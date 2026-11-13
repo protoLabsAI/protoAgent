@@ -4,9 +4,10 @@
 // failed turn carries one "Failed" badge. Nothing in the Feed dismisses, delivers or
 // alerts (bd-rbk7e retries undelivered pages server-side).
 //
-// The PILL tests below are untouched by slice 4 (the widget's queued/alert signalling is
-// slice 6); the classifier tests stay with them since ActivityWidget still consumes
-// `needsOperatorAttention`.
+// The PILL is a plain unread count (slice 6): a priority-now page bumps it exactly like
+// any other item — the alert badge/label are gone (anything operator-class pages through
+// Work › Needs you). The classifier tests stay here since the Needs-you Delivery lane
+// (work/tone.ts) still consumes `needsOperatorAttention`.
 //
 // createRoot/act + a mocked event bus, in the style of ServerTurnWatch.test.tsx /
 // FleetRoom.test.tsx (no testing-library dep). The event mock supports several
@@ -130,79 +131,59 @@ describe("isPendingNowInboxPage / needsOperatorAttention (the queued/alert class
   });
 });
 
-describe("ActivityWidget — pill signalling", () => {
-  it("flags an operator-class (needs_human) priority-now page even while the feed is closed", () => {
-    act(() => root.render(h(ActivityWidget)));
+describe("ActivityWidget — pill unread count (slice 6: plain count, no alert path)", () => {
+  // The pill reads the agent's display name off the shared runtime probe for its resting
+  // hover info, so widget renders need a provider too.
+  function renderWidget() {
+    vi.spyOn(api, "runtimeStatus").mockResolvedValue({
+      identity: { name: "roxy", operator: "" },
+    } as unknown as RuntimeStatus);
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+          h(ActivityWidget),
+        ),
+      ),
+    );
+  }
+
+  it("bumps a plain count for a priority-now page exactly like any other item — never an alert", async () => {
+    renderWidget();
+    await flush();
     expect(testid("activity-badge")).toBeNull();
 
+    // Operator-class (needs_human) priority-now page: the pill alert is gone — anything
+    // operator-class pages through Work › Needs you, never the Feed pill (feed.md §2).
     emit("inbox.item", { id: 7, priority: "now", source: "webhook:deploy", text: "page on-call", needs_human: true });
 
     const badge = testid("activity-badge")!;
     expect(badge).not.toBeNull();
-    // The badge is now the DS Count primitive (span.pl-count), keeping the alert modifier on top.
+    // The badge is the bare DS Count primitive (span.pl-count) — no alert modifier left.
     expect(badge.classList.contains("pl-count")).toBe(true);
     expect(badge.textContent).toBe("1");
-    expect(badge.classList.contains("activity-badge--alert")).toBe(true);
-    expect(badge.getAttribute("data-alert")).toBe("now");
-    expect(testid("activity-widget")!.getAttribute("aria-label")).toContain("needs delivery");
-  });
-
-  it("treats a merely undelivered now page as plain unread — queued, never an alert", () => {
-    act(() => root.render(h(ActivityWidget)));
-
-    // The restored-page push without needs_human: it retries when the agent is free.
-    emit("inbox.item", { id: 9, priority: "now", source: "a2a:sister", text: "card assigned" });
-
-    const badge = testid("activity-badge")!;
-    expect(badge.textContent).toBe("1");
-    expect(badge.classList.contains("activity-badge--alert")).toBe(false);
-    expect(badge.getAttribute("data-alert")).toBeNull();
+    expect(container.querySelector(".activity-badge--alert")).toBeNull();
+    expect(container.querySelector("[data-alert]")).toBeNull();
     expect(testid("activity-widget")!.getAttribute("aria-label")).toBe("Feed — 1 new");
-  });
 
-  it("counts a fired now item once, as activity, without the blocked-page alert", () => {
-    act(() => root.render(h(ActivityWidget)));
-
-    // A fired now pushes ONLY activity.message (never inbox.item) — one unread bump, no alert.
-    emit("activity.message", { priority: "now", text: "handled the now item" });
-
-    const badge = testid("activity-badge")!;
-    expect(badge.textContent).toBe("1");
-    expect(badge.classList.contains("activity-badge--alert")).toBe(false);
-    expect(badge.getAttribute("data-alert")).toBeNull();
-    expect(testid("activity-widget")!.getAttribute("aria-label")).toBe("Feed — 1 new");
-  });
-
-  it("does not flag a delivered now inbox payload as a blocked page", () => {
-    act(() => root.render(h(ActivityWidget)));
-
-    emit("inbox.item", {
-      id: 8,
-      priority: "now",
-      delivered_at: "2026-09-03T10:01:00Z",
-      source: "a2a",
-      text: "already delivered",
-    });
-
-    const badge = testid("activity-badge")!;
-    expect(badge.textContent).toBe("1");
-    expect(badge.classList.contains("activity-badge--alert")).toBe(false);
-    expect(badge.getAttribute("data-alert")).toBeNull();
-  });
-
-  it("treats ordinary next/later inbox items as plain unread with no alert", () => {
-    act(() => root.render(h(ActivityWidget)));
-
+    // An ordinary next item bumps the SAME count the same way.
     emit("inbox.item", { id: 1, priority: "next", source: "a2a", text: "fyi" });
-    let badge = testid("activity-badge")!;
-    expect(badge.textContent).toBe("1");
-    expect(badge.classList.contains("activity-badge--alert")).toBe(false);
-
-    emit("inbox.item", { id: 2, priority: "later", source: "a2a", text: "later" });
-    badge = testid("activity-badge")!;
-    expect(badge.textContent).toBe("2");
-    expect(badge.classList.contains("activity-badge--alert")).toBe(false);
+    expect(testid("activity-badge")!.textContent).toBe("2");
     expect(testid("activity-widget")!.getAttribute("aria-label")).toBe("Feed — 2 new");
+  });
+
+  it("counts a fired now item once, as activity, and caps the badge at 9+", async () => {
+    renderWidget();
+    await flush();
+
+    // A fired now pushes ONLY activity.message (never inbox.item) — one unread bump.
+    emit("activity.message", { priority: "now", text: "handled the now item" });
+    expect(testid("activity-badge")!.textContent).toBe("1");
+    expect(testid("activity-widget")!.getAttribute("aria-label")).toBe("Feed — 1 new");
+
+    for (let i = 0; i < 9; i++) emit("activity.message", { text: `turn ${i}` });
+    expect(testid("activity-badge")!.textContent).toBe("9+");
   });
 });
 

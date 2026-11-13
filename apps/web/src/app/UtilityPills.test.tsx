@@ -128,7 +128,10 @@ it("counts unseen Feed items, clears on opening its OWN dialog, and resumes afte
   expect(pill("activity-badge").textContent).toBe("2");
   await act(async () => pill("activity-widget").click());
   // The Feed is its own home since S4c removed Work's Activity section: the pill opens
-  // the full ActivitySurface in its own dialog and never touches the Work modal.
+  // the full ActivitySurface in its own dialog and never touches the Work modal. (The
+  // dialog is sized UTIL_DIALOG_WIDTH — an inline `min(800px, 94vw)` the DS Dialog sets
+  // on this element, but jsdom's cssstyle rejects CSS math functions, so the width isn't
+  // observable here; the PR's 1440/390 screenshots cover it.)
   expect(useUI.getState().surfaceModal).toBeNull();
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.textContent).toContain("Feed");

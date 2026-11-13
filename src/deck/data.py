@@ -118,6 +118,7 @@ class Backend(Protocol):
     def a2a(self, agent: dict) -> Any: ...
     def steer(self, agent: dict, session_id: str, msg_id: str, text: str) -> dict: ...
     def steer_pending(self, agent: dict, session_id: str) -> list[dict]: ...
+    def steer_state(self, agent: dict, session_id: str) -> dict: ...
     def steer_cancel(self, agent: dict, session_id: str, msg_id: str) -> bool: ...
     def interject(self, agent: dict, session_id: str, task_id: str, msg_id: str, text: str) -> dict: ...
     def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool: ...
@@ -322,6 +323,15 @@ class LiveBackend:
         rows = out.get("pending") if isinstance(out, dict) else None
         return [r for r in (rows or []) if isinstance(r, dict) and r.get("id")]
 
+    def steer_state(self, agent: dict, session_id: str) -> dict:
+        """The member's whole steering answer for the session, one read: ``pending`` rows,
+        the ``drained`` fold log, and ``started`` — msg id → the task the server ran a
+        steer AS when it started a fresh turn for it (bd-0ad5v: an idle-session steer, or
+        one left undrained at turn-end), ``""`` while that start is in flight. An older
+        member sends no ``started``, which reads as "no restart happened"."""
+        out = self.client.member_get(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer")
+        return out if isinstance(out, dict) else {}
+
     def steer_cancel(self, agent: dict, session_id: str, msg_id: str) -> bool:
         """Drop a queued steer; False = already folded in (too late) or never queued."""
         out = self.client.member_delete(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer/{_seg(msg_id)}")
@@ -466,7 +476,7 @@ class OfflineBackend:
     def _offline(self, *a, **kw):
         raise RuntimeError("offline — no hub to reach this member through")
 
-    steer = steer_pending = steer_cancel = interject = delegation_cancel = submit_form = _offline
+    steer = steer_pending = steer_state = steer_cancel = interject = delegation_cancel = submit_form = _offline
     create = rename = remove = remote_add = remote_update = remote_remove = set_order = (
         _offline  # the CLI's offline verbs go through the ops; the deck stays start/stop
     )

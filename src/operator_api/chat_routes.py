@@ -88,7 +88,6 @@ class _delete_lock:
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import (
-    _bridge_attachment_ids,
     _resolve_thread_id,
     aside_session,
     chat,
@@ -98,6 +97,7 @@ from server.chat import (
     forget_delegate_conversations_for_session,
     fork_session,
     rewind_session,
+    steer_or_start_turn,
     turn_error,
 )
 
@@ -445,6 +445,22 @@ def _coerce_attachment_images(raw) -> list[tuple[str, str]] | None:
         if isinstance(part, (list, tuple)) and len(part) == 2 and all(isinstance(x, str) for x in part):
             out.append((part[0], part[1]))
     return out or None
+
+
+def _coerce_turn_settings(body: dict | None) -> dict | None:
+    """A steer/interjection body's per-message turn settings — the same three keys a
+    normal console send stamps on its A2A message metadata (``model`` /
+    ``reasoning_effort`` / ``bypass_permissions``) — or ``None`` when the caller sent
+    none (an older client). Only these keys pass: the value rides a loopback A2A send
+    when the message starts a fresh turn (bd-0ad5v), and arbitrary metadata must not."""
+    settings: dict = {}
+    for key in ("model", "reasoning_effort"):
+        value = str((body or {}).get(key) or "").strip()
+        if value:
+            settings[key] = value
+    if (body or {}).get("bypass_permissions"):
+        settings["bypass_permissions"] = True
+    return settings or None
 
 
 def _has_unresolved_tool_calls(msg) -> bool:
@@ -1383,13 +1399,23 @@ def register_chat_routes(app, ui: str) -> None:
         """Queue a user message into a RUNNING turn (mid-turn steering).
 
         The next model call folds it in via ``SteeringMiddleware``, so the user
-        can redirect or reset ongoing work without stopping the live stream. This
-        does NOT start a turn — it only enqueues; the in-flight turn picks it up at
-        its next model call (i.e. after the current tool finishes). The client may
-        pass its own ``id`` so it can reconcile at turn-end."""
-        from fastapi import HTTPException
+        can redirect or reset ongoing work without stopping the live stream. The
+        in-flight turn picks it up at its next model call (i.e. after the current
+        tool finishes). The client may pass its own ``id`` so it can reconcile at
+        turn-end.
 
-        from graph import steering
+        With NO live turn on the session (and nothing HITL-parked) there is nothing
+        left to drain a queued message — a console steering off a stale 'streaming'
+        bubble used to strand its text ``pending`` forever (bd-0ad5v). Such a message
+        now STARTS an ordinary operator turn instead, over the same path as a normal
+        send, and the reply carries ``started_turn: <task_id>`` so the console can
+        attach to it and drop its stale streaming state. A duplicate POST of the same
+        ``id`` answers with the same task. ``server.chat.steer_or_start_turn`` decides;
+        incognito (ADR 0069 D3b) is asserted by the console exactly as on a normal send,
+        and so are the tab's per-message ``model`` / ``reasoning_effort`` /
+        ``bypass_permissions`` — a turn started (now or at turn-end) for this message
+        runs under them, not under the configured defaults."""
+        from fastapi import HTTPException
 
         text = str((body or {}).get("text", "")).strip()
         msg_id = str((body or {}).get("id", "")).strip() or None
@@ -1398,22 +1424,15 @@ def register_chat_routes(app, ui: str) -> None:
         images = _coerce_attachment_images((body or {}).get("images"))
         if not text and not images:
             raise HTTPException(status_code=400, detail="text is required")
-        # Incognito (ADR 0069 D3b): the console asserts it, exactly as on a normal send —
-        # there is no server-side incognito marker to read. Mirror _vision_human_message,
-        # which skips the media bridge (and so the refs note) on an incognito turn: the
-        # image still reaches a vision model as a block via the fold, it is just never
-        # persisted and carries no media id.
         incognito = bool((body or {}).get("incognito", False))
-        refs = "" if incognito else _bridge_attachment_ids(images, session_id)
-        mid = steering.enqueue(
+        return await steer_or_start_turn(
             session_id,
             text,
-            msg_id=msg_id,
+            msg_id,
             images=images,
-            refs=refs,
-            vision=bool(getattr(STATE.graph_config, "model_vision", False)),
+            incognito=incognito,
+            settings=_coerce_turn_settings(body),
         )
-        return {"ok": True, "id": mid, "pending": steering.pending(session_id)}
 
     @app.get("/api/chat/sessions/{session_id}/steer")
     async def _api_steer_pending(session_id: SessionId):
@@ -1426,12 +1445,19 @@ def register_chat_routes(app, ui: str) -> None:
         ``pending`` alone can't tell "the agent read it" from "it never arrived" — the
         queue is in-memory and the live boundary marker is best-effort — and the console
         must not guess between settling a message the agent never saw and re-offering one
-        it already used. This is the server answering that question directly."""
+        it already used. This is the server answering that question directly.
+
+        ``started`` maps msg id → task id for messages the server ran as a FRESH turn of
+        their own instead (bd-0ad5v — an idle-session steer, or a steer left undrained at
+        turn-end), ``""`` while that turn's start is still in flight. The reply for such a
+        message comes from that task, not from any turn that drained the queue, so the
+        console attaches to it rather than settling or re-sending."""
         from graph import steering
 
         return {
             "pending": steering.pending_items(session_id),
             "drained": steering.drained(session_id),
+            "started": steering.started_map(session_id),
         }
 
     @app.post("/api/chat/sessions/{session_id}/server-turns/{task_id}/interject")
@@ -1451,7 +1477,9 @@ def register_chat_routes(app, ui: str) -> None:
         if not text:
             raise HTTPException(status_code=400, detail="text is required")
         msg_id = str((body or {}).get("id", "")).strip() or None
-        return submit_server_turn_interjection(session_id, task_id, text, msg_id=msg_id)
+        return submit_server_turn_interjection(
+            session_id, task_id, text, msg_id=msg_id, settings=_coerce_turn_settings(body)
+        )
 
     @app.delete("/api/chat/sessions/{session_id}/steer/{msg_id}")
     async def _api_steer_cancel(session_id: SessionId, msg_id: str):

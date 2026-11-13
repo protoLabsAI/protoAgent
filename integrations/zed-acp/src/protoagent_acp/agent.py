@@ -91,6 +91,11 @@ from .roots import RootMap
 
 log = logging.getLogger(__name__)
 
+# How long to wait for a turn-end restart's in-flight start ("" in `GET …/steer`'s
+# `started` map, bd-0ad5v) to name its task — a shade past the server's own 35s bound on
+# the loopback send, so this resolves whenever the start itself does.
+STARTED_WAIT_S = 40.0
+
 AUTH_METHODS = [
     # The registry requires at least one `agent` or `terminal` method. Terminal: Zed runs
     # `protoagent-acp login` in a terminal; the token lands in the credentials file.
@@ -691,7 +696,14 @@ class ProtoAgentACP:
         # returns, its completion callback must retain output for this adopter.
         s.adopting = True
         try:
-            status, body = await self.a2a.send_json("POST", f"/api/chat/sessions/{s.id}/steer", {"id": steer_id, "text": text})
+            status, body = await self.a2a.send_json(
+                "POST",
+                f"/api/chat/sessions/{s.id}/steer",
+                # The per-message settings a console send carries (session-scope bypass is
+                # this shim's only one): a turn the server starts for this message must
+                # run under them, not under the configured defaults.
+                {"id": steer_id, "text": text, **({"bypass_permissions": True} if s.allow_commands else {})},
+            )
         finally:
             s.adopting = False
         if status != 200 or not (isinstance(body, dict) and body.get("ok")):
@@ -709,13 +721,41 @@ class ProtoAgentACP:
         for update in held:  # in stream order; includes the marker if the fold already happened
             await self._send(s, update)
         s.attached.set()
+        started_turn = str(body.get("started_turn") or "")
+        if started_turn:
+            # The session had NO live turn (bd-0ad5v): the turn this prompt meant to steer
+            # was already over — the runner here is a zombie — and the server ran the
+            # message as a fresh ordinary turn instead of queueing it. The reply comes
+            # from THAT task, so follow it rather than owning a stream that is done.
+            # Disown the zombie first: its completion callback clears `s.task_id` only for
+            # the runner it still owns, and a cancel mid-follow must find the NEW task.
+            s.steer = None
+            if s.runner is runner:
+                s.runner = None
+            return await self._follow_started_turn(s, started_turn)
         resp = await self._own(s, runner)
         if resp.stop_reason != "end_turn":
             return resp
         # Turn over. A steer that arrived after the turn's LAST model call was never folded
-        # in; take it back out of the queue and run it as the next turn (the console does
-        # the same reconciliation at turn end).
+        # in. Since bd-0ad5v the SERVER restarts it as a fresh turn of its own at turn-end
+        # (`started` names that task, "" while the start is in flight); an older server
+        # leaves it queued, and this shim takes it back and runs it as the next turn (the
+        # console does the same reconciliation at turn end).
         _, queued = await self.a2a.send_json("GET", f"/api/chat/sessions/{s.id}/steer")
+        mark = self._started_mark(queued, steer_id)
+        if mark == "":
+            # Popped for a restart whose loopback send hasn't named its task yet. Wait the
+            # start out: reading the absence as "folded into the ended turn" is exactly how
+            # the reply got lost. A failed start requeues the steer (re-read `pending`).
+            deadline = time.monotonic() + STARTED_WAIT_S
+            while mark == "" and time.monotonic() < deadline and not s.cancelled:
+                await asyncio.sleep(min(self.busy_poll, 0.25))
+                _, queued = await self.a2a.send_json("GET", f"/api/chat/sessions/{s.id}/steer")
+                mark = self._started_mark(queued, steer_id)
+        if mark:
+            s.steer = None
+            await self._steer_marker(s, text)
+            return await self._follow_started_turn(s, mark)
         pending = [i.get("id") for i in (queued or {}).get("pending") or [] if isinstance(i, dict)]
         if steer_id in pending:
             _, gone = await self.a2a.send_json("DELETE", f"/api/chat/sessions/{s.id}/steer/{steer_id}")
@@ -728,6 +768,61 @@ class ProtoAgentACP:
             s.steer = None
             await self._steer_marker(s, text)
         return resp
+
+    @staticmethod
+    def _started_mark(queued: Any, steer_id: str) -> str | None:
+        """``GET …/steer``'s ``started`` entry for this steer: the task id the server ran
+        it as (bd-0ad5v), ``""`` while that start is in flight, ``None`` when the server
+        never started one (or predates the map, which reads the same way)."""
+        started = (queued or {}).get("started") if isinstance(queued, dict) else None
+        if not isinstance(started, dict):
+            return None
+        mark = started.get(steer_id)
+        return str(mark) if isinstance(mark, str) else None
+
+    async def _follow_started_turn(self, s: Session, task_id: str) -> PromptResponse:
+        """The server ran the operator's message as a FRESH turn of its own (bd-0ad5v: the
+        steer landed on an idle session, or was left undrained when its turn ended and the
+        server restarted it). The reply comes from that task — before this, the shim
+        reported such a message folded into the ended turn and its answer never reached
+        the editor. There is no stream to join (the turn runs detached, server-side), so
+        follow the durable task and emit its answer when it lands."""
+        s.task_id = task_id  # a cancel while following cancels the RIGHT task
+        deadline = time.monotonic() + self.busy_timeout
+        while True:
+            if s.cancelled:
+                return PromptResponse(stop_reason="cancelled")
+            task = await self.a2a.get_task(task_id)
+            state, answer = task_snapshot(task)
+            if state is not None and state.state:
+                if state.paused:
+                    # Parked for input: show it and let the NEXT prompt answer it — the
+                    # same shape _drive gives a question/form it cannot render.
+                    hitl = state.hitl or {}
+                    question = str(hitl.get("question") or hitl.get("title") or state.text or "The agent needs input.")
+                    if hitl.get("kind") == "form":
+                        question += "\n\n(This is a form in the protoAgent console; reply here in words, or answer it there.)"
+                    sep = "\n\n" if s.spoke else ""
+                    await self._send(s, update_agent_message_text(f"{sep}**Input needed:** {question}"))
+                    s.parked_task_id = task_id
+                    s.parked_hitl = hitl
+                    return PromptResponse(stop_reason="end_turn")
+                if state.terminal:
+                    if state.state in ("canceled", "cancelled"):
+                        return PromptResponse(stop_reason="cancelled")
+                    if state.state in ("failed", "rejected"):
+                        await self._fail(s, state.text or "the turn failed with no reason given", state=state.state)
+                    if answer:
+                        await self._on_text(s, TextEvent(text=answer, append=False), "")
+                    return PromptResponse(stop_reason="end_turn")
+            if time.monotonic() > deadline:
+                await self._fail(
+                    s,
+                    f"your message is running as its own turn (task {task_id}) and hasn't finished — "
+                    "check the protoAgent console",
+                    state="working",
+                )
+            await asyncio.sleep(min(self.busy_poll, 2.0))
 
     async def _steer_marker(self, s: Session, text: str) -> None:
         short = " ".join(text.split())

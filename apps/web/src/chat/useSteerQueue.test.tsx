@@ -112,6 +112,11 @@ afterEach(() => {
 
 const ids = (q: QueuedSteer[]) => q.map((x) => x.id);
 
+// The per-message settings every steer/interjection POST now carries (bd-0ad5v review): a
+// turn the server starts for the message must run under the tab's picks, not the defaults.
+// A fresh session has no model/bypass pick and reasons at the default level.
+const SETTINGS = { reasoningEffort: "medium" };
+
 describe("useSteerQueue — queueing", () => {
   it("queues a steer optimistically, clears the draft, records history, and POSTs it", async () => {
     draftBox.value = "  go left  ";
@@ -123,9 +128,25 @@ describe("useSteerQueue — queueing", () => {
     expect(r.current.steerQueue).toMatchObject([{ text: "go left" }]);
     expect(r.current.steerQueueRef.current).toBe(r.current.steerQueue);
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "go left");
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "go left", undefined, undefined, SETTINGS);
     // Persisted so a swap (S3) restores it.
     expect(ids(loadSteers(sessionId))).toEqual([id]);
+  });
+
+  it("carries the tab's chosen model/effort/bypass, read live (bd-0ad5v review)", async () => {
+    // A turn the server starts for this message (idle session, or the turn-end restart)
+    // must run under the tab's settings — the old re-send path carried them via runTurn.
+    chatStore.setSessionModel(sessionId, "sonnet-x");
+    chatStore.setSessionReasoningEffort(sessionId, "high");
+    chatStore.setSessionBypassPermissions(sessionId, true);
+    const r = renderHook(baseOpts({ draft: "go" }));
+    await act(() => r.current.queueSteer());
+    const id = r.current.steerQueue[0].id;
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "go", undefined, undefined, {
+      model: "sonnet-x",
+      reasoningEffort: "high",
+      bypassPermissions: true,
+    });
   });
 
   it("does nothing with an empty draft or no session", async () => {
@@ -161,8 +182,32 @@ describe("useSteerQueue — queueing", () => {
     await act(() => r.current.queueServerInterjection());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this");
+    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this", SETTINGS);
     expect(r.current.steerQueue).toEqual([{ id, text: "also this", serverTaskId: "t-live" }]);
+  });
+
+  it("finalizes the stale bubble and attaches to the task a started_turn reply names (bd-0ad5v)", async () => {
+    // The server had NO live turn: the 'streaming' this console believed in was stale, and
+    // the steer ran as a fresh turn instead of queueing. The bubble retires, the zombie
+    // stream is released, and the new task streams in via the slot's reattach effect.
+    chatStore.updateMessages(sessionId, [
+      { id: "u0", role: "user", content: "hello", createdAt: 1, status: "done" },
+      { id: "a0", role: "assistant", content: "…", createdAt: 2, status: "streaming" },
+    ]);
+    steerChat.mockResolvedValue({ ok: true, id: null, pending: 0, started_turn: "task-9" });
+    const abort = vi.fn();
+    const abortRef = { current: { abort } as unknown as AbortController | null };
+    const r = renderHook(baseOpts({ draft: "are you there?", abortRef }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    expect(r.current.steerQueue).toEqual([]); // retired — the turn's own user message replaces it
+    expect(abort).toHaveBeenCalled();
+    expect(abortRef.current).toBeNull();
+    const msgs = messagesOf();
+    expect(msgs.map((m) => m.status)).toEqual(["done", "done", "done", "streaming"]);
+    expect(msgs[2]).toMatchObject({ role: "user", content: "are you there?" });
+    expect(msgs[3]).toMatchObject({ role: "assistant", taskId: "task-9", status: "streaming" });
+    expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("streaming");
   });
 
   it("hands a REFUSED interjection back into the composer (appended), and drops the stale control", async () => {
@@ -203,7 +248,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueSteer());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "look here", [IMG]);
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "look here", [IMG], undefined, SETTINGS);
     // Cleared ONLY after the POST resolved, so a failure would have kept them.
     expect(clearTrayImages).toHaveBeenCalledTimes(1);
   });
@@ -247,7 +292,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
   it("asserts incognito on an image steer", async () => {
     const r = renderHook(baseOpts({ session: { id: sessionId, incognito: true }, trayImages: () => [IMG] }));
     await act(() => r.current.queueSteer());
-    expect(steerChat).toHaveBeenCalledWith(sessionId, r.current.steerQueue[0].id, "", [IMG], true);
+    expect(steerChat).toHaveBeenCalledWith(sessionId, r.current.steerQueue[0].id, "", [IMG], true, SETTINGS);
   });
 
   it("waits for acceptance before clearing images", async () => {
@@ -271,7 +316,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await flush();
     expect(r.current.steerQueue).toMatchObject([{ text: "" }]);
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "", [IMG]);
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "", [IMG], undefined, SETTINGS);
     expect(clearTrayImages).toHaveBeenCalledTimes(1);
   });
 
@@ -293,7 +338,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueSteer());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "just text");
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "just text", undefined, undefined, SETTINGS);
     expect(clearTrayImages).not.toHaveBeenCalled();
   });
 
@@ -314,7 +359,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueServerInterjection());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this");
+    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this", SETTINGS);
     expect(trayImages).not.toHaveBeenCalled();
     expect(clearTrayImages).not.toHaveBeenCalled();
   });
@@ -327,7 +372,7 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     await act(() => r.current.queueSteer());
     await flush();
     const id = r.current.steerQueue[0].id;
-    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "answer later");
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "answer later", undefined, undefined, SETTINGS);
     expect(trayImages).not.toHaveBeenCalled();
     expect(clearTrayImages).not.toHaveBeenCalled();
   });
@@ -407,8 +452,60 @@ describe("useSteerQueue — own-stream turn-end reconcile", () => {
     pendingSteer.mockResolvedValue({ pending: [{ id: b, text: "two" }] });
     await act(() => r.current.reconcileSteer());
     expect(messagesOf().some((m) => m.id === a)).toBe(true);
+    // Dequeued BEFORE the re-send: left on the server, the turn-end restart (or the fresh
+    // turn itself) would fold the same words in again.
+    expect(cancelSteer).toHaveBeenCalledWith(sessionId, b);
     expect(runTurn).toHaveBeenCalledWith("two");
     expect(r.current.steerQueue).toEqual([]);
+  });
+
+  it("does not re-send a steer whose dequeue lost the race — the next pass reads what took it", async () => {
+    const runTurn = mkRun();
+    const r = renderHook(baseOpts({ runTurn }));
+    rerender(baseOpts({ draft: "one", runTurn }));
+    await act(() => r.current.queueSteer());
+    const [a] = ids(r.current.steerQueue);
+    rerender(baseOpts({ runTurn }));
+    pendingSteer.mockResolvedValue({ pending: [{ id: a, text: "one" }] });
+    cancelSteer.mockResolvedValue({ removed: false, pending: 0 });
+    await act(() => r.current.reconcileSteer());
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(ids(r.current.steerQueue)).toEqual([a]);
+  });
+
+  it("attaches to the restarted turn instead of settling when the server ran leftovers as a fresh turn (bd-0ad5v)", async () => {
+    // The blocking review case: the turn ended with both steers undrained, and the server
+    // popped them into a loopback turn of their own. They are gone from `pending` and in
+    // `drained` — which used to read as "consumed by the turn that just ended" — but
+    // `started` names the fresh task: the reply comes from THERE, so the bubbles become
+    // the turn's own user messages and a streaming assistant bubble carries its task id
+    // for the slot's reattach effect to subscribe through.
+    const runTurn = mkRun();
+    const r = renderHook(baseOpts({ runTurn }));
+    const [a, b] = await queueTwo(r);
+    rerender(baseOpts({ runTurn }));
+    pendingSteer.mockResolvedValue({ pending: [], drained: [a, b], started: { [a]: "task-r", [b]: "task-r" } });
+    await act(() => r.current.reconcileSteer());
+    expect(runTurn).not.toHaveBeenCalled(); // never re-sent — the restart already carries the words
+    expect(r.current.steerQueue).toEqual([]);
+    const msgs = messagesOf();
+    expect(msgs.filter((m) => m.role === "user").map((m) => m.id)).toEqual(["u0", a, b]);
+    expect(msgs[msgs.length - 1]).toMatchObject({ role: "assistant", taskId: "task-r", status: "streaming" });
+    expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("streaming");
+  });
+
+  it("keeps a steer queued while its restart hasn't named a task yet (started: '')", async () => {
+    const runTurn = mkRun();
+    const r = renderHook(baseOpts({ runTurn }));
+    rerender(baseOpts({ draft: "one", runTurn }));
+    await act(() => r.current.queueSteer());
+    const [a] = ids(r.current.steerQueue);
+    rerender(baseOpts({ runTurn }));
+    pendingSteer.mockResolvedValue({ pending: [], drained: [a], started: { [a]: "" } });
+    await act(() => r.current.reconcileSteer());
+    expect(ids(r.current.steerQueue)).toEqual([a]); // neither settled nor re-sent — asked again
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(messagesOf().some((m) => m.id === a)).toBe(false);
   });
 
   it("keeps unread steers QUEUED while a HITL form is parked (never re-sends before the answer)", async () => {
