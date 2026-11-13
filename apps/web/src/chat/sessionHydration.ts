@@ -25,6 +25,7 @@ import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
+import { clearServerTurnsFor } from "./server-turn-store";
 import { localTurnInFlight, reconcileSessionStatus } from "./sessionLiveness";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
 import { applyComponent, applyDecisionIdentity, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
@@ -629,6 +630,32 @@ function recordChangeSeq(summary: DurableChatSession): void {
   if (seen === undefined || seq > seen) changeSeqSeen.set(summary.session_id, seq);
 }
 
+/** Render the server's authoritative session state (ADR 0130 D1/D5): the server owns each
+ *  chat's liveness and the console follows it, rather than inferring it from local producers.
+ *
+ *  When the server reports a session IDLE — no live task — any local belief that a turn is
+ *  running there is stale and is dropped: the server-turn typing indicator, the server-turn
+ *  control (which locks the composer and routes the next send as a steer), and a lingering
+ *  "streaming" status all return to idle. This is what un-sticks a session whose server turn
+ *  was lost to a restart and so never got a `turn.finished` to settle it (bd-0ad5v): nothing
+ *  else hands the status back, and the next message would otherwise be swallowed as a steer
+ *  against a turn the server does not report.
+ *
+ *  A turn THIS window is itself streaming (`localTurnInFlight`) is an optimistic local draw the
+ *  server has not caught up to yet (D1) — left to its own producer to settle. `running` and
+ *  `paused` keep their existing producers (a live stream / reattach, a parked HITL bubble). An
+ *  older server that sends no `status` (the field is absent) keeps today's local inference. */
+export function applyServerSessionState(summary: DurableChatSession): void {
+  const status = summary.status;
+  if (typeof status !== "string" || !status) return; // pre-S2 server: no authoritative state
+  if (status !== "idle" || summary.live_task_id) return; // only the unambiguous "nothing live" signal
+  const sessionId = summary.session_id;
+  if (localTurnInFlight(sessionId)) return; // this window's own optimistic turn owns it
+  clearServerTurnsFor(sessionId); // the #1767 indicator — a lost turn never fired `turn.finished`
+  chatStore.clearServerTurnControl(sessionId); // the composer lock / steer target (bd-0ad5v)
+  reconcileSessionStatus(sessionId); // hand a lingering "streaming" status back to idle
+}
+
 /** Fetch only server-only, locally empty, render-stale, or BEHIND-the-server sessions
  * (isBehindServer or the `last_change_seq` backstop), with bounded fan-out. `full` forces a
  * re-read of EVERY locally-held session's turns — the `resync_required` response (ADR 0130
@@ -725,6 +752,11 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
       }),
     );
   }
+  // Render the server's authoritative session state for every session in the index (D1/D5),
+  // AFTER the transcript reconcile above has settled any stranded preview: a session the
+  // server reports idle drops its server-turn indicator, composer lock and streaming status
+  // here, so no client shows a session live that the server does not (bd-0ad5v).
+  for (const summary of summaries) applyServerSessionState(summary);
 }
 
 /** How often a visible console re-reads the session index while it stays open. */

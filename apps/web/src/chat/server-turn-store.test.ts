@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 
 import {
+  clearServerTurnsFor,
   effectiveOrigin,
   GOAL_RUN_ORIGIN,
   labelForOrigin,
@@ -79,6 +80,33 @@ describe("server-turn store", () => {
     expect(serverTurnLabel("s1")).toBeNull();
     noteTurnStarted("s1", labelForOrigin("scheduler"));
     expect(serverTurnLabel("s1")).toMatch(/scheduled/i); // start still arms cleanly
+  });
+
+  it("clearServerTurnsFor drops the indicator outright when the server reports idle (ADR 0130 D5)", () => {
+    // A server restart loses a turn with no `turn.finished` to decrement the count (bd-0ad5v),
+    // so the ref-count still believes TWO turns run — the authoritative idle render clears both.
+    noteTurnStarted("s1", labelForOrigin("scheduler"));
+    noteTurnStarted("s1", labelForOrigin("scheduler"));
+    expect(clearServerTurnsFor("s1")).toBe(true);
+    expect(serverTurnLabel("s1")).toBeNull();
+    expect(serverTurnSessionsKey()).toBe("");
+  });
+
+  it("clearServerTurnsFor is a no-op (returns false) for a session with no indicator", () => {
+    expect(clearServerTurnsFor("s1")).toBe(false);
+    expect(clearServerTurnsFor("")).toBe(false);
+    // …and scopes to its own session: an unrelated turn is untouched.
+    noteTurnStarted("s2", labelForOrigin("scheduler"));
+    expect(clearServerTurnsFor("s1")).toBe(false);
+    expect(serverTurnLabel("s2")).toMatch(/scheduled/i);
+  });
+
+  it("clearServerTurnsFor leaves the remembered origin for a trailing chat.resumed to tag", () => {
+    rememberOrigin("s1", "scheduler");
+    noteTurnStarted("s1", labelForOrigin("scheduler"));
+    clearServerTurnsFor("s1");
+    expect(serverTurnLabel("s1")).toBeNull(); // indicator gone…
+    expect(originForSession("s1")).toBe("scheduler"); // …origin kept, like turn.finished leaves it
   });
 });
 

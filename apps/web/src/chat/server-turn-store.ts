@@ -205,6 +205,21 @@ export function noteTurnFinished(sessionId: string, taskId = "") {
   emit();
 }
 
+/** Drop the in-flight indicator for ONE session outright — the server reports it idle (ADR
+ *  0130 D1/D5), so whatever `turn.started` armed here is over, however many turns the
+ *  ref-count still believes are running. A server restart loses a turn with no `turn.finished`
+ *  to decrement the count (bd-0ad5v), and nothing else would ever clear the indicator; this is
+ *  the authoritative render of server state doing it. The remembered origin is left in place
+ *  for a trailing `chat.resumed` to tag a settled result, exactly as `turn.finished` leaves it.
+ *  Returns whether an indicator was showing. */
+export function clearServerTurnsFor(sessionId: string): boolean {
+  if (!sessionId || (counts.get(sessionId) ?? 0) <= 0) return false;
+  counts.delete(sessionId);
+  labels.delete(sessionId);
+  emit();
+  return true;
+}
+
 /** Test/reset hook — drop all in-flight state (including remembered origins). */
 export function resetServerTurns() {
   counts.clear();

@@ -205,12 +205,11 @@ test("a turn that ends while the client is away renders its component parts on r
 // D4: "A client never shows a spinner, a queued steer or a locked composer for a session
 // the server reports idle." A server turn starts, then the server RESTARTS mid-turn: the
 // turn is lost, the rebooted server derives idle from its store and feeds `turn.failed` +
-// `session.changed`. Today's console armed its belief from `turn.started` and nothing ever
-// hands it back — the spinner stays and the next message is swallowed as a steer the server
-// will never drain (bd-0ad5v). Flips when server-held session state is rendered (S2/S4).
-test.fail("a session the server reports idle never keeps a spinner or swallows a send as a steer", {
-  annotation: { type: "fails-on-main", description: "bd-0ad5v / ADR 0130 S2+S4 (#5196): session status is still inferred locally" },
-}, async ({ browser, request }, testInfo) => {
+// `session.changed`. Before S4 the console armed its belief from `turn.started` and nothing
+// ever handed it back — the spinner stayed and the next message was swallowed as a steer the
+// server would never drain (bd-0ad5v). S4 renders the server-held session state: on resume the
+// rebooted server reports the session idle (failed turn, no live task) and the console follows it.
+test("a session the server reports idle never keeps a spinner or swallows a send as a steer", async ({ browser, request }, testInfo) => {
   const scope = syncScope(testInfo, "idle");
   const session = "chat-sync-idle";
   await seedChat(request, scope, session, "Standup notes", "Seeded — notes captured.");
