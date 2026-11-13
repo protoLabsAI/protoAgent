@@ -1,18 +1,14 @@
 import "./activity.css";
 
 import { useQuery } from "@tanstack/react-query";
-// The DS Badge rides an alias: OriginProvenance.test.tsx (DS audit card 4) pins that no
-// `<Badge` token appears in this file — the guard retires with the component in slice 7.
-import { Badge as FailedBadge, Empty } from "@protolabsai/ui/primitives";
+import { Badge, Empty } from "@protolabsai/ui/primitives";
 import { Alert, Skeleton, StatusDot } from "@protolabsai/ui/data";
-import { Clock, Inbox, MessageSquare, Users, Webhook, Zap } from "lucide-react";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
 import { brandName } from "../lib/brand";
-import { ago } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { runtimeStatusQuery } from "../lib/queries";
 import type { ActivityEntry, InboxItem } from "../lib/types";
@@ -32,33 +28,9 @@ import { applyLiveEntry, groupByDay, mergeFeed, stripWakeHeader, type FeedRow } 
 // separate try/catch): a transient failure of GET /api/inbox or GET /api/activity
 // surfaces the one couldn't-load alert while whatever loaded keeps rendering (§7).
 
-// origin → badge (icon + label). "" / unknown falls back to a generic agent turn.
-const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
-  scheduler: { icon: Clock, label: "scheduled" },
-  inbox: { icon: Inbox, label: "inbox" },
-  webhook: { icon: Webhook, label: "webhook" },
-  a2a: { icon: Users, label: "sister-agent" },
-  operator: { icon: MessageSquare, label: "you" },
-};
-
 // The wake-header stripping (#5094) moved into the pure feed model (docs/design/feed.md
 // §3) so the merged Feed shares it; re-exported here for existing callers.
 export { stripWakeHeader };
-
-export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
-  const o = ORIGIN[entry.origin] ?? { icon: Zap, label: entry.origin || "agent" };
-  const Icon = o.icon;
-  return (
-    <div className="activity-prov">
-      <span className={`activity-origin activity-origin-${entry.origin || "agent"}`}>
-        <Icon size={12} /> {o.label}
-      </span>
-      {entry.trigger ? <span className="activity-trigger">{entry.trigger}</span> : null}
-      {entry.priority ? <span className={`inbox-pri inbox-pri-${entry.priority}`}>{entry.priority}</span> : null}
-      {entry.created_at ? <span className="activity-time">{ago(entry.created_at)}</span> : null}
-    </div>
-  );
-}
 
 export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow) => void }) {
   // The agent's display name — the queued-row promise and the live announcement both
@@ -297,7 +269,7 @@ export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow
                       <StatusDot status={row.kind === "failed" ? "error" : "neutral"} />
                       <span className="feed-row-body">
                         <span className="feed-row-head">
-                          {row.kind === "failed" ? <FailedBadge status="error">Failed</FailedBadge> : null}
+                          {row.kind === "failed" ? <Badge status="error">Failed</Badge> : null}
                           <span className={`feed-row-title${row.kind === "queued" ? " feed-row-title--queued" : ""}`}>
                             {row.title}
                           </span>
