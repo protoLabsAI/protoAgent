@@ -10,19 +10,25 @@ losing SQLite's busy-handler poll race. See :func:`infra.sqlite_locks.file_lock`
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pytest
 
 from infra.sqlite_locks import file_lock
 
 
-def test_same_path_returns_the_same_lock(tmp_path):
+@pytest.mark.parametrize("spelling", [Path, str], ids=["path", "str"])
+def test_same_path_returns_the_same_lock(tmp_path, spelling):
+    """Looking one file up twice returns the same lock — and by either a ``Path`` or
+    ``str`` spelling, because the key is the normcased real path, not the argument type."""
     db = tmp_path / "issues.db"
-    lock = file_lock(db)
+    lock = file_lock(spelling(db))
     assert lock is file_lock(db)
+    assert lock is file_lock(str(db))
     assert isinstance(lock, type(threading.Lock()))
 
 
+@pytest.mark.platform_sensitive
 def test_two_paths_to_one_file_share_a_lock(tmp_path):
     """A symlink (or any alternate spelling) resolves to one real path, so the two
     get the same lock — the whole point of keying on the real path."""
@@ -38,8 +44,3 @@ def test_two_paths_to_one_file_share_a_lock(tmp_path):
 
 def test_different_files_get_different_locks(tmp_path):
     assert file_lock(tmp_path / "a.db") is not file_lock(tmp_path / "b.db")
-
-
-def test_str_and_path_spellings_share_a_lock(tmp_path):
-    db = tmp_path / "issues.db"
-    assert file_lock(str(db)) is file_lock(db)
