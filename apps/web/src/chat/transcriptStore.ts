@@ -15,6 +15,12 @@
 //   agents    key slug                     { slug, order: [sessionId…], currentSessionId }
 //   threads   key storageKey               { key, messages } — a palette / DM thread, named by
 //                                            its localStorage key (which keeps only its contextId)
+//   cursors   key slug                     { slug, seq } — the live-sync change-feed cursor
+//                                            (ADR 0130 D3): the highest bus seq this origin has
+//                                            rendered for an agent, so an EventSource reconnect
+//                                            resumes with `Last-Event-ID`/`?since=` across a tab
+//                                            close or a wake (lib/syncCursor.ts). Durable, unlike
+//                                            the per-tab sessionStorage mirror it backs.
 //
 // The tab order and the focused chat live in `agents`: written only when they change, and never
 // in localStorage, where a 50-id list would be another >1K value overwritten.
@@ -28,9 +34,10 @@ import type { ChatMessage } from "../lib/types";
 import { chunkHash, cutChunks } from "./transcriptChunks";
 
 export const TRANSCRIPT_DB = "protoagent-transcripts";
-// v2: + `agents` (tab order, focus) and `threads` (palette / DM threads). The upgrade only
+// v2: + `agents` (tab order, focus) and `threads` (palette / DM threads).
+// v3: + `cursors` (the live-sync change-feed cursor, ADR 0130 D3). The upgrade only
 // creates the stores a database lacks, so an older one gains them without losing anything.
-const VERSION = 2;
+const VERSION = 3;
 /** Opening IndexedDB can stall (a blocked upgrade, a wedged WebKit storage process). Past this,
  *  the caller falls back to localStorage for the page's lifetime. */
 export const OPEN_TIMEOUT_MS = 3_000;
@@ -48,6 +55,8 @@ type SessionRecord = {
 };
 type ChunkRecord = { slug: string; sessionId: string; hash: string; messages: Message[] };
 export type AgentRecord = { slug: string; order: string[]; currentSessionId: string | null };
+/** One agent's live-sync change-feed cursor (ADR 0130 D3). */
+export type CursorRecord = { slug: string; seq: number };
 /** One saved session, as Settings → Storage counts it (`bytes`: JSON length of its records). */
 export type SessionUsage = { slug: string; id: string; updatedAt: number; bytes: number };
 export type ThreadUsage = { key: string; bytes: number };
@@ -268,6 +277,22 @@ export class TranscriptStore {
     await done(tx);
   }
 
+  /** This agent's durable live-sync cursor — the highest change-feed seq the origin has
+   *  rendered for it (ADR 0130 D3), or null when none is stored. */
+  async loadCursor(slug: string): Promise<number | null> {
+    const tx = this.db.transaction("cursors", "readonly");
+    const record = (await promised(tx.objectStore("cursors").get(slug))) as CursorRecord | undefined;
+    return record && typeof record.seq === "number" && Number.isFinite(record.seq) ? record.seq : null;
+  }
+
+  /** Persist this agent's live-sync cursor. Monotonic is the caller's concern (syncCursor.ts);
+   *  this writes whatever it is handed so a deliberate reset can lower it. */
+  async putCursor(slug: string, seq: number): Promise<void> {
+    const tx = this.db.transaction("cursors", "readwrite");
+    tx.objectStore("cursors").put({ slug, seq } satisfies CursorRecord);
+    await done(tx);
+  }
+
   /** Free space under IndexedDB quota pressure (ADR 0114 D5), one step per call, so the
    *  caller can retry its write after each. Order:
    *   1. every saved chat of agents no longer in the fleet;
@@ -329,11 +354,12 @@ export class TranscriptStore {
 
   /** Remove everything (a backend switch, the crash reset). */
   async clear(): Promise<void> {
-    const tx = this.db.transaction(["sessions", "chunks", "agents", "threads"], "readwrite");
+    const tx = this.db.transaction(["sessions", "chunks", "agents", "threads", "cursors"], "readwrite");
     tx.objectStore("sessions").clear();
     tx.objectStore("chunks").clear();
     tx.objectStore("agents").clear();
     tx.objectStore("threads").clear();
+    tx.objectStore("cursors").clear();
     await done(tx);
   }
 }
@@ -373,6 +399,7 @@ export function openTranscriptStore(opts: { name?: string; timeoutMs?: number; f
       if (!db.objectStoreNames.contains("chunks")) db.createObjectStore("chunks", { keyPath: ["slug", "sessionId", "hash"] });
       if (!db.objectStoreNames.contains("agents")) db.createObjectStore("agents", { keyPath: "slug" });
       if (!db.objectStoreNames.contains("threads")) db.createObjectStore("threads", { keyPath: "key" });
+      if (!db.objectStoreNames.contains("cursors")) db.createObjectStore("cursors", { keyPath: "slug" });
     };
     request.onsuccess = () => {
       const db = request.result;

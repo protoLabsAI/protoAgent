@@ -22,12 +22,16 @@ class FakeEventSource {
   onerror: ((ev: unknown) => void) | null = null;
   onmessage: ((ev: unknown) => void) | null = null;
   closed = false;
+  // Mirrors the real EventSource: 0 CONNECTING, 1 OPEN, 2 CLOSED. reconnectOnWake reads it to
+  // tell a dead-but-assigned source (a slept tab) from a healthy one.
+  readyState = 1;
   constructor(url: string) {
     this.url = url;
     FakeEventSource.instances.push(this);
   }
   close() {
     this.closed = true;
+    this.readyState = 2;
   }
   emit(data: unknown) {
     this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent);
@@ -43,6 +47,8 @@ async function loadEvents() {
 }
 
 beforeEach(() => {
+  // Clear BEFORE loadEvents so each module re-import reads a clean persisted cursor at init.
+  window.sessionStorage.clear();
   sseToken.mockReset();
   sseToken.mockResolvedValue({ token: "" });
 });
@@ -191,6 +197,89 @@ describe("reconnect", () => {
     await vi.advanceTimersByTimeAsync(1000);
     await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(2));
     expect(FakeEventSource.instances[1].url).toBe("/api/events?token=t2&since=42");
+  });
+});
+
+describe("resume cursor (ADR 0130 D3)", () => {
+  it("resumes a FIRST connect from the durable IndexedDB cursor", async () => {
+    // A reopened tab: nothing in the synchronous mirror, only the durable per-origin cursor.
+    const cursorStore = { loadCursor: async () => 77, putCursor: async () => {} };
+    const { onTopic } = await loadEvents();
+    const { setSyncCursorStore } = await import("./syncCursor");
+    setSyncCursorStore((() => cursorStore) as never); // must register before the first connect
+    onTopic("#", () => {});
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    // connect() folds the durable cursor in before building the URL → resumes from ?since=77.
+    expect(FakeEventSource.instances[0].url).toBe("/api/events?since=77");
+  });
+
+  it("resync_required follows the server's seq DOWN, so the reconnect resumes there not at the stale high", async () => {
+    vi.useFakeTimers();
+    const { onTopic } = await loadEvents();
+    onTopic("#", () => {});
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    const first = FakeEventSource.instances[0];
+    first.onopen?.({});
+    first.emit({ topic: "turn.completed", data: {}, seq: 500 }); // climb the cursor high
+    expect(window.sessionStorage.getItem("protoagent.events.since")).toBe("500");
+    // The server resumes us at a LOWER seq (a wiped / foreign log) — the cursor must follow it
+    // down, or every reconnect re-triggers resync_required forever (events/bus.py _log_replay).
+    first.emit({ topic: "resync_required", data: { since: 500, floor: 10, last_seq: 12 }, seq: 12 });
+    expect(window.sessionStorage.getItem("protoagent.events.since")).toBe("12");
+
+    first.onerror?.({});
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(2));
+    expect(FakeEventSource.instances[1].url).toBe("/api/events?since=12");
+  });
+});
+
+describe("resume on wake (ADR 0130 D3)", () => {
+  it("reconnects immediately on focus instead of waiting out the backoff, replaying from the cursor", async () => {
+    const { onTopic } = await loadEvents();
+    onTopic("#", () => {});
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    const first = FakeEventSource.instances[0];
+    first.onopen?.({});
+    first.emit({ topic: "turn.started", data: {}, seq: 5 });
+    first.onerror?.({}); // tears the source down and schedules a (1s) backoff reconnect
+    expect(first.closed).toBe(true);
+
+    FakeEventSource.instances = []; // isolate the wake-driven reconnect from the first connect
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    expect(FakeEventSource.instances[0].url).toBe("/api/events?since=5");
+  });
+
+  it("replaces a DEAD (CLOSED) but still-assigned source — the slept-tab case onerror never fired", async () => {
+    const { onTopic } = await loadEvents();
+    onTopic("#", () => {});
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    const first = FakeEventSource.instances[0];
+    first.onopen?.({});
+    first.emit({ topic: "turn.completed", data: {}, seq: 8 });
+    first.readyState = 2; // CLOSED: the socket died on sleep, but onerror never fired
+
+    FakeEventSource.instances = [];
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    expect(first.closed).toBe(true); // the dead source was torn down and replaced
+    expect(FakeEventSource.instances[0].url).toBe("/api/events?since=8");
+  });
+
+  it("leaves a healthy OPEN stream alone on a routine focus / visibility change", async () => {
+    const { onTopic } = await loadEvents();
+    onTopic("#", () => {});
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    const first = FakeEventSource.instances[0];
+    first.onopen?.({});
+    first.readyState = 1; // OPEN
+
+    FakeEventSource.instances = [];
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(FakeEventSource.instances.length).toBe(0); // no churn
   });
 });
 

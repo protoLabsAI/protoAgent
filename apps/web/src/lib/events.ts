@@ -1,5 +1,5 @@
 import { api, apiUrl } from "./api";
-import { readKey, writeKey } from "./storage";
+import { agentSlug, hydrateCursor, loadCursor, rememberCursor, resetCursor } from "./syncCursor";
 
 // Client for the server→client event bus (ADR 0003, extended ADR 0039). One EventSource
 // is shared for the app's lifetime. Every event arrives as an unnamed SSE frame carrying
@@ -26,29 +26,22 @@ const connListeners = new Set<(connected: boolean) => void>();
 let source: EventSource | null = null;
 let connected = false;
 let connecting = false;
-// Highest bus seq we've dispatched — replayed via `?since=` on reconnect.
-// Persisted per agent in sessionStorage (Swap & Resume S2): an agent switch is
-// a full navigation, and a module-global cursor reset to null meant ZERO replay
-// of retained topics (input-required raised while away, background completions)
-// even though the server's ring had them. sessionStorage is per-tab — exactly
-// the "this tab navigated away and came back" scope; a fresh tab starting live
-// is correct. Keyed by slug: bus seqs are per-agent streams.
-const SINCE_KEY = (() => {
-  try {
-    const m = window.location.pathname.match(/\/agent\/([^/?#]+)/);
-    return m ? `protoagent.events.since:${decodeURIComponent(m[1])}` : "protoagent.events.since";
-  } catch {
-    return "protoagent.events.since";
-  }
-})();
+// The agent whose stream this tab follows. An agent switch is a full navigation, so this is
+// fixed for the module's life. Bus seqs are per-agent streams, so the resume cursor is keyed
+// by it (lib/syncCursor.ts).
+const AGENT_SLUG = agentSlug();
 
-function loadLastSeq(): number | null {
-  const raw = readKey("session", SINCE_KEY);
-  const n = raw === null ? NaN : Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-let lastSeq: number | null = loadLastSeq();
+// Highest bus seq we've dispatched — replayed via `?since=` on reconnect, when the tab
+// becomes visible again, and on wake from sleep. Persisted per agent by syncCursor: the
+// synchronous sessionStorage mirror lets this module resume the instant it builds its first
+// URL, and the durable IndexedDB copy (folded in before the first connect) survives a tab
+// close so a reopened pane resumes from its cursor rather than a blind refetch. Without a
+// cursor a prior tab's input-required-while-away or background completions never replayed
+// even though the server's log still held them (ADR 0130 D3).
+let lastSeq: number | null = loadCursor(AGENT_SLUG);
+// The durable cursor is read from IndexedDB once, before the first connect (async); until
+// then `lastSeq` is the synchronous mirror.
+let cursorHydrated = false;
 // Client-side mirror of the server's ring buffer (events/bus.py retains 128): every seq'd
 // frame this console has received, so the plugin-view bridge can replay "what did I miss?"
 // to an iframe that re-subscribes with `since` (#1640) WITHOUT a second server fetch. Sized
@@ -84,9 +77,10 @@ function setConnected(next: boolean) {
   connListeners.forEach((fn) => fn(connected));
 }
 
-/** Route a raw SSE frame to matching subscribers. Returns the frame's bus seq
- *  (for `?since=` replay) or null when the frame carries none. */
-function dispatch(raw: string): number | null {
+/** Route a raw SSE frame to matching subscribers. Returns its topic and the server-assigned
+ *  seq (for `?since=` replay / the resume cursor), or null when the frame is unparseable or
+ *  carries no topic. `seq` is null for a frame the server sent without one. */
+function dispatch(raw: string): { topic: string; seq: number | null } | null {
   let frame: { topic?: string; data?: Record<string, unknown>; seq?: number } = {};
   try {
     frame = JSON.parse(raw || "{}");
@@ -115,7 +109,7 @@ function dispatch(raw: string): number | null {
       console.error(`[events] listener for ${sub.pattern} threw on ${topic}`, err);
     }
   }
-  return seq ?? null;
+  return { topic, seq: seq ?? null };
 }
 
 /** Retained frames newer than `since`, oldest→newest — the client-side counterpart of
@@ -182,6 +176,18 @@ function scheduleReconnect() {
 async function connect() {
   if (source || connecting || typeof EventSource === "undefined") return;
   connecting = true;
+  // Fold the durable (IndexedDB) cursor in once, before the first URL is built, so a tab
+  // reopened after a close resumes from where the origin left off (ADR 0130 D3). Best-effort
+  // and cheap to have missed — the sessionStorage mirror already seeded `lastSeq`.
+  if (!cursorHydrated) {
+    cursorHydrated = true;
+    try {
+      const durable = await hydrateCursor(AGENT_SLUG);
+      if (durable !== null && (lastSeq === null || durable > lastSeq)) lastSeq = durable;
+    } catch {
+      /* durable store unavailable — keep the synchronous cursor */
+    }
+  }
   let token = "";
   try {
     token = (await api.sseToken()).token || "";
@@ -205,15 +211,62 @@ async function connect() {
     scheduleReconnect();
   };
   es.onmessage = (event) => {
-    const seq = dispatch((event as MessageEvent).data);
-    if (seq !== null) {
-      lastSeq = seq;
-      writeKey("session", SINCE_KEY, String(seq)); // best-effort: live-only if it fails
+    const frame = dispatch((event as MessageEvent).data);
+    if (!frame || frame.seq === null) return;
+    lastSeq = frame.seq;
+    if (frame.topic === "resync_required") {
+      // The server's authoritative resume point: it hands back its CURRENT seq, which a wiped
+      // or foreign log can put BELOW our stale cursor. Force it (past the monotonic guard) so
+      // the next reconnect resumes from here instead of re-triggering resync_required forever
+      // — the loop the server sends this to break (ADR 0130 D3; events/bus.py `_log_replay`).
+      resetCursor(AGENT_SLUG, frame.seq);
+    } else {
+      rememberCursor(AGENT_SLUG, frame.seq); // monotonic: sessionStorage mirror + durable IndexedDB
     }
   };
 }
 
+/** A tab regaining focus, becoming visible, or waking from sleep: if the stream is down and
+ *  something still wants it, resume from the cursor NOW rather than waiting out the backoff —
+ *  a slept laptop may never have fired the `onerror` that would have rescheduled it (ADR 0130
+ *  D3). A hidden tab is left alone; it reconnects the moment it is shown. */
+function reconnectOnWake() {
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+  if (connecting || !wanted()) return;
+  if (source) {
+    // An OPEN or still-CONNECTING EventSource heals itself — leave it be, so a routine focus
+    // or visibility change never churns a healthy stream. But a slept/suspended tab can land
+    // here with a DEAD source still assigned and `onerror` never fired (so it was never torn
+    // down or rescheduled): readyState is CLOSED. The old `if (source) return` wedged resume
+    // forever in exactly that case (ADR 0130 D3) — so replace it and reconnect now.
+    if (source.readyState !== 2 /* CLOSED */) return;
+    teardownSource();
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempts = 0;
+  void connect();
+}
+
+let wakeHooked = false;
+function hookWake() {
+  if (wakeHooked) return;
+  wakeHooked = true;
+  try {
+    document?.addEventListener?.("visibilitychange", reconnectOnWake);
+    window?.addEventListener?.("focus", reconnectOnWake);
+    // iOS/desktop restore from the page cache (sleep, back-forward) fires `pageshow`, not
+    // always `focus`/`visibilitychange`.
+    window?.addEventListener?.("pageshow", reconnectOnWake);
+  } catch {
+    /* non-browser context (SSR / node test env) */
+  }
+}
+
 function ensureOpen() {
+  hookWake();
   void connect();
 }
 

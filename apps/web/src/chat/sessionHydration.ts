@@ -20,6 +20,7 @@ import {
   type HydrationEligibility,
   type SessionReconcile,
 } from "./chat-store";
+import { onTopic } from "../lib/events";
 import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
@@ -604,11 +605,37 @@ export function pinParkedSessions(
   return out.slice(0, limit);
 }
 
+// session_id → the highest `last_change_seq` the index has reported for it (ADR 0130 D3).
+// The visibility backstop: a session whose server seq has climbed past what this console last
+// rendered is refetched even when its turn count and newest task id are unchanged (a rename, a
+// status flip). Seeded on first sight so a freshly booted index does not re-read everything.
+const changeSeqSeen = new Map<string, number>();
+
+/** A locally-held session the server's change feed has moved past since this console last read
+ *  it — the `last_change_seq` backstop (D3). False on first sight (nothing to compare), on a
+ *  server that sends no seq, and when the seq is unchanged. */
+function behindByChangeSeq(summary: DurableChatSession): boolean {
+  const seq = summary.last_change_seq;
+  if (typeof seq !== "number" || !Number.isFinite(seq)) return false;
+  const seen = changeSeqSeen.get(summary.session_id);
+  return seen !== undefined && seq > seen;
+}
+
+/** Remember the index's newest `last_change_seq` for a session, monotonically. */
+function recordChangeSeq(summary: DurableChatSession): void {
+  const seq = summary.last_change_seq;
+  if (typeof seq !== "number" || !Number.isFinite(seq)) return;
+  const seen = changeSeqSeen.get(summary.session_id);
+  if (seen === undefined || seq > seen) changeSeqSeen.set(summary.session_id, seq);
+}
+
 /** Fetch only server-only, locally empty, render-stale, or BEHIND-the-server sessions
- * (isBehindServer), with bounded fan-out.
+ * (isBehindServer or the `last_change_seq` backstop), with bounded fan-out. `full` forces a
+ * re-read of EVERY locally-held session's turns — the `resync_required` response (ADR 0130
+ * D3), where a cursor gap past retention means no incremental signal can be trusted.
  * Every read is best-effort: an offline/cold fleet member leaves local chat
  * untouched and will be tried again on the next full page boot. */
-export async function hydrateDurableChatSessions(): Promise<void> {
+export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}): Promise<void> {
   let summaries: DurableChatSession[];
   try {
     const [newest, parked] = await Promise.all([
@@ -629,11 +656,15 @@ export async function hydrateDurableChatSessions(): Promise<void> {
     // because a turn it still shows STREAMING is the server's newest (bd-wk4ti): a stranded
     // server-turn preview holds that task id itself, which reads "in step" to isBehindServer.
     // A turn THIS window is running (localTurnInFlight) is its own producer's to settle.
+    // The `last_change_seq` backstop (D3) catches a change that moved neither — a rename, a
+    // status flip — and `full` re-reads every held session (resync_required).
     const behind = Boolean(
       session?.messages.length &&
         !needsDurableHydration(session) &&
-        (isBehindServer(session, summary) ||
-          (!localTurnInFlight(summary.session_id) && hasStaleStreamingTurn(session, summary))),
+        (opts.full ||
+          isBehindServer(session, summary) ||
+          (!localTurnInFlight(summary.session_id) && hasStaleStreamingTurn(session, summary)) ||
+          behindByChangeSeq(summary)),
     );
     if (session?.messages.length && !needsDurableHydration(session) && !behind) return false;
     const token = chatStore.captureHydrationEligibility(summary.session_id, { behind });
@@ -641,6 +672,9 @@ export async function hydrateDurableChatSessions(): Promise<void> {
     eligibility.set(summary.session_id, token);
     return true;
   });
+  // Record the index's seqs AFTER the behind decision read the prior values, so the next
+  // visibility check compares against what the server reports now.
+  summaries.forEach(recordChangeSeq);
   const hydrated: ChatSession[] = [];
   const reconciled: SessionReconcile[] = [];
   let cursor = 0;
@@ -705,24 +739,103 @@ let lastResyncAt = 0;
  *  Boot hydration alone left an open window blind to turns another device ran — the
  *  phone's replies never reached a desktop window that stayed open all day. Single-flight
  *  and spaced by RESYNC_MIN_GAP_MS; `force` skips the spacing (not the single flight).
+ *  `full` re-reads every held session's turns (the `resync_required` response, ADR 0130 D3).
  *  Every commit still goes through the eligibility veto, so a local edit made while the
  *  read is out wins. */
-export function resyncDurableChatSessions(opts: { force?: boolean; now?: number } = {}): Promise<void> {
+export function resyncDurableChatSessions(
+  opts: { force?: boolean; now?: number; full?: boolean } = {},
+): Promise<void> {
   if (resyncInFlight) return resyncInFlight;
   const now = opts.now ?? Date.now();
   if (!opts.force && now - lastResyncAt < RESYNC_MIN_GAP_MS) return Promise.resolve();
   lastResyncAt = now;
-  resyncInFlight = hydrateDurableChatSessions().finally(() => {
+  resyncInFlight = hydrateDurableChatSessions({ full: opts.full }).finally(() => {
     resyncInFlight = null;
   });
   return resyncInFlight;
 }
 
-/** Keep an open console in step with the server: re-sync when the window comes back
- *  (visibility, focus) and on a slow interval while it is visible. A hidden window does
- *  nothing; it catches up the moment it is shown. Returns the unsubscribe. */
+/** The change-feed topics (ADR 0130 D2) that mean "a chat session or one of its turns moved".
+ *  Events carry identities, not payloads — the console reacts by refetching the affected
+ *  entities (the session index and any open session the server has moved past), never by
+ *  trusting the frame's body. */
+export const SYNC_TOPICS = [
+  "session.changed",
+  "turn.started",
+  "turn.completed",
+  "turn.failed",
+  "turn.finished",
+  "turn.resumed",
+] as const;
+
+// Coalesce a burst of change-feed frames into one forced resync: while one is in flight,
+// remember that more arrived and run exactly once more after it settles — so a turn that
+// fires `turn.completed` + two `session.changed` in a row costs one extra read, not three.
+let syncQueued = false;
+let syncFull = false;
+// Whether a drain loop is actively running. Tracked SEPARATELY from resyncInFlight: a resync
+// can be in flight from OUTSIDE the coalescer (SessionHistoryHydrator's boot `force:true`, or
+// watchDurableSessions' visibility/focus/interval resync), and in that case no drain is
+// reading `syncQueued` back. Gating onServerChange on resyncInFlight instead let a frame —
+// including `resync_required` — land during an external resync, set the flags, and never be
+// drained, silently dropping the refetch (and, for resync_required, the full re-read).
+let draining = false;
+async function drainServerChange(): Promise<void> {
+  if (draining) return;
+  draining = true;
+  try {
+    while (syncQueued) {
+      // A resync started outside the coalescer is still running: wait it out before starting
+      // ours. resyncDurableChatSessions single-flights, so calling it now would just return
+      // that in-flight promise — and if it is not `full` while our queued request IS (the
+      // resync_required path), the full re-read would be folded into it and lost. Awaiting
+      // first, then looping, lets us start a FRESH resync that carries the accumulated `full`.
+      const external = resyncInFlight;
+      if (external) {
+        await external.catch(() => {});
+        continue;
+      }
+      const full = syncFull;
+      syncQueued = false;
+      syncFull = false;
+      await resyncDurableChatSessions({ force: true, full });
+    }
+  } finally {
+    draining = false;
+  }
+}
+
+/** React to one change-feed frame: refetch the entities it names (D2). `full` (the
+ *  `resync_required` path) re-reads every open session's turns. Always queues the work and
+ *  ensures a drain is running — even when a resync started outside the coalescer is in
+ *  flight — so the refetch is never dropped. */
+export function onServerChange(opts: { full?: boolean } = {}): void {
+  if (opts.full) syncFull = true;
+  syncQueued = true;
+  if (draining) return;
+  void drainServerChange();
+}
+
+/** Subscribe the console to the server's change feed (ADR 0130 D3): a `session.changed` or
+ *  `turn.*` frame routes to an entity refetch, and `resync_required` (a cursor gap past
+ *  retention) to a full refetch of the session list and every open session's turns. Returns
+ *  the combined unsubscribe. */
+export function watchServerChangeFeed(): () => void {
+  const offs = SYNC_TOPICS.map((topic) => onTopic(topic, () => onServerChange()));
+  offs.push(onTopic("resync_required", () => onServerChange({ full: true })));
+  return () => offs.forEach((off) => off());
+}
+
+/** Keep an open console in step with the server: subscribe to the live change feed (ADR 0130
+ *  D3) so another device's send, answer or background result refetches here within a beat,
+ *  and — as a backstop — re-sync when the window comes back (visibility, focus) and on a slow
+ *  interval while it is visible. The visibility re-sync compares each open session's
+ *  `last_change_seq` with the server's, catching anything the feed missed while the stream was
+ *  down. A hidden window does nothing; it catches up the moment it is shown. Returns the
+ *  unsubscribe. */
 export function watchDurableSessions(): () => void {
-  if (typeof document === "undefined" || typeof window === "undefined") return () => {};
+  const offFeed = watchServerChangeFeed();
+  if (typeof document === "undefined" || typeof window === "undefined") return offFeed;
   const visible = () => document.visibilityState !== "hidden";
   const onReturn = () => {
     if (visible()) void resyncDurableChatSessions();
@@ -731,14 +844,20 @@ export function watchDurableSessions(): () => void {
   document.addEventListener("visibilitychange", onReturn);
   window.addEventListener("focus", onReturn);
   return () => {
+    offFeed();
     window.clearInterval(timer);
     document.removeEventListener("visibilitychange", onReturn);
     window.removeEventListener("focus", onReturn);
   };
 }
 
-/** Test seam: forget the spacing and any in-flight re-sync. */
+/** Test seam: forget the spacing, any in-flight re-sync, the change-feed coalescer, and the
+ *  `last_change_seq` backstop. */
 export function resetDurableResyncForTests(): void {
   resyncInFlight = null;
   lastResyncAt = 0;
+  syncQueued = false;
+  syncFull = false;
+  draining = false;
+  changeSeqSeen.clear();
 }
