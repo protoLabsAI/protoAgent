@@ -37,6 +37,16 @@ describe("shared workGroups projection", () => {
     expect(workGroups([]).map((g) => g.count)).toEqual([0, 0, 0, 0]);
   });
 
+  it("sends a waiting task to Needs you while a long-quiet in_progress one stays in Doing now (ADR 0129)", () => {
+    const stale = task("in_progress");
+    (stale.raw as Task).updated_at = "2026-01-01T00:00:00Z"; // days quiet — staleness never regroups
+    const groups = workGroups([task("waiting"), stale]);
+    expect(groups.map(({ id, count }) => [id, count])).toEqual([
+      ["needs-you", 1], ["doing-now", 1], ["coming-up", 0], ["instructions", 0],
+    ]);
+    expect((groups[0].items[0].raw as Task).status).toBe("waiting");
+  });
+
   it("filters other groups to the same session but never filters Needs you", () => {
     const decision: GroupableWorkItem = { ...base, kind: "decision", sessionId: "elsewhere", status: "needs-you", raw: { state: "pending" } };
     const delivery: GroupableWorkItem = { ...base, kind: "delivery", sessionId: "elsewhere", status: "needs-you", raw: { delivered: false, needsHuman: true } };

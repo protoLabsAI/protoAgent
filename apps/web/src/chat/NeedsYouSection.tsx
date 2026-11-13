@@ -19,10 +19,10 @@ import { chatStore } from "./chat-store";
 
 /** The kinds this section draws rows for — the rail (ChatStatusRail) counts EXACTLY this
  *  set, so "Needs you · N" can never claim a row the panel doesn't show. A `waiting` task
- *  (ADR 0129 Q1) rides Work's own Needs-you group instead: it has no rail row, so it must
- *  not raise the fleet-wide marker either. */
+ *  (ADR 0129 Q1) now has a row of its own — "Waiting on you: <title>", opening the chat
+ *  where the agent parked it — so it counts here exactly as it does in Work's group. */
 export const NEEDS_YOU_SECTION_KINDS: ReadonlySet<GroupableWorkItem["kind"]> =
-  new Set(["decision", "delivery", "goal"]);
+  new Set(["decision", "delivery", "goal", "task"]);
 
 /** A decision pending this long gets the muted stale hint — never a warning callout. */
 export const STALE_DECISION_MS = 30 * 60_000;
@@ -59,6 +59,7 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
   const decisions = items.filter((item) => item.kind === "decision");
   const deliveries = items.filter((item) => item.kind === "delivery");
   const goals = items.filter((item) => item.kind === "goal");
+  const tasks = items.filter((item) => item.kind === "task");
   const count = items.length;
   const live = new Set(decisions.map((item) => item.id));
   // ONE list, keyed by id (the DecisionsPanel shape): a held card that leaves the pending
@@ -70,6 +71,12 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
 
   const openChat = async (row: DecisionRow, reply: boolean) => {
     if (await openSourceChat(row.session_id, reply)) onNavigate();
+    else setNote("Couldn't open that chat. Try again when the agent is connected.");
+  };
+  // A waiting job's row opens the chat where the agent parked it (the same move its Work
+  // row makes) — the conversation IS the pending ask, so there is nothing to answer here.
+  const openTaskChat = async (sessionId: string) => {
+    if (await openSourceChat(sessionId, false)) onNavigate();
     else setNote("Couldn't open that chat. Try again when the agent is connected.");
   };
   // "Open chat: {title}" when the source chat is already hydrated; the card falls back to
@@ -129,8 +136,20 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
             </span>
           </button>
         ))}
-      {(deliveries.length > 0 || goals.length > 0) && (
+      {(deliveries.length > 0 || goals.length > 0 || tasks.length > 0) && (
         <ul className="chat-status-details__rows">
+          {tasks.map((item) => (
+            <li key={`task:${item.id}`} className="chat-status-details__row chat-needs-you__task">
+              <span className="chat-status-details__title" title={item.title}>
+                Waiting on you: {item.title}
+              </span>
+              {item.sessionId && (
+                <Button size={size} variant="ghost" onClick={() => void openTaskChat(item.sessionId!)}>
+                  Open chat
+                </Button>
+              )}
+            </li>
+          ))}
           {deliveries.map((item) => (
             <li key={`delivery:${item.id}`} className="chat-status-details__row">
               <span className="chat-status-details__title" title={item.title}>{item.title}</span>

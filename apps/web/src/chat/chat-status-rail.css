@@ -247,6 +247,9 @@
 .chat-needs-you__goal {
   flex-wrap: wrap;
 }
+.chat-needs-you__task {
+  flex-wrap: wrap;
+}
 .chat-needs-you__goal-actions {
   display: flex;
   align-items: center;
@@ -287,6 +290,10 @@
     width: 100%;
   }
   .chat-needs-you__goal-actions .pl-btn {
+    width: 100%;
+  }
+  /* A waiting job's Open chat stacks full width too, meeting the touch floor. */
+  .chat-needs-you__task .pl-btn {
     width: 100%;
   }
 }
