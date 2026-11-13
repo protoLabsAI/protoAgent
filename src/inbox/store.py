@@ -5,7 +5,9 @@ External systems (webhooks, cron, scripts, sister agents) push messages here via
 
 - ``now``   — surfaced immediately (the server fires a turn on the item's own
   isolated ``job:`` execution session, ADR 0129; the Activity feed gets the summary).
-- ``next``  — queued; the agent pulls it on its next ``check_inbox`` call.
+- ``next``  — delivered when the agent is idle: the retry-when-free path fires it as a
+  turn (on its own ``job:`` session, after any current work — never interrupting it),
+  and ``check_inbox`` still pulls it on demand.
 - ``later`` — background; only returned on an explicit ``later`` floor.
 
 An item may also carry ``delivery="thread"`` (ADR 0003 amendment, outside messages): it
@@ -87,13 +89,16 @@ class InboxStore:
         # there is nothing to ack. Read from the table, so a store rebuilt mid-turn (a
         # settings hot-reload swaps the instance) still knows about a claim in flight.
         self._unacked_sessions: set[str] = self._sessions_with_unacked_claims()
-        # In-process hint for the retry-when-free path: MAY a priority-now page be waiting?
-        # Set on every write that could leave one pending; only cleared by has_pending_now()
-        # once the table says there is none. False negatives would strand a page, so every
-        # ambiguity errs toward True (a spare lookup is cheap, a stranded page is not) —
-        # ``_now_gen`` lets the clear notice a set that landed while its query ran.
-        self._now_gen = 0
-        self._now_pending: bool = self._has_pending_now_db()
+        # In-process hint for the retry-when-free path: MAY a FIREABLE item be waiting — a
+        # priority-now page, or a priority-next item the idle agent should run (a thread
+        # item is delivered via claim_thread_items, not this fire path, so it never arms
+        # it). Set on every write that could leave one pending; only cleared by
+        # has_pending_fireable() once the table says there is none. False negatives would
+        # strand an item, so every ambiguity errs toward True (a spare lookup is cheap, a
+        # stranded item is not) — ``_fireable_gen`` lets the clear notice a set that landed
+        # while its query ran.
+        self._fireable_gen = 0
+        self._fireable_pending: bool = self._has_pending_fireable_db()
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
@@ -262,8 +267,12 @@ class InboxStore:
                 with self._hint_lock:
                     self._hint_gen += 1
                     self._thread_targets.add(target_session)
-            if priority == "now":
-                self._note_pending_now()
+            # Arm the retry-when-free hint for a tier the idle agent fires as a turn: a now
+            # page (delivered immediately or on retry) or a next item (delivered when free).
+            # A thread item (always stored next) belongs to the live chat, not this fire
+            # path, so it never arms it; later items stay background.
+            if priority in ("now", "next") and delivery != DELIVERY_THREAD:
+                self._note_pending_fireable()
             return dict(row)
         finally:
             db.close()
@@ -334,38 +343,42 @@ class InboxStore:
             return bool(targets)
         return "" in targets or session_id in targets
 
-    def _has_pending_now_db(self) -> bool:
+    def _has_pending_fireable_db(self) -> bool:
         db = self._connect()
         try:
             row = db.execute(
-                "SELECT 1 FROM inbox WHERE priority = 'now' AND delivered_at IS NULL LIMIT 1"
+                "SELECT 1 FROM inbox WHERE priority IN ('now', 'next') AND delivered_at IS NULL "
+                "AND delivery != ? LIMIT 1",
+                (DELIVERY_THREAD,),
             ).fetchone()
             return row is not None
         finally:
             db.close()
 
-    def _note_pending_now(self) -> None:
+    def _note_pending_fireable(self) -> None:
         with self._hint_lock:
-            self._now_gen += 1
-            self._now_pending = True
+            self._fireable_gen += 1
+            self._fireable_pending = True
 
-    def maybe_pending_now(self) -> bool:
-        """Cheap, SQLite-free hint: MAY a priority-now page still be awaiting delivery?
-        False means certainly none; True means check :meth:`has_pending_now`."""
-        return self._now_pending
+    def maybe_pending_fireable(self) -> bool:
+        """Cheap, SQLite-free hint: MAY a now page or a next item still be awaiting its
+        idle-delivery? False means certainly none; True means check
+        :meth:`has_pending_fireable`."""
+        return self._fireable_pending
 
-    def has_pending_now(self) -> bool:
-        """Whether any priority-now page is still undelivered (table truth; refreshes the
-        in-process hint either way). A set that lands while the query runs wins over the
+    def has_pending_fireable(self) -> bool:
+        """Whether any now page or next item is still undelivered — the tiers the
+        retry-when-free path fires as a turn when the agent is free (table truth; refreshes
+        the in-process hint either way). A set that lands while the query runs wins over the
         clear, so a concurrent add can never be hinted away."""
         with self._hint_lock:
-            gen = self._now_gen
-        pending = self._has_pending_now_db()
+            gen = self._fireable_gen
+        pending = self._has_pending_fireable_db()
         with self._hint_lock:
             if pending:
-                self._now_pending = True
-            elif self._now_gen == gen:
-                self._now_pending = False
+                self._fireable_pending = True
+            elif self._fireable_gen == gen:
+                self._fireable_pending = False
         return pending
 
     def _sessions_with_unacked_claims(self) -> set[str]:
@@ -529,13 +542,15 @@ class InboxStore:
         if not include_delivered:
             where += " AND delivered_at IS NULL"
             if not include_recovery_claimed:
-                # Hide a now page that recovery is holding: either an in-flight claim, OR a
-                # durable accepted-but-unmarked delivery (recovery_accepted_at). The latter
-                # was already delivered to the operator; surfacing it to a check_inbox pull
-                # would fire a duplicate Activity turn even after the ephemeral claim is
-                # cleared at startup. Recovery completes it (marks delivered) without re-firing.
+                # Hide a now page OR a next item that recovery is holding: either an
+                # in-flight claim, OR a durable accepted-but-unmarked delivery
+                # (recovery_accepted_at). The latter was already delivered; surfacing it to
+                # a check_inbox pull would fire a duplicate turn even after the ephemeral
+                # claim is cleared at startup. Recovery completes it (marks delivered)
+                # without re-firing. Next is included so the idle-delivery claim and a
+                # concurrent check_inbox pull can't both deliver the same next item.
                 where += (
-                    " AND NOT (priority = 'now' AND "
+                    " AND NOT (priority IN ('now', 'next') AND "
                     "(recovery_claimed_at IS NOT NULL OR recovery_accepted_at IS NOT NULL))"
                 )
         db = self._connect()
@@ -590,8 +605,8 @@ class InboxStore:
                 self._hint_gen += 1
                 self._thread_targets = self._thread_targets | snapshot
             if cur.rowcount:
-                # Every restored now-item is pending again — re-arm the retry hint.
-                self._note_pending_now()
+                # Every restored item is pending again — re-arm the retry hint.
+                self._note_pending_fireable()
             return cur.rowcount
         finally:
             db.close()
@@ -713,10 +728,19 @@ class InboxStore:
         limit: int = 8,
         retry_after_s: int = 3600,
         max_attempts: int = RECOVERY_MAX_ATTEMPTS,
+        priorities: tuple[str, ...] = ("now",),
         now: datetime | None = None,
     ) -> list[dict]:
-        """Atomically claim a bounded batch of pre-existing pending ``now`` items for
-        boot recovery, returning the claimed rows.
+        """Atomically claim a bounded batch of pending items for the retry-when-free path,
+        returning the claimed rows ordered by priority (now before next) then age (oldest
+        first).
+
+        ``priorities`` selects the tiers to claim. It defaults to ``("now",)`` — boot
+        recovery and the now-page backstop — and the idle retry-when-free sweep passes
+        ``("now", "next")`` so an idle agent also runs a queued next item (after any
+        current work). Thread-delivery items (always stored ``next``) are never claimed
+        here: they belong to the operator's live chat via ``claim_thread_items``. ``later``
+        items are background and are never claimed.
 
         Claimed rows remain undelivered until accepted delivery marks them delivered.
         ``recovery_claimed_at`` is a bounded in-flight lease that keeps a concurrent
@@ -758,20 +782,23 @@ class InboxStore:
         now_iso = now.isoformat()
         _ = retry_after_s
         batch_limit = max(1, int(limit))
+        tiers = tuple(p for p in priorities if p in PRIORITIES) or ("now",)
+        tier_placeholders = ",".join("?" for _ in tiers)
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
-                """
+                f"""
                 SELECT * FROM inbox
-                WHERE priority = 'now'
+                WHERE priority IN ({tier_placeholders})
                   AND delivered_at IS NULL
                   AND recovery_claimed_at IS NULL
+                  AND delivery != ?
                   AND (recovery_accepted_at IS NOT NULL OR recovery_attempts < ?)
-                ORDER BY created_at ASC
+                ORDER BY CASE priority WHEN 'now' THEN 0 WHEN 'next' THEN 1 ELSE 2 END, created_at ASC
                 LIMIT ?
                 """,
-                (max_attempts, batch_limit),
+                (*tiers, DELIVERY_THREAD, max_attempts, batch_limit),
             ).fetchall()
             ids = [int(r["id"]) for r in rows]
             if ids:
@@ -853,7 +880,7 @@ class InboxStore:
             db.commit()
             if cur.rowcount:
                 # The row is pending and unclaimed again — re-arm the retry hint.
-                self._note_pending_now()
+                self._note_pending_fireable()
             return cur.rowcount
         finally:
             db.close()
