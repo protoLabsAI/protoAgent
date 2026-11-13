@@ -126,6 +126,8 @@ def test_two_concurrent_install_deps_requests_run_one_pip(plugin, monkeypatch):
 
     # Released: the next install runs (the fake dep is still "missing", so pip runs again).
     again = TestClient(app).post("/api/plugins/install-deps", json={"id": PID})
+    for bad in ("..", "a/b", "a\\b", "c:x"):  # an id is a name, never a path
+        assert TestClient(app).post("/api/plugins/install-deps", json={"id": bad}).status_code == 400, bad
     assert again.status_code == 200
     assert _events(log).count("start") == 2 and "OVERLAP" not in _events(log)
     assert installer.deps_install_running() is None

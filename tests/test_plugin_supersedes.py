@@ -348,6 +348,23 @@ def test_supersedes_on_an_installed_copy_is_inert(host):
     assert _winner(host)["cowork"].path == host.live / "cowork"  # tracked override, as before
 
 
+def test_a_fetched_copy_from_an_untrusted_source_cannot_enable_itself(host, monkeypatch):
+    """ADR 0071 D3: a fetch-only install skips the consent ask, so its own manifest
+    `enabled: true` / `builtin: true` must not run it; an ack (or plugins.enabled) does."""
+    from graph.config import LangGraphConfig
+
+    _write_plugin(host.live / "selfon", "selfon", "0.1.0", extra="enabled: true\nbuiltin: true\n")
+    host.lock.write_text(json.dumps({"plugins": [{"id": "selfon", "source_url": FORK}]}))
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [host.bundled, host.live])
+    on = lambda cfg: next(m for m in load_plugins(cfg).meta if m["id"] == "selfon")["enabled"]  # noqa: E731
+    assert not on(LangGraphConfig())
+    assert on(LangGraphConfig(plugins_sources_acked=[FORK])) and on(LangGraphConfig(plugins_enabled=["selfon"]))
+    # A lock row with NO source is a bundled plugin's wheel-deps pin (ADR 0093), not a fetched
+    # copy: its manifest still decides.
+    host.lock.write_text(json.dumps({"plugins": [{"id": "selfon", "deps": []}]}))
+    assert on(LangGraphConfig())
+
+
 def test_supersedes_from_a_sibling_folder_in_the_same_root_is_inert(host):
     """…including a second folder in the SAME root claiming the id: only a copy from an
     EARLIER root (the bundled tree) can retire a later one, so a dropped-in folder can't

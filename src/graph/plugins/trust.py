@@ -99,6 +99,20 @@ def source_trusted(
     return bool(trust_unverified) or _matches(url, official) or _matches(url, acked)
 
 
+def config_trusts(url: str, cfg) -> bool:
+    """``source_trusted`` read off a config object (``plugins_sources_official`` /
+    ``plugins_sources_acked`` / ``plugins_trust_unverified``). The don't-ask flag WIDENS
+    trust, so only a literal ``True`` counts; no config trusts nothing."""
+    if cfg is None:
+        return False
+    return source_trusted(
+        url,
+        official=getattr(cfg, "plugins_sources_official", None),
+        acked=getattr(cfg, "plugins_sources_acked", None),
+        trust_unverified=getattr(cfg, "plugins_trust_unverified", False) is True,
+    )
+
+
 def ack_pattern(url: str) -> str:
     """What a bare Confirm stores into ``plugins.sources.acked``: the exact
     normalized source (narrowest grant — acking one repo trusts that repo, not its
