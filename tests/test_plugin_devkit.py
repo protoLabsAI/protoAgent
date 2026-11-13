@@ -819,6 +819,9 @@ def test_reload_flags_silent_noop_only_under_devkit_roots(monkeypatch, tmp_path)
 # ── lifecycle tools (#2719) — install / update / disable / uninstall / verify ──
 
 
+_TRUSTING = type("_Cfg", (), {"plugins_trust_unverified": True})()  # ADR 0071 D3: every source trusted
+
+
 def _install_result(**over):
     from types import SimpleNamespace
 
@@ -841,6 +844,7 @@ def test_install_plugin_tool_reports_live_and_load_errors(monkeypatch):
     from runtime.state import STATE
 
     monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "graph_config", _TRUSTING, raising=False)
 
     async def fake_install(url, ref=None, **kw):
         assert kw["by"] == "devkit" and kw["activate"] is True
@@ -850,6 +854,9 @@ def test_install_plugin_tool_reports_live_and_load_errors(monkeypatch):
     out = _run(mod.install_plugin.ainvoke({"url": "https://x/demo"}))
     assert "installed" in out and "enabled + live: demo" in out
     assert "FAILED to load" in out and "leftpad" in out  # honest per #2716
+    # …and a source the operator never trusted is refused before anything is fetched
+    monkeypatch.setattr(STATE, "graph_config", None, raising=False)
+    assert "not installed" in _run(mod.install_plugin.ainvoke({"url": "https://x/demo"}))
 
 
 def test_install_plugin_tool_fetch_only_without_graph(monkeypatch):
@@ -858,6 +865,7 @@ def test_install_plugin_tool_fetch_only_without_graph(monkeypatch):
     from runtime.state import STATE
 
     monkeypatch.setattr(STATE, "graph", None, raising=False)
+    monkeypatch.setattr(STATE, "graph_config", _TRUSTING, raising=False)
 
     async def fake_install(url, ref=None, **kw):
         assert kw["apply_settings"] is None  # no live applier → ops skips activation
@@ -1013,6 +1021,7 @@ def test_install_plugin_reload_failure_is_not_fetched_only(monkeypatch):
     from runtime.state import STATE
 
     monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "graph_config", _TRUSTING, raising=False)
 
     async def fake_install(url, ref=None, **kw):
         return _install_result(enabled=[], reloaded=False, enable_error="graph compile failed")

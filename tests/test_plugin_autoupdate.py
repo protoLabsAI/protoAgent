@@ -20,6 +20,7 @@ def _cfg(**over):
         plugins_enabled=["demo"],
         plugins_disabled=[],
         plugins_sources_allow=[],
+        plugins_sources_acked=["github.com/acme/*"],  # ADR 0071 D3: only a trusted source auto-updates
         plugins_update_policy={"demo": {"track": "main", "when": "idle"}},
         plugins_autoupdate_interval_hours=6,
     )
@@ -81,6 +82,12 @@ def stub_installer(monkeypatch):
     calls.entry = entry
     calls.installer = installer_mod
     return calls
+
+
+async def test_sweep_never_pulls_from_an_untrusted_source(stub_installer):
+    cfg = _cfg(plugins_sources_acked=[])
+    await agent_init._plugin_autoupdate_sweep(cfg, cfg.plugins_update_policy)
+    assert stub_installer.installed == []
 
 
 async def test_sweep_updates_behind_enabled_plugin(stub_installer):

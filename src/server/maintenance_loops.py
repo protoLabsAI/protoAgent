@@ -904,6 +904,13 @@ async def _autoupdate_one_plugin(plugin_id: str, entry: dict, status: dict, cfg,
         # tag (the check's latest_ref), not the recorded one.
         ref = status.get("latest_ref") or ref
 
+    from graph.plugins.trust import config_trusts
+
+    if not config_trusts(source_url, cfg):
+        # ADR 0071 D3: auto-update inherits source trust — an unacked source never pulls
+        # new code unattended.
+        log.info("[plugin-autoupdate] %s skipped — its source is not trusted (Settings ▸ Plugins)", plugin_id)
+        return
     allow = list(getattr(cfg, "plugins_sources_allow", []) or []) or None
     try:
         summary = await asyncio.to_thread(installer.install, source_url, ref, force=True, by="autoupdate", allow=allow)

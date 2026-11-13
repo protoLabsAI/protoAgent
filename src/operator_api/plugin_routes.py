@@ -79,18 +79,9 @@ def _consent_needs_ack(url: str) -> dict | None:
     the ``{"needs_ack": True, "source": …}`` response when ``url`` needs the
     one-time "this runs code" ack, else None (trusted — proceed). One home so the
     two gates can't drift (the 2771 QA panel's DRY finding)."""
-    from graph.plugins.trust import normalize_source, source_trusted
+    from graph.plugins.trust import config_trusts, normalize_source
 
-    cfg = STATE.graph_config
-    if source_trusted(
-        url,
-        official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
-        acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
-        # Literal-True only: from_dict already parses string forms via _falsey
-        # (#2739), so the attribute is a real bool — but this flag WIDENS trust,
-        # so the gate is belt-and-braces fail-closed against any exotic value.
-        trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
-    ):
+    if config_trusts(url, STATE.graph_config):
         return None
     return {"needs_ack": True, "source": normalize_source(url)}
 

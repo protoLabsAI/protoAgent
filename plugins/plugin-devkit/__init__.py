@@ -996,9 +996,10 @@ async def enable_plugin(plugin_id: str) -> str:
 # these it stopped at authoring (scaffold/edit/test/enable/reload) and the agent had
 # to hand installs/updates/removals back to the operator. Everything routes through
 # the same ops/installer layers the console uses, so load failures surface (#2716)
-# and teardown is live (#1955). Consent posture: the devkit is opt-in — enabling it
-# IS the consent gate until ADR 0071 D3's ack layer lands (ADR 0096) — and the
-# configured source allowlist still applies to every install.
+# and teardown is live (#1955). Consent posture (ADR 0071 D3): the agent installs only
+# from a source the operator already trusts (official, acked, or trust_unverified);
+# any other source goes back to the operator's console ask. The configured source
+# allowlist still applies to every install.
 
 
 def _live_apply(config_updates: dict | None) -> tuple[bool, str]:
@@ -1052,16 +1053,25 @@ def _ops_applier():
 async def install_plugin(url: str, ref: str = "", activate: bool = True) -> str:
     """Install a plugin — or a whole bundle — from a git URL and (by default) enable +
     hot-reload it, exactly like the console install. **Installing with activate=True
-    RUNS the plugin's code** (trust-by-default, ADR 0071); the configured source
-    allowlist still applies. ``activate=False`` fetches only (install ≠ enable).
+    RUNS the plugin's code** (trust-by-default, ADR 0071). Only a source the operator
+    already trusts installs here; any other is refused, and the operator installs it
+    from the console. The configured source allowlist still applies. ``activate=False`` fetches only (install ≠ enable).
 
     Reports what enabled, any member that FAILED to load (in ``plugins.enabled`` but
     not running — fix it, then ``reload_plugins``), and seeded MCP servers."""
     from ops import OpContext
     from ops.plugins import install_and_activate
 
-    from graph.plugins import installer
+    from runtime.state import STATE
 
+    from graph.plugins import installer
+    from graph.plugins.trust import config_trusts
+
+    if not config_trusts(url, getattr(STATE, "graph_config", None)):
+        return (
+            f"✗ not installed: {url} is not a source the operator has trusted. Ask them to install it "
+            "from Settings ▸ Plugins, which asks once before it runs code from a new source."
+        )
     applier = _ops_applier() if activate else None
     try:
         res = await install_and_activate(
