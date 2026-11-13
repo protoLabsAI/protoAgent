@@ -8,14 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 it asks you to *edit PROTO.md, not this file*, so the agent guidance has one home and
 doesn't drift. Read it before editing. It owns:
 
-- **Run commands** — `python -m server` (never `python server.py`; retired in ADR 0023);
+- **Run commands** — `python -m server`;
   `scripts/dev.sh` for the isolated dev instance; `uv sync` (Python) / `npm ci` (console).
 - **The must-pass-before-PR gates** — the table mirroring `.github/workflows/checks.yml`
   (`ruff check .`, `lint-imports`, `python -m pytest tests/ -q`, `python scripts/live_smoke.py`,
   `npm run test:unit`/`test:e2e --workspace @protoagent/web`). Run them locally before the PR.
 - **The gotchas that actually recur** — `F841` fails CI and isn't auto-fixed; the
-  `graph/config.py` ↔ `tests/test_config_roundtrip.py` golden field map; the import-layering
-  contract; `a2a_impl/` (not `a2a/`); empty `current_session_id()` inside tool bodies; the
+  `src/graph/config.py` ↔ `tests/test_config_roundtrip.py` golden field map; the import-layering
+  contract; `src/a2a_impl/` (not `a2a/`); empty `current_session_id()` inside tool bodies; the
   `*/`-in-CSS-comment minifier trap; controlled DS AppShell widths.
 
 [README.md](./README.md) is the feature/capability map (what ships, where it lives, which
@@ -28,15 +28,16 @@ protoAgent is a **LangGraph agent runtime**: a Python core plus a TypeScript ope
 console, extended by drop-in plugins rather than by forking.
 
 **Request flow.** A consumer (A2A JSON-RPC over `/a2a`, the OpenAI-compatible `/v1` API,
-or the React console over `/api`) hits the **FastAPI server** (`server/`, with the
-operator REST surface in `operator_api/`). The server **never calls the model directly** —
-it submits the message to **`graph/agent.py`** (a LangGraph `create_agent`), which owns the
-tool loop, subagent `task()` delegation (`graph/subagents/`), and the `<scratch_pad>`/
+or the React console over `/api`) hits the **FastAPI server** (`src/server/`, with the
+operator REST surface in `src/operator_api/`). The server **never calls the model directly** —
+it submits the message to **`src/graph/agent.py`** (a LangGraph `create_agent`), which owns the
+tool loop, subagent `task()` delegation (`src/graph/subagents/`), and the `<scratch_pad>`/
 `<output>` structured-output protocol. The graph talks to an **OpenAI-compatible LiteLLM
-gateway** (`graph/llm.py`) — *model selection is gateway config, not code*.
+gateway** (`src/graph/llm.py`) — *model selection is gateway config, not code*.
 
-**Two languages, one repo.** Python is the core (`server/ graph/ a2a_impl/ tools/
-knowledge/ scheduler/ observability/ security/ infra/ runtime/ events/ operator_api/`);
+**Two languages, one repo.** Python is the core, under `src/` (`server/ graph/ a2a_impl/ tools/
+knowledge/ scheduler/ observability/ security/ infra/ runtime/ events/ operator_api/`;
+each keeps its top-level import name, e.g. `import graph`);
 TypeScript is the console (`apps/web`, the `@protoagent/web` npm workspace, served prebuilt
 from `apps/web/dist`).
 
@@ -62,7 +63,7 @@ with separate chat/tasks/knowledge. Use the dev instance for feature testing.
 
 ## Forking note
 
-This is a template repo: shared-runtime fixes (`server/`, `graph/agent.py`, extension
+This is a template repo: shared-runtime fixes (`src/server/`, `src/graph/agent.py`, extension
 support, release pipeline) land here; domain-specific agent behavior belongs in a fork,
-where a fork is close to rewriting `config/SOUL.md`, `graph/prompts.py`, and
-`tools/lg_tools.py` and little else.
+where a fork is close to rewriting `config/SOUL.md`, `src/graph/prompts.py`, and
+`src/tools/lg_tools.py` and little else.
