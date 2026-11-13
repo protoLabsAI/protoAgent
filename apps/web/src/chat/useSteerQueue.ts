@@ -8,6 +8,7 @@ import type { ChatMessage, ConsumedSteer, HitlPayload, QueuedSteer } from "../li
 import { chatStore, type SessionStatus } from "./chat-store";
 import { messageId } from "./messageId";
 import { loadSteers, saveSteers } from "./scratchState";
+import { settleAnsweredPause } from "./reattach";
 import { liveMessageId } from "./server-turn-store";
 import { placeConsumedSteers, placeServerTurnSteers } from "./steerPlacement";
 import {
@@ -167,16 +168,50 @@ export function useSteerQueue({
     setDraft("");
     setSteerQueue([...steerQueueRef.current, { id, text, ...(images.length ? { images } : {}) }]);
     try {
-      await (images.length
+      const res = await (images.length
         ? session.incognito
           ? api.steerChat(session.id, id, text, images, true)
           : api.steerChat(session.id, id, text, images)
-        : api.steerChat(session.id, id, text));
+        : session.incognito
+          ? // Text-only steers carry incognito too: a steer that STARTS a turn (below)
+            // must pass the thread's no-memory-trail promise to that fresh turn.
+            api.steerChat(session.id, id, text, undefined, true)
+          : api.steerChat(session.id, id, text));
       if (images.length) clearTrayImages?.();
+      if (res.started_turn) attachStartedTurn(id, text, res.started_turn);
     } catch (e) {
       setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
       onError(`Couldn't queue message: ${errMsg(e)}`);
     }
+  }
+
+  // The server had NO live turn (bd-0ad5v): the 'streaming' this console believed in was
+  // stale, and instead of queueing a message nothing would ever drain, the server ran it
+  // as an ordinary operator turn. Retire the queued bubble — the turn's own user message
+  // replaces it, under the same id, which is what dedupes a later hydration — finalize
+  // whatever this console still thought was streaming, and attach to the new task: the
+  // slot's reattach effect resubscribes to the last streaming assistant bubble carrying a
+  // taskId, so the turn streams in exactly like a reload's reattach.
+  function attachStartedTurn(steerId: string, text: string, taskId: string) {
+    setSteerQueue(steerQueueRef.current.filter((q) => q.id !== steerId));
+    if (!session) return;
+    // Any locally-owned stream is a zombie — the server just said nothing is running.
+    // Abort it and release the slot's claim, or the reattach effect (gated on abortRef)
+    // never runs and the new turn's bubble would spin unattached.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    if (!snap) return;
+    let base = snap.messages;
+    for (const m of snap.messages) {
+      if (m.role === "assistant" && m.status === "streaming") base = settleAnsweredPause(base, m.id);
+    }
+    chatStore.updateMessages(session.id, [
+      ...base,
+      { id: steerId, role: "user", content: text, createdAt: Date.now(), status: "done" },
+      { id: messageId(), role: "assistant", content: "", createdAt: Date.now(), status: "streaming", taskId },
+    ]);
+    chatStore.setSessionStatus(session.id, "streaming");
   }
 
   // Interject into an ATTENDED server-initiated turn without starting a competing
@@ -539,7 +574,13 @@ export function useSteerQueue({
             continue;
           }
         } else {
-          await api.steerChat(session.id, item.id, item.text);
+          const res = await api.steerChat(session.id, item.id, item.text);
+          if (res.started_turn) {
+            // The turn ended between the liveness check above and this POST, so the
+            // server ran the message as a fresh turn instead of queueing it: attach.
+            attachStartedTurn(item.id, item.text, res.started_turn);
+            continue;
+          }
         }
         setSteerQueue(
           steerQueueRef.current.map((q) =>

@@ -88,7 +88,6 @@ class _delete_lock:
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import (
-    _bridge_attachment_ids,
     _resolve_thread_id,
     aside_session,
     chat,
@@ -98,6 +97,7 @@ from server.chat import (
     forget_delegate_conversations_for_session,
     fork_session,
     rewind_session,
+    steer_or_start_turn,
     turn_error,
 )
 
@@ -1383,13 +1383,20 @@ def register_chat_routes(app, ui: str) -> None:
         """Queue a user message into a RUNNING turn (mid-turn steering).
 
         The next model call folds it in via ``SteeringMiddleware``, so the user
-        can redirect or reset ongoing work without stopping the live stream. This
-        does NOT start a turn — it only enqueues; the in-flight turn picks it up at
-        its next model call (i.e. after the current tool finishes). The client may
-        pass its own ``id`` so it can reconcile at turn-end."""
-        from fastapi import HTTPException
+        can redirect or reset ongoing work without stopping the live stream. The
+        in-flight turn picks it up at its next model call (i.e. after the current
+        tool finishes). The client may pass its own ``id`` so it can reconcile at
+        turn-end.
 
-        from graph import steering
+        With NO live turn on the session (and nothing HITL-parked) there is nothing
+        left to drain a queued message — a console steering off a stale 'streaming'
+        bubble used to strand its text ``pending`` forever (bd-0ad5v). Such a message
+        now STARTS an ordinary operator turn instead, over the same path as a normal
+        send, and the reply carries ``started_turn: <task_id>`` so the console can
+        attach to it and drop its stale streaming state. A duplicate POST of the same
+        ``id`` answers with the same task. ``server.chat.steer_or_start_turn`` decides;
+        incognito (ADR 0069 D3b) is asserted by the console exactly as on a normal send."""
+        from fastapi import HTTPException
 
         text = str((body or {}).get("text", "")).strip()
         msg_id = str((body or {}).get("id", "")).strip() or None
@@ -1398,22 +1405,8 @@ def register_chat_routes(app, ui: str) -> None:
         images = _coerce_attachment_images((body or {}).get("images"))
         if not text and not images:
             raise HTTPException(status_code=400, detail="text is required")
-        # Incognito (ADR 0069 D3b): the console asserts it, exactly as on a normal send —
-        # there is no server-side incognito marker to read. Mirror _vision_human_message,
-        # which skips the media bridge (and so the refs note) on an incognito turn: the
-        # image still reaches a vision model as a block via the fold, it is just never
-        # persisted and carries no media id.
         incognito = bool((body or {}).get("incognito", False))
-        refs = "" if incognito else _bridge_attachment_ids(images, session_id)
-        mid = steering.enqueue(
-            session_id,
-            text,
-            msg_id=msg_id,
-            images=images,
-            refs=refs,
-            vision=bool(getattr(STATE.graph_config, "model_vision", False)),
-        )
-        return {"ok": True, "id": mid, "pending": steering.pending(session_id)}
+        return await steer_or_start_turn(session_id, text, msg_id, images=images, incognito=incognito)
 
     @app.get("/api/chat/sessions/{session_id}/steer")
     async def _api_steer_pending(session_id: SessionId):

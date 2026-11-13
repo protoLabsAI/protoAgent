@@ -165,6 +165,7 @@ def test_reset_clears_every_piece_of_module_state(_clean):
     module-level dict, so a dict added later can't be forgotten by a fixture."""
     _fold_in("s1", "m1")
     steering.enqueue("s2", "pending", msg_id="m2")
+    steering.note_started("s3", "m3", "task-1")
     state = {name: v for name, v in vars(steering).items() if isinstance(v, dict) and not name.startswith("__")}
     assert state and all(state.values()), state  # every dict is populated
 

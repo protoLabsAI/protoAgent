@@ -848,6 +848,221 @@ def _vision_human_message(
     return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message, additional_kwargs=sent_at_kwargs())
 
 
+# ── steering a session with NO live turn (bd-0ad5v) ─────────────────────────────
+# A console with a stale 'streaming' bubble steers a session whose turn is long over; the
+# queued message then has nothing left to drain it and sits ``pending`` forever, with the
+# operator unable to chat. Two closures below: the steer POST starts a FRESH turn when the
+# session is idle (steer_or_start_turn), and a turn that ends terminally with undrained
+# steers restarts them as one new turn (restart_undrained_steers, fired from the
+# executor's ``turn_ended`` frame via server/a2a.py).
+
+
+async def _start_steer_turn(
+    session_id: str,
+    text: str,
+    msg_id: str | None,
+    *,
+    images: list[tuple[str, str]] | None = None,
+    incognito: bool = False,
+) -> str:
+    """Run a steer as an ordinary operator turn; return its A2A task id ("" on failure).
+
+    Goes over the loopback A2A endpoint — the SAME path a console send takes (so the
+    turn is interactive, parks on HITL normally, and the console can attach to its task)
+    — with ``returnImmediately`` so the task id comes back while the turn runs detached
+    (the scheduler's fire pattern). ``msg_id`` rides as the A2A ``messageId``: the message
+    ledger (#4975) then joins any concurrent duplicate to this task, and the task history
+    carries the id the console's bubbles reconcile on."""
+    import uuid
+
+    import httpx
+
+    from a2a_impl.auth import self_invocation_headers
+    from a2a_impl.wire import task_id_from_response
+
+    port = getattr(STATE, "active_port", None)
+    if not port:
+        log.warning("[steer] no active port — cannot start a turn for session %s", session_id)
+        return ""
+    mid = str(msg_id or "").strip() or uuid.uuid4().hex
+    parts: list[dict] = [{"text": text}] if text else []
+    # Image attachments ride as parts exactly as a console send's do; the turn layer
+    # bridges/gates them itself (_vision_human_message), so nothing is pre-bridged here.
+    parts += [{"url": uri, "mediaType": mt} for mt, uri in images or []]
+    message: dict[str, Any] = {
+        "role": "ROLE_USER",
+        "parts": parts,
+        "messageId": mid,
+        "contextId": session_id,
+    }
+    if incognito:
+        message["metadata"] = {"incognito": True}
+    body = {
+        "jsonrpc": "2.0",
+        "id": mid,
+        "method": "SendMessage",
+        "params": {"configuration": {"returnImmediately": True}, "message": message},
+    }
+    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
+    headers.update(self_invocation_headers())
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"http://127.0.0.1:{port}/a2a", headers=headers, json=body)
+        if r.status_code >= 400:
+            log.warning("[steer] turn start for %s failed: HTTP %d %s", session_id, r.status_code, r.text[:200])
+            return ""
+        payload = r.json()
+        if payload.get("error"):
+            log.warning("[steer] turn start for %s refused: %s", session_id, str(payload["error"])[:200])
+            return ""
+        return task_id_from_response(payload)
+    except Exception:  # noqa: BLE001 — a transport error must not 500 the steer route
+        log.exception("[steer] turn start POST failed for %s", session_id)
+        return ""
+
+
+async def _session_turn_idle(session_id: str) -> bool:
+    """True when nothing can fold a queued steer into a running turn for ``session_id``.
+
+    Conservative by construction — any doubt reads as "not idle", so the message takes the
+    long-standing queue path. Not idle when: a turn driver is live on the session (running
+    OR queued on its thread lock — both bracket ``turn_activity``); there is no graph / no
+    A2A stack to start a replacement turn on; or the thread is PARKED at a HITL interrupt
+    (no live driver, but the held message folds in right after the operator's answer —
+    ``_hold_if_hitl_pending``'s rule). The interrupt check runs under the thread lock so it
+    can't race a turn that is just starting or parking."""
+    if _turn_activity.is_active(session_id):
+        return False
+    if STATE.graph is None or getattr(STATE, "a2a_task_engine", None) is None:
+        return False
+    tid = _turn_control._resolve_thread_id(None, session_id)
+    config = {"configurable": {"thread_id": tid}}
+    async with _turn_control._thread_lock(tid):
+        if _turn_activity.is_active(session_id):
+            return False  # a turn took the thread while this check queued on the lock
+        try:
+            return await _pending_interrupt_value(config) is None
+        except Exception:  # noqa: BLE001 — unreadable checkpoint: keep the queue behavior
+            log.warning("[steer] could not read session %s's pending interrupt", session_id, exc_info=True)
+            return False
+
+
+async def steer_or_start_turn(
+    session_id: str,
+    text: str,
+    msg_id: str | None = None,
+    *,
+    images: list[tuple[str, str]] | None = None,
+    incognito: bool = False,
+) -> dict[str, Any]:
+    """The steer POST's body: queue into the running turn, or start one when idle.
+
+    A session with a live (or HITL-parked) turn keeps the existing behavior — the message
+    enters the steering queue and folds in at the next model call. With NO live turn the
+    old behavior left it ``pending`` forever (nothing drains an idle session's queue, the
+    bd-0ad5v stuck chat), so the message now runs as an ordinary operator turn instead and
+    the reply carries ``started_turn: <task_id>`` for the console to attach to. A repeat of
+    an already-started ``msg_id`` answers with the first task — one turn per message."""
+    import uuid
+
+    from graph import steering
+
+    mid = str(msg_id or "").strip() or uuid.uuid4().hex
+    started = steering.started_task(session_id, mid)
+    if started:
+        return {"ok": True, "id": mid, "started_turn": started, "pending": steering.pending(session_id)}
+    if await _session_turn_idle(session_id):
+        task_id = await _start_steer_turn(session_id, text, mid, images=images, incognito=incognito)
+        if task_id:
+            steering.note_started(session_id, mid, task_id)
+            return {"ok": True, "id": mid, "started_turn": task_id, "pending": steering.pending(session_id)}
+        # Could not start a turn (loopback refused/unreachable): fall through to the queue
+        # rather than drop operator input — the next turn folds it in, as before.
+        log.warning("[steer] session %s is idle but a turn could not be started — queueing", session_id)
+    refs = "" if incognito else _bridge_attachment_ids(images, session_id)
+    queued = steering.enqueue(
+        session_id,
+        text,
+        msg_id=mid,
+        images=images,
+        refs=refs,
+        vision=bool(getattr(STATE.graph_config, "model_vision", False)),
+        incognito=incognito,
+    )
+    return {"ok": True, "id": queued, "pending": steering.pending(session_id)}
+
+
+# Keeps the restart tasks alive (asyncio holds tasks weakly); each discards itself.
+_STEER_RESTARTS: set[asyncio.Task] = set()
+
+
+def restart_undrained_steers(session_id: str, state: str) -> "asyncio.Task | None":
+    """Steers still queued when their turn ended terminally become ONE fresh turn.
+
+    Fired from the executor's guaranteed ``turn_ended`` frame (server/a2a.py). Covers the
+    race the steer POST can't: the message was accepted while the turn looked live, but the
+    turn ended without another model call, so nothing will ever drain it. Only a
+    ``completed``/``failed`` end restarts — ``input_required`` means the turn PARKED (held
+    messages fold in after the operator's answer), and a ``canceled`` end is the operator's
+    Stop, whose console flow takes its queued messages back itself (a surprise follow-up
+    turn is the last thing a Stop should spawn). The queue is popped synchronously, before
+    any await, so the console's own turn-end reconcile can never re-send the same items."""
+    if state not in ("completed", "failed"):
+        return None
+    sid = str(session_id or "")
+    if not sid or sid.startswith("background:"):
+        return None
+    from graph import steering
+
+    if not steering.pending(sid):
+        return None
+    if _turn_activity.is_active(sid):
+        return None  # another turn is already running/queued — it folds them in
+    if STATE.graph is None or getattr(STATE, "a2a_task_engine", None) is None:
+        return None
+    items = steering.take_unfenced(sid)
+    if not items:
+        return None
+
+    def _requeue() -> None:
+        for i in items:
+            steering.enqueue(
+                sid,
+                i.get("text", ""),
+                msg_id=i.get("id"),
+                fence=i.get("fence"),
+                images=i.get("images"),
+                refs=i.get("refs", ""),
+                vision=bool(i.get("vision")),
+                incognito=bool(i.get("incognito")),
+            )
+
+    async def _restart() -> None:
+        text = "\n\n".join(i.get("text", "") for i in items if i.get("text"))
+        images = [img for i in items for img in (i.get("images") or [])] or None
+        mid = str(items[0].get("id") or "") or None
+        task_id = await _start_steer_turn(
+            sid, text, mid, images=images, incognito=any(i.get("incognito") for i in items)
+        )
+        if task_id:
+            if mid:
+                steering.note_started(sid, mid, task_id)
+            log.info("[steer] restarted %d undrained steer(s) for session %s as turn %s", len(items), sid, task_id)
+            return
+        # Never lose operator input: back on the queue (original order) for the next turn.
+        _requeue()
+        log.warning("[steer] could not restart %d undrained steer(s) for session %s — left queued", len(items), sid)
+
+    try:
+        task = asyncio.get_running_loop().create_task(_restart())
+    except RuntimeError:  # no loop (a sync caller outside the server): leave them queued
+        _requeue()
+        return None
+    _STEER_RESTARTS.add(task)
+    task.add_done_callback(_STEER_RESTARTS.discard)
+    return task
+
+
 # The streaming event loop (``_run_turn_stream``) and its lead-speaker filter moved to
 # server/turn_stream.py (#3874) and are re-exported at the top of this module.
 

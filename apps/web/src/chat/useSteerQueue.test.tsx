@@ -165,6 +165,30 @@ describe("useSteerQueue — queueing", () => {
     expect(r.current.steerQueue).toEqual([{ id, text: "also this", serverTaskId: "t-live" }]);
   });
 
+  it("finalizes the stale bubble and attaches to the task a started_turn reply names (bd-0ad5v)", async () => {
+    // The server had NO live turn: the 'streaming' this console believed in was stale, and
+    // the steer ran as a fresh turn instead of queueing. The bubble retires, the zombie
+    // stream is released, and the new task streams in via the slot's reattach effect.
+    chatStore.updateMessages(sessionId, [
+      { id: "u0", role: "user", content: "hello", createdAt: 1, status: "done" },
+      { id: "a0", role: "assistant", content: "…", createdAt: 2, status: "streaming" },
+    ]);
+    steerChat.mockResolvedValue({ ok: true, id: null, pending: 0, started_turn: "task-9" });
+    const abort = vi.fn();
+    const abortRef = { current: { abort } as unknown as AbortController | null };
+    const r = renderHook(baseOpts({ draft: "are you there?", abortRef }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    expect(r.current.steerQueue).toEqual([]); // retired — the turn's own user message replaces it
+    expect(abort).toHaveBeenCalled();
+    expect(abortRef.current).toBeNull();
+    const msgs = messagesOf();
+    expect(msgs.map((m) => m.status)).toEqual(["done", "done", "done", "streaming"]);
+    expect(msgs[2]).toMatchObject({ role: "user", content: "are you there?" });
+    expect(msgs[3]).toMatchObject({ role: "assistant", taskId: "task-9", status: "streaming" });
+    expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("streaming");
+  });
+
   it("hands a REFUSED interjection back into the composer (appended), and drops the stale control", async () => {
     chatStore.setServerTurnControl({
       sessionId,

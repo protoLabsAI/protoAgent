@@ -577,15 +577,21 @@ export const chatApi = {
   // into the media store and folds them into the next model call. They go only when
   // there are any, so a text-only steer still sends exactly `{id, text}` as before;
   // each part is a `[mime, data-URI]` pair, the shape the route's coercion takes.
+  // `started_turn` (bd-0ad5v): the session had NO live turn, so instead of queueing a
+  // message nothing would ever drain, the server ran it as an ordinary operator turn —
+  // the caller should finalize its stale streaming state and attach to that task.
   steerChat(sessionId: string, id: string, text: string, images?: ChatImagePart[], incognito?: boolean) {
-    return request<{ ok: boolean; id: string | null; pending: number }>(
+    return request<{ ok: boolean; id: string | null; pending: number; started_turn?: string | null }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
       {
         method: "POST",
         body: {
           id,
           text,
-          ...(images?.length && incognito ? { incognito: true } : {}),
+          // Asserted per message, as on a normal send (there is no server marker to read):
+          // the route skips the media bridge on it, and a steer that STARTS a turn
+          // (started_turn below) must carry it or the fresh turn would leave a memory trail.
+          ...(incognito ? { incognito: true } : {}),
           ...(images && images.length
             ? { images: images.map((img) => [img.mime, `data:${img.mime};base64,${img.b64}`]) }
             : {}),
