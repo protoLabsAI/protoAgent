@@ -30,6 +30,25 @@ export function sha256Source(text) {
   return `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
 }
 
+/** The sha256 of every INLINE `<script>` in an HTML document (the boot splash, bd-aawcj) — the
+ *  exact source bytes between the tags, which is what the browser hashes. Classic inline scripts
+ *  only: a `src=` script loads externally (covered by `'self'`), and the `type="module"` entry is
+ *  the bundler's, loaded from a file. Hashing the BUILT index.html (not the source) keeps the
+ *  digest in step with whatever the browser actually executes, even if the build rewrites it. */
+export function inlineScriptHashes(html) {
+  const out = [];
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const attrs = m[1] || "";
+    if (/\bsrc\s*=/i.test(attrs)) continue; // external — allowed by 'self'
+    if (/\btype\s*=\s*["']?module/i.test(attrs)) continue; // the bundler entry
+    if (m[2].trim() === "") continue;
+    out.push(sha256Source(m[2]));
+  }
+  return out;
+}
+
 /** `{directives: {name: [sources]}}`, with the inline-script hash added to `script-src`. */
 export function cspDocument() {
   const policy = JSON.parse(readFileSync(here("../csp-policy.json"), "utf8"));
@@ -54,7 +73,17 @@ export function consoleCspPlugin() {
       outDir = join(config.root, config.build.outDir);
     },
     writeBundle() {
-      writeFileSync(join(outDir, "csp.json"), JSON.stringify(cspDocument(), null, 2) + "\n");
+      const doc = cspDocument();
+      // Allow the inline boot-splash script (bd-aawcj): a parser-inserted inline script is blocked
+      // by `script-src 'self'` unless its sha256 is listed. Hash the ACTUAL built index.html so the
+      // digest can't drift from what the browser runs; a missing file ships the base policy.
+      try {
+        const hashes = inlineScriptHashes(readFileSync(join(outDir, "index.html"), "utf8"));
+        if (hashes.length) doc.directives["script-src"] = [...doc.directives["script-src"], ...hashes];
+      } catch {
+        /* no built index.html — ship the base policy */
+      }
+      writeFileSync(join(outDir, "csp.json"), JSON.stringify(doc, null, 2) + "\n");
     },
   };
 }
