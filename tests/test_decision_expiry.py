@@ -517,6 +517,31 @@ async def test_withdraw_from_another_session_clears_real_checkpoint(ledger, park
 
 
 @pytest.mark.asyncio
+async def test_withdraw_of_restart_recovery_record_never_resumes(ledger, monkeypatch):
+    """Withdrawing a restart-recovery record (ADR 0129 D7 S7) through the agent tool is
+    the whole dismissal: it has no parked checkpoint interrupt, so the clearing resume —
+    which would start a fresh turn on the job session, a turn only the operator's Re-run
+    answer may start — must never run."""
+    from graph.decisions import restart_recovery_interrupt_id
+
+    store, _ = ledger
+    resume = AsyncMock(return_value=True)
+    monkeypatch.setattr(decision_resume, "resume_parked_turn", resume)
+    rec = store.create(
+        "job:exec",
+        "Archive the exports was interrupted by a restart after 1 step.",
+        [{"id": "resume"}, {"id": "rerun"}, {"id": "drop"}],
+        interrupt_id=restart_recovery_interrupt_id("job-1", "2026-11-08T11:00:00+00:00", "2026-11-08T10:00:00+00:00", "task-1"),
+    )
+    result = await withdraw_decision.ainvoke(
+        {"decision_id": rec.id, "reason": "obsolete", "state": {"session_id": "job:exec"}}
+    )
+    assert result == f"Decision {rec.id} withdrawn: obsolete"
+    assert store.get(rec.id).state == "withdrawn"
+    resume.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_withdraw_reports_resume_delivery_failure(ledger, monkeypatch):
     store, _ = ledger
     rec = store.create("s", "Release?", OPTIONS)

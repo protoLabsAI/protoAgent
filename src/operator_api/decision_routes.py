@@ -48,6 +48,34 @@ class CancelRequest(BaseModel):
     reason: str = ""
 
 
+async def _restart_recovery_action(rec, ref: dict, *, answer: str, answered_by: str, answered_surface: str):
+    """Deliver a restart-recovery decision's answer (ADR 0129 D7 S7): Resume / Re-run /
+    Drop on the occurrence a restart left ``interrupted_needs_operator``. There is no
+    parked checkpoint interrupt to resume — the server-owned handler performs the action
+    (under the execution session's turn lock where it touches the thread) and closes the
+    ledger itself with a CAS, so of two concurrent answers exactly one lands and the
+    loser surfaces as this route's 409. Reached through ``STATE.interrupted_recovery``:
+    this module must not import ``server``."""
+    from fastapi import HTTPException
+
+    from graph.decisions import DecisionClosed, DecisionError
+    from runtime.state import STATE
+
+    recovery = getattr(STATE, "interrupted_recovery", None)
+    if recovery is None:
+        # Keep the record pending (retryable) rather than guess: a degraded boot has no
+        # checkpoint/task seam to act through.
+        raise HTTPException(status_code=503, detail="restart recovery is unavailable on this server")
+    try:
+        await recovery.operator_action(
+            rec, ref, answer=answer, answered_by=answered_by, answered_surface=answered_surface
+        )
+    except DecisionClosed as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DecisionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _resolve_answer(rec, body: AnswerRequest) -> str:
     """The answer string to resume the turn with, validated against the record's options.
 
@@ -85,6 +113,7 @@ def register_decision_routes(app) -> None:
         DecisionClosed,
         DecisionNotFound,
         decision_store,
+        restart_recovery_ref,
     )
 
     @app.get("/api/decisions")
@@ -195,10 +224,19 @@ def register_decision_routes(app) -> None:
                 if current is None or not current.pending:
                     raise HTTPException(status_code=409, detail=with_delivery(current) if current else None)
                 # Its result isn't needed: the ledger, re-read below, says whose answer landed.
-                delivery = asyncio.create_task(_resume_parked_turn(rec.session_id, text, decision_id, resolution={
-                    "answer": answer, "answered_by": actor,
-                    "answered_surface": body.surface, "state": "answered",
-                }))
+                recovery_ref = restart_recovery_ref(current)
+                if recovery_ref is not None:
+                    # ADR 0129 D7 S7: no parked interrupt — the answer performs
+                    # Resume / Re-run / Drop on the held occurrence instead.
+                    delivery = asyncio.create_task(_restart_recovery_action(
+                        current, recovery_ref, answer=answer,
+                        answered_by=actor, answered_surface=body.surface,
+                    ))
+                else:
+                    delivery = asyncio.create_task(_resume_parked_turn(rec.session_id, text, decision_id, resolution={
+                        "answer": answer, "answered_by": actor,
+                        "answered_surface": body.surface, "state": "answered",
+                    }))
                 deliveries.add(delivery)
                 delivery.add_done_callback(delivery_done)
                 # Keep delivery alive while returning as soon as consumption is durable. Poll
@@ -265,7 +303,13 @@ def register_decision_routes(app) -> None:
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:
             raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
-        parked = await interrupt_parked(getattr(STATE, "graph", None), rec)
+        # A restart-recovery decision (ADR 0129 D7 S7) has no checkpoint interrupt to
+        # clear: withdrawing the record IS the whole dismissal — a clearing resume would
+        # instead start a fresh turn on the job session, which only Re-run may do. The
+        # held occurrence stays parked, visible in the job's diagnostics.
+        parked = False if restart_recovery_ref(rec) is not None else await interrupt_parked(
+            getattr(STATE, "graph", None), rec
+        )
         # No await from here to the claim: the check-and-claim is atomic with respect to the
         # answer route's claim (both run on this event loop), and the claim is held across the
         # threaded withdraw (#5112 review).

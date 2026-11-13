@@ -1820,8 +1820,11 @@ class LocalScheduler:
         """Dispose the claims a restart interrupted, off the start() path (a resume is
         a whole turn). The claims stay 'claimed'/'unknown'/'running' until disposed, so
         the existing serialization holds meanwhile: no owner admits a new independent
-        fire while its interrupted occurrence is undecided (D6)."""
-        if not self._interrupted_task_ids:
+        fire while its interrupted occurrence is undecided (D6). Runs whenever the
+        recovery seam exists, even with nothing newly interrupted: the pass also repairs
+        the Needs-you card of every occurrence still held from an EARLIER boot (S7 — an
+        answer whose action a crash cut down must get its card back)."""
+        if not self._interrupted_task_ids and self._interrupted_recovery is None:
             return
         t = asyncio.create_task(self._recover_interrupted_turns(), name="scheduler.interrupted")
         self._fire_tasks.add(t)
@@ -1849,6 +1852,46 @@ class LocalScheduler:
                     "[scheduler] interrupted-turn recovery failed for task %s; claim stays held",
                     claim["task_id"],
                 )
+        if recovery is not None:
+            await self._ensure_held_occurrence_cards(recovery)
+
+    async def _ensure_held_occurrence_cards(self, recovery) -> None:
+        """Every occurrence still held ``interrupted_needs_operator`` must show a pending
+        Needs-you card (ADR 0129 D7 S7). An answer acts AFTER the ledger CAS closes the
+        record, so a crash in that window leaves the run held with an answered record and
+        no card — and a disposal whose ledger write failed never had one. Runs after the
+        disposal pass each boot, per occurrence and best-effort: the held row stays the
+        durable fallback either way."""
+        ensure = getattr(recovery, "ensure_needs_operator_decision", None)
+        if ensure is None:
+            return
+        try:
+            with closing(self._connect()) as db, db:
+                held = db.execute(
+                    "SELECT * FROM occurrences WHERE state = 'interrupted_needs_operator' "
+                    "AND job_snapshot IS NOT NULL"
+                ).fetchall()
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not read the held occurrences for card repair")
+            return
+        for claim in held:
+            try:
+                job = Job(**json.loads(claim["job_snapshot"]))
+                try:
+                    fired_after = parse_iso_to_utc(claim["next_fire"])
+                except (TypeError, ValueError):
+                    fired_after = None
+                await ensure(
+                    job_id=job.id,
+                    context_id=job.context_id or "",
+                    task_id=claim["task_id"] or "",
+                    next_fire=claim["next_fire"],
+                    created_at=claim["created_at"],
+                    fired_after=fired_after,
+                    prompt=job.prompt or "",
+                )
+            except Exception:  # noqa: BLE001 — the held row outlives a failed ledger write
+                log.exception("[scheduler] could not repair the Needs-you item for %s", claim["job_id"])
 
     async def _dispose_interrupted_claim(self, claim: sqlite3.Row, recovery) -> None:
         job = Job(**json.loads(claim["job_snapshot"]))
@@ -1917,6 +1960,24 @@ class LocalScheduler:
             # The dead handle must not read as alive forever; the occurrence keeps
             # its D7 state either way (never settled-failed, never resent).
             await recovery.fail_task(task_id)
+            raise_item = getattr(recovery, "raise_needs_operator_decision", None)
+            if state == "interrupted_needs_operator" and raise_item is not None:
+                # The S7 Needs-you item (Resume / Re-run / Drop), recorded in the job's
+                # execution session through the decisions ledger. Best-effort and
+                # idempotent per occurrence: the held row (+ the job's last_error) is
+                # the durable fallback when the ledger write fails.
+                try:
+                    await raise_item(
+                        job_id=job.id,
+                        context_id=job.context_id or "",
+                        task_id=task_id or "",
+                        next_fire=claim["next_fire"],
+                        created_at=claim["created_at"],
+                        fired_after=fired_after,
+                        prompt=job.prompt or "",
+                    )
+                except Exception:  # noqa: BLE001 — the held occurrence outlives a failed ledger write
+                    log.exception("[scheduler] could not raise the Needs-you recovery item for %s", job.id)
         log.warning(
             "[scheduler] job %s occurrence interrupted by a restart → %s (task %s)",
             job.id, state, task_id,
@@ -1976,6 +2037,149 @@ class LocalScheduler:
             return False
         finally:
             db.close()
+
+    # ── the operator's Resume / Re-run / Drop on a held occurrence (D7, S7) ──
+
+    def interrupted_operator_claim(self, job_id: str, next_fire: str, created_at: str) -> sqlite3.Row | None:
+        """The held occurrence row an S7 recovery decision acts on, or None once it
+        moved on (already acted on, or resolved some other way)."""
+        db = self._connect()
+        try:
+            return db.execute(
+                "SELECT * FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ? "
+                "AND state = 'interrupted_needs_operator'",
+                (job_id, next_fire, created_at),
+            ).fetchone()
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not read the held occurrence for %s", job_id)
+            return None
+        finally:
+            db.close()
+
+    def drop_interrupted_occurrence(self, job_id: str, next_fire: str, created_at: str) -> bool:
+        """Operator 'Drop' (ADR 0129 D7 S7): settle the held occurrence as dropped
+        WITHOUT running anything. CAS on the held state — a second answer finds the row
+        moved and does nothing. A one-shot's jobs row is finished (removed) like any
+        settled one-shot; a recurring job keeps its row — the next slot is untouched —
+        with ``last_error`` updated so the surface stops saying it waits on an operator."""
+        diagnostic = "dropped by the operator after a restart interruption (ADR 0129 D7)"
+        settled_action = ""
+        dropped = False
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            dropped = db.execute(
+                "UPDATE occurrences SET state = 'settled', task_state = 'dropped', diagnostic = ? "
+                "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
+                (diagnostic, job_id, next_fire, created_at),
+            ).rowcount > 0
+            if dropped:
+                row = db.execute(
+                    "SELECT schedule FROM jobs WHERE id = ? AND created_at = ? AND agent_name = ?",
+                    (job_id, created_at, self.agent_name),
+                ).fetchone()
+                if row is not None and is_cron(row["schedule"]):
+                    db.execute(
+                        "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
+                        (diagnostic, job_id, created_at),
+                    )
+                elif row is not None and db.execute(
+                    "DELETE FROM jobs WHERE id = ? AND created_at = ?", (job_id, created_at)
+                ).rowcount > 0:
+                    settled_action = "finished"
+            db.commit()
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not drop the interrupted occurrence for %s", job_id)
+            return False
+        finally:
+            db.close()
+        if settled_action:
+            self._publish_job_settled(job_id, settled_action)
+        return dropped
+
+    def rerun_interrupted_occurrence(self, job_id: str, next_fire: str, created_at: str) -> bool:
+        """Operator 'Re-run' (ADR 0129 D7 S7): supersede the held occurrence and make the
+        job due NOW, so the fresh turn goes through the ONE normal claim+fire path — a
+        new occurrence with new message identity, from the job's own prompt. Never a
+        resend of the interrupted dispatch. CAS on the held state (exactly once); the
+        fresh claim then re-serializes against the execution owner like any fire."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            cur = db.execute(
+                "UPDATE occurrences SET state = 'settled', task_state = 'failed', diagnostic = ? "
+                "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
+                (
+                    "superseded by an operator re-run after a restart interruption (ADR 0129 D7); "
+                    "the original dispatch was never recovered",
+                    job_id, next_fire, created_at,
+                ),
+            )
+            if cur.rowcount:
+                db.execute(
+                    "UPDATE jobs SET next_fire = ?, last_error = ? WHERE id = ? AND created_at = ? "
+                    "AND agent_name = ?",
+                    (
+                        datetime.now(UTC).isoformat(),
+                        "re-run by the operator after a restart interruption (ADR 0129 D7)",
+                        job_id, created_at, self.agent_name,
+                    ),
+                )
+            db.commit()
+            return cur.rowcount > 0
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not re-run the interrupted occurrence for %s", job_id)
+            return False
+        finally:
+            db.close()
+
+    def release_interrupted_occurrence(
+        self, job_id: str, next_fire: str, created_at: str, *,
+        state: str, diagnostic: str, task_state: str | None = None,
+    ) -> bool:
+        """Move a held occurrence out of ``interrupted_needs_operator`` after an operator
+        resume (ADR 0129 D7 S7): to ``unknown`` once the resume drove the turn and the
+        task handle holds its real outcome (normal reconciliation then settles it exactly
+        once), or straight to ``settled`` when the resume could not act — never leaving
+        the row parked behind a closed decision. CAS on the held state. A settle here
+        finishes a one-shot/continuation's jobs row like every other settle
+        (``_settle_task``, :meth:`drop_interrupted_occurrence`): once the occurrence is
+        'settled' it no longer counts as D7-parked, so a leftover row would read as an
+        outstanding continuation and wedge the owner's other fires. A recurring job keeps
+        its row — only ``last_error`` changes."""
+        settled_action = ""
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            cur = db.execute(
+                "UPDATE occurrences SET state = ?, task_state = COALESCE(?, task_state), diagnostic = ? "
+                "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
+                (state, task_state, diagnostic, job_id, next_fire, created_at),
+            )
+            if cur.rowcount and state == "settled":
+                row = db.execute(
+                    "SELECT schedule FROM jobs WHERE id = ? AND created_at = ? AND agent_name = ?",
+                    (job_id, created_at, self.agent_name),
+                ).fetchone()
+                if row is not None and is_cron(row["schedule"]):
+                    db.execute(
+                        "UPDATE jobs SET last_error = ? WHERE id = ? AND created_at = ?",
+                        (diagnostic, job_id, created_at),
+                    )
+                elif row is not None and db.execute(
+                    "DELETE FROM jobs WHERE id = ? AND created_at = ?", (job_id, created_at)
+                ).rowcount > 0:
+                    settled_action = "finished"
+            db.commit()
+            released = cur.rowcount > 0
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not release the interrupted occurrence for %s", job_id)
+            return False
+        finally:
+            db.close()
+        if settled_action:
+            self._publish_job_settled(job_id, settled_action)
+        return released
 
     async def _fire(self, job: Job) -> bool | None:
         """Deliver a job by POSTing to the agent's own A2A endpoint.
