@@ -23,6 +23,7 @@ function plan(
   over: Partial<{
     pending: string[];
     drained: string[];
+    started: Record<string, string>;
     phase: ServerTurnPhase;
     consumed: string[];
     ownStreamLive: boolean;
@@ -34,6 +35,7 @@ function plan(
   return planInterjectionReconcile(stale, {
     pendingIds: new Set(over.pending ?? []),
     drainedIds: new Set(over.drained ?? []),
+    started: new Map(Object.entries(over.started ?? {})),
     phases: new Map([["task-x", over.phase ?? "ended"]]),
     consumedIds: new Map([["task-x", new Set(over.consumed ?? [])]]),
     ownStreamLive: over.ownStreamLive ?? false,
@@ -90,6 +92,21 @@ describe("planInterjectionReconcile", () => {
 
   it("settles a confirmed message that left the queue of a turn that is over", () => {
     expect(plan([toX("a")], { pending: [] }).settle).toEqual([toX("a")]);
+  });
+
+  it("ATTACHES to the restart's task over every other record — the reply comes from there (bd-0ad5v)", () => {
+    // A restarted id is in the drain log too (the fresh turn reads it like a fold); settling
+    // off that record is exactly the lost-reply bug: the bubble retires under the ended turn
+    // and the real answer never streams in.
+    const out = plan([toX("a")], { pending: [], drained: ["a"], started: { a: "task-new" } });
+    expect(out.attach).toEqual([toX("a")]);
+    expect(out.settle).toEqual([]);
+  });
+
+  it("keeps a popped id whose restart hasn't named its task yet, then settles past the grace", () => {
+    const over = { pending: [], drained: ["a"], started: { a: "" } };
+    expect(plan([toX("a")], over).keep).toEqual([toX("a")]);
+    expect(plan([toX("a")], { ...over, asks: UNRESOLVED_ASKS }).settle).toEqual([toX("a")]);
   });
 
   it("never re-sends or re-offers a message that left the queue — a duplicate is worse", () => {

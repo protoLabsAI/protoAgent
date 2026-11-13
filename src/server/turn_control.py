@@ -290,6 +290,7 @@ def submit_server_turn_interjection(
     text: str,
     *,
     msg_id: str | None = None,
+    settings: dict | None = None,
 ) -> dict[str, Any]:
     """Queue an operator interjection for a live, attended server-originated turn.
 
@@ -297,6 +298,9 @@ def submit_server_turn_interjection(
     turn. It only enqueues into the same steering queue that an already-running turn
     drains at the model-call boundary. Stale, terminal, wrong-session, unattended, and
     duplicate-id submissions are rejected without touching another session's queue.
+    ``settings`` (the sender's per-message model/effort/bypass) ride the queued item so
+    an interjection left undrained when the turn ends is restarted under them, not under
+    the configured defaults (bd-0ad5v); the live fold itself ignores them.
     """
     sid = str(session_id or "").strip()
     tid = str(task_id or "").strip()
@@ -316,7 +320,7 @@ def submit_server_turn_interjection(
     from graph import steering
 
     # Attended server-turn interjections remain text-only.
-    queued = steering.enqueue(sid, body, msg_id=mid)
+    queued = steering.enqueue(sid, body, msg_id=mid, settings=settings)
     if queued is None:
         return {"ok": False, "reason": "empty", "pending": steering.pending(sid)}
     turn.accepted_ids.add(mid)

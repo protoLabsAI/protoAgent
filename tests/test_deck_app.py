@@ -120,17 +120,23 @@ class FakeBackend:
     # ── acting on a turn (#3470): every call recorded; canned answers per test ──
     steer_removed = True  # DELETE steer → removed?
     pending_steers: list[dict] = []  # GET steer → still queued at turn end
+    started_steers: dict = {}  # GET steer → `started`: msg id → the task a restart ran it as (bd-0ad5v)
+    steer_result: dict | None = None  # POST steer reply override (e.g. a started_turn answer)
     delegation_cancelled = True
     form_result: dict = {"reply": "thanks"}
     interject_result: dict = {"ok": True, "pending": 1}
 
     def steer(self, agent, session_id, msg_id, text):
         self.calls.append(("steer", session_id, msg_id, text))
-        return {"ok": True, "id": msg_id, "pending": 1}
+        return dict(self.steer_result) if self.steer_result else {"ok": True, "id": msg_id, "pending": 1}
 
     def steer_pending(self, agent, session_id):
         self.calls.append(("steer_pending", session_id))
         return list(self.pending_steers)
+
+    def steer_state(self, agent, session_id):
+        # Delegates the rows to steer_pending so per-test overrides of it keep working.
+        return {"pending": self.steer_pending(agent, session_id), "drained": [], "started": dict(self.started_steers)}
 
     def steer_cancel(self, agent, session_id, msg_id):
         self.calls.append(("steer_cancel", session_id, msg_id))

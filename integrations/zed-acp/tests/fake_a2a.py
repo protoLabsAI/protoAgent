@@ -121,6 +121,12 @@ class FakeA2A:
         self.steer_queue: dict[str, list[dict]] = {}  # session → still-queued items
         self.steer_deleted: list[str] = []
         self.steered = threading.Event()  # set when a steer is POSTed
+        # bd-0ad5v: a task id here makes the NEXT steer POST answer `started_turn` (the
+        # session had no live turn, so the server ran the message as a fresh turn — the
+        # steer is NOT queued); `steer_started` is served as GET …/steer's `started` map
+        # (msg id → the task a turn-end restart ran it as, "" while that start is in flight).
+        self.steer_started_turn = ""
+        self.steer_started: dict[str, str] = {}
         self.sessions: list[dict] = []  # GET /api/chat/sessions rows
         self.turns: dict[str, list[dict]] = {}  # GET …/turns
         # Console → Zed hand-off (POST /api/editor/handoff/claim): one pending hand-off,
@@ -186,7 +192,9 @@ class FakeA2A:
                 elif parts[:3] == ["api", "chat", "sessions"] and len(parts) == 5 and parts[4] == "turns":
                     self._json({"turns": fake.turns.get(parts[3], [])})
                 elif parts[:3] == ["api", "chat", "sessions"] and len(parts) == 5 and parts[4] == "steer":
-                    self._json({"pending": fake.steer_queue.get(parts[3], []), "drained": []})
+                    self._json(
+                        {"pending": fake.steer_queue.get(parts[3], []), "drained": [], "started": fake.steer_started}
+                    )
                 else:
                     self._json({"detail": "Not Found"}, 404)
 
@@ -223,6 +231,13 @@ class FakeA2A:
                         return
                     sid = self.path.split("/")[4]
                     fake.steers.append({"session": sid, **body})
+                    if fake.steer_started_turn:
+                        # bd-0ad5v: no live turn — the message ran as a fresh turn, nothing queued.
+                        fake.steered.set()
+                        self._json(
+                            {"ok": True, "id": body["id"], "started_turn": fake.steer_started_turn, "pending": 0}
+                        )
+                        return
                     fake.steer_queue.setdefault(sid, []).append({"id": body["id"], "text": body["text"]})
                     fake.steered.set()
                     self._json({"ok": True, "id": body["id"], "pending": len(fake.steer_queue[sid])})
