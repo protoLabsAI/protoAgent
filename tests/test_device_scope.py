@@ -1080,6 +1080,34 @@ def test_device_scope_cannot_set_the_public_console_url(config_client):
     assert config_client.writes == []
 
 
+@pytest.mark.parametrize("scope, status", [("device", 403), ("full", 200)])
+def test_a_device_cannot_leave_a_watch_that_runs_host_commands(monkeypatch, scope, status):
+    """A watch re-runs its verifier for as long as it lives: a command one outlives a revoke."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from operator_api.routes import register_operator_routes
+
+    async def _ok(*_a):
+        return {"ok": True}
+
+    app = FastAPI()
+    kw = dict(runtime_status=dict, subagent_list=list, subagent_run=_ok, subagent_batch=_ok)
+    register_operator_routes(app, **kw, watch_set=_ok, watch_update=_ok)
+
+    @app.middleware("http")
+    async def _stamp(request: Request, call_next):
+        request.state.credential_scope = scope
+        return await call_next(request)
+
+    c = TestClient(app)
+    shell = {"condition": "c", "verifier": {"type": "command", "command": "true"}}
+    assert c.post("/api/watches", json=shell).status_code == status
+    assert c.patch("/api/watches/w", json=shell).status_code == status
+    assert c.post("/api/watches", json={"condition": "c", "verifier": {"type": "llm"}}).status_code == 200
+    assert c.post("/api/watches", json={"condition": "c", "verifier": {"type": ["ci"]}}).status_code != 500  # not ours to judge
+
+
 # ── Direct device minting (#4683) ─────────────────────────────────────────────────────────
 
 

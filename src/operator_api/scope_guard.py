@@ -23,14 +23,7 @@ def credential_plane_refusal(request: Any, updates: Any, *, nested: bool = False
     Unstamped (an app assembled without the middleware, open mode never reaches here unstamped)
     reads as ``full`` ONLY when no credential is configured at all — otherwise as the narrow
     scope, so a missing stamp can't widen anything."""
-    from a2a_impl.credential_scope import DEVICE_SCOPE_CODE, SCOPE_FULL
-
-    scope = getattr(getattr(request, "state", None), "credential_scope", None)
-    if scope is None:
-        from a2a_impl.auth import open_mode
-
-        scope = SCOPE_FULL if open_mode() else "device"
-    if scope == SCOPE_FULL:
+    if _is_full(request):
         return None
     from graph.settings_schema import credential_plane_keys
 
@@ -38,7 +31,45 @@ def credential_plane_refusal(request: Any, updates: Any, *, nested: bool = False
     if not keys:
         return None
     named = ", ".join(keys)
-    reason = f"This device can't change {named} — use a full-access device."
+    return _refusal(f"This device can't change {named} — use a full-access device.", keys)
+
+
+#: Watch verifier types that run a command on the server host (``graph.goals.verifiers``).
+HOST_COMMAND_VERIFIERS = frozenset({"command", "test", "ci"})
+
+
+def host_command_refusal(request: Any, body: Any) -> JSONResponse | None:
+    """A 403 when a non-``full``-scope caller's watch create/edit sets a verifier that runs a
+    command on the host, else None. A watch re-runs its verifier on an interval for as long as
+    it lives, so such a watch is host code that outlives a revoke — the same reason MCP servers
+    and ``lifecycle_hooks`` are on the ceiling (ADR 0121 D4). Other verifiers, and every other
+    watch field, stay open to a device."""
+    verifier = body.get("verifier") if isinstance(body, dict) else None
+    vtype = verifier.get("type") if isinstance(verifier, dict) else None
+    # A non-string type is not one of ours (and may be unhashable): leave it to the route's own
+    # validation rather than fail here.
+    if not isinstance(vtype, str) or vtype not in HOST_COMMAND_VERIFIERS or _is_full(request):
+        return None
+    return _refusal(
+        f"This device can't set a {vtype!r} check, which runs on this computer — use a full-access device.", []
+    )
+
+
+def _is_full(request: Any) -> bool:
+    """Whether ``request`` carries a ``full``-scope credential (see ``credential_plane_refusal``)."""
+    from a2a_impl.credential_scope import SCOPE_FULL
+
+    scope = getattr(getattr(request, "state", None), "credential_scope", None)
+    if scope is None:
+        from a2a_impl.auth import open_mode
+
+        scope = SCOPE_FULL if open_mode() else "device"
+    return scope == SCOPE_FULL
+
+
+def _refusal(reason: str, keys: list[str]) -> JSONResponse:
+    from a2a_impl.credential_scope import DEVICE_SCOPE_CODE
+
     return JSONResponse(
         {
             "ok": False,

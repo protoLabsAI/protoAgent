@@ -65,6 +65,11 @@ they would write a [credential-plane key](configuration.md#credential-plane-keys
 refused keys in `keys` and named in `detail.reason`. A write that touches no such key saves as
 usual.
 
+`POST /api/watches` and `PATCH /api/watches/{id}` answer `403 device_scope` when they would
+set a `command`, `test` or `ci` verifier. A watch re-runs its verifier for as long as it lives,
+so such a watch is a command on the host that would keep running after a revoke. Other
+verifiers and every other watch field are open to a device.
+
 A `502` with a **string** detail comes from the fleet hub's proxy (the agent isn't up or
 reachable yet) and is worth retrying; a `502` with an **object** detail is the agent itself
 reporting that its model provider failed, so retrying right away won't help. The console
