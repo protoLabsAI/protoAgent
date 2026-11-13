@@ -210,10 +210,16 @@ class TestInspect:
                     "filesystem": {"allow_run": True},
                     "operator": {"allowed_dirs": ["/srv/x"]},
                     "mcp": {"servers": [{"name": "github"}]},
+                    "agent_runtime": "acp:claude",
+                    "lifecycle_hooks": [{"command": "x"}],
+                    "providers": [{"id": "gw", "base_url": "https://gw.example"}],
+                    "network": {"bind": "0.0.0.0"},
                 }
             )
         )
         keys = [k for k, _ in plan.capabilities]
+        for k in ("agent_runtime", "lifecycle_hooks", "providers.gw.base_url", "network.bind"):
+            assert k in keys
         assert "filesystem.allow_run" in keys
         assert "operator.allowed_dirs" in keys
         assert "mcp.servers" in keys
@@ -323,9 +329,10 @@ class TestStaging:
         assert not (tmp_path / "REVIEW.md").exists()
 
     def test_materializes_the_config_from_the_manifest(self, tmp_path):
-        stage_snapshot(_snapshot(config={"model": {"name": "m"}}), tmp_path)
+        # …minus `plugins.dir`: an absolute path would install into a dir outside the new workspace
+        stage_snapshot(_snapshot(config={"model": {"name": "m"}, "plugins": {"dir": "/host/plugins"}}), tmp_path)
         doc = yaml.safe_load((tmp_path / "langgraph-config.yaml").read_text())
-        assert doc == {"model": {"name": "m"}}
+        assert doc == {"model": {"name": "m"}, "plugins": {}}
 
     def test_staging_cannot_escape_the_destination(self, tmp_path):
         data = _zip({"agent.snapshot.yaml": _manifest(), "../escape.txt": "x"})
