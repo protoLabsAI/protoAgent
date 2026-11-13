@@ -193,3 +193,8 @@ it("shows explicit closure notes and omits empty conditions and scope", async ()
   expect(host.textContent).not.toContain("Applies to:");
   expect(host.textContent).not.toContain("secret-id");
 });
+it("an auto-fulfilled directive says it closed itself, with the attributed reason (ADR 0129 D4/Q2)", async () => {
+  await render(<DirectiveEntry entry={row("auto", { quote: "Work #879 then #873", status: "fulfilled", closed_by: "system", close_reason: "acme/widgets#879 closed; acme/widgets#873 closed", closed_at: "2026-11-07T19:02:00+00:00" })} revoke={mocks.revoke} />);
+  expect(host.textContent).toContain("Done · it closed itself when its linked work finished");
+  expect(host.textContent).toContain("Note: acme/widgets#879 closed; acme/widgets#873 closed");
+});

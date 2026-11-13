@@ -10,6 +10,9 @@ import type { RevokeResult } from "./useDirectives";
 
 export function closingSentence(entry: DirectiveRow) {
   const when = formatGivenAt(entry.closed_at);
+  if (entry.status === "fulfilled" && entry.closed_by === "system") {
+    return `Done · it closed itself when its linked work finished ${when}`;
+  }
   const who = entry.closed_by === "operator" ? "you" : "the agent";
   return entry.status === "fulfilled"
     ? `Done · ${who} marked it complete ${when}`

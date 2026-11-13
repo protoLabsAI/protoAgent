@@ -13,6 +13,12 @@ transcript is not.
   /api/chat/sessions/{id}/directives`` and the ``/directives`` chat command.
 * Every in-force directive of the current chat is rendered into ``<working_state>`` each
   model call (:func:`working_state_section`, called by ``graph.projection``).
+* A directive may carry ``links`` to the work it covers (ADR 0129 D4/Q2) — GitHub
+  issue/PR refs (``owner/repo#N``), board card ids (``bd-…``), scheduler job ids, task
+  ids. :meth:`DirectiveStore.resolve_link` marks a ref terminal and fulfils the directive
+  automatically (``closed_by: "system"``, attributed reason) once EVERY linked item has
+  finished; ``graph.directive_autofulfil`` wires the event paths and the GitHub sweep
+  that call it. Unlinked directives behave exactly as before.
 
 Storage: one JSON file per chat under the per-instance ``instance_root/directives`` store
 (ADR 0065). The file name is a hash of the session id — session ids may carry ``:`` and
@@ -28,10 +34,11 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import tempfile
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -42,6 +49,9 @@ STATUS_FULFILLED = "fulfilled"
 STATUS_REVOKED = "revoked"
 STATUSES = (STATUS_IN_FORCE, STATUS_FULFILLED, STATUS_REVOKED)
 CLOSED_BY = ("agent", "operator")
+#: The auto-fulfil closer (ADR 0129 D4/Q2): every linked item finished, so the system
+#: closed the directive itself. Valid on ``close()`` only — never a ``record`` author.
+CLOSED_BY_SYSTEM = "system"
 
 #: A directive is the operator's own words, quoted — a sentence or a short paragraph, not a
 #: whole pasted message. Generous, but bounded: every in-force one renders every turn.
@@ -55,8 +65,100 @@ WS_DIRECTIVE_CAP = 20
 #: it so a few large directives can't crowd out the rest of ``<working_state>`` every turn.
 WS_DIRECTIVES_MAX_CHARS = 6000
 
+#: A directive covers a bounded piece of work, not a backlog; the cap keeps one record
+#: from carrying (and re-rendering) an unbounded ref list every turn.
+MAX_LINKS = 20
+MAX_LINK_CHARS = 200
+
 # One lock for every store object: :func:`directive_store` may hand out a fresh one per call.
 _LOCK = threading.RLock()
+
+# ── linked work (ADR 0129 D4/Q2) ─────────────────────────────────────────────────
+
+_GH_REF_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+$")
+_GH_URL_RE = re.compile(r"^https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(?:issues|pull)/(\d+)/?$", re.I)
+
+
+def parse_github_ref(ref: str) -> tuple[str, str, str] | None:
+    """``(owner, repo, number)`` for a GitHub issue/PR ref — ``owner/repo#N`` or an
+    issue/PR URL — else ``None``. The sweep uses it to ask the Issues API (which
+    answers for PRs too; a merged PR reads ``closed`` there)."""
+    ref = (ref or "").strip()
+    if _GH_REF_RE.match(ref):
+        repo_part, _, number = ref.partition("#")
+        owner, _, repo = repo_part.partition("/")
+        return owner, repo, number
+    hit = _GH_URL_RE.match(ref)
+    return (hit.group(1), hit.group(2), hit.group(3)) if hit else None
+
+
+def _link_kind(ref: str) -> str:
+    """Classify a link ref by shape: board card (``bd-…``), task (``task-…``), GitHub
+    issue/PR ref or URL, else a scheduler job id."""
+    if ref.startswith("bd-"):
+        return "card"
+    if ref.startswith("task-"):
+        return "task"
+    if parse_github_ref(ref):
+        return "github"
+    return "job"
+
+
+def normalize_links(links) -> list[dict]:
+    """Validated, deduped link entries (``{ref, kind, state, reason}``) for ``record``.
+
+    Accepts a list/tuple of refs (a plain string is split on commas/whitespace, the way
+    an agent pastes them). Raises :class:`DirectiveError` on a ref the auto-fulfil paths
+    could never resolve — a bare ``#N`` (no repo) or a URL that isn't a GitHub issue/PR —
+    instead of storing a link that would silently keep the directive in force forever."""
+    if links is None:
+        return []
+    if isinstance(links, str):
+        links = [part for part in re.split(r"[,\s]+", links) if part]
+    if not isinstance(links, (list, tuple)):
+        raise DirectiveError("links must be a list of refs (owner/repo#N, bd-… card, job or task ids)")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in links:
+        ref = str(raw or "").strip().rstrip(",")
+        if not ref or ref in seen:
+            continue
+        if len(ref) > MAX_LINK_CHARS:
+            raise DirectiveError(f"link ref is {len(ref)} characters (max {MAX_LINK_CHARS})")
+        if re.fullmatch(r"#\d+", ref):
+            raise DirectiveError(f"GitHub ref {ref!r} names no repository — qualify it as owner/repo{ref}")
+        if ref.lower().startswith(("http://", "https://")) and not parse_github_ref(ref):
+            raise DirectiveError(f"link URL {ref!r} is not a GitHub issue/PR URL — link owner/repo#N instead")
+        seen.add(ref)
+        out.append({"ref": ref, "kind": _link_kind(ref), "state": "open", "reason": ""})
+    if len(out) > MAX_LINKS:
+        raise DirectiveError(f"{len(out)} links (max {MAX_LINKS}) — link the work this directive covers, not a backlog")
+    return out
+
+
+def _parse_links(value) -> list[dict]:
+    """The stored ``links`` entries off a ledger row — tolerant on purpose: a legacy or
+    hand-edited file must never break a read path."""
+    if not isinstance(value, list):
+        return []
+    out = []
+    for entry in value:
+        if isinstance(entry, dict) and entry.get("ref"):
+            out.append(
+                {
+                    "ref": str(entry["ref"]),
+                    "kind": str(entry.get("kind") or _link_kind(str(entry["ref"]))),
+                    "state": "done" if entry.get("state") == "done" else "open",
+                    "reason": str(entry.get("reason") or ""),
+                }
+            )
+    return out
+
+
+def _links_reason(links: list[dict]) -> str:
+    """The attributed close reason an all-links-done directive carries —
+    "acme/widgets#879 closed; task-3 closed"."""
+    return "; ".join(f"{e['ref']} {e.get('reason') or 'done'}" for e in links)
 
 WS_HEADING = "STANDING DIRECTIVES (from the operator — in force until fulfilled or revoked)"
 
@@ -102,6 +204,9 @@ class Directive:
     close_reason: str | None = None
     closed_by: str | None = None
     author: str = "agent"
+    #: Linked work (ADR 0129 D4/Q2): ``[{ref, kind, state, reason}, …]`` — empty for the
+    #: (unchanged) unlinked case.
+    links: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -120,6 +225,7 @@ class Directive:
             close_reason=data.get("close_reason"),
             closed_by=data.get("closed_by"),
             author=str(data.get("author") or "agent"),
+            links=_parse_links(data.get("links")),
         )
 
     @property
@@ -192,9 +298,12 @@ class DirectiveStore:
 
     # ── operations ──────────────────────────────────────────────────────────────
 
-    def record(self, session_id: str, quote: str, *, conditions: str = "", scope: str = "", author: str = "agent") -> Directive:
+    def record(self, session_id: str, quote: str, *, conditions: str = "", scope: str = "", author: str = "agent",
+               links=None) -> Directive:
         """Record a new in-force directive for ``session_id``. ``quote`` is the operator's
-        words verbatim for operator writes; legacy agent writes trim the ends."""
+        words verbatim for operator writes; legacy agent writes trim the ends. ``links``
+        (ADR 0129 D4/Q2) are the refs of the work the directive covers — the directive
+        fulfils itself once every linked item finishes (:meth:`resolve_link`)."""
         session_id = (session_id or "") if author == "operator" else (session_id or "").strip()
         if not session_id.strip():
             raise DirectiveError("a directive belongs to a chat — no session id was given")
@@ -210,6 +319,7 @@ class DirectiveStore:
             )
         conditions = (conditions or "").strip()[:MAX_NOTE_CHARS]
         scope = (scope or "").strip()[:MAX_NOTE_CHARS]
+        link_entries = normalize_links(links)
         with self._lock:
             items = self._load(session_id)
             taken = {d.id for d in items}
@@ -224,6 +334,7 @@ class DirectiveStore:
                 scope=scope,
                 created_at=_now(),
                 author=author,
+                links=link_entries,
             )
             items.append(directive)
             self._save(session_id, items)
@@ -274,11 +385,12 @@ class DirectiveStore:
     ) -> Directive:
         """Mark an in-force directive ``fulfilled`` or ``revoked``. Raises
         :class:`DirectiveNotFound` for an id this chat doesn't hold (another chat's id
-        included) and :class:`DirectiveClosed` when it is already closed."""
+        included) and :class:`DirectiveClosed` when it is already closed. ``closed_by``
+        may also be :data:`CLOSED_BY_SYSTEM` — the auto-fulfil path (ADR 0129 D4/Q2)."""
         if status not in (STATUS_FULFILLED, STATUS_REVOKED):
             raise DirectiveError(f"status must be {STATUS_FULFILLED!r} or {STATUS_REVOKED!r}")
-        if closed_by not in CLOSED_BY:
-            raise DirectiveError(f"closed_by must be one of {CLOSED_BY}")
+        if closed_by not in (*CLOSED_BY, CLOSED_BY_SYSTEM):
+            raise DirectiveError(f"closed_by must be one of {(*CLOSED_BY, CLOSED_BY_SYSTEM)}")
         directive_id = (directive_id or "").strip()
         with self._lock:
             items = self._load(session_id) if session_id else []
@@ -294,6 +406,74 @@ class DirectiveStore:
             self._save(session_id, items)
         _publish("directive.changed", {"session_id": session_id, "id": directive_id})
         return hit
+
+    # ── linked-work auto-fulfil (ADR 0129 D4/Q2) ─────────────────────────────────
+
+    def _ledger_session_ids(self) -> list[str]:
+        """Every session id with a ledger file under this store (for the cross-chat link
+        paths — an event names a ref, not a chat). Skips unreadable files and any file
+        that doesn't sit where its own session id hashes (the ``_load`` ownership guard)."""
+        if not self._base.is_dir():
+            return []
+        out: list[str] = []
+        for path in sorted(self._base.glob("*.json")):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                continue
+            session_id = str(data.get("session_id") or "") if isinstance(data, dict) else ""
+            if session_id and self._path(session_id) == path:
+                out.append(session_id)
+        return out
+
+    def linked_in_force(self) -> list[Directive]:
+        """Every in-force directive (any chat) that carries links — the periodic GitHub
+        sweep's work list."""
+        with self._lock:
+            out: list[Directive] = []
+            for session_id in self._ledger_session_ids():
+                out.extend(d for d in self._load(session_id) if d.in_force and d.links)
+        return out
+
+    def resolve_link(self, ref: str, reason: str = "") -> list[Directive]:
+        """Mark ``ref`` terminal on every in-force directive (any chat) that links it, and
+        fulfil each directive whose links are now ALL done — ``closed_by: "system"`` with
+        an attributed reason ("acme/widgets#879 closed; task-3 closed"). Returns the
+        directives touched (resolved a link, fulfilled or not). Directives without links
+        never match, so unlinked ones are untouched by construction."""
+        ref = (ref or "").strip()
+        if not ref:
+            return []
+        reason = (reason or "").strip()
+        touched: list[Directive] = []
+        with self._lock:
+            for session_id in self._ledger_session_ids():
+                items = self._load(session_id)
+                changed = False
+                for d in items:
+                    if not d.in_force:
+                        continue
+                    hit = False
+                    for entry in d.links:
+                        if entry.get("ref") == ref and entry.get("state") != "done":
+                            entry["state"] = "done"
+                            entry["reason"] = reason or "done"
+                            hit = True
+                    if not hit:
+                        continue
+                    changed = True
+                    if all(e.get("state") == "done" for e in d.links):
+                        d.status = STATUS_FULFILLED
+                        d.closed_at = _now()
+                        d.close_reason = _links_reason(d.links)[:MAX_NOTE_CHARS]
+                        d.closed_by = CLOSED_BY_SYSTEM
+                    touched.append(d)
+                if changed:
+                    self._save(session_id, items)
+        for d in touched:
+            _publish("directive.changed", {"session_id": d.session_id, "id": d.id})
+        return touched
 
     def forget(self, session_id: str) -> bool:
         """Drop a chat's whole ledger (the chat was deleted). True when a file was removed."""
@@ -346,6 +526,10 @@ def render_entry(d: Directive, *, closed_detail: bool = False) -> str:
         lines.append(_indent(f"Conditions: {d.conditions}"))
     if d.scope:
         lines.append(_indent(f"Scope: {d.scope}"))
+    if d.links:
+        refs = ", ".join(e["ref"] + (" [done]" if e.get("state") == "done" else "") for e in d.links)
+        suffix = "" if not d.in_force else " — fulfils itself when all of them finish"
+        lines.append(_indent(f"Linked work: {refs}{suffix}"))
     if closed_detail and not d.in_force:
         by = f" by the {d.closed_by}" if d.closed_by else ""
         why = f": {d.close_reason}" if d.close_reason else ""

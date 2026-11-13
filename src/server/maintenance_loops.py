@@ -431,6 +431,32 @@ async def _watch_loop() -> None:
         await asyncio.sleep(max(MIN_WATCH_INTERVAL_S, float(interval or DEFAULT_WATCH_INTERVAL_S)))
 
 
+# Directive GitHub-ref sweep cadence (ADR 0129 D4/Q2). GitHub publishes nothing onto the
+# in-process bus, so closed/merged issues and PRs are the one linked-work kind the event
+# handlers can't see; five minutes keeps a directive from riding every turn long after its
+# issues closed while staying far below gh's rate budget (one ``gh api`` read per distinct
+# linked ref).
+DIRECTIVE_LINK_SWEEP_INTERVAL_S = 300.0
+
+
+async def _directive_link_sweep_loop() -> None:
+    """Periodic GitHub-ref sweep for linked directives (ADR 0129 D4/Q2): fulfil directives
+    whose linked issues/PRs all closed. Started unconditionally like ``_watch_loop``; cheap
+    when no in-force directive holds an unresolved GitHub ref (``sweep_directive_links``
+    returns before any ``gh`` call)."""
+    from graph.directive_autofulfil import sweep_directive_links
+
+    await asyncio.sleep(60)  # let boot settle before the first sweep
+    while True:
+        try:
+            n = await sweep_directive_links()
+            if n:
+                log.info("[directives] GitHub sweep resolved links on %d directive(s)", n)
+        except Exception:
+            log.exception("[directives] GitHub link sweep failed")
+        await asyncio.sleep(DIRECTIVE_LINK_SWEEP_INTERVAL_S)
+
+
 # A2A orphaned-WORKING-task reaper cadence (#3418). Deliberately far shorter than the
 # checkpoint-prune hour, and finite (the console waits INDEFINITELY on a WORKING durable
 # record): a producer that vanished without tripping boot reconciliation or the executor

@@ -35,7 +35,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 
 | Topic | Payload keys | Emitted from |
 |---|---|---|
-| `activity.message` | `context_id`, `error`, `origin`, `origin_session`, `priority`, `role`, `state`, `stimulus`, `task_id`, `text`, `trigger` | `src/server/a2a.py`, `src/server/stores.py` |
+| `activity.message` | `context_id`, `error`, `inbox_id`, `origin`, `origin_session`, `priority`, `role`, `state`, `stimulus`, `task_id`, `text`, `trigger` | `src/server/a2a.py`, `src/server/stores.py` |
 | `background.completed` | `description`, `error`, `job_id`, `origin_session`, `result`, `status`, `subagent_type` | `src/background/manager.py`, `src/server/a2a.py` |
 | `background.progress` | `error`, `job_id`, `output`, `phase`, `task_id`, `tool`, `tool_call_id` | `src/background/manager.py`, `src/server/a2a.py` |
 | `background.started` | `description`, `job_id`, `origin_session`, `status`, `subagent_type` | `src/background/manager.py` |
@@ -60,7 +60,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `plugin.changed` | `scope` | `src/server/settings_apply.py` |
 | `plugin.updated` | `by`, `id`, `reloaded`, `resolved_sha`, `version` | `src/server/maintenance_loops.py` |
 | `provider.usage` | _(varies)_ | `src/observability/usage_store.py` |
-| `scheduler.changed` | `action`, `job_id` | `src/operator_api/console_handlers.py` |
+| `scheduler.changed` | `action`, `job_id` | `src/operator_api/console_handlers.py`, `src/scheduler/local.py` +1 |
 | `scheduler.completed` | _(varies)_ | `src/server/a2a.py` |
 | `scheduler.fired` | `job_id`, `prompt`, `schedule` | `src/scheduler/local.py` |
 | `turn.finished` | `ok`, `origin`, `origin_session`, `session_id`, `state`, `task_id`, `trigger` | `src/background/manager.py`, `src/scheduler/local.py` +1 |
