@@ -1223,6 +1223,12 @@ async def _operator_inbox_get(item_id: int, wait: float = 0.0) -> dict:
 
 
 async def _operator_inbox_deliver(item_id: int) -> dict:
+    """Mark an inbox item handled — it does NOT start a turn or run the item.
+
+    Despite the ``deliver`` name this only sets ``delivered_at`` (``mark_delivered``), which
+    takes the item out of the pending queue so ``check_inbox`` and the idle retry-when-free
+    path skip it. The Work view's Dismiss calls this to clear a page without acting on it.
+    """
     import asyncio
 
     if STATE.inbox_store is None:

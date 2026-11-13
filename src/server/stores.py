@@ -55,10 +55,11 @@ _INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
 # Single-sourced in ``inbox.store`` so /api/inbox's ``retries_exhausted`` decoration
 # (operator_api may not import server) agrees with the budget enforced here.
 _INBOX_NOW_RECOVERY_MAX_ATTEMPTS = RECOVERY_MAX_ATTEMPTS
-# Retry-when-free (undelivered pages must not wait for the next restart): a pending now
-# item is retried right after the last in-flight turn settles (the turn_control bracket
-# kicks ``kick_inbox_now_retry``) PLUS by a bounded periodic sweep — every minute, only
-# while no turn holds the agent, a few items per sweep.
+# Retry-when-free (a pending now page must not wait for the next restart; a pending next
+# item must reach an idle agent, not sit forever): a pending now/next item is delivered
+# right after the last in-flight turn settles (the turn_control bracket kicks
+# ``kick_inbox_now_retry``) PLUS by a bounded periodic sweep — every minute, only while no
+# turn holds the agent, a few items per sweep.
 _INBOX_NOW_RETRY_INTERVAL_S = 60
 _INBOX_NOW_RETRY_SWEEP_LIMIT = 4
 _INBOX_NOW_RETRY_LOOP_STARTED = False
@@ -195,12 +196,20 @@ async def recover_pending_now_inbox_items(
     limit: int = _INBOX_NOW_RECOVERY_BATCH_LIMIT,
     retry_after_s: int = _INBOX_NOW_RECOVERY_RETRY_AFTER_S,
     max_attempts: int = _INBOX_NOW_RECOVERY_MAX_ATTEMPTS,
+    priorities: tuple[str, ...] = ("now",),
     is_busy=None,
     reconcile: bool = True,
     now=None,
 ) -> dict[str, int]:
-    """One bounded recovery pass for pending priority-``now`` inbox items — the boot
-    backlog drain AND the body of every retry-when-free pass (settle kick / 60s sweep).
+    """One bounded recovery pass for pending inbox items — the boot backlog drain AND the
+    body of every retry-when-free pass (settle kick / 60s sweep).
+
+    ``priorities`` selects the tiers to deliver: ``("now",)`` for boot recovery and the
+    now-page backstop; the idle retry-when-free sweep passes ``("now", "next")`` so an idle
+    agent also runs a queued next item, in priority-then-age order. Claimed next items fire
+    a turn the same way now pages do (via ``STATE.inbox_now_delivery``); the ``is_busy``
+    gate keeps a next item from running during a turn (``next`` means after the current
+    work, not never).
 
     The inbox store owns the bounded claim/dedup policy: ``claim_now_recovery_batch``
     atomically claims the batch so a concurrent consumer can't double-deliver a
@@ -270,6 +279,7 @@ async def recover_pending_now_inbox_items(
             limit=limit,
             retry_after_s=retry_after_s,
             max_attempts=max_attempts,
+            priorities=priorities,
             now=now,
         )
     except Exception:  # noqa: BLE001 — recovery must not break boot
@@ -360,8 +370,9 @@ async def recover_pending_now_inbox_items(
         if attempts < max_attempts:
             return
         item_id = item.get("id")
+        priority = str(item.get("priority") or "now")
         text = (
-            f"Priority-now inbox item {item_id} could not be delivered after "
+            f"Priority-{priority} inbox item {item_id} could not be delivered after "
             f"{attempts} attempt(s): {reason}. It stays queued in the inbox "
             "(check_inbox or an explicit deliver still picks it up)."
         )
@@ -535,14 +546,16 @@ async def retry_pending_now_inbox_items_when_free(
     limit: int = _INBOX_NOW_RETRY_SWEEP_LIMIT,
     max_attempts: int = _INBOX_NOW_RECOVERY_MAX_ATTEMPTS,
 ) -> dict[str, int]:
-    """One bounded retry pass for pending priority-``now`` items, only when the agent is
-    free — the body of both the turn-settle kick and the periodic sweep.
+    """One bounded retry pass for pending priority-``now`` AND priority-``next`` items,
+    only when the agent is free — the body of both the turn-settle kick and the periodic
+    sweep. Items are delivered in priority-then-age order (now before next, oldest first).
 
     A busy agent makes this a no-op that spends nothing (no claim, no attempt): the item
     stays a queued inbox row — never an operator alert — until a pass finds the agent
     free and ``recover_pending_now_inbox_items`` delivers it under the existing
     claim/accept safety (no double delivery; retries join the item's accepted turn via
-    its durable execution identity)."""
+    its durable execution identity). A next item therefore runs AFTER the current work,
+    never interrupting it."""
     global _INBOX_NOW_RETRY_ACTIVE
     none = {"claimed": 0, "accepted": 0, "failed": 0}
     store = STATE.inbox_store
@@ -552,23 +565,24 @@ async def retry_pending_now_inbox_items_when_free(
         return none
     # Claim the single-flight latch BEFORE the first await: the check above and this set
     # are only atomic while no await separates them (one event-loop thread). Setting it
-    # after the pending-now lookup let a settle kick and a sweep tick both pass the check
+    # after the pending lookup let a settle kick and a sweep tick both pass the check
     # during that await and run two passes at once.
     _INBOX_NOW_RETRY_ACTIVE = True
     try:
         try:
             # Cheap in-memory hint first (the common sweep tick costs nothing); the table
             # check both confirms it and clears a stale hint.
-            if not store.maybe_pending_now() or not await asyncio.to_thread(store.has_pending_now):
+            if not store.maybe_pending_fireable() or not await asyncio.to_thread(store.has_pending_fireable):
                 return none
         except Exception:  # noqa: BLE001 — a hint failure must not kill the sweep
-            log.exception("[inbox] pending-now check failed")
+            log.exception("[inbox] pending-fireable check failed")
             return none
         # reconcile=False: the boot-only lease releases would undo a claim a concurrent
         # in-process owner (the boot pass, a live POST's fire) still legitimately holds.
         return await recover_pending_now_inbox_items(
             limit=limit,
             max_attempts=max_attempts,
+            priorities=("now", "next"),
             is_busy=_agent_is_busy,
             reconcile=False,
         )
@@ -578,16 +592,17 @@ async def retry_pending_now_inbox_items_when_free(
 
 def kick_inbox_now_retry() -> None:
     """Schedule one retry-when-free pass, now. Called by ``turn_control._turn_ended``
-    when the last in-flight turn settles — the moment a queued now page can run — so an
-    undelivered page no longer waits for a restart (or even the next sweep tick).
-    Cheap no-op unless a pending now item may exist; never raises."""
+    when the last in-flight turn settles — the moment a queued now page OR next item can
+    run — so an undelivered page no longer waits for a restart (or even the next sweep
+    tick), and a next item queued during the turn runs right after it ends.
+    Cheap no-op unless a pending now/next item may exist; never raises."""
     store = STATE.inbox_store
     if store is None or not callable(getattr(STATE, "inbox_now_delivery", None)):
         return
     if _INBOX_NOW_RETRY_ACTIVE or _agent_is_busy():
         return
     try:
-        if not store.maybe_pending_now():
+        if not store.maybe_pending_fireable():
             return
     except Exception:  # noqa: BLE001
         return
