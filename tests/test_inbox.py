@@ -255,6 +255,137 @@ async def test_now_inbox_fire_rejects_jsonrpc_error(monkeypatch):
     assert ok is False
 
 
+# ── late-delivery age note (#5241) ───────────────────────────────────────────
+
+
+def _inbox_capture_app(captured: dict) -> FastAPI:
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def _a2a(body: dict):
+        captured.update(body)
+        return {"result": {"status": {"state": "TASK_STATE_SUBMITTED"}}}
+
+    return app
+
+
+def test_inbox_late_delivery_notice_helper():
+    """The pure age-formatting helper: a stale item gets a one-line note; a fresh item,
+    a missing stamp and an unparseable stamp all return None (unchanged delivery)."""
+    import server.a2a as a2a
+
+    now = datetime(2026, 11, 13, 16, 49, tzinfo=UTC)
+    queued = (now - timedelta(hours=32)).isoformat()
+    notice = a2a._inbox_late_delivery_notice(queued, now=now)
+    assert notice == (
+        "[Queued 2026-11-12 08:49 UTC — delivered 32h late. "
+        "Newer instructions may replace it; check before acting.]"
+    )
+
+    # Within the one-hour threshold → unchanged.
+    assert a2a._inbox_late_delivery_notice((now - timedelta(minutes=30)).isoformat(), now=now) is None
+    # Exactly at the threshold is NOT "older than" → unchanged.
+    assert a2a._inbox_late_delivery_notice((now - timedelta(hours=1)).isoformat(), now=now) is None
+    # A naive (tz-less) stamp is read as UTC, not crashed on.
+    assert a2a._inbox_late_delivery_notice("2026-11-12T08:49:00", now=now).startswith("[Queued 2026-11-12 08:49 UTC")
+    # Missing / unparseable → None, never raises.
+    assert a2a._inbox_late_delivery_notice(None, now=now) is None
+    assert a2a._inbox_late_delivery_notice("", now=now) is None
+    assert a2a._inbox_late_delivery_notice("not-a-timestamp", now=now) is None
+    assert a2a._inbox_late_delivery_notice(1762937340, now=now) is None
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_prefixes_a_stale_item_and_keeps_identity(tmp_path, monkeypatch):
+    """A page queued well over the threshold is delivered with a leading age note; the
+    original text follows unchanged after a blank line, metadata carries created_at, and
+    the prefix leaves the message identity (messageId/contextId) untouched."""
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    item = store.add(
+        "cancel the nightly backup schedule",
+        priority="now",
+        source="ops",
+        now=datetime.now(UTC) - timedelta(hours=32),
+    )
+    captured: dict = {}
+    monkeypatch.setattr(STATE, "inbox_store", store, raising=False)
+    monkeypatch.setattr(STATE, "fastapi_app", _inbox_capture_app(captured), raising=False)
+    monkeypatch.setattr(STATE, "active_port", 9, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox(item)
+
+    assert ok is True
+    msg = captured["params"]["message"]
+    text = msg["parts"][0]["text"]
+    first_line, blank, rest = text.partition("\n\n")
+    assert first_line.startswith("[Queued ")
+    assert "UTC" in first_line and "late" in first_line
+    assert "Newer instructions may replace it" in first_line
+    assert blank == "\n\n"
+    # The original text follows byte-for-byte.
+    assert rest == "cancel the nightly backup schedule"
+    assert msg["metadata"]["created_at"] == item["created_at"]
+    # The prefix is cosmetic: identity is the durable one the store assigned.
+    identity = store.execution_identity(item["id"])
+    assert msg["messageId"] == identity["message_id"]
+    assert msg["contextId"] == identity["context_id"]
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_leaves_a_fresh_item_unchanged(tmp_path, monkeypatch):
+    """An item within the threshold is delivered byte-for-byte unchanged, but still
+    carries created_at in its metadata."""
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    item = store.add("fresh page", priority="now", source="ops")
+    captured: dict = {}
+    monkeypatch.setattr(STATE, "inbox_store", store, raising=False)
+    monkeypatch.setattr(STATE, "fastapi_app", _inbox_capture_app(captured), raising=False)
+    monkeypatch.setattr(STATE, "active_port", 9, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox(item)
+
+    assert ok is True
+    msg = captured["params"]["message"]
+    assert msg["parts"] == [{"text": "fresh page"}]
+    assert msg["metadata"]["created_at"] == item["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_without_created_at_is_unchanged(monkeypatch):
+    """A missing or unparseable created_at delivers the text unchanged and does not raise;
+    metadata still carries the (None / raw) created_at value for every item."""
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    captured: dict = {}
+    monkeypatch.setattr(STATE, "inbox_store", None, raising=False)
+    monkeypatch.setattr(STATE, "fastapi_app", _inbox_capture_app(captured), raising=False)
+    monkeypatch.setattr(STATE, "active_port", 9, raising=False)
+
+    # No created_at at all.
+    ok = await a2a._fire_activity_from_inbox({"id": 71, "text": "no stamp here", "priority": "now"})
+    assert ok is True
+    msg = captured["params"]["message"]
+    assert msg["parts"] == [{"text": "no stamp here"}]
+    assert msg["metadata"]["created_at"] is None
+
+    # An unparseable stamp is also delivered unchanged.
+    captured.clear()
+    ok = await a2a._fire_activity_from_inbox(
+        {"id": 72, "text": "garbage stamp", "priority": "now", "created_at": "not-a-timestamp"}
+    )
+    assert ok is True
+    msg = captured["params"]["message"]
+    assert msg["parts"] == [{"text": "garbage stamp"}]
+    assert msg["metadata"]["created_at"] == "not-a-timestamp"
+
+
 # ── check_inbox tool ─────────────────────────────────────────────────────────
 
 

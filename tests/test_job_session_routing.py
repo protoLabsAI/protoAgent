@@ -321,7 +321,11 @@ async def test_inbox_now_fire_uses_a_durable_per_item_job_session(tmp_path, monk
         "inbox_id": first["id"],
         "inbox_source": "ci",
         "priority": "now",
+        # created_at rides on every inbox message now (#5241); a just-queued item carries
+        # its stamp but is well within the late-delivery threshold, so its text is unchanged.
+        "created_at": first["created_at"],
     }
+    assert msgs[0]["parts"] == [{"text": "deploy done"}]
     # Acceptance was recorded durably on the identity.
     assert store.execution_identity(first["id"])["task_id"] == "task-ib-1"
 
