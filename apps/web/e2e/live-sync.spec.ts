@@ -82,13 +82,11 @@ async function pollReturn(page: Page, visible: ReturnType<Page["locator"]>) {
 
 // ── Case 1 ────────────────────────────────────────────────────────────────────────────────
 // D4: "A change in one (send …) appears in the other within 2s, with no reload." The mock
-// already records the turn durably and feeds `session.changed` / `turn.completed` with seq
-// over the scoped SSE — today's console has no consumer for them (a browser-streamed turn
-// publishes nothing it reacts to), so the other client stays blind until it happens to
-// resync. Flips when the S3 sync client (cursor resume + entity refetch) lands.
-test.fail("a send in one client appears in the other within 2 seconds, with no reload", {
-  annotation: { type: "fails-on-main", description: "ADR 0130 S1–S3 (#5196): no change-feed consumer in the console yet" },
-}, async ({ browser, request }, testInfo) => {
+// records the turn durably and feeds `session.changed` / `turn.completed` with seq over the
+// scoped SSE; the S3 sync client (sessionHydration.watchServerChangeFeed) consumes them and
+// refetches the session index + the open session's turns, so the other client converges with
+// no reload.
+test("a send in one client appears in the other within 2 seconds, with no reload", async ({ browser, request }, testInfo) => {
   const scope = syncScope(testInfo, "send");
   const session = "chat-sync-send";
   await seedChat(request, scope, session, "Sprint kickoff", "Seeded — the sprint board is ready.");

@@ -28,6 +28,13 @@ import { startDeviceTokenRotation } from "./lib/deviceRotation";
 import { installStorageEviction } from "./lib/storageEviction";
 import { initTranscriptBackend, transcriptStoreIfOpen } from "./chat/chat-store";
 import { initPaletteThreads } from "./app/paletteChatStore";
+import { setSyncCursorStore } from "./lib/syncCursor";
+
+// Back the live-sync change-feed cursor (ADR 0130 D3) with the shared transcript IndexedDB
+// connection, so an EventSource resume survives a closed tab. A live accessor: it returns
+// null until the store opens (the sessionStorage mirror stands in meanwhile) and follows a
+// tenant switch's reopen.
+setSyncCursorStore(transcriptStoreIfOpen);
 
 // A phone paired before #4336 S3 holds its device token in the OPERATOR key. Move it to its
 // own key before anything sends a request. Copy-then-remove, so a failed write leaves the

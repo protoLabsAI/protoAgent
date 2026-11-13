@@ -86,6 +86,19 @@ export type DurableChatSession = {
   last_task_id?: string | null;
   /** The newest turn's state — served on the `parked` index (#3957), absent otherwise. */
   last_state?: string | null;
+  // Server-held session state (ADR 0130 D1/D2, S2). The server derives these from the task
+  // store and turn lock; a client renders them rather than inferring liveness locally. Absent
+  // on a server that predates S2.
+  /** `idle` | `running` | `paused` — the session's live status. */
+  status?: string | null;
+  /** The task the server reports LIVE in this session, or null when nothing runs. */
+  live_task_id?: string | null;
+  /** The bus seq of this session's newest `session.changed`. The live-sync backstop compares
+   *  it with the seq it last rendered for the session (sessionHydration), so a change that
+   *  bumps no turn (a rename, a status flip) still triggers a refetch on return (D3). */
+  last_change_seq?: number | null;
+  /** When the server-held state last changed (ISO 8601). */
+  updated_at?: string | null;
 };
 
 export type DurableChatTurn = {
