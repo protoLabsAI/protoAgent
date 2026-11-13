@@ -1,0 +1,19 @@
+{
+  "//": "The console page's Content-Security-Policy (bd-9ih.13). scripts/csp.mjs adds the streaming preview's script hash to script-src and writes dist/csp.json; src/operator_api/web.py sends it. 'wasm-unsafe-eval' lets the code highlighter compile its WebAssembly; it does not allow JavaScript eval. style-src needs 'unsafe-inline' for React style attributes and highlighted code.",
+  "directives": {
+    "default-src": ["'self'"],
+    "script-src": ["'self'", "'wasm-unsafe-eval'"],
+    "style-src": ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+    "font-src": ["'self'", "data:", "https://fonts.gstatic.com"],
+    "img-src": ["'self'", "data:", "blob:"],
+    "media-src": ["'self'", "data:", "blob:"],
+    "connect-src": ["'self'", "data:", "blob:"],
+    "frame-src": ["'self'"],
+    "worker-src": ["'self'", "blob:"],
+    "manifest-src": ["'self'"],
+    "object-src": ["'none'"],
+    "base-uri": ["'self'"],
+    "form-action": ["'self'"],
+    "frame-ancestors": ["'self'"]
+  }
+}

@@ -39,6 +39,8 @@ import {
 // Byte-for-byte vendored Idiomorph (0BSD) — see vendor/idiomorph.LICENSE.txt for version + sha256.
 // Imported as raw text so it can be inlined as the frame's one nonce'd script.
 import idiomorphMin from "./vendor/idiomorph.min.js?raw";
+// The receiver, also raw: the console CSP allows this exact script by hash (scripts/csp.mjs).
+import previewReceiver from "./previewReceiver.js?raw";
 
 // Streamed artifact preview (ADR 0118 D3 console, S8b). While a `show_artifact` tool call with
 // inline placement is still streaming, the server decodes its declared `code` argument into a
@@ -163,38 +165,10 @@ function randomNonce(): string {
  *  document's content height back so the host can size the frame (and hand that height to the
  *  final inline frame on swap). Built from the module constants so the host and the frame agree on
  *  the message types and the root id. */
-const MORPH_RECEIVER = [
-  "(function(){",
-  "function report(){",
-  "try{",
-  "var h=Math.ceil(document.documentElement.scrollHeight||document.body.scrollHeight||0);",
-  `parent.postMessage({type:${JSON.stringify(PREVIEW_HEIGHT_TYPE)},height:h},"*");`,
-  "}catch(_){}",
-  "}",
-  "function render(html){",
-  `var root=document.getElementById(${JSON.stringify(PREVIEW_ROOT_ID)});`,
-  "if(!root)return;",
-  'try{Idiomorph.morph(root,html,{morphStyle:"innerHTML"});}catch(_){root.innerHTML="";}',
-  "report();",
-  "}",
-  // A host style post: fill one of the two HOST-owned style elements (kit / theme) by id — never
-  // any other node — and re-stamp the scheme on <html>, which the theme rules key off.
-  "function restyle(d){",
-  `if(d.id!==${JSON.stringify(PREVIEW_KIT_STYLE_ID)}&&d.id!==${JSON.stringify(PREVIEW_THEME_STYLE_ID)})return;`,
-  "var el=document.getElementById(d.id);",
-  "if(el)el.textContent=d.css;",
-  'if(d.scheme==="light"||d.scheme==="dark")document.documentElement.setAttribute("data-theme",d.scheme);',
-  "report();",
-  "}",
-  'window.addEventListener("message",function(ev){',
-  "if(ev.source!==parent)return;",
-  "var d=ev.data;",
-  `if(d&&d.type===${JSON.stringify(PREVIEW_STYLE_TYPE)}&&typeof d.css==="string"){restyle(d);return;}`,
-  `if(!d||d.type!==${JSON.stringify(PREVIEW_MORPH_TYPE)}||typeof d.html!=="string")return;`,
-  "render(d.html);",
-  "});",
-  "})();",
-].join("");
+/** The in-frame receiver (``previewReceiver.js``): on each `proto-preview:morph` post, morph the
+ *  root's children to match the processed markup so the preview updates in place instead of being
+ *  rebuilt, then post the document's content height back so the host can size the frame. */
+const MORPH_RECEIVER = previewReceiver;
 
 /** Build the preview frame's srcdoc: the exact CSP meta; the console's theme, inlined (allowed by
  *  `style-src 'unsafe-inline'`) exactly as the live artifact frame gets it — the DS kit's CSS text
@@ -204,6 +178,13 @@ const MORPH_RECEIVER = [
  *  carrying the vendored Idiomorph plus the receiver. Any `</script` in the vendored lib is defused
  *  so it cannot close its host `<script>` early (there are none at the pinned version —
  *  belt-and-braces). */
+/** The frame's one script — vendored Idiomorph plus the receiver — byte-for-byte what
+ *  scripts/csp.mjs hashes into the console CSP. */
+// Any `</script` in the vendored lib is defused so it cannot close its host `<script>` early (there
+// are none at the pinned version — belt-and-braces). scripts/csp.mjs applies the same join; a unit
+// test checks both produce the same bytes.
+export const PREVIEW_SCRIPT = `${idiomorphMin.replace(/<\/(script)/gi, "<\\/$1")}\n${MORPH_RECEIVER}`;
+
 export function buildPreviewSrcdoc(
   nonce: string,
   theme: { scheme: "light" | "dark"; css: string; kitCss: string } = {
@@ -212,7 +193,6 @@ export function buildPreviewSrcdoc(
     kitCss: cachedPluginKitCss(),
   },
 ): string {
-  const idiomorph = idiomorphMin.replace(/<\/(script)/gi, "<\\/$1");
   return [
     "<!doctype html>",
     `<html lang="en" data-theme="${theme.scheme}">`,
@@ -224,7 +204,7 @@ export function buildPreviewSrcdoc(
     "</head>",
     "<body>",
     `<div id="${PREVIEW_ROOT_ID}"></div>`,
-    `<script nonce="${nonce}">${idiomorph}\n${MORPH_RECEIVER}</script>`,
+    `<script nonce="${nonce}">${PREVIEW_SCRIPT}</script>`,
     "</body>",
     "</html>",
   ].join("\n");

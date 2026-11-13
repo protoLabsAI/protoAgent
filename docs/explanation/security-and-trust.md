@@ -284,6 +284,42 @@ phone credential. Unknown, expired, replayed or substituted handles fail closed,
 after a hub restart or capacity eviction (mint a fresh ticket). Other plugins' ticket
 protocols still need explicit integration; their proxied ticket sockets are not covered.
 
+## The console page policy {#the-console-page-policy}
+
+The console holds the operator token, and it renders text the model wrote, which can be steered
+by pages and files the agent read. A script that ran inside the console could take the token, so
+the console page sends a Content-Security-Policy that only lets the console's own code run. Its
+directives are built with the console (`apps/web/csp-policy.json`, plus the hash of the one
+inline script the streaming artifact preview needs) and written to `dist/csp.json`.
+
+What it allows:
+
+- **Scripts** from the console's own origin, the preview script by its hash, and compiling the
+  code highlighter's WebAssembly (`'wasm-unsafe-eval'`, which does not allow JavaScript `eval`).
+  No inline scripts, no `eval`.
+- **Styles** inline and from Google Fonts; **fonts** from Google Fonts.
+- **Images and media** from the console's origin, inline (`data:`, `blob:`), and the agent's
+  public URL. An image from any other host already shows as a link in chat.
+- **Connections and frames** to the console's origin only (plugin views and fleet members
+  are served through it), plus the agent's public URLs for connections. No plugins
+  (`object-src 'none'`), and other sites may not frame it. A plugin frame can't navigate itself
+  to another site.
+
+Two things it changes once enforced:
+
+- A paired phone's offline notice still lists the agent's other addresses, but only checks
+  whether the public ones are answering. A tailnet or LAN address shows without that hint.
+- A console in a browser can no longer be pointed at a different backend with `?__apiPort=`;
+  only the desktop app uses that, and the desktop app doesn't get this header.
+
+It is sent in **report** mode by default (`PROTOAGENT_CONSOLE_CSP`): the browser blocks nothing
+and reports what it would have blocked to `/csp-report`, which logs each distinct report once.
+Watch for `[console-csp] would block:` lines, then set `PROTOAGENT_CONSOLE_CSP=enforce`. The e2e
+suite runs the whole console under the policy enforced, and fails if anything is blocked.
+
+The desktop app loads its bundled copy of the console, not this page, so this header does not
+reach it.
+
 ## See also
 
 - [Building a plugin view](../guides/building-react-plugin-views.md) — the sandboxed-iframe plugin UI model.

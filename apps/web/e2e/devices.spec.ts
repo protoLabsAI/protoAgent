@@ -623,6 +623,10 @@ test("a browser holding only the shared bearer is offered no move", async ({ pag
 });
 
 test("the offline notice lists the phone's other addresses when its home stops answering", async ({ page }) => {
+  // The notice probes the phone's other addresses for an "answering" hint. Those are fixture
+  // origins here; under an enforced console CSP the probe only reaches the agent's configured
+  // public URLs (connect-src), so this runs without the policy (the server reports it by default).
+  await page.setExtraHTTPHeaders({ "x-e2e-csp": "off" });
   await asPairedPhone(page);
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.locator(".app-shell-main")).toBeVisible();

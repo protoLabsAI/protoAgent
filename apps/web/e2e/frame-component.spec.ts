@@ -35,6 +35,13 @@ test.beforeEach(async ({ page }) => {
   await withFrameComponent(page);
 });
 
+// The frame-navigation tests run WITHOUT the console CSP: under it, frame-src already refuses the
+// navigation (the page never leaves), so the capability handshake they test is never exercised.
+// The server sends that policy report-only by default, so the handshake must hold on its own.
+async function withoutConsoleCsp(page: Page) {
+  await page.setExtraHTTPHeaders({ "x-e2e-csp": "off" });
+}
+
 test("a plugin's frame component renders inline with no console rebuild", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
@@ -180,6 +187,7 @@ const EVIL_HTML =
   "</script></body></html>";
 
 test("a frame that navigates away is refused every read and unloaded", async ({ page }) => {
+  await withoutConsoleCsp(page);
   await page.route("**/api/components", (route) =>
     route.fulfill({
       json: [{ name: "pl-demo-widget", plugin: "demo", frame_url: "/plugins/demo/widget", reads: ["features/*"] }],
@@ -272,6 +280,7 @@ async function routeRace(page: Page, frameHtml: string) {
 }
 
 test("(a) a page that navigates while still parsing never gets the capability", async ({ page }) => {
+  await withoutConsoleCsp(page);
   // The declared page navigates BEFORE it ever posts ready — so the iframe sees one load, the
   // replacing page's, exactly like the plugin page itself.
   const hits = await routeRace(
@@ -287,6 +296,7 @@ test("(a) a page that navigates while still parsing never gets the capability", 
 });
 
 test("(b) a page that navigates after init and stalls its own load never gets the capability", async ({ page }) => {
+  await withoutConsoleCsp(page);
   // The declared page pairs, gets its init, then navigates ~at once (inside the old re-post
   // window); the replacing page holds its own load open forever.
   const hits = await routeRace(
