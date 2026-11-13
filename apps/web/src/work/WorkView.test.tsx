@@ -428,16 +428,17 @@ it("shows skeletons without a zero-count flash or empty announcement", async () 
 });
 
 it("omits only loading group badges while retaining ready zero counts", async () => {
-  data.sources.tasks.status = "loading";
+  data.sources.watches.status = "loading";
   await render();
   const nav = await openSections();
   const entry = (label: string) => Array.from(nav.querySelectorAll('[role="menuitemradio"]')).find((node) => node.textContent?.includes(label))!;
-  // Tasks feed Doing now and Coming up, so those (and the Overview total) hold their badges
-  // back; Needs you and Your instructions keep their ready zeros.
-  expect(entry("Doing now").querySelector(".pl-menu__badge")).toBeNull();
+  // Watches feed Coming up, so it (and the Overview total) holds its badge back; the other
+  // groups keep their ready zeros. (Tasks now feed Needs you too — a `waiting` task — so a
+  // loading tasks source would hold that badge back as well.)
   expect(entry("Coming up").querySelector(".pl-menu__badge")).toBeNull();
   expect(entry("Overview").querySelector(".pl-menu__badge")).toBeNull();
   expect(entry("Needs you").querySelector(".pl-menu__badge")?.textContent).toBe("0");
+  expect(entry("Doing now").querySelector(".pl-menu__badge")?.textContent).toBe("0");
   expect(entry("Your instructions").querySelector(".pl-menu__badge")?.textContent).toBe("0");
   await closeSections(nav);
 });

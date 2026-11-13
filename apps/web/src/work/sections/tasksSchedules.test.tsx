@@ -47,11 +47,12 @@ it("annotates tasks without overriding per-row goal/task/watch classification", 
     { ...base, id: "achieved", kind: "goal", raw: { status: "achieved" } },
     { ...base, id: "running", kind: "task", raw: { status: "in_progress" } },
     { ...base, id: "queued", kind: "task", raw: { status: "open" } },
+    { ...base, id: "parked", kind: "task", raw: { status: "waiting" } },
     { ...base, id: "closed", kind: "task", raw: { status: "closed" } },
     { ...base, id: "watch", kind: "watch", raw: { status: "active" } },
   ]);
   expect(groups.map(({ id, items }) => [id, items.map((item) => item.id)])).toEqual([
-    ["needs-you", ["stopped"]],
+    ["needs-you", ["stopped", "parked"]],
     ["doing-now", ["active", "running"]],
     ["coming-up", ["queued", "watch"]],
     ["instructions", []],
