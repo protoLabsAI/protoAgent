@@ -540,6 +540,35 @@ class DecisionStore:
         return rec
 
 
+#: ``interrupt_id`` marker for a restart-recovery decision (ADR 0129 D7 S7): the Needs-you
+#: item raised for an occurrence a restart left ``interrupted_needs_operator``. Such a record
+#: has NO checkpoint interrupt — its answer performs Resume / Re-run / Drop on the held
+#: occurrence instead of resuming a parked turn — so the marker both routes the answer and
+#: keeps the stranded-record reconcile away (``thread_id`` stays empty, which reads unknown).
+#: The suffix is the occurrence key as JSON, making creation idempotent per occurrence.
+RESTART_RECOVERY_PREFIX = "restart-recovery:"
+
+
+def restart_recovery_interrupt_id(job_id: str, next_fire: str, created_at: str, task_id: str = "") -> str:
+    """The idempotency key + machine payload for one interrupted occurrence's Needs-you item."""
+    return RESTART_RECOVERY_PREFIX + json.dumps(
+        {"created_at": created_at, "job_id": job_id, "next_fire": next_fire, "task_id": task_id},
+        sort_keys=True,
+    )
+
+
+def restart_recovery_ref(rec: Decision) -> dict | None:
+    """The occurrence key a restart-recovery decision acts on; ``None`` for ordinary records."""
+    raw = str(getattr(rec, "interrupt_id", "") or "")
+    if not raw.startswith(RESTART_RECOVERY_PREFIX):
+        return None
+    try:
+        ref = json.loads(raw[len(RESTART_RECOVERY_PREFIX):])
+    except ValueError:
+        return None
+    return ref if isinstance(ref, dict) and ref.get("job_id") else None
+
+
 def decision_store() -> DecisionStore:
     """The live store: ``STATE.decision_store`` (built once at boot — the instance root
     never changes for the life of a process), else a store over this instance's directory

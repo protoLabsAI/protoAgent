@@ -137,6 +137,17 @@ def _task_status(tmp_path, task_id: str) -> tuple[str, str]:
     return str(blob.get("state") or ""), text
 
 
+async def _wait_task_failed(tmp_path, task_id: str) -> str:
+    """The spared handle's failure (``recovery.fail_task``) is a separate async write that
+    lands moments AFTER the occurrence's D7 disposition commits — wait for the terminal
+    state instead of racing it, then return the diagnosis text for content asserts."""
+    await _wait_until(
+        lambda: _task_status(tmp_path, task_id)[0] == "TASK_STATE_FAILED",
+        message=f"task {task_id} failed with the restart diagnosis",
+    )
+    return _task_status(tmp_path, task_id)[1]
+
+
 # ── the deterministic model boundary + the process-death boundary ──────────────────
 
 _BLOCKING_TOOLS = {"merge_pr", "risky_step", "cron_step"}
@@ -605,8 +616,7 @@ async def test_sigterm_during_tool_call_in_other_one_shot_goes_to_operator(tmp_p
         assert job_row is not None
         assert "operator" in (job_row.last_error or "")
         # The dead handle is terminal; the OCCURRENCE keeps the D7 state.
-        state, text = _task_status(tmp_path, task_id)
-        assert state == "TASK_STATE_FAILED"
+        text = await _wait_task_failed(tmp_path, task_id)
         assert RESTART_INTERRUPTED_TEXT in text
 
         # Never resent, never resumed: no new model pass, re-run or occurrence.
@@ -651,8 +661,7 @@ async def test_recurring_job_interrupted_occurrence_is_skipped_and_next_slot_fir
         skipped = _occurrence(gen2.sched.path, "job-cron", slot1)
         assert skipped["auto_resumes"] == 0
         assert "skipped" in skipped["diagnostic"]
-        state, text = _task_status(tmp_path, task_id)
-        assert state == "TASK_STATE_FAILED"
+        text = await _wait_task_failed(tmp_path, task_id)
         assert RESTART_INTERRUPTED_TEXT in text
 
         # The next slot runs normally: a FRESH occurrence on the same session.
@@ -726,8 +735,7 @@ async def test_kill_before_prompt_checkpointed_never_completes_with_previous_rep
         assert _occurrence(gen2.sched.path, "job-stale", slot2)["auto_resumes"] == 0  # never auto-resumed
         assert coord.tool_runs["cron_step"] == 2  # slot 1 + the zombie — the resume never drove the model
         # THE regression: the prior slot's reply must never settle this fire's task.
-        state, text = _task_status(tmp_path, task_id)
-        assert state == "TASK_STATE_FAILED"
+        text = await _wait_task_failed(tmp_path, task_id)
         assert RESTART_INTERRUPTED_TEXT in text
         assert "done CRON-TOOL" not in text
 
@@ -790,8 +798,7 @@ async def test_stale_wait_continuation_goes_to_operator_not_completed(tmp_path, 
         )
         held = _occurrence(gen2.sched.path, f"wait:{ctx}", claim["next_fire"])
         assert held["auto_resumes"] == 0  # a stale checkpoint is never auto-resumed
-        state, text = _task_status(tmp_path, task_id)
-        assert state == "TASK_STATE_FAILED"
+        text = await _wait_task_failed(tmp_path, task_id)
         assert RESTART_INTERRUPTED_TEXT in text
         assert "done WAIT-TOOL" not in text  # the previous loop turn's reply never settles this fire
         assert coord.tool_runs["merge_pr"] == 2  # turn 1 + the zombie — the resume never drove the model
@@ -841,8 +848,7 @@ async def test_second_interruption_of_same_occurrence_is_never_auto_resumed(tmp_
         held = _occurrence(gen3.sched.path, "job-twice")
         assert held["auto_resumes"] == 1  # the cap: one resume, never two
         assert "after one automatic resume" in held["diagnostic"]
-        state, text = _task_status(tmp_path, task_id)
-        assert state == "TASK_STATE_FAILED"
+        text = await _wait_task_failed(tmp_path, task_id)
         assert RESTART_INTERRUPTED_TEXT in text
         # No third model pass, no tool re-run, nothing resent.
         await _quiesce_polls(gen3.sched)

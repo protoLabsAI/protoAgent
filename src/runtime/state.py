@@ -69,6 +69,10 @@ class AppState:
     # operator_api → server layering boundary. ``None`` until the server wires it.
     inbox_now_delivery: Any = None
     activity_log: Any = None
+    # ADR 0129 D7 S7: the server-owned InterruptedTurnRecovery seam, so the decision
+    # routes can perform a restart-recovery answer (Resume / Re-run / Drop) without
+    # importing across the operator_api → server layering boundary.
+    interrupted_recovery: Any = None
     # MCP servers (ADR 0001) + plugin contributions (ADR 0018/0019).
     mcp_clients: list = field(default_factory=list)
     mcp_tools: list = field(default_factory=list)

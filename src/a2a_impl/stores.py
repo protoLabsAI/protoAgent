@@ -795,6 +795,7 @@ def _status_blob(now: datetime, text: str, state: str = "failed") -> dict:
         "completed": TaskState.TASK_STATE_COMPLETED,
         "failed": TaskState.TASK_STATE_FAILED,
         "input_required": TaskState.TASK_STATE_INPUT_REQUIRED,
+        "working": TaskState.TASK_STATE_WORKING,
     }
     ts = Timestamp()
     ts.FromDatetime(now)
@@ -906,6 +907,38 @@ async def finalize_interrupted_task(
         )
         await session.commit()
     _RESTART_SPARED_TASK_IDS.discard(str(task_id))
+    return bool(result.rowcount)
+
+
+async def reopen_restart_failed_task(
+    engine: AsyncEngine, task_id: str, *, now: datetime | None = None
+) -> bool:
+    """Move a task the D7 disposition failed (:data:`RESTART_INTERRUPTED_TEXT`) back to
+    ``working`` for an operator-ordered resume (ADR 0129 D7 S7).
+
+    ``finalize_interrupted_task`` CAS-es on the interrupted states, so without this step
+    the resume's final write could never land on a row the disposition already failed —
+    a completed operator resume would stay recorded as failed. CAS on ``failed`` + the
+    exact restart diagnosis, so an ordinarily-failed task can never be reopened. The id
+    is re-registered as restart-spared so the TTL sweep / orphaned-WORKING reaper can't
+    destroy the row mid-drive; the resume's own finalize releases it again. Returns True
+    when the row moved (False: already reopened, swept, or not a restart-failed task)."""
+    now = now or datetime.now(UTC)
+    blob = _status_blob(now, "Resuming after a restart at the operator's request.", "working")
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_maker() as session:
+        result = await session.execute(
+            update(TaskModel)
+            .where(TaskModel.id == str(task_id))
+            .where(TaskModel.status["state"].as_string() == "TASK_STATE_FAILED")
+            .where(TaskModel.status["message"]["parts"][0]["text"].as_string() == RESTART_INTERRUPTED_TEXT)
+            .values(status=blob, last_updated=now)
+        )
+        await session.commit()
+    if result.rowcount:
+        _RESTART_SPARED_TASK_IDS.add(str(task_id))
     return bool(result.rowcount)
 
 
