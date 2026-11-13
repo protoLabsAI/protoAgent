@@ -9,7 +9,6 @@ import type { BackgroundJobDTO } from "../lib/types";
 
 const listeners: Record<string, (d: Record<string, unknown>) => void> = {};
 let backgroundCall: () => Promise<{ enabled: boolean; jobs: unknown[] }>;
-let connListener: ((c: boolean) => void) | null = null;
 
 vi.mock("../lib/api", () => ({
   api: {
@@ -21,11 +20,6 @@ vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (d: Record<string, unknown>) => void) => {
     listeners[topic] = fn;
     return () => delete listeners[topic];
-  },
-  onConnectionChange: (fn: (c: boolean) => void) => {
-    connListener = fn;
-    fn(true);
-    return () => {};
   },
 }));
 
@@ -98,8 +92,8 @@ describe("a hydration MERGES into what the bus already said (the progress-card f
     for (const k of Object.keys(listeners)) delete listeners[k];
   });
 
-  it("keeps a running job's live progress across a reconnect's re-hydration", async () => {
-    // Every bus reconnect re-hydrates. The list has no progress; it must not erase it.
+  it("keeps a running job's live progress across a resync re-hydration", async () => {
+    // A resync_required re-hydrates (ADR 0130 D3). The list has no progress; it must not erase it.
     backgroundCall = () => Promise.resolve({ enabled: true, jobs: [] });
     subscribeForTest(() => {});
     listeners["background.started"]({ job_id: "bg-1", origin_session: "s1", subagent_type: "delegate" });
@@ -107,15 +101,14 @@ describe("a hydration MERGES into what the bus already said (the progress-card f
     await new Promise((r) => setTimeout(r, 0));
     expect(snapshotForTest()["bg-1"].progress?.recentTools).toHaveLength(1);
 
-    // The bus drops and comes back (a member's stream used to end every 15s idle): the
-    // reconnect re-hydrates from a list that has the job running and no progress.
+    // A cursor gap past retention forces a full re-hydrate from a list that has the job
+    // running and no progress — the merge must keep the live progress card alive.
     let seen = 0;
     subscribeForTest(() => {
       if (!snapshotForTest()["bg-1"]?.progress) seen++;
     });
     backgroundCall = () => Promise.resolve({ enabled: true, jobs: [row()] });
-    connListener?.(false);
-    connListener?.(true);
+    listeners["resync_required"]({});
     await new Promise((r) => setTimeout(r, 0));
     expect(snapshotForTest()["bg-1"].progress?.recentTools.map((t) => t.name)).toEqual(["board_create_feature"]);
     expect(snapshotForTest()["bg-1"].status).toBe("running");

@@ -12,24 +12,24 @@ import { ApiError } from "../lib/api/http";
 
 // The decision bus + the native-notification seam, mocked so the store is driven by hand.
 const bus = vi.hoisted(() => ({
-  listeners: new Set<(d: Record<string, unknown>) => void>(),
-  connections: new Set<(c: boolean) => void>(),
+  listeners: new Map<string, Set<(d: Record<string, unknown>) => void>>(),
   topics: [] as string[],
 }));
 const mocks = vi.hoisted(() => ({ notify: vi.fn() }));
 vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (d: Record<string, unknown>) => void) => {
     bus.topics.push(topic);
-    bus.listeners.add(fn);
-    return () => bus.listeners.delete(fn);
-  },
-  onConnectionChange: (fn: (c: boolean) => void) => {
-    bus.connections.add(fn);
-    fn(true); // the store swallows the first (initial) connected callback
-    return () => bus.connections.delete(fn);
+    const set = bus.listeners.get(topic) ?? new Set();
+    set.add(fn);
+    bus.listeners.set(topic, set);
+    return () => set.delete(fn);
   },
 }));
 vi.mock("../lib/notify", () => ({ notifyIfHidden: mocks.notify }));
+
+/** Fire one bus topic's listeners by hand (the store is driven, not transported). */
+const emit = (topic: string, data: Record<string, unknown> = {}) =>
+  bus.listeners.get(topic)?.forEach((fn) => fn(data));
 
 const decision = (id: string, patch: Partial<DecisionRow> = {}): DecisionRow => ({
   id,
@@ -67,7 +67,6 @@ let root: Root;
 beforeEach(() => {
   vi.restoreAllMocks();
   bus.listeners.clear();
-  bus.connections.clear();
   bus.topics.length = 0;
   mocks.notify.mockClear();
   vi.stubGlobal("ResizeObserver", class {
@@ -127,38 +126,37 @@ describe("useDecisions store", () => {
     expect(store.getSnapshot().state).toBe("ready");
   });
 
-  it("refreshes on decision.changed and on reconnect, and never polls", async () => {
+  it("refreshes on decision.changed and on resync_required, and never polls", async () => {
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
     mountStore();
     await settle();
     expect(list).toHaveBeenCalledTimes(1);
     expect(bus.topics).toContain("decision.changed");
+    expect(bus.topics).toContain("resync_required");
 
-    bus.listeners.forEach((fn) => fn({ id: "a", session_id: "s1", state: "pending" }));
+    emit("decision.changed", { id: "a", session_id: "s1", state: "pending" });
     await settle();
     expect(list).toHaveBeenCalledTimes(2);
 
-    // A drop (disconnect) never refreshes; a reconnect does.
-    bus.connections.forEach((fn) => fn(false));
-    expect(list).toHaveBeenCalledTimes(2);
-    bus.connections.forEach((fn) => fn(true));
+    // decision.changed replays from the durable log on a reconnect within retention; only a
+    // cursor gap past it sends resync_required, which forces a plain re-read (ADR 0130 D3).
+    emit("resync_required");
     await settle();
     expect(list).toHaveBeenCalledTimes(3);
   });
 
-  it("reconciles departed cached pending records on reconnect and does not reread unchanged or terminal records", async () => {
+  it("reconciles departed cached pending records on resync_required and does not reread unchanged or terminal records", async () => {
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("departed"), decision("waiting")]));
     const get = vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(decision("historical", { state: "answered" }));
     const store = mountStore();
     await settle();
     await store.loadDecision("historical");
     get.mockClear();
-    bus.connections.forEach((fn) => fn(false));
     list.mockResolvedValue(listOf([decision("waiting")]));
     const terminal = decision("departed", { state: "expired" });
     let resolve!: (row: DecisionRow) => void;
     get.mockImplementation(() => new Promise((done) => { resolve = done; }));
-    bus.connections.forEach((fn) => fn(true));
+    emit("resync_required");
     await settle();
     expect(get).toHaveBeenCalledExactlyOnceWith("departed");
     // Keep the old list until its departed record has been reconciled.
@@ -179,7 +177,7 @@ describe("useDecisions store", () => {
     expect(mocks.notify).not.toHaveBeenCalled();
 
     list.mockResolvedValue(listOf([decision("dec-1")]));
-    bus.listeners.forEach((fn) => fn({ id: "dec-1", session_id: "s1", state: "pending" }));
+    emit("decision.changed", { id: "dec-1", session_id: "s1", state: "pending" });
     await settle();
     expect(mocks.notify).toHaveBeenCalledTimes(1);
     const [title, body, onClick] = mocks.notify.mock.calls[0];
@@ -192,7 +190,7 @@ describe("useDecisions store", () => {
     expect(store.getSnapshot().panelOpen).toBe(true);
 
     // A reload with the same id does not notify again (§4.5).
-    bus.listeners.forEach((fn) => fn({ id: "dec-1", session_id: "s1", state: "pending" }));
+    emit("decision.changed", { id: "dec-1", session_id: "s1", state: "pending" });
     await settle();
     expect(mocks.notify).toHaveBeenCalledTimes(1);
   });
@@ -323,7 +321,7 @@ describe("useDecisions store", () => {
     expect(store.getSnapshot().records["a"].state).toBe("pending");
 
     list.mockResolvedValue(listOf([]));
-    bus.listeners.forEach((fn) => fn({ id: "a", session_id: "s1", state: "answered" }));
+    emit("decision.changed", { id: "a", session_id: "s1", state: "answered" });
     await settle();
     await settle();
 
@@ -344,7 +342,7 @@ describe("useDecisions store", () => {
     expect(store.getSnapshot().records["a"].state).toBe("pending");
 
     list.mockResolvedValue(listOf([decision("a", { question: "Merge the release now?" })]));
-    bus.listeners.forEach((fn) => fn({ id: "a", session_id: "s1", state: "pending" }));
+    emit("decision.changed", { id: "a", session_id: "s1", state: "pending" });
     await settle();
     await settle();
 

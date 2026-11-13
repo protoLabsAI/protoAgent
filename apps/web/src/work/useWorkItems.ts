@@ -6,7 +6,7 @@ import { api, currentSlug } from "../lib/api";
 import { decisionsApi, type DecisionList, type DecisionRow } from "../lib/api/decisions";
 import type { DirectiveRow } from "../lib/api/chat";
 import { goalsQuery, inboxQuery, queryKeys, schedulesQuery, tasksQuery, watchesQuery } from "../lib/queries";
-import { onConnectionChange, onTopic } from "../lib/events";
+import { onTopic } from "../lib/events";
 import type {
   InboxItem,
   BackgroundJobDTO,
@@ -93,9 +93,6 @@ export type UseWorkItemsParams = {
   /** Shared scope filtering; Needs you always includes all chats. */
   thisChatOnly: boolean;
 };
-
-/** How often schedules refetch before the first `scheduler.changed` proves the bus is live. */
-export const SCHEDULE_POLL_MS = 60_000;
 
 /** A `[slug, "work", …]` key for the four sources without a factory in `lib/queries`. */
 function workKey(source: string, extra?: string): readonly unknown[] {
@@ -212,8 +209,6 @@ function stateOf<T>(result: UseQueryResult<T>, items: WorkItem[]): WorkSource {
 
 export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): WorkItems {
   const qc = useQueryClient();
-  // Schedules poll until the first `scheduler.changed` proves the bus carries it (§7.2).
-  const [schedulerSeen, setSchedulerSeen] = useState(false);
 
   const results = useQueries({
     queries: [
@@ -221,7 +216,7 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       goalsQuery(),
       watchesQuery(),
       tasksQuery(),
-      { ...schedulesQuery(), refetchInterval: schedulerSeen ? (false as const) : SCHEDULE_POLL_MS },
+      schedulesQuery(),
       { queryKey: workKey("background"), queryFn: () => api.background() },
       inboxQuery(),
       {
@@ -310,7 +305,6 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       void qc.invalidateQueries({ queryKey });
     };
     const onBackground = invalidate(workKey("background"));
-    let wasOffline = false;
     const offs = [
       // Prefix invalidation covers every focused-chat inventory cache.
       onTopic("decision.changed", invalidate(workKey("decisions"))),
@@ -323,22 +317,19 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       onTopic("background.started", onBackground),
       onTopic("background.progress", onBackground),
       onTopic("background.completed", onBackground),
-      onTopic("scheduler.changed", () => {
-        setSchedulerSeen(true);
-        void qc.invalidateQueries({ queryKey: queryKeys.schedules });
-      }),
+      onTopic("scheduler.changed", invalidate(queryKeys.schedules)),
       onTopic("directive.changed", invalidate(workKey("directive-inventory"))),
-      // A decision answered, expired or withdrawn while the bus was down sends no event we'll
-      // ever see, so re-read the list once on reconnect (a one-shot refetch, not a poll).
-      // onConnectionChange fires once on subscribe, so refetch only on an offline → online edge.
-      onConnectionChange((connected) => {
-        if (connected && wasOffline) {
-          for (const queryKey of [workKey("decisions"), workKey("background"), workKey("directive-inventory"),
-            queryKeys.goals, queryKeys.watches, queryKeys.tasks, queryKeys.schedules, queryKeys.inbox]) {
-            void qc.invalidateQueries({ queryKey });
-          }
+      // The durable change log (ADR 0130 D2) replays every retained frame on reconnect, so a
+      // decision/goal/watch/task/schedule/background/inbox/directive change that landed while
+      // the bus was down re-fires its own targeted invalidation above when the stream resumes
+      // — no blanket reconnect refetch, and no schedule poll, needed. The one gap the feed
+      // cannot replay is a cursor past retention: the server answers `resync_required` (D3),
+      // and only there do we re-read every source once, since no incremental signal survived.
+      onTopic("resync_required", () => {
+        for (const queryKey of [workKey("decisions"), workKey("background"), workKey("directive-inventory"),
+          queryKeys.goals, queryKeys.watches, queryKeys.tasks, queryKeys.schedules, queryKeys.inbox]) {
+          void qc.invalidateQueries({ queryKey });
         }
-        wasOffline = !connected;
       }),
     ];
     return () => {

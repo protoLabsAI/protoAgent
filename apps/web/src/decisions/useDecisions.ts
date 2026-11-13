@@ -3,15 +3,16 @@ import { useEffect, useSyncExternalStore } from "react";
 import { decisionsApi } from "../lib/api/decisions";
 import type { AnswerResult, DecisionList, DecisionRow } from "../lib/api/decisions";
 import { ApiError } from "../lib/api/http";
-import { onConnectionChange, onTopic } from "../lib/events";
+import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 
 /**
  * The fleet-wide "decisions waiting on you" store (#4725, §7). ONE store, keyed by decision id
  * so the pill, the phone button, the panel, the source chat and the notification all read the
  * same truth with no duplicates. It loads once, refreshes on the `decision.changed` bus event
- * and on reconnect, and never polls — the `useDirectives` pattern (#4861), but singleton and
- * fleet-wide (the hub sees every member's events).
+ * (replayed from the durable change log on reconnect, ADR 0130 D2) and on `resync_required`,
+ * and never polls — the `useDirectives` pattern (#4861), but singleton and fleet-wide (the hub
+ * sees every member's events).
  *
  * It also owns the panel's open state (so a notification click or an Activity link can open it
  * from outside, §2.3/Q11) and the one-shot notification latch (notify once per new pending id,
@@ -284,14 +285,12 @@ export function createDecisionsStore() {
     listeners.add(listener);
     if (!stop) {
       void refresh();
-      let initial = true;
-      const offConn = onConnectionChange((connected) => {
-        if (initial) {
-          initial = false;
-          return;
-        }
-        if (connected) void refresh();
-      });
+      // A decision answered/expired/withdrawn while the bus was down publishes a
+      // `decision.changed` the durable change log replays when the stream resumes (ADR 0130
+      // D2), so the handler below refreshes on reconnect with no blanket connection hook. The
+      // one gap the feed cannot replay is a cursor past retention: the server sends
+      // `resync_required` (D3), and only there do we force a plain re-read.
+      const offResync = onTopic("resync_required", () => void refresh());
       // Fleet-wide: any member's decision.changed refreshes the one store. The refresh covers
       // current pending rows and reconciles departed pending records. Also re-read a cached
       // terminal record named by the event, unless the refresh already replaced it (§7).
@@ -307,7 +306,7 @@ export function createDecisionsStore() {
         });
       });
       stop = () => {
-        offConn();
+        offResync();
         offTopic();
       };
     }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { api } from "../lib/api";
-import { onConnectionChange, onTopic } from "../lib/events";
+import { onTopic } from "../lib/events";
 import { delegateProgressFromWire } from "../lib/delegateProgress";
 import type { BackgroundJobDTO, DelegateProgress } from "../lib/types";
 
@@ -126,18 +126,15 @@ function hydrate() {
 function start() {
   if (started) return;
   started = true;
-  // Hydrate now (a token-gated setup whose bus can't authenticate still reads plain HTTP)
-  // and on every later reconnect — `onConnectionChange` also reports the CURRENT state as
-  // soon as it's subscribed, which the flag skips so startup is one request, not two.
+  // Hydrate once now (a token-gated setup whose bus can't authenticate still reads plain
+  // HTTP). A job that started or finished while the bus was down publishes a
+  // `background.{started,completed}` the durable change log replays when the stream resumes
+  // (ADR 0130 D2), so the handlers below rebuild the live state on reconnect with no blanket
+  // connection hook. (progress frames stay live-only and never replay, as before.) Only a
+  // cursor past retention cannot replay: the server sends `resync_required` (D3), and there
+  // we re-hydrate once from the list.
   hydrate();
-  let initial = true;
-  const offConn = onConnectionChange((c) => {
-    if (initial) {
-      initial = false;
-      return;
-    }
-    if (c) hydrate();
-  });
+  const offResync = onTopic("resync_required", hydrate);
   const offStart = onTopic("background.started", (d) => {
     const id = String(d.job_id || "");
     if (!id) return;
@@ -178,7 +175,7 @@ function start() {
     upsert(id, { progress }, true);
   });
   stop = () => {
-    offConn();
+    offResync();
     offStart();
     offDone();
     offProgress();

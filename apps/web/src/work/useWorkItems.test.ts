@@ -4,8 +4,8 @@
 // a faked `onTopic` bus. Pins: every source goes READY with items mapped through ./tone;
 // `thisChatOnly` filters only the sources that carry a session id; one push refetches one
 // source; a first-load failure is `error` while a post-load failure is `stale` (items kept,
-// others untouched); schedules poll until the first `scheduler.changed`; undo + setScheduleEnabled
-// hit the new routes.
+// others untouched); a `resync_required` (ADR 0130 D3) re-reads every source; undo +
+// setScheduleEnabled hit the new routes.
 import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -35,7 +35,7 @@ import { api } from "../lib/api";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
 import type { DirectiveRow } from "../lib/api/chat";
 import type { ActivityEntry, ActivityHistory } from "../lib/types";
-import { SCHEDULE_POLL_MS, useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
+import { useWorkItems, type UseWorkItemsParams, type WorkItems, type WorkSourceKind } from "./useWorkItems";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -242,41 +242,45 @@ describe("useWorkItems — live refresh", () => {
     expect(r.current.decisions.status).toBe("ready");
   });
 
-  it("refetches decisions once on an offline → online edge, not on subscribe", async () => {
+  it("re-reads every source once on resync_required, not on subscribe", async () => {
     const r = mount({ thisChatOnly: false });
     await flush();
-    expect(spies.decisions).toHaveBeenCalledTimes(1); // the subscribe-time "connected" is not a reconnect
-
-    spies.decisions.mockResolvedValue({ decisions: [dec("d1", "answered", "s1")], pending: 0 });
-    for (const fn of mocks.conn) fn(false);
-    await flush();
+    // The subscribe-time connect fires no blanket refetch — the per-topic replay does (D2).
     expect(spies.decisions).toHaveBeenCalledTimes(1);
-    for (const fn of mocks.conn) fn(true);
+    expect(spies.goals).toHaveBeenCalledTimes(1);
+    expect(spies.schedules).toHaveBeenCalledTimes(1);
+    expect(spies.inbox).toHaveBeenCalledTimes(1);
+
+    // A cursor gap past retention (ADR 0130 D3): no replay is possible, so re-read all sources.
+    spies.decisions.mockResolvedValue({ decisions: [dec("d1", "answered", "s1")], pending: 0 });
+    emit("resync_required");
     await flush();
     expect(spies.decisions).toHaveBeenCalledTimes(2);
-    expect(r.current.decisions.items[0]).toMatchObject({ id: "d1", status: "done" });
     expect(spies.goals).toHaveBeenCalledTimes(2);
+    expect(spies.watches).toHaveBeenCalledTimes(2);
+    expect(spies.tasks).toHaveBeenCalledTimes(2);
+    expect(spies.schedules).toHaveBeenCalledTimes(2);
+    expect(spies.background).toHaveBeenCalledTimes(2);
     expect(spies.inbox).toHaveBeenCalledTimes(2);
+    expect(r.current.decisions.items[0]).toMatchObject({ id: "d1", status: "done" });
   });
 
-  it("polls schedules every 60s until a scheduler.changed, then stops", async () => {
+  it("never polls schedules; only a scheduler.changed invalidation refetches them", async () => {
     vi.useFakeTimers();
     focusManager.setFocused(true);
     mount({ thisChatOnly: false });
     await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
     expect(spies.schedules).toHaveBeenCalledTimes(1);
 
-    await act(async () => void (await vi.advanceTimersByTimeAsync(SCHEDULE_POLL_MS)));
-    expect(spies.schedules).toHaveBeenCalledTimes(2);
-    await act(async () => void (await vi.advanceTimersByTimeAsync(SCHEDULE_POLL_MS)));
-    expect(spies.schedules).toHaveBeenCalledTimes(3);
+    // No refetchInterval any more (ADR 0130 S5): time passing alone never re-reads schedules —
+    // the durable feed replays scheduler.changed, so the self-disabling poll is gone.
+    await act(async () => void (await vi.advanceTimersByTimeAsync(60_000 * 5)));
+    expect(spies.schedules).toHaveBeenCalledTimes(1);
 
+    // The bus push still invalidates the schedules query, exactly as before.
     emit("scheduler.changed", { job_id: "j1", action: "added" });
     await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
-    expect(spies.schedules).toHaveBeenCalledTimes(4); // the push's own invalidation
-
-    await act(async () => void (await vi.advanceTimersByTimeAsync(SCHEDULE_POLL_MS * 3)));
-    expect(spies.schedules).toHaveBeenCalledTimes(4); // polling is off
+    expect(spies.schedules).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -410,17 +414,17 @@ describe("live group adapters", () => {
     expect(all.current.schedules.items.map((i) => i.id)).toEqual([...expected, "other-origin", "other", "global"]);
   });
 
-  it("reconciles missed delivery, wait removal and new chats on reconnect", async () => {
+  it("reconciles missed delivery, wait removal and new chats on resync_required", async () => {
     spies.inbox.mockResolvedValue({ items: [page(1, "now")] });
     spies.schedules.mockResolvedValue({ jobs: [{ id: "wait:old", prompt: "Resume", schedule: "2026-12-01T00:00:00Z" }], backend: "local" });
     const r = mount({ thisChatOnly: false });
     await flush();
-    act(() => mocks.conn.forEach((fn) => fn(false)));
     spies.inbox.mockResolvedValue({ items: [page(2, "now")] });
     spies.schedules.mockResolvedValue({ jobs: [], backend: "local" });
     spies.sessions.mockResolvedValue({ sessions: [{ session_id: "new-chat", turn_count: 1, last_updated: null }] });
     spies.directives.mockResolvedValue({ directives: [dir("new", "in_force", "new-chat")], in_force: 1 });
-    act(() => mocks.conn.forEach((fn) => fn(true)));
+    // A cursor gap past retention re-reads every source at once (ADR 0130 D3).
+    emit("resync_required");
     await flush();
     const groups = workGroups(r.current);
     expect(groups[0].items.filter((i) => i.kind === "delivery").map((i) => i.id)).toEqual(["2"]);

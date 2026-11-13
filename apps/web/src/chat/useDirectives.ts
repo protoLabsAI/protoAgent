@@ -3,7 +3,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { chatStore } from "./chat-store";
 import { api, ApiError } from "../lib/api";
 import type { DirectiveList, DirectiveRow } from "../lib/api/chat";
-import { onConnectionChange, onTopic } from "../lib/events";
+import { onTopic } from "../lib/events";
 
 export type DirectivesSnapshot = {
   state: "loading" | "ready" | "failed" | "stale";
@@ -94,19 +94,16 @@ function createStore(sessionId: string) {
     listeners.add(listener);
     if (!stop) {
       void refresh();
-      let initial = true;
-      const offConn = onConnectionChange((connected) => {
-        if (initial) {
-          initial = false;
-          return;
-        }
-        if (connected) void refresh();
-      });
+      // A directive forced while the bus was down publishes a `directive.changed` the durable
+      // change log replays when the stream resumes (ADR 0130 D2), so the handler below refreshes
+      // on reconnect with no blanket connection hook. Only a cursor past retention cannot replay:
+      // the server sends `resync_required` (D3), and there we force a plain re-read.
+      const offResync = onTopic("resync_required", () => void refresh());
       const offTopic = onTopic("directive.changed", (data) => {
         if (data.session_id === sessionId) void refresh();
       });
       stop = () => {
-        offConn();
+        offResync();
         offTopic();
       };
     }

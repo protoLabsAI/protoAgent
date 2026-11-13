@@ -43,7 +43,11 @@ vi.mock("../../chat/useDirectives", () => ({
 }));
 vi.mock("../../lib/useIsMobile", () => ({ useIsMobile: () => false }));
 
-const connection = vi.hoisted(() => ({ online: true, listeners: new Set<(online: boolean) => void>() }));
+const connection = vi.hoisted(() => ({
+  online: true,
+  listeners: new Set<(online: boolean) => void>(),
+  topics: new Map<string, Set<(data: Record<string, unknown>) => void>>(),
+}));
 vi.mock("../../lib/events", () => ({
   isConnected: () => connection.online,
   onConnectionChange: (listener: (online: boolean) => void) => {
@@ -51,8 +55,16 @@ vi.mock("../../lib/events", () => ({
     listener(connection.online);
     return () => connection.listeners.delete(listener);
   },
-  onTopic: () => () => {},
+  onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
+    const set = connection.topics.get(topic) ?? new Set();
+    set.add(fn);
+    connection.topics.set(topic, set);
+    return () => set.delete(fn);
+  },
 }));
+/** A cursor-gap resync (ADR 0130 D3): the stores re-read the server with no incremental bus
+ *  event — the path that reconciles a decision settled while the stream was down. */
+const fireResync = () => connection.topics.get("resync_required")?.forEach((fn) => fn({}));
 
 const kinds: WorkSourceKind[] = ["decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives"];
 function emptySources(): WorkItems {
@@ -337,6 +349,7 @@ describe("Work decision actions", () => {
     await act(async () => {
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
+      fireResync();
     });
     expect(get.mock.calls.filter(([requested]) => requested === id)).toEqual([[id]]);
     expect(decisionsStoreForTest.getSnapshot().records[id]).toEqual(terminal);
@@ -363,6 +376,7 @@ describe("Work decision actions", () => {
     await act(async () => {
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
+      fireResync();
     });
     expect(decisionsStoreForTest.getSnapshot().missing[id]).toBe(true);
     expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
@@ -388,6 +402,7 @@ describe("Work decision actions", () => {
     await act(async () => {
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
+      fireResync();
     });
     expect(decisionsStoreForTest.getSnapshot().records[id].state).toBe("pending");
     expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();

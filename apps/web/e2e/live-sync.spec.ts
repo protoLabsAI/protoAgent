@@ -46,6 +46,10 @@ function syncPost(request: APIRequestContext, scope: string, path: string, data:
   return request.post(`/api/__test__/sync/${path}`, { headers: { "x-e2e-sync": scope }, data });
 }
 
+function syncGet(request: APIRequestContext, scope: string, path: string) {
+  return request.get(`/api/__test__/sync/${path}`, { headers: { "x-e2e-sync": scope } });
+}
+
 /** Seed the scope's durable store with one settled turn BEFORE any client boots, so both
  *  contexts hydrate the same server-side chat as their current tab. */
 async function seedChat(request: APIRequestContext, scope: string, sessionId: string, prompt: string, answer: string) {
@@ -267,4 +271,46 @@ test("a client that dropped offline converges to the server's state on reconnect
   await expect(b.page.locator(`${SLOT} .pl-message--assistant .pl-spinner`)).toHaveCount(0);
   // The composer is open for a normal send — nothing is locked on a turn that is over.
   await expect(b.page.locator(SLOT).getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+});
+
+// ── Case 6 (S5) ─────────────────────────────────────────────────────────────────────────────
+// D4 extended to the Work / decisions feed (ADR 0130 S5): "A change to a decision, Work item or
+// Feed row in one client appears in another ≤2s." The decisions pill is driven by useDecisions,
+// now on the durable change feed (no poll, no reconnect hook). A decision seeded before either
+// client boots proves both converge on the server's decision state from their boot read (and
+// lets both event streams attach). Then a decision raised LIVE on the server publishes the
+// identity-only `decision.changed` over the scoped feed, and both clients — neither of which
+// triggered it — refetch and show it within the 2s clock; answering one elsewhere drops both the
+// same way. The pill count is the same `useDecisions` the Work "Needs you" rail reads, so the
+// rail and Work never disagree (r3).
+const decisionsPill = (client: Client, n: number) =>
+  client.page.getByRole("button", { name: `Decisions, ${n} waiting on you` });
+test("a decision change in one client appears in the other within 2 seconds", async ({ browser, request }, testInfo) => {
+  const scope = syncScope(testInfo, "decision");
+  // An agent parked on a decision before either client booted.
+  await syncPost(request, scope, "decision", { id: "dec-sync-1", question: "Ship the sync release?" });
+
+  const a = await openClient(browser, scope);
+  const b = await openClient(browser, scope);
+
+  // Both clients converge on the server's decision state from their boot read.
+  await expect(decisionsPill(a, 1)).toBeVisible();
+  await expect(decisionsPill(b, 1)).toBeVisible();
+
+  // Both event streams are attached before the live change — the steady state the contract is
+  // about (a fresh, never-cursored stream replays nothing, so a change raced against a stream
+  // still connecting would be missed by design, not by a sync bug).
+  await expect
+    .poll(async () => (await (await syncGet(request, scope, "streams")).json()).streams, { timeout: 15_000 })
+    .toBe(2);
+
+  // A second decision is raised live: it appears in BOTH clients within the 2s clock.
+  await syncPost(request, scope, "decision", { id: "dec-sync-2", question: "Cut the hotfix?" });
+  await expect(decisionsPill(a, 2)).toBeVisible({ timeout: 2_000 });
+  await expect(decisionsPill(b, 2)).toBeVisible({ timeout: 2_000 });
+
+  // One is answered on another device: the drop propagates to both within the 2s clock.
+  await syncPost(request, scope, "decision", { id: "dec-sync-2", action: "settle", state: "answered" });
+  await expect(decisionsPill(a, 1)).toBeVisible({ timeout: 2_000 });
+  await expect(decisionsPill(b, 1)).toBeVisible({ timeout: 2_000 });
 });
