@@ -74,6 +74,28 @@ def test_github_owner_repo_rejects_non_github():
         installer._github_owner_repo("https://gitlab.com/x/y")
 
 
+@pytest.mark.parametrize(
+    "url,sent",
+    [
+        ("https://api.github.com/repos/o/r", True),
+        ("https://pypi.org/pypi/x/json", False),
+        ("https://evil/github.com", False),
+    ],
+)
+def test_http_get_sends_the_github_token_to_github_only(monkeypatch, url, sent):
+    import httpx
+
+    seen = {}
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda u, headers, **kw: seen.update(headers) or httpx.Response(200, request=httpx.Request("GET", u)),
+    )
+    installer._http_get(url)
+    assert ("Authorization" in seen) is sent
+
+
 @pytest.mark.parametrize("ref", ["main", "release/1.2", "v1.0.0", "a" * 40, "feature_x"])
 def test_validate_ref_accepts_real_refs(ref):
     installer._validate_ref(ref)  # no raise
