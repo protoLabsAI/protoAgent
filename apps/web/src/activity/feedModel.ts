@@ -1,3 +1,4 @@
+import { parseInstant } from "../lib/format";
 import type { ActivityEntry, InboxItem } from "../lib/types";
 
 // The Feed data model (docs/design/feed.md §1, §3, §4): one chronological list, newest
@@ -65,14 +66,11 @@ export function sourceLabel(origin: string, trigger: string | null | undefined):
   return trigger ? `${label} · ${trigger}` : label;
 }
 
-/** Epoch ms for a feed timestamp. The stores write naive-ish ISO strings; treat a
- *  `T`-form with no zone as UTC (matching WorkOverview's terminal-time parsing).
+/** Epoch ms for a feed timestamp via the shared `parseInstant` (offsetless = UTC).
  *  0 when missing/unparseable, so broken rows sink to the bottom instead of NaN
  *  poisoning the sort. */
 function timeMs(value: string | undefined): number {
-  if (!value) return 0;
-  const ms = Date.parse(/T/.test(value) && !/(Z|[+-]\d\d:\d\d)$/.test(value) ? `${value}Z` : value);
-  return Number.isNaN(ms) ? 0 : ms;
+  return parseInstant(value) ?? 0;
 }
 
 /** Ran/failed title: the first non-empty line of the agent's response (§4). */
@@ -85,12 +83,18 @@ function firstLine(text: string | undefined): string {
 }
 
 function queuedRow(item: InboxItem, agentName: string): FeedRow {
+  // Once the automatic retry budget is spent the sweeps will never pick this page up
+  // again (types.ts `retries_exhausted`), so promising "runs when the agent is free"
+  // would be a lie — same wording ActivitySurface's queued-now flag uses.
+  const status = item.retries_exhausted
+    ? "Queued — automatic retries used up"
+    : `Queued — runs when ${agentName} is free`;
   return {
     key: `item:${item.id}`,
     kind: "queued",
     sortAt: item.created_at,
     title: stripWakeHeader(item.text),
-    meta: `${sourceLabel("inbox", item.source)} · Queued — runs when ${agentName} is free`,
+    meta: `${sourceLabel("inbox", item.source)} · ${status}`,
     item,
   };
 }

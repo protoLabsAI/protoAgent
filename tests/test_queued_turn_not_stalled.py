@@ -274,9 +274,11 @@ async def test_a_fire_into_a_busy_thread_runs_exactly_once_after_it_frees(env, t
     with caplog.at_level(logging.INFO, logger="scheduler.local"):
         await s._tick()
         await asyncio.gather(*s._fire_tasks)
-        # The fire's wait ran out while it was queued: unresolved, visibly pending, not lost.
+        # The fire's wait ran out while it was queued: still running — not an error,
+        # not lost. The row carries no last_error and the occurrence says 'running'.
         assert s.get_job(job.id) is not None
-        assert "queued or running" in (s.get_job(job.id).last_error or "")
+        assert not (s.get_job(job.id).last_error or "")
+        assert "still running after" in caplog.text
         assert "delivery unknown" not in caplog.text
         assert s._claim_due_jobs(datetime.now(UTC)) == []  # cannot fire a second time meanwhile
 

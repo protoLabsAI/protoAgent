@@ -314,6 +314,14 @@ def _compute_next_fire(
 
 _DELIVERY_UNKNOWN = "delivery unknown; not automatically retried"
 
+# Unresolved dispatch claims: 'claimed' (intent committed; the send's outcome is
+# unproven), 'unknown' (sent; acceptance or outcome unknown) and 'running' (ACCEPTED —
+# a task handle exists — but the turn outlived the bounded fire wait). A running
+# occurrence is not an error and not a delivery unknown: nothing was lost, the handle
+# is retained, and reconciliation settles it when its task ends. All three quarantine
+# their owner (D6 — the next slot waits) and survive a restart for D7 classification.
+_UNRESOLVED_STATES_SQL = "'claimed', 'unknown', 'running'"
+
 # ADR 0129 D7: occurrence dispositions for a dispatch a restart interrupted. Neither is
 # 'settled' — 'interrupted' records a skipped recurring occurrence (the next slot runs
 # normally); 'interrupted_needs_operator' holds the row for the S7 Needs-you decision
@@ -904,7 +912,7 @@ class LocalScheduler:
     def execution_session_pins(self) -> set[str] | None:
         """``job:`` execution sessions this store still holds unresolved work for
         (ADR 0129): a live scheduling row — a recurring job between fires, a pending
-        one-shot, a wait/watch continuation — or a claimed/unknown occurrence. The
+        one-shot, a wait/watch continuation — or a claimed/unknown/running occurrence. The
         retention sweep (``server/maintenance_loops.py``) must not retire these
         sessions' checkpoint threads. ``None`` means the ledger could not be read —
         the caller must treat EVERY job session as pinned rather than drop one whose
@@ -929,7 +937,7 @@ class LocalScheduler:
         try:
             rows = db.execute(
                 "SELECT DISTINCT task_id FROM occurrences "
-                "WHERE state IN ('claimed', 'unknown') AND task_id IS NOT NULL"
+                f"WHERE state IN ({_UNRESOLVED_STATES_SQL}) AND task_id IS NOT NULL"
             ).fetchall()
             return {r["task_id"] for r in rows}
         except sqlite3.DatabaseError as exc:
@@ -1371,7 +1379,7 @@ class LocalScheduler:
                 busy = db.execute(
                     "SELECT 1 FROM occurrences o JOIN job_sessions s "
                     "ON s.job_id = o.job_id AND s.created_at = o.created_at "
-                    "WHERE o.state IN ('claimed', 'unknown') AND s.context_id = ? LIMIT 1",
+                    f"WHERE o.state IN ({_UNRESOLVED_STATES_SQL}) AND s.context_id = ? LIMIT 1",
                     (job.context_id,),
                 ).fetchone()
                 # Outstanding continuations of this owner (a session's root is a
@@ -1413,7 +1421,7 @@ class LocalScheduler:
                              (job.id, job.next_fire, job.created_at)).fetchone()
             unresolved = db.execute(
                 "SELECT 1 FROM occurrences WHERE job_id = ? AND created_at = ? "
-                "AND state IN ('claimed', 'unknown')",
+                f"AND state IN ({_UNRESOLVED_STATES_SQL})",
                 (job.id, job.created_at),
             ).fetchone()
             if unresolved:
@@ -1461,7 +1469,16 @@ class LocalScheduler:
             ).fetchone()
             if claim and claim["state"] == "settled":
                 return
-            if state != "unknown" and self._owns_occurrence(db, job):
+            if state == "running" and self._owns_occurrence(db, job):
+                # A turn that outlived the bounded fire wait has no outcome yet, and
+                # nothing may read as an error (#5106): restore the pre-claim value
+                # even over the bounded wait's interim "pending" diagnostic.
+                db.execute(
+                    "UPDATE jobs SET last_error = (SELECT previous_error FROM occurrences "
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ?",
+                    (job.id, job.next_fire, job.created_at, job.id),
+                )
+            elif state != "unknown" and self._owns_occurrence(db, job):
                 # Cancellation and refused connections preserve the preceding outcome.
                 db.execute(
                     "UPDATE jobs SET last_error = (SELECT previous_error FROM occurrences "
@@ -1485,7 +1502,7 @@ class LocalScheduler:
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
                 "AND o.created_at = jobs.created_at AND "
                 "(o.next_fire = jobs.next_fire AND o.state != 'retryable' "
-                "OR o.state IN ('claimed', 'unknown'))) "
+                f"OR o.state IN ({_UNRESOLVED_STATES_SQL}))) "
                 "ORDER BY next_fire ASC",
                 (self.agent_name, now.isoformat()),
             ).fetchall()
@@ -1543,12 +1560,12 @@ class LocalScheduler:
                 )
             rows = db.execute(
                 # The unresolved-work exemption is per GENERATION: only this row's own
-                # claimed/unknown occurrence keeps it out of stale-fire policy. An
-                # orphaned claim from a replaced generation must not keep a newer
+                # claimed/unknown/running occurrence keeps it out of stale-fire policy.
+                # An orphaned claim from a replaced generation must not keep a newer
                 # version alive past the recovery window (it would then run late).
                 "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND execution_hold IS NULL AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
-                "AND o.created_at = jobs.created_at AND o.state IN ('claimed', 'unknown'))",
+                f"AND o.created_at = jobs.created_at AND o.state IN ({_UNRESOLVED_STATES_SQL}))",
                 (self.agent_name, cutoff_recent.isoformat()),
             ).fetchall()
             for row in rows:
@@ -1575,7 +1592,7 @@ class LocalScheduler:
                     held = db.execute(
                         "SELECT 1 FROM occurrences o JOIN job_sessions s "
                         "ON o.job_id = s.job_id AND o.created_at = s.created_at "
-                        "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown') "
+                        f"WHERE s.context_id = ? AND o.state IN ({_UNRESOLVED_STATES_SQL}) "
                         "UNION ALL SELECT 1 FROM jobs j JOIN job_sessions cs "
                         "ON j.id = cs.job_id AND j.created_at = cs.created_at "
                         f"WHERE j.context_id = ? AND j.id != ? AND cs.root_job_id != j.id "
@@ -1725,6 +1742,12 @@ class LocalScheduler:
             # disposition must not settle it into ordinary terminal bookkeeping.
             if claim is None or claim["state"] in ("settled", *_D7_DISPOSED_STATES):
                 return True
+            # A 'running' occurrence is already known to be fine — the turn simply
+            # outlived the bounded fire wait. While GetTask keeps answering with a
+            # live pending task, keep that state and leave ``jobs.last_error`` alone;
+            # a handle that stops resolving is a real unknown again and falls through
+            # to the diagnostic below.
+            still_running = claim["state"] == "running" and valid and not terminal
             owns = self._owns_occurrence(db, job)
             if terminal and owns:
                 if canceled:
@@ -1737,12 +1760,13 @@ class LocalScheduler:
                 else:
                     if db.execute("DELETE FROM jobs WHERE id = ?", (job.id,)).rowcount > 0:
                         settled_action = "finished"
-            elif owns:
+            elif owns and not still_running:
                 db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (diagnostic, job.id))
             db.execute(
                 "UPDATE occurrences SET state = ?, task_state = ?, diagnostic = ? "
                 "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                ("settled" if terminal else "unknown", state if valid else "missing",
+                ("settled" if terminal else ("running" if still_running else "unknown"),
+                 state if valid else "missing",
                  (failure or None) if terminal else diagnostic, job.id, job.next_fire, job.created_at),
             )
         if terminal:
@@ -1770,7 +1794,7 @@ class LocalScheduler:
         that owner to a replacement generation, so cancel-and-recreate escapes it."""
         with closing(self._connect()) as db, db:
             claims = db.execute(
-                "SELECT * FROM occurrences WHERE state IN ('claimed', 'unknown') "
+                f"SELECT * FROM occurrences WHERE state IN ({_UNRESOLVED_STATES_SQL}) "
                 "AND task_id IS NOT NULL AND job_snapshot IS NOT NULL"
             ).fetchall()
         return [claim for claim in claims if claim["job_id"] not in self._inflight_ids]
@@ -1794,9 +1818,9 @@ class LocalScheduler:
 
     def _start_interrupted_recovery(self) -> None:
         """Dispose the claims a restart interrupted, off the start() path (a resume is
-        a whole turn). The claims stay 'claimed'/'unknown' until disposed, so the
-        existing serialization holds meanwhile: no owner admits a new independent fire
-        while its interrupted occurrence is undecided (D6)."""
+        a whole turn). The claims stay 'claimed'/'unknown'/'running' until disposed, so
+        the existing serialization holds meanwhile: no owner admits a new independent
+        fire while its interrupted occurrence is undecided (D6)."""
         if not self._interrupted_task_ids:
             return
         t = asyncio.create_task(self._recover_interrupted_turns(), name="scheduler.interrupted")
@@ -1908,7 +1932,7 @@ class LocalScheduler:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT auto_resumes FROM occurrences WHERE job_id = ? AND next_fire = ? "
-                "AND created_at = ? AND state IN ('claimed', 'unknown')",
+                f"AND created_at = ? AND state IN ({_UNRESOLVED_STATES_SQL})",
                 (claim["job_id"], claim["next_fire"], claim["created_at"]),
             ).fetchone()
             if row is None or int(row["auto_resumes"] or 0) >= 1:
@@ -1937,7 +1961,7 @@ class LocalScheduler:
             cur = db.execute(
                 "UPDATE occurrences SET state = ?, diagnostic = ? "
                 "WHERE job_id = ? AND next_fire = ? AND created_at = ? "
-                "AND state IN ('claimed', 'unknown')",
+                f"AND state IN ({_UNRESOLVED_STATES_SQL})",
                 (state, diagnostic, claim["job_id"], claim["next_fire"], claim["created_at"]),
             )
             if cur.rowcount:
@@ -1957,7 +1981,10 @@ class LocalScheduler:
         """Deliver a job by POSTing to the agent's own A2A endpoint.
 
         True means delivered, False means retryable delivery failure, and None
-        means delivery is unknown and must not be automatically retried.
+        means the occurrence is not settled here: either an ACCEPTED turn still
+        running past the bounded wait (marked 'running'; reconciliation settles it
+        when its task ends) or a genuine delivery unknown that must not be
+        automatically retried.
         """
         import httpx
 
@@ -2106,17 +2133,20 @@ class LocalScheduler:
                                     payload = await self._get_task(client, task_id)
                         except TimeoutError:
                             # Accepted and still going (#5106): typically queued behind a
-                            # long turn on the same thread, or a long turn itself. Nothing
-                            # was lost and nothing is resent — the claim stays unresolved
-                            # (so the job cannot fire again meanwhile) and every tick reads
-                            # the task until it ends, then settles it exactly once.
-                            dispatch_state = "unknown"
+                            # long turn on the same thread, or a long turn itself. That is
+                            # not a delivery unknown — the send was ACCEPTED (a task_id
+                            # exists) and only this bounded wait ran out. The occurrence
+                            # goes 'running' (task handle kept, no last_error, no failure
+                            # or backoff), keeps holding its owner so the job cannot fire
+                            # again meanwhile (D6), and every tick reads the task until it
+                            # ends, then settles it — and publishes turn.finished — once.
+                            dispatch_state = "running"
                             log.info(
-                                "[scheduler] job %s: task %s still queued or running after %gs; "
-                                "it settles when the task ends",
+                                "[scheduler] job %s still running after %gs; will settle "
+                                "when its task ends (task %s)",
                                 job.id,
-                                task_id,
                                 self._fire_timeout_s,
+                                task_id,
                             )
                             return None
                         dispatch_state = "settled"

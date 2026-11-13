@@ -32,6 +32,21 @@ describe("mergeFeed", () => {
     expect(mergeFeed([item({ delivered_at: at(12, 11) })], [], "roxy")).toHaveLength(0);
   });
 
+  it("stops promising a retry once the delivery budget is spent (retries_exhausted)", () => {
+    const rows = mergeFeed([item({ retries_exhausted: true })], [], "roxy");
+    expect(rows[0].meta).toBe("Inbox · github · Queued — automatic retries used up");
+    expect(rows[0].meta).not.toContain("free");
+  });
+
+  it("sorts a lowercase-z timestamp by its real instant, not to the bottom", () => {
+    const rows = mergeFeed(
+      [],
+      [entry({ id: 2, created_at: at(12, 11) }), entry({ id: 1, created_at: at(12, 12).replace("Z", "z") })],
+      "roxy",
+    );
+    expect(rows.map((r) => r.key)).toEqual(["entry:1", "entry:2"]);
+  });
+
   it("shows the entry, not the item, when inbox_id claims it — exactly one row", () => {
     const rows = mergeFeed([item()], [entry({ inbox_id: 1, origin: "inbox", trigger: "github" })], "roxy");
     expect(rows).toHaveLength(1);
