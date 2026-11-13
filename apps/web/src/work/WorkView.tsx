@@ -12,6 +12,7 @@ import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 import { useDecisions } from "../decisions/useDecisions";
 import { decisionMeta, fromDecision, relTime, type GroupableWorkItem, type WorkGroupId } from "./tone";
+import { summaryTitle } from "./rowMeta";
 import type { InboxItem } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
@@ -79,9 +80,14 @@ function DeliveryDetail({ item, onDone }: { item: GroupableWorkItem; onDone: () 
   const qc = useQueryClient();
   const row = item.raw as InboxItem;
   return <WorkDetail
-    title={item.title || "Delivery"}
+    // The heading is the short summary, never the whole message (a page can run to
+    // paragraphs); the full text is the Message field below. Recomputed from the raw row
+    // so a title that still carries the full text can never become the heading.
+    title={summaryTitle(row.text ?? item.title) || "Delivery"}
     status="needs-you"
     fields={[
+      { label: "Message", value: row.text?.trim()
+        ? <div style={{ whiteSpace: "pre-wrap" }}>{row.text}</div> : null },
       { label: "From", value: row.source || null },
       { label: "Waiting since", value: row.created_at ? relTime(row.created_at).text : null },
       { label: "Status", value: row.retries_exhausted

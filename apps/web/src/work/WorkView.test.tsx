@@ -357,6 +357,42 @@ it("a retries-exhausted page lands in Needs-you and its Dismiss marks it deliver
   expect(useUI.getState().surfaceStates.work.itemId).toBeUndefined();
 });
 
+// Josh 2026-11-12: a page's detail rendered the entire message — a 900-character paragraph —
+// as the bold heading. The heading is the short summary (first sentence of the first line,
+// ~80 chars, ellipsis); the full text shows once, as body text, in the Message field.
+it("a delivery titles with the short summary and shows the full text once in a Message field", async () => {
+  const text = "The nightly importer stalled on the vendor feed and left 412 rows unprocessed, so the morning digest is incomplete.\nIt needs a manual re-run before 9:00.\nCheck the importer logs first.";
+  data.sources.activity.groupItems = [{ kind: "delivery", id: "91", status: "needs-you", title: text, meta: "ops",
+    raw: { id: 91, priority: "now", delivered_at: null, source: "ops", text, created_at: new Date().toISOString(),
+      dedup_key: null, needs_human: true } } as GroupableWorkItem];
+  await render("modal");
+  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(".work-row")).find((node) => node.textContent?.includes("The nightly importer"))!.click());
+  const detail = host.querySelector(".work-view__detail")!;
+  expect(detail.querySelector("h2")?.textContent).toBe("The nightly importer stalled on the vendor feed and left 412 rows unprocessed,…");
+  const message = Array.from(detail.querySelectorAll(".work-detail__field")).find((field) => field.querySelector("dt")?.textContent === "Message");
+  expect(message, "Message field").toBeTruthy();
+  const body = message!.querySelector<HTMLElement>("dd div")!;
+  expect(body.textContent).toBe(text); // the whole message, line breaks intact…
+  expect(body.style.whiteSpace).toBe("pre-wrap"); // …rendered wrapping, as body text
+  expect(detail.textContent!.split(text)).toHaveLength(2); // the full text appears exactly once
+  // The existing From / Waiting since fields and the Dismiss action survive.
+  expect(detail.textContent).toContain("From");
+  expect(detail.textContent).toContain("ops");
+  expect(detail.textContent).toContain("Waiting since");
+  expect(detail.textContent).toContain("Dismiss…");
+});
+
+it("a delivery with an empty text keeps the Delivery fallback title and no Message field", async () => {
+  data.sources.activity.groupItems = [{ kind: "delivery", id: "92", status: "needs-you", title: "", meta: "ops",
+    raw: { id: 92, priority: "now", delivered_at: null, source: "ops", text: "", created_at: new Date().toISOString(),
+      dedup_key: null, needs_human: true } } as GroupableWorkItem];
+  await render("modal");
+  await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
+  const detail = host.querySelector(".work-view__detail")!;
+  expect(detail.querySelector("h2")?.textContent).toBe("Delivery");
+  expect(detail.textContent).not.toContain("Message");
+});
+
 it("round-trips selection, scroll and filters across frames and back", async () => {
   data.sources.tasks.items = [task("row")];
   useUI.setState({ surfaceStates: { work: { section: "overview", scrollTop: 75, filters: { thisChat: false } } } });
