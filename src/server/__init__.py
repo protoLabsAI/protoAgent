@@ -743,6 +743,23 @@ def _main():
 
         STATE.tasks_store = TaskStore()
 
+    # Durable change feed (ADR 0130 S1): every retained bus publish also lands in a
+    # per-instance append-only log, so a client's Last-Event-ID resume survives both
+    # ring eviction and a server restart, and a cursor older than retention (7d/100k)
+    # gets `resync_required` instead of a silent gap. Attached before the routes and
+    # producers wire up, so the first publish is already durable; the sweep at boot
+    # ages out a quiet instance's backlog. A broken DB must never block boot — the
+    # bus then falls back to today's ring-only live behavior.
+    try:
+        from events import ChangeLog
+        from infra.paths import instance_paths
+
+        _change_log = ChangeLog(instance_paths().store("events") / "change-log.db")
+        _change_log.sweep()
+        _event_bus.attach_change_log(_change_log)
+    except Exception:  # noqa: BLE001 — live-only SSE still works without durability
+        log.exception("[events] change log unavailable; SSE resume falls back to the ring")
+
     # Linked tasks close themselves when the linked work finishes (ADR 0129 Q1): the
     # handlers watch directive closes, scheduler settlement and the generic
     # ``task.link.closed`` contract on the bus. They read ``STATE.tasks_store`` at
