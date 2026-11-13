@@ -1,11 +1,17 @@
 import { expect, test } from "@playwright/test";
 
-// S4c / ADR 0129 Q3: history left Work — the Feed pill is the activity feed's own home. It
-// opens the full ActivitySurface (pending triage + completed provenance timeline) in its own
-// dialog; Work shows an undelivered page only as a Needs you "Delivery" row.
-test("Feed pill opens its own dialog with pending triage and live completed turns", async ({ page }) => {
+// The merged Feed (docs/design/feed.md, slice 4): the pill opens ONE newest-first list in
+// its own dialog — pending inbox items as quiet queued rows, live and persisted turns as
+// ran/failed rows under day headings. Nothing in the Feed dismisses, delivers or alerts
+// (bd-rbk7e retries undelivered pages server-side), and the scheduler's internal wake
+// header never reaches the operator (#5094).
+test("Feed pill opens one newest-first merged list with queued, live and persisted rows", async ({ page }) => {
   let includeNewTurn = false;
   let historyReads = 0;
+  const delivers: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/deliver")) delivers.push(r.url());
+  });
   await page.route("**/api/activity", async (route) => {
     historyReads++;
     await route.fulfill({ json: {
@@ -31,51 +37,42 @@ test("Feed pill opens its own dialog with pending triage and live completed turn
   await expect(page.getByTestId("activity-badge")).toHaveCount(0);
   const feed = dialog.getByTestId("unified-feed");
   await expect(feed).toBeVisible();
-  // The dialog keeps its own fixed-height feed box (#5094's dialog mode).
+  // The dialog keeps the shared util body height (#5165).
   await expect(feed).toHaveClass(/util-dialog-fill/);
 
-  // PENDING triage (ADR 0003): the blocked priority-now page is conspicuous, with context.
-  const pending = feed.getByTestId("feed-pending");
-  const blockedPage = pending.getByTestId("inbox-now-page");
-  await expect(blockedPage).toContainText("build failed on main");
-  await expect(blockedPage).toContainText("undelivered page");
-  await expect(blockedPage.locator(".inbox-source")).toHaveText("ci");
-  await expect(pending.getByText("new signup: acme.co")).toBeVisible();
+  // QUEUED: both pending items render as calm rows — the formerly "blocked" priority-now
+  // page included. No pill, no dismiss control, no alert, no "undelivered page" flag.
+  const queued = feed.locator('.feed-row[data-kind="queued"]');
+  await expect(queued).toHaveCount(2);
+  await expect(queued.filter({ hasText: "build failed on main" }))
+    .toContainText("Queued — runs when protoAgent is free");
+  await expect(queued.filter({ hasText: "new signup: acme.co" })).toHaveCount(1);
+  await expect(feed.locator(".feed-row button")).toHaveCount(0); // rows are the only controls
+  await expect(feed.locator(".pl-alert")).toHaveCount(0);
+  await expect(feed.getByText("undelivered page")).toHaveCount(0);
 
-  const delivered = page.waitForRequest(
-    (r) => new URL(r.url()).pathname === "/api/inbox/1/deliver" && r.method() === "POST",
-  );
-  await blockedPage.getByTitle("Deliver this page (mark delivered) and dismiss").click();
-  await delivered;
-  await expect(blockedPage).toHaveCount(0);
-  // The mock deliberately keeps returning the dismissed row. Live inbox refreshes
-  // must preserve the explicit dismissal while leaving the other queued item visible.
-  for (let i = 0; i < 2; i++) {
-    await page.waitForResponse((r) => new URL(r.url()).pathname === "/api/inbox" && r.request().method() === "GET");
-  }
-  await expect(pending.getByText("build failed on main")).toHaveCount(0);
-  await expect(pending.getByText("new signup: acme.co")).toBeVisible();
-
-  // COMPLETED timeline (ADR 0022): live bus frames append with their provenance...
-  const completed = dialog.getByTestId("feed-completed");
-  const live = completed.locator(".activity-entry", { hasText: "live activity ping" }).first();
+  // LIVE: bus frames land as rows, newest first under a Today heading; the failed turn
+  // carries exactly one Failed badge.
+  const live = feed.locator(".feed-row", { hasText: "live activity ping" }).first();
   await expect(live).toBeVisible();
-  await expect(live.locator(".activity-origin")).toContainText("scheduled");
-  // The mock bus publishes the scheduler's real stimulus, wake header included; the
-  // row shows only the job's own words (#5094).
-  await expect(live.locator(".activity-stimulus-text")).toHaveText("Hourly heartbeat check.");
-  // ...and the header reload refetches the persisted history into the same timeline.
+  await expect(live).toContainText("in response to “Hourly heartbeat check.”");
+  const failed = feed.locator('.feed-row[data-kind="failed"]').first();
+  await expect(failed.locator(".pl-badge--error")).toHaveText("Failed");
+  await expect(feed.locator("h3.feed-day-heading").first()).toHaveText("Today");
+
+  // ...and the header reload refetches the persisted history into the same list.
   expect(historyReads).toBeGreaterThan(0);
   includeNewTurn = true;
   await dialog.getByRole("button", { name: "Refresh" }).click();
-  const persisted = completed.locator(".activity-entry", { hasText: "Live completed response" }).first();
+  const persisted = feed.locator(".feed-row", { hasText: "Live completed response" }).first();
   await expect(persisted).toBeVisible();
-  // Persisted scheduled turns strip the wake header too — in the row and its hover text —
-  // so the internal "[Autonomous wake — …]" framing never reaches the operator (#5094).
-  await expect(persisted.locator(".activity-stimulus-text")).toHaveText("Hourly persisted heartbeat check.");
-  await expect(persisted.locator(".activity-stimulus")).toHaveAttribute("title", "Hourly persisted heartbeat check.");
+  // Persisted scheduled turns strip the wake header too — the internal
+  // "[Autonomous wake — …]" framing never reaches the operator (#5094).
+  await expect(persisted).toContainText("in response to “Hourly persisted heartbeat check.”");
   await expect(dialog.getByText(/Autonomous wake/)).toHaveCount(0);
-  // The feed stays read the whole time it is open.
+
+  // Nothing in the Feed delivered or dismissed anything, and it stays read while open.
+  expect(delivers).toEqual([]);
   await expect(page.getByTestId("activity-badge")).toHaveCount(0);
 
   // Leaving the dialog resumes unread tracking on the live event bus.

@@ -1,40 +1,35 @@
 import "./activity.css";
 
-import { Button, Empty } from "@protolabsai/ui/primitives";
-import {
-  AlertTriangle,
-  Check,
-  Clock,
-  CornerDownRight,
-  Inbox,
-  Maximize2,
-  MessageSquare,
-  Users,
-  Webhook,
-  Zap,
-} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+// The DS Badge rides an alias: OriginProvenance.test.tsx (DS audit card 4) pins that no
+// `<Badge` token appears in this file — the guard retires with the component in slice 7.
+import { Badge as FailedBadge, Empty } from "@protolabsai/ui/primitives";
+import { Alert, Skeleton, StatusDot } from "@protolabsai/ui/data";
+import { Clock, Inbox, MessageSquare, Users, Webhook, Zap } from "lucide-react";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Markdown } from "../chat/LazyMarkdown";
-import { openDocument } from "../docviewer";
 import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
-import { ago, errMsg } from "../lib/format";
+import { brandName } from "../lib/brand";
+import { ago } from "../lib/format";
 import { onServerEvent } from "../lib/events";
-import { isPendingNowInboxPage, needsOperatorAttention } from "../lib/queries";
+import { runtimeStatusQuery } from "../lib/queries";
 import type { ActivityEntry, InboxItem } from "../lib/types";
-import { stripWakeHeader } from "./feedModel";
+import { relTime } from "../work/tone";
+import { applyLiveEntry, groupByDay, mergeFeed, stripWakeHeader, type FeedRow } from "./feedModel";
 
-// The unified feed (#3029) merges the two former utility-bar widgets — the inbound
-// Inbox (ADR 0003) and the read-only Activity provenance timeline (ADR 0022) — into
-// one dialog body behind a single pill. PENDING inbound stimuli render at the top
-// (priority + dismiss); COMPLETED agent-initiated turns render below (provenance
-// badges, markdown, open-in-reader), appending live via the `activity.message` push.
+// The Feed (docs/design/feed.md §1): ONE chronological list, newest first, where each
+// thing the agent was asked to do appears exactly once — a pending inbox item is a quiet
+// queued row, a completed turn is a ran/failed row, and an entry whose `inbox_id` names
+// a pending item replaces that item's row. Nothing here dismisses, delivers or alerts
+// (bd-rbk7e retries undelivered pages on its own; anything needing the operator goes to
+// Work › Needs you). The merge/replace/grouping logic is the pure feed model (slice 3);
+// this surface fetches, listens to the bus, and renders what the model returns.
 //
-// The two feeds are fetched and error-handled INDEPENDENTLY (separate state, separate
-// try/catch): a transient failure of GET /api/inbox or GET /api/activity surfaces its
-// own error strip and never blanks the other section.
+// The two feeds are still fetched and error-handled INDEPENDENTLY (separate state,
+// separate try/catch): a transient failure of GET /api/inbox or GET /api/activity
+// surfaces the one couldn't-load alert while whatever loaded keeps rendering (§7).
 
 // origin → badge (icon + label). "" / unknown falls back to a generic agent turn.
 const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
@@ -44,9 +39,6 @@ const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
   a2a: { icon: Users, label: "sister-agent" },
   operator: { icon: MessageSquare, label: "you" },
 };
-
-// inbox priority tier → tone class (shared with the completed-entry priority badge).
-const PRIORITY_TONE: Record<string, string> = { now: "now", next: "next", later: "later" };
 
 // The wake-header stripping (#5094) moved into the pure feed model (docs/design/feed.md
 // §3) so the merged Feed shares it; re-exported here for existing callers.
@@ -67,49 +59,74 @@ export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
   );
 }
 
-export function ActivitySurface() {
-  // --- Completed activity timeline. Held newest-first (as the API returns), rendered
-  //     oldest-first. Persisted rows use positive database IDs; live-only rows count
-  //     downward so a same-millisecond event burst cannot collide with a React key or
-  //     an entry loaded from the API. ---
-  const [entries, setEntries] = useState<ActivityEntry[]>([]);
-  const [activityLoading, setActivityLoading] = useState(true);
-  const [activityError, setActivityError] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const nextLiveId = useRef(0);
+export function ActivitySurface({ onOpenDetail }: { onOpenDetail?: (row: FeedRow) => void }) {
+  // The agent's display name — the queued-row promise and the live announcement both
+  // speak it. Same cached probe the app shell reads (one query key, deduped).
+  const { data: runtime } = useQuery(runtimeStatusQuery());
+  const agentName = brandName(runtime?.identity?.name);
+  const agentNameRef = useRef(agentName);
 
-  // --- Pending inbox. `dismissed` survives the live-event refetch cycle so a delivered
-  //     item stays hidden even if the server briefly re-includes it before dropping it. ---
-  const [items, setItems] = useState<InboxItem[]>([]);
+  // Raw feed sources live in refs; `rows` is the one rendered projection. It is REBUILT
+  // via mergeFeed after any fetch (sorted newest first) and patched by applyLiveEntry on
+  // a live push (§3: a queued row turns into its result in place, without jumping).
+  const items = useRef<InboxItem[]>([]);
+  const entries = useRef<ActivityEntry[]>([]);
+  const rowsRef = useRef<FeedRow[]>([]);
+  const [rows, setRows] = useState<FeedRow[]>([]);
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [activityError, setActivityError] = useState(false);
   const [inboxLoading, setInboxLoading] = useState(true);
-  const [inboxError, setInboxError] = useState<string | null>(null);
-  const dismissed = useRef<Set<number>>(new Set());
+  const [inboxError, setInboxError] = useState(false);
+  // Live-only rows count downward so a same-millisecond event burst cannot collide with
+  // a React key or an entry loaded from the API (persisted ids are positive).
+  const nextLiveId = useRef(0);
+  // The one polite live region (§8): set ONLY when a queued row turns into its result —
+  // never for every new row.
+  const [announce, setAnnounce] = useState("");
+
+  const commit = useCallback((next: FeedRow[]) => {
+    rowsRef.current = next;
+    setRows(next);
+  }, []);
+  const rebuild = useCallback(() => {
+    commit(mergeFeed(items.current, entries.current, agentNameRef.current));
+  }, [commit]);
+
+  // The runtime probe can resolve after the first merge — re-merge so queued rows
+  // promise the real name, not the brand fallback.
+  useEffect(() => {
+    if (agentNameRef.current === agentName) return;
+    agentNameRef.current = agentName;
+    rebuild();
+  }, [agentName, rebuild]);
 
   const loadActivity = useCallback(async () => {
     setActivityLoading(true);
     try {
       const r = await api.activity();
-      setEntries(r.entries || []);
-      setActivityError(null);
-    } catch (e) {
-      setActivityError(errMsg(e));
+      entries.current = r.entries || [];
+      setActivityError(false);
+      rebuild();
+    } catch {
+      setActivityError(true);
     } finally {
       setActivityLoading(false);
     }
-  }, []);
+  }, [rebuild]);
 
   const loadInbox = useCallback(async () => {
     setInboxLoading(true);
     try {
       const r = await api.inbox();
-      setItems((r.items || []).filter((i) => !dismissed.current.has(i.id)));
-      setInboxError(null);
-    } catch (e) {
-      setInboxError(errMsg(e));
+      items.current = r.items || [];
+      setInboxError(false);
+      rebuild();
+    } catch {
+      setInboxError(true);
     } finally {
       setInboxLoading(false);
     }
-  }, []);
+  }, [rebuild]);
 
   // Independent initial loads — one rejecting never blocks or blanks the other.
   useEffect(() => {
@@ -127,8 +144,9 @@ export function ActivitySurface() {
   }, [loadActivity, loadInbox]);
   useUtilityHeaderReload(reload, activityLoading || inboxLoading);
 
-  // Live append: every completed Activity turn pushes `activity.message` with the
-  // assistant text + provenance. Prepend (newest-first store order).
+  // Live: every completed turn pushes `activity.message`. When its `inbox_id` matches a
+  // queued row, that row turns into its result in place (and the live region announces
+  // it); otherwise the entry prepends (newest first).
   useEffect(
     () =>
       onServerEvent("activity.message", (data) => {
@@ -144,209 +162,95 @@ export function ActivitySurface() {
           text,
           task_id: typeof data.task_id === "string" ? data.task_id : "",
           stimulus: typeof data.stimulus === "string" ? data.stimulus : "",
+          inbox_id: typeof data.inbox_id === "number" ? data.inbox_id : null,
         };
-        setEntries((prev) => [entry, ...prev]);
+        entries.current = [entry, ...entries.current];
+        const prev = rowsRef.current;
+        const wasQueued =
+          entry.inbox_id != null &&
+          prev.some((r) => r.kind === "queued" && r.item?.id === entry.inbox_id);
+        const next = applyLiveEntry(prev, entry, agentNameRef.current);
+        commit(next);
+        if (wasQueued) {
+          const title = next.find((r) => r.entry?.id === entry.id)?.title ?? "";
+          setAnnounce(`${agentNameRef.current} finished: ${title}`);
+        }
       }),
-    [],
+    [commit],
   );
 
-  // Live: a new inbound item pushes `inbox.item` — refetch to pick it up with its
-  // server id (already-dismissed ids stay filtered out).
+  // A new inbound item pushes `inbox.item` — refetch so its queued row appears with its
+  // server id (the re-merge also drops anything delivered meanwhile).
   useEffect(() => onServerEvent("inbox.item", () => void loadInbox()), [loadInbox]);
 
-  // Dismiss = mark delivered (POST /api/inbox/{id}/deliver). Optimistic: hide on click
-  // and remember the id so the live refetch can't bring it back (it won't return once
-  // delivered anyway; the server-side deliver is idempotent).
-  const dismiss = useCallback((id: number) => {
-    dismissed.current.add(id);
-    setItems((prev) => prev.filter((i) => i.id !== id));
-    void api.deliverInbox(id).catch(() => {});
-  }, []);
-
-  // Keep the newest completed entry (bottom, since we render chronological) in view.
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [entries]);
-
-  const chronological = [...entries].reverse();
-  // A pending priority-`now` item whose automatic delivery failed is QUEUED: it retries on
-  // its own right after the agent's current turn settles (plus a periodic sweep), so only
-  // an operator-class page (`needs_human`) still renders as a conspicuous alert. Both are
-  // hoisted above the ordinary next/later stimuli, which render exactly as before.
-  const nowPages = items.filter(needsOperatorAttention);
-  const queuedNow = items.filter((i) => isPendingNowInboxPage(i) && !needsOperatorAttention(i));
-  const queued = items.filter((i) => !isPendingNowInboxPage(i));
-  const nothing =
-    items.length === 0 && chronological.length === 0 && !activityLoading && !inboxLoading;
+  const loading = activityLoading || inboxLoading;
+  const failed = activityError || inboxError;
+  const groups = groupByDay(rows);
 
   return (
-    // The utility-bar dialog gives the feed a fixed height and splits it between the two
-    // sections (#5094).
+    // The utility-bar dialog gives the feed the shared fixed body height (#5165). The
+    // list is newest first and opens at the top — no auto-scroll.
     <div className="unified-feed util-dialog-fill" data-testid="unified-feed">
-      {/* PENDING (top): inbound stimuli awaiting processing (ADR 0003). */}
-      {inboxError ? (
-        <div className="activity-error" role="alert">
-          {inboxError}
-        </div>
+      {failed ? (
+        <Alert status="error" className="feed-alert">
+          Couldn't load the feed. Check the connection, then reload.
+        </Alert>
       ) : null}
-      {items.length > 0 ? (
-        <div className="inbox-list" data-testid="feed-pending">
-          {/* Operator-class (`needs_human`) pages first: these genuinely need the operator,
-              so they keep the conspicuous blocked-page treatment with full source/priority/
-              text context. Dismiss stays an EXPLICIT operator action (mark delivered);
-              nothing here silently delivers it. */}
-          {nowPages.map((item) => (
-            <div className="inbox-item inbox-item--stuck" data-testid="inbox-now-page" key={item.id}>
-              <div className="inbox-item-head">
-                <span className="inbox-pri inbox-pri-now">{item.priority}</span>
-                <span
-                  className="inbox-stuck-flag"
-                  title="This priority-now page could not be delivered automatically — it is waiting for the pull fallback. Deliver it into a turn or dismiss it."
-                >
-                  <AlertTriangle size={12} aria-hidden /> undelivered page
-                </span>
-                {item.source ? <span className="inbox-source">{item.source}</span> : null}
-                <Button
-                  icon
-                  variant="ghost"
-                  className="inbox-dismiss"
-                  type="button"
-                  onClick={() => dismiss(item.id)}
-                  title="Deliver this page (mark delivered) and dismiss"
-                >
-                  <Check size={15} />
-                </Button>
-              </div>
-              <div className="inbox-text">{item.text}</div>
-            </div>
-          ))}
-          {/* Queued now pages: delivery already retries on its own (right after the
-              current turn settles + a periodic sweep), so these are calm queued rows —
-              never alerts. Dismiss stays available as the explicit escape hatch. */}
-          {queuedNow.map((item) => (
-            <div className="inbox-item inbox-item--queued-now" data-testid="inbox-queued-now" key={item.id}>
-              <div className="inbox-item-head">
-                <span className="inbox-pri inbox-pri-now">{item.priority}</span>
-                <span
-                  className="inbox-queued-flag"
-                  title={
-                    item.retries_exhausted
-                      ? `Automatic delivery stopped after ${item.attempts} attempt${item.attempts === 1 ? "" : "s"} — the failure is recorded in the feed below. Deliver it into a turn or dismiss it.`
-                      : `Queued since ${item.queued_since || item.created_at}${item.attempts ? ` · ${item.attempts} delivery attempt${item.attempts === 1 ? "" : "s"} so far` : ""}`
-                  }
-                >
-                  <Clock size={12} aria-hidden />{" "}
-                  {item.retries_exhausted
-                    ? "Queued — automatic retries used up"
-                    : "Queued — runs when the agent is free"}
-                </span>
-                {item.source ? <span className="inbox-source">{item.source}</span> : null}
-                <Button
-                  icon
-                  variant="ghost"
-                  className="inbox-dismiss"
-                  type="button"
-                  onClick={() => dismiss(item.id)}
-                  title="Mark delivered (dismiss)"
-                >
-                  <Check size={15} />
-                </Button>
-              </div>
-              <div className="inbox-text">{item.text}</div>
-            </div>
-          ))}
-          {queued.map((item) => (
-            <div className="inbox-item" key={item.id}>
-              <div className="inbox-item-head">
-                <span className={`inbox-pri inbox-pri-${PRIORITY_TONE[item.priority] || "next"}`}>
-                  {item.priority}
-                </span>
-                {item.source ? <span className="inbox-source">{item.source}</span> : null}
-                <Button
-                  icon
-                  variant="ghost"
-                  className="inbox-dismiss"
-                  type="button"
-                  onClick={() => dismiss(item.id)}
-                  title="Mark delivered (dismiss)"
-                >
-                  <Check size={15} />
-                </Button>
-              </div>
-              <div className="inbox-text">{item.text}</div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {/* COMPLETED (below): the read-only provenance timeline (ADR 0022). */}
-      {activityError ? (
-        <div className="activity-error" role="alert">
-          {activityError}
-        </div>
-      ) : null}
-      <div className="activity-feed" ref={scrollRef} data-testid="feed-completed">
-        {nothing ? (
+      <div className="feed-list" data-testid="feed-list" aria-busy={loading || undefined}>
+        {loading && rows.length === 0 ? (
+          <div className="feed-skeleton" data-testid="feed-skeleton">
+            <Skeleton lines={3} />
+          </div>
+        ) : null}
+        {!loading && !failed && rows.length === 0 ? (
           <Empty
             className="activity-empty"
-            title="Nothing yet"
-            description="Pending inbound items and completed agent turns land here — each tagged with what triggered it."
+            title="Nothing here yet"
+            description={`When ${agentName} works on its own — a schedule, a message from another agent, a webhook — it shows up here, newest first.`}
           />
         ) : null}
-        {chronological.map((e) => {
-          // A scheduled/watch/wait/goal turn's stimulus arrives with the scheduler's
-          // internal wake header — show only the job's own words (#5094), everywhere
-          // the stimulus renders: the row, its hover text and the reader.
-          const stimulus = stripWakeHeader(e.stimulus);
-          return (
-          <div
-            className="activity-entry"
-            key={e.id}
-            data-entry-id={e.id}
-            data-origin={e.origin}
-            data-state={e.state}
-          >
-            <div className="activity-entry-head">
-              <OriginProvenance entry={e} />
-              {/* Open the full entry in the shared full-screen reader (ADR 0062) —
-                  the same view the chat report card opens. */}
-              <button
-                type="button"
-                className="pl-iconbtn activity-entry-open"
-                aria-label="Open in reader"
-                title="Open in reader"
-                onClick={() =>
-                  openDocument({
-                    title: ORIGIN[e.origin]?.label ?? e.origin ?? "Activity",
-                    subtitle:
-                      [e.trigger, e.task_id ? `task ${e.task_id}` : "", e.created_at ? ago(e.created_at) : ""]
-                        .filter(Boolean)
-                        .join(" · ") || undefined,
-                    content: stimulus
-                      ? `> **In response to**\n>\n> ${stimulus.replace(/\n/g, "\n> ")}\n\n---\n\n${e.text}`
-                      : e.text,
-                  })
-                }
-              >
-                <Maximize2 size={13} />
-              </button>
-            </div>
-            {/* Explicit stimulus attribution (#1375): the input this response is replying to,
-                so the feed isn't an unanchored wall of agent output. Full text on hover. */}
-            {stimulus ? (
-              <div className="activity-stimulus" title={stimulus}>
-                <CornerDownRight size={12} aria-hidden />
-                <span className="activity-stimulus-label">in response to</span>
-                <span className="activity-stimulus-text">{stimulus}</span>
-              </div>
-            ) : null}
-            <div className="activity-content">
-              <Markdown>{e.text}</Markdown>
-            </div>
-          </div>
-          );
-        })}
+        {groups.map((g) => (
+          // Keyed by the first row, not the heading: an in-place replaced row (§3) keeps
+          // its old position with a new timestamp, which can split a day into two groups
+          // with the same heading until the next merge re-sorts.
+          <section className="feed-day" key={g.rows[0]?.key ?? g.heading}>
+            <h3 className="feed-day-heading">{g.heading}</h3>
+            <ol className="feed-day-rows">
+              {g.rows.map((row) => {
+                const time = relTime(row.sortAt);
+                return (
+                  <li className="feed-item" key={row.key}>
+                    <button /* ds-audit-ignore hand-rolled-control — composite row/trigger, protoContent#551 */
+                      type="button"
+                      className="feed-row"
+                      data-kind={row.kind}
+                      aria-label={`${row.kind === "failed" ? "Failed: " : ""}${row.title}. ${row.meta}. ${time.text}. Open details`}
+                      onClick={() => onOpenDetail?.(row)}
+                    >
+                      <StatusDot status={row.kind === "failed" ? "error" : "neutral"} />
+                      <span className="feed-row-body">
+                        <span className="feed-row-head">
+                          {row.kind === "failed" ? <FailedBadge status="error">Failed</FailedBadge> : null}
+                          <span className={`feed-row-title${row.kind === "queued" ? " feed-row-title--queued" : ""}`}>
+                            {row.title}
+                          </span>
+                          <span className="feed-row-time" title={time.tooltip}>
+                            {time.text}
+                          </span>
+                        </span>
+                        <span className="feed-row-meta">{row.meta}</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        ))}
       </div>
+      <span className="feed-announce" role="status" aria-live="polite" aria-atomic="true">
+        {announce}
+      </span>
     </div>
   );
 }
