@@ -805,6 +805,40 @@ async def test_reaper_cas_skips_task_that_revived_after_scan(tmp_path, monkeypat
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_restart_spared_tasks_exempt_from_sweep_and_reaper_until_finalized(tmp_path):
+    """ADR 0129 D7: a restart-spared WORKING row keeps its pre-crash ``last_updated``,
+    so after long downtime the TTL sweep would delete it and the orphaned-WORKING
+    reaper would fail it MID-RESUME. Both janitors skip registered ids;
+    ``finalize_interrupted_task`` releases the id, restoring normal aging."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    # Both are far past every TTL/reaper window; only "spared" is under D7 recovery.
+    await _seed_task(store, engine, ctx, "spared", state="TASK_STATE_WORKING", age_s=90_000, now=now)
+    await _seed_task(store, engine, ctx, "doomed", state="TASK_STATE_WORKING", age_s=90_000, now=now)
+    stores.mark_restart_spared_tasks({"spared"})
+    try:
+        assert await sweep_expired_tasks(engine, now=now) == 1  # "doomed" kept today's TTL
+        assert await reap_orphaned_working_tasks(engine, birth_grace_s=1, idle_after_s=1, now=now) == 0
+        kept = await store.get("spared", ctx)
+        assert kept.status.state == a2a_pb2.TASK_STATE_WORKING  # untouched mid-recovery
+        assert await store.get("doomed", ctx) is None
+
+        # Recovery disposes the task: the real outcome lands and the exemption lifts.
+        assert await stores.finalize_interrupted_task(engine, "spared", state="completed", text="done")
+        assert stores.restart_spared_task_ids() == frozenset()
+        got = await store.get("spared", ctx)
+        assert got.status.state == a2a_pb2.TASK_STATE_COMPLETED
+    finally:
+        stores.mark_restart_spared_tasks(())  # no registry state may leak across tests
+        await engine.dispose()
+
+
 # ── (b) SSRF guard: reject private/loopback, accept public ──────────────────────
 
 

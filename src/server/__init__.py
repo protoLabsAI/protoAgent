@@ -1456,12 +1456,28 @@ def _main():
     # sweep on tasks). The push-config store rejects SSRF callback URLs at
     # set-time; the matching push sender re-validates at send-time.
     task_store, push_config_store, task_db, push_db = build_a2a_stores()
-    asyncio.run(initialize_a2a_stores(task_store, push_config_store))
+    # ADR 0129 D7 (S6): tasks the scheduler still holds accepted dispatch claims for
+    # are spared from blanket restart failure — once the scheduler starts, each is
+    # classified from its LangGraph checkpoint and the safe cases resume against the
+    # original thread and task handle. Interactive chat turns carry no claim and keep
+    # the fail-on-boot behavior.
+    _scheduler_claim_handles = (
+        getattr(STATE.scheduler, "unresolved_task_handles", set)() if STATE.scheduler is not None else set()
+    )
+    _interrupted_job_tasks = asyncio.run(
+        initialize_a2a_stores(task_store, push_config_store, spare_task_ids=_scheduler_claim_handles)
+    )
     # Hand the engine to the periodic prune loop so the 24h TTL sweep keeps
     # running on an always-on agent (boot-only before — rows grew unbounded
     # between restarts).
     STATE.a2a_task_engine = task_store.engine
     STATE.a2a_push_engine = push_config_store.engine  # for the orphan push-config sweep (ADR 0051)
+    if _interrupted_job_tasks and STATE.scheduler is not None:
+        _note_interrupted = getattr(STATE.scheduler, "note_interrupted_tasks", None)
+        if _note_interrupted is not None:
+            from server.interrupted_turns import InterruptedTurnRecovery
+
+            _note_interrupted(_interrupted_job_tasks, recovery=InterruptedTurnRecovery())
     log.info("[a2a] durable stores ready (tasks=%s, push=%s)", task_db, push_db)
 
     async def _structured_finalizer(skill_id: str, final_text: str):

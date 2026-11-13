@@ -405,6 +405,31 @@ def test_scheduled_resume_pins_the_owner_session(tmp_path):
     assert root.context_id not in s.execution_session_pins()
 
 
+@pytest.mark.parametrize("disposed", ["interrupted", "interrupted_needs_operator"])
+def test_restart_disposed_occurrence_pins_the_session_for_retention(tmp_path, disposed):
+    """A restart-disposed occurrence (ADR 0129 D7) keeps its execution session pinned
+    even with every scheduling row gone — the S7 Resume replays from exactly that
+    checkpoint. Settling (the operator's Drop) releases the pin."""
+    s = _make_scheduler(tmp_path)
+    root = s.add_job("root job", "0 9 * * *")
+    wait = s.add_job("resume the job later", _FUTURE_ISO, context_id=root.context_id)
+    _park_occurrence(s, wait)
+    db = sqlite3.connect(str(s.path))
+    try:
+        db.execute("UPDATE occurrences SET state = ? WHERE job_id = ?", (disposed, wait.id))
+        db.commit()
+    finally:
+        db.close()
+    # Isolate the new occurrence-state arm: without the jobs rows, only the disposed
+    # occurrence can pin the owner.
+    assert s.cancel_job(wait.id)
+    assert s.cancel_job(root.id)
+
+    assert root.context_id in s.execution_session_pins()
+    _settle_occurrences(s, wait.id)
+    assert root.context_id not in s.execution_session_pins()
+
+
 def test_maintenance_pins_compose_decisions_watches_and_the_ledger(clear_state, monkeypatch):
     """server-side pins = the scheduler's ledger + pending decisions + armed watch
     continuations; an unreadable ledger protects every job session (fails closed)."""

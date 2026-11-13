@@ -573,7 +573,12 @@ def build_push_sender(
 _CONSOLE_CHAT_PREFIX = "chat-"
 
 
-async def sweep_expired_tasks(engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_S, now: datetime | None = None) -> int:
+async def sweep_expired_tasks(
+    engine: AsyncEngine,
+    *,
+    ttl_s: int = _DEFAULT_TTL_S,
+    now: datetime | None = None,
+) -> int:
     """Delete task rows older than ``ttl_s`` (24h default), keyed on the SDK's
     ``last_updated`` column. The SDK DB store has no TTL knob, so this restores
     the bespoke store's 24h eviction. Returns the number of rows deleted.
@@ -582,7 +587,13 @@ async def sweep_expired_tasks(engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_
     rebuilds a chat from these rows (ADR 0104), so sweeping them after 24h left the phone and
     the desktop each with only what it had cached locally. A ``chat-`` row is swept only once
     its chat has a tombstone (the operator deleted it); every other context — delegations,
-    API calls, Activity — keeps the 24h TTL."""
+    API calls, Activity — keeps the 24h TTL.
+
+    Restart-spared tasks (ADR 0129 D7, ``restart_spared_task_ids``) keep their pre-crash
+    ``last_updated``, so a boot after long downtime — and the hourly prune loop, while a
+    recovery is still pending — would sweep exactly the rows the scheduler's recovery is
+    about to classify and resume, dropping unresolved work. They are excluded here; once
+    recovery finalizes them (``finalize_interrupted_task``) they age normally."""
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=ttl_s)
     from sqlalchemy import Column, MetaData, String, Table, exists, inspect, not_
@@ -604,12 +615,16 @@ async def sweep_expired_tasks(engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_
         # A NULL/absent state is not a preserved pause, so still sweep it (the
         # JSON-path is NULL for a stateless row, and ``NOT IN`` wouldn't match it).
         state = TaskModel.status["state"].as_string()
-        result = await session.execute(
+        stmt = (
             delete(TaskModel)
             .where(TaskModel.last_updated < cutoff)
             .where(or_(state.is_(None), state.notin_(_PRESERVED_STATES)))
             .where(not_(kept_chat))
         )
+        spared = sorted(_RESTART_SPARED_TASK_IDS)
+        if spared:
+            stmt = stmt.where(TaskModel.id.notin_(spared))
+        result = await session.execute(stmt)
         await session.commit()
         return result.rowcount or 0
 
@@ -660,10 +675,48 @@ _INTERRUPTED_STATES = ("TASK_STATE_SUBMITTED", "TASK_STATE_WORKING")
 _PRESERVED_STATES = ("TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED")
 
 
-def _failed_status_blob(now: datetime, text: str) -> dict:
-    """A serialized ``failed`` ``TaskStatus`` carrying ``text`` as the agent-visible
-    diagnosis, in the same proto-JSON shape the SDK store writes (``MessageToDict``).
-    Shared by the restart reconciler and the orphaned-WORKING-task reaper (#3418)."""
+#: The agent-visible diagnosis a restart-killed task fails with — shared with the
+#: scheduler-side D7 recovery (``server/interrupted_turns.py``) so an occurrence an
+#: operator must decide on carries the same wording as a blanket-failed chat turn.
+RESTART_INTERRUPTED_TEXT = "Task interrupted by an agent restart; its runner did not survive."
+
+# Restart-spared task ids currently awaiting (or undergoing) D7 checkpoint
+# classification/resume (ADR 0129). A spared row keeps its pre-crash ``last_updated``,
+# so after long downtime BOTH periodic janitors would destroy exactly the rows the
+# scheduler's recovery is about to act on: the 24h TTL sweep would delete them, and
+# the orphaned-WORKING reaper (#3418 — first pass 45s after boot, 30m idle window)
+# would fail them MID-RESUME, after which the resume's final
+# ``finalize_interrupted_task`` CAS (on submitted/working) matches nothing and a
+# completed turn is recorded as failed. Both janitors skip these ids until recovery
+# disposes each task (``finalize_interrupted_task`` releases the id, whatever state it
+# wrote), after which the backstops apply again. In-process (every janitor runs in this
+# process) and replaced — never accumulated — on each boot.
+_RESTART_SPARED_TASK_IDS: set[str] = set()
+
+
+def mark_restart_spared_tasks(task_ids) -> None:
+    """Replace the restart-spared registry with ``task_ids`` (ADR 0129 D7). Called once
+    per boot from ``initialize_a2a_stores`` — replacement, not accumulation, so a
+    previous generation's leftover ids (a recovery that could not run) never pin rows
+    forever across restarts."""
+    _RESTART_SPARED_TASK_IDS.clear()
+    _RESTART_SPARED_TASK_IDS.update(str(t) for t in task_ids if t)
+
+
+def restart_spared_task_ids() -> frozenset[str]:
+    """The task ids currently exempt from the TTL sweep and the orphaned-WORKING reaper."""
+    return frozenset(_RESTART_SPARED_TASK_IDS)
+
+# ``finalize_interrupted_task`` states → proto TaskState names (resolved lazily in
+# ``_status_blob`` so the a2a import stays function-local like its siblings).
+_FINALIZE_STATES = ("completed", "failed", "input_required")
+
+
+def _status_blob(now: datetime, text: str, state: str = "failed") -> dict:
+    """A serialized ``TaskStatus`` in ``state`` carrying ``text`` as the agent-visible
+    message, in the same proto-JSON shape the SDK store writes (``MessageToDict``).
+    Shared by the restart reconciler, the orphaned-WORKING-task reaper (#3418) and the
+    D7 resume finalizer (ADR 0129)."""
     import uuid
 
     from google.protobuf.json_format import MessageToDict
@@ -671,6 +724,11 @@ def _failed_status_blob(now: datetime, text: str) -> dict:
 
     from a2a.types import Message, Part, Role, TaskState, TaskStatus
 
+    states = {
+        "completed": TaskState.TASK_STATE_COMPLETED,
+        "failed": TaskState.TASK_STATE_FAILED,
+        "input_required": TaskState.TASK_STATE_INPUT_REQUIRED,
+    }
     ts = Timestamp()
     ts.FromDatetime(now)
     msg = Message(
@@ -678,17 +736,26 @@ def _failed_status_blob(now: datetime, text: str) -> dict:
         role=Role.ROLE_AGENT,
         parts=[Part(text=text)],
     )
-    status = TaskStatus(state=TaskState.TASK_STATE_FAILED, message=msg, timestamp=ts)
+    status = TaskStatus(state=states[state], message=msg, timestamp=ts)
     return MessageToDict(status)
+
+
+def _failed_status_blob(now: datetime, text: str) -> dict:
+    """A serialized ``failed`` ``TaskStatus`` carrying ``text`` as the agent-visible
+    diagnosis, in the same proto-JSON shape the SDK store writes (``MessageToDict``).
+    Shared by the restart reconciler and the orphaned-WORKING-task reaper (#3418)."""
+    return _status_blob(now, text, "failed")
 
 
 def _interrupted_status_blob(now: datetime) -> dict:
     """A serialized ``failed`` ``TaskStatus`` carrying a restart error, in the
     same proto-JSON shape the SDK store writes (``MessageToDict``)."""
-    return _failed_status_blob(now, "Task interrupted by an agent restart; its runner did not survive.")
+    return _failed_status_blob(now, RESTART_INTERRUPTED_TEXT)
 
 
-async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | None = None) -> int:
+async def reconcile_interrupted_tasks(
+    engine: AsyncEngine, *, now: datetime | None = None, spare_task_ids=()
+) -> int:
     """Fail any task left non-terminal (``submitted`` / ``working``) by a restart.
 
     The bespoke task store did this; the SDK store doesn't — so an interrupted
@@ -698,20 +765,81 @@ async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | No
     react to. The SDK serializes ``status`` as proto-JSON and itself filters on
     ``status['state']`` (in ``list_tasks``), so a dialect-agnostic JSON-path
     UPDATE mirrors ``sweep_expired_tasks``. Returns the rows reconciled. (#486)
+
+    ``spare_task_ids`` (ADR 0129 D7): task ids the scheduler still holds accepted
+    dispatch claims for are NOT blanket-failed here — on boot they are classified
+    from their LangGraph checkpoint and, when safe, resumed against the original
+    thread and task handle (``server/interrupted_turns.py`` + the scheduler's D7
+    recovery). Interactive chat turns carry no claim, so they keep this failure.
     """
     now = now or datetime.now(UTC)
     blob = _interrupted_status_blob(now)
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    spare = {str(t) for t in spare_task_ids if t}
+    stmt = (
+        update(TaskModel)
+        .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
+        .values(status=blob, last_updated=now)
+    )
+    if spare:
+        stmt = stmt.where(TaskModel.id.notin_(sorted(spare)))
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_maker() as session:
+        result = await session.execute(stmt)
+        await session.commit()
+        return result.rowcount or 0
+
+
+async def interrupted_nonterminal_tasks(engine: AsyncEngine, task_ids) -> set[str]:
+    """Which of ``task_ids`` are currently non-terminal (``submitted``/``working``) —
+    i.e. a restart left them with no surviving runner (ADR 0129 D7). Read at boot,
+    BEFORE any reconciliation touches them, so the scheduler's recovery pass knows
+    exactly which of its accepted claims were interrupted (a claim whose task already
+    reached a terminal state settles through normal reconciliation instead)."""
+    ids = sorted({str(t) for t in task_ids if t})
+    if not ids:
+        return set()
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_maker() as session:
+        rows = await session.execute(
+            select(TaskModel.id)
+            .where(TaskModel.id.in_(ids))
+            .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
+        )
+        return {r[0] for r in rows}
+
+
+async def finalize_interrupted_task(
+    engine: AsyncEngine, task_id: str, *, state: str, text: str, now: datetime | None = None
+) -> bool:
+    """Write a terminal (or ``input_required`` pause) status onto a restart-spared task
+    row (ADR 0129 D7): the resume driver finishes a turn against the ORIGINAL task
+    handle, so the handle must reach the state the turn actually ended in. CAS on the
+    interrupted states — a row that moved on (another writer, a TTL sweep recreating
+    nothing) is never clobbered. Also releases the id from the restart-spared registry
+    (AFTER the write, so the reaper can't race the finalize): the recovery has made its
+    disposition, so the TTL/reaper backstops apply to the row again from here on.
+    Returns True when the row was updated."""
+    if state not in _FINALIZE_STATES:
+        raise ValueError(f"finalize_interrupted_task: unsupported state {state!r}")
+    now = now or datetime.now(UTC)
+    blob = _status_blob(now, text, state)
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     async with session_maker() as session:
         result = await session.execute(
             update(TaskModel)
+            .where(TaskModel.id == str(task_id))
             .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
             .values(status=blob, last_updated=now)
         )
         await session.commit()
-        return result.rowcount or 0
+    _RESTART_SPARED_TASK_IDS.discard(str(task_id))
+    return bool(result.rowcount)
 
 
 # ── Orphaned-WORKING-task reaper (#3418) ─────────────────────────────────────────
@@ -827,6 +955,12 @@ async def reap_orphaned_working_tasks(
 
     Only ``TASK_STATE_WORKING`` rows are considered. Terminal states and the resumable
     ``TASK_STATE_INPUT_REQUIRED`` / ``TASK_STATE_AUTH_REQUIRED`` pauses are never touched.
+    Restart-spared rows (ADR 0129 D7, ``restart_spared_task_ids``) are skipped: they keep
+    their pre-crash ``last_updated``, so after >idle-window downtime this reaper's first
+    post-boot pass would fail them MID-RESUME — and the resume's own finalize (CAS on
+    submitted/working) would then silently lose a completed turn to that failed write.
+    Recovery releases each id as it disposes the task (``finalize_interrupted_task``),
+    restoring this backstop for the row.
     Eligible rows transition to a visible ``failed`` status carrying an actionable
     diagnosis; NOTHING is deleted, so a reaped row stays fetchable for the console's
     terminal watchdog. Idempotent: a reaped row is no longer WORKING, so a second pass
@@ -849,6 +983,7 @@ async def reap_orphaned_working_tasks(
     state = TaskModel.status["state"].as_string()
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     reaped = 0
+    spared = frozenset(_RESTART_SPARED_TASK_IDS)
     async with session_maker() as session:
         rows = (
             await session.execute(
@@ -862,6 +997,8 @@ async def reap_orphaned_working_tasks(
             )
         ).all()
         for task_id, history, artifacts, last_updated, status_json in rows:
+            if task_id in spared:
+                continue  # under D7 recovery — see the docstring; released on finalize
             # A NULL `last_updated` used to be skipped outright, which made this reaper
             # unable to do its own job on exactly the rows most likely to need it: a task
             # whose producer died is not more likely to have written that column. It was
@@ -953,7 +1090,9 @@ async def drop_legacy_task_table(engine: AsyncEngine) -> bool:
 async def initialize_a2a_stores(
     task_store: DatabaseTaskStore,
     push_store: ValidatingPushNotificationConfigStore,
-) -> None:
+    *,
+    spare_task_ids=frozenset(),
+) -> set[str]:
     """Create the schemas, reconcile restart-interrupted tasks, and run the TTL
     sweep at boot.
 
@@ -963,6 +1102,13 @@ async def initialize_a2a_stores(
     terminal ``failed`` rather than being silently deleted at 24h (#486).
     ``input_required`` / ``auth_required`` pauses are left alone (resumable from
     the checkpoint).
+
+    ``spare_task_ids`` (ADR 0129 D7): the scheduler's unresolved accepted dispatch
+    handles. Those of them a restart actually interrupted (still ``submitted`` /
+    ``working`` here) are NOT failed — they are returned so the scheduler's boot
+    recovery can classify each from its LangGraph checkpoint and resume the safe
+    cases against the original thread and task handle. Everything else — interactive
+    chat turns included — keeps today's fail-on-boot behavior.
     """
     # Upgrade guard: a legacy bespoke ``tasks`` table would survive create_all and
     # break every task op with "no such column: tasks.id". Drop it first so the
@@ -973,12 +1119,24 @@ async def initialize_a2a_stores(
         log.exception("[a2a] legacy task-table migration check failed; continuing")
     await task_store.initialize()
     await push_store.initialize()
+    interrupted_spared: set[str] = set()
     try:
-        r = await reconcile_interrupted_tasks(task_store.engine)
+        if spare_task_ids:
+            interrupted_spared = await interrupted_nonterminal_tasks(task_store.engine, spare_task_ids)
+        r = await reconcile_interrupted_tasks(task_store.engine, spare_task_ids=interrupted_spared)
         if r:
             log.info("[a2a] reconciled %d interrupted task(s) to failed (restart)", r)
+        if interrupted_spared:
+            log.info(
+                "[a2a] %d interrupted scheduler task(s) spared for checkpoint classification (ADR 0129 D7)",
+                len(interrupted_spared),
+            )
     except Exception:
         log.exception("[a2a] interrupted-task reconciliation failed; continuing")
+    # Registered BEFORE the first sweep so neither janitor (TTL sweep here and hourly,
+    # orphaned-WORKING reaper 45s in) can destroy a row mid-recovery; always called, so
+    # a previous boot's leftovers are cleared even when nothing is spared this time.
+    mark_restart_spared_tasks(interrupted_spared)
     try:
         n = await sweep_expired_tasks(task_store.engine)
         if n:
@@ -991,3 +1149,4 @@ async def initialize_a2a_stores(
             log.info("[a2a] swept %d orphaned push-config(s) (ADR 0051)", p)
     except Exception:
         log.exception("[a2a] push-config sweep failed; continuing")
+    return interrupted_spared
