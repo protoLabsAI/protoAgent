@@ -170,6 +170,12 @@ def test_install_end_to_end_unpacks_pins_and_syspaths(box, monkeypatch):
     # …and the resolved dep is pinned in the lock.
     lock = json.loads((box / "plugins.lock").read_text())
     assert lock["plugins"] == [{"id": "demoplug", "deps": [{"name": "demolib", "version": "1.0.0", "sha256": sha}]}]
+    # A re-install checks that pin (ADR 0093 D6): the same version under another hash aborts.
+    assert wi.install("demoplug", ["demolib>=1"]) == ["demolib==1.0.0"]
+    lock["plugins"][0]["deps"][0]["sha256"] = "0" * 64
+    (box / "plugins.lock").write_text(json.dumps(lock))
+    with pytest.raises(wi.WheelInstallError, match="plugins.lock pin"):
+        wi.install("demoplug", ["demolib>=1"])
 
 
 def test_record_lock_preserves_regular_plugin_entry(box, monkeypatch):
