@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 it asks you to *edit PROTO.md, not this file*, so the agent guidance has one home and
 doesn't drift. Read it before editing. It owns:
 
-- **Run commands** — `python -m server` (never `python server.py`; retired in ADR 0023);
+- **Run commands** — `python -m server`;
   `scripts/dev.sh` for the isolated dev instance; `uv sync` (Python) / `npm ci` (console).
 - **The must-pass-before-PR gates** — the table mirroring `.github/workflows/checks.yml`
   (`ruff check .`, `lint-imports`, `python -m pytest tests/ -q`, `python scripts/live_smoke.py`,
