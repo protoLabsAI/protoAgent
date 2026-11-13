@@ -15,12 +15,11 @@ from fastapi.testclient import TestClient
 def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None, seen=None):
     import operator_api.chat_routes as cr
     import runtime.state as rs
-    import server.session_state as _ss
 
-    # The ADR 0130 S2 state fields ride the session routes; a turn bracketed by an
-    # earlier test file would otherwise leak a `last_change_seq` into the exact-body
-    # asserts below.
-    _ss._reset_for_tests()
+    # The ADR 0130 S2 state fields ride the session routes; the autouse
+    # `_reset_session_state` fixture in conftest clears `server.session_state`'s process
+    # globals around every test, so an earlier test file cannot leak a `last_change_seq`
+    # into the exact-body asserts below.
 
     async def _fake_chat(
         message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, origin="local", **_kw

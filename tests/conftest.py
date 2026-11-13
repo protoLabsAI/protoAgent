@@ -129,6 +129,34 @@ def _reset_inbox_now_retry_state():
 
 
 @pytest.fixture(autouse=True)
+def _reset_session_state():
+    """Reset the ADR 0130 S2 server-held session state (``server.session_state``) around
+    every test.
+
+    Its ``_LAST`` (per-session ``(status, live_task_id)`` dedupe), ``_EPOCH`` settle
+    counters, ``_SEQS`` ``last_change_seq`` map and the ``_WIRED``/``_SEEDED`` latches are
+    module-level process globals. One test that drives a ``session.changed`` transition
+    (a turn bracket, a park, a consumed steer, a delete) would otherwise leak a deduped
+    status or a stale ``last_change_seq`` into the next test's exact-body or exact-event
+    assertions — nondeterministically, because xdist fixes neither the order nor which
+    worker runs which file. Owning the reset here (not in each session-touching test
+    file) keeps every test isolated.
+
+    Lazy via ``sys.modules``: a test that never imports the server pays nothing, and a
+    freshly imported module starts empty anyway, so there is nothing to clear until some
+    test has used it."""
+
+    def _reset():
+        mod = sys.modules.get("server.session_state")
+        if mod is not None:
+            mod._reset_for_tests()
+
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_injection_log(tmp_path, monkeypatch):
     """Point the per-turn injection log (ADR 0069 D6) at a per-test temp DB.
 

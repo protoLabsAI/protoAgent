@@ -167,11 +167,9 @@ def published(monkeypatch):
     monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None, **kw: out.append((t, d)))
     # Keep the chat-progress bridge out of it: these frames are about the lifecycle pair.
     monkeypatch.setattr(a2a, "_publish_chat_progress", lambda *a, **k: None)
-    # Fresh ADR 0130 S2 dedupe state, so the park's session.changed below is deterministic
+    # The park's session.changed below is deterministic because conftest's autouse
+    # `_reset_session_state` fixture clears the ADR 0130 S2 dedupe state around every test,
     # whatever ran earlier in the process.
-    import server.session_state as _ss
-
-    _ss._reset_for_tests()
     return out
 
 
