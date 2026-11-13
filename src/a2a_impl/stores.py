@@ -35,7 +35,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import bindparam, delete, or_, select, text, update
+from sqlalchemy import bindparam, delete, insert, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from a2a.server.context import ServerCallContext
@@ -795,6 +795,7 @@ def _status_blob(now: datetime, text: str, state: str = "failed") -> dict:
         "completed": TaskState.TASK_STATE_COMPLETED,
         "failed": TaskState.TASK_STATE_FAILED,
         "input_required": TaskState.TASK_STATE_INPUT_REQUIRED,
+        "working": TaskState.TASK_STATE_WORKING,
     }
     ts = Timestamp()
     ts.FromDatetime(now)
@@ -907,6 +908,75 @@ async def finalize_interrupted_task(
         await session.commit()
     _RESTART_SPARED_TASK_IDS.discard(str(task_id))
     return bool(result.rowcount)
+
+
+async def reopen_restart_failed_task(
+    engine: AsyncEngine, task_id: str, *, context_id: str = "", now: datetime | None = None
+) -> bool:
+    """Move a task the D7 disposition failed (:data:`RESTART_INTERRUPTED_TEXT`) back to
+    ``working`` for an operator-ordered resume (ADR 0129 D7 S7).
+
+    ``finalize_interrupted_task`` CAS-es on the interrupted states, so without this step
+    the resume's final write could never land on a row the disposition already failed —
+    a completed operator resume would stay recorded as failed. CAS on ``failed`` + the
+    exact restart diagnosis, so an ordinarily-failed task can never be reopened.
+
+    The row may also be GONE: the held occurrence (and its Needs-you card) parks
+    indefinitely, while the failed row ages out of the 24h TTL sweep
+    (``finalize_interrupted_task`` released it from the spared registry). What the resume
+    actually drives is the LangGraph checkpoint — the task row is only the handle the
+    outcome lands on — so when ``context_id`` names the session and no row exists at all,
+    the handle is re-minted under the ORIGINAL task id instead of silently refusing. Only
+    an ABSENT row is re-minted: an existing row in any other state still returns False,
+    so an ordinarily-failed/completed task can never be clobbered.
+
+    The id is re-registered as restart-spared so the TTL sweep / orphaned-WORKING reaper
+    can't destroy the row mid-drive; the resume's own finalize releases it again. Returns
+    True when the row is ``working`` by this call's doing (False: already reopened,
+    or not a restart-failed task)."""
+    now = now or datetime.now(UTC)
+    blob = _status_blob(now, "Resuming after a restart at the operator's request.", "working")
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_maker() as session:
+        result = await session.execute(
+            update(TaskModel)
+            .where(TaskModel.id == str(task_id))
+            .where(TaskModel.status["state"].as_string() == "TASK_STATE_FAILED")
+            .where(TaskModel.status["message"]["parts"][0]["text"].as_string() == RESTART_INTERRUPTED_TEXT)
+            .values(status=blob, last_updated=now)
+        )
+        await session.commit()
+        reopened = bool(result.rowcount)
+        if not reopened and context_id:
+            gone = (
+                await session.execute(select(TaskModel.id).where(TaskModel.id == str(task_id)))
+            ).first() is None
+            if gone:
+                try:
+                    # Shaped like every row the executor saves for a scheduler fire:
+                    # operator-tier owner (a NULL owner is invisible to the
+                    # reconciler's GetTask, which filters on the caller's partition)
+                    # and protocol_version 1.0 (the SDK's proto-vs-legacy
+                    # deserialization discriminator — NULL reads as a 0.3 row).
+                    await session.execute(
+                        insert(TaskModel).values(
+                            id=str(task_id), context_id=str(context_id), kind="task",
+                            owner=OPERATOR_OWNER, status=blob, last_updated=now,
+                            protocol_version="1.0",
+                        )
+                    )
+                    await session.commit()
+                    reopened = True
+                except IntegrityError:
+                    # Re-created between the check and the insert: whatever wrote it
+                    # owns its state now — never clobber it.
+                    await session.rollback()
+    if reopened:
+        _RESTART_SPARED_TASK_IDS.add(str(task_id))
+    return reopened
 
 
 # ── Orphaned-WORKING-task reaper (#3418) ─────────────────────────────────────────

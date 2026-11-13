@@ -20,52 +20,14 @@
   margin: auto;
 }
 
-.activity-msg {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pl-space-1);
-}
-
-.activity-role {
-  font-size: var(--pl-font-size-3xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted));
-}
-
-/* Origin provenance (ADR 0022) — the `OriginProvenance` badge row, the one survivor of
-   the pre-Feed timeline (slice 7 retires it with the component). */
-.activity-prov {
-  display: flex;
-  align-items: center;
-  gap: var(--pl-space-2);
-  flex-wrap: wrap;
-  font-size: var(--pl-font-size-2xs);
-}
-.activity-origin {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--pl-space-1);
-  padding: var(--pl-space-0_5) var(--pl-space-2);
-  border-radius: var(--pl-radius-pill);
-  font-weight: 600;
-  border: 1px solid var(--pl-color-border);
-  color: var(--pl-color-fg-muted);
-}
-.activity-origin svg { flex: 0 0 auto; }
-.activity-origin-scheduler { color: var(--pl-color-chart-series2); border-color: color-mix(in srgb, var(--pl-color-chart-series2) 45%, var(--pl-color-border)); }
-.activity-origin-inbox     { color: var(--pl-color-status-success); border-color: color-mix(in srgb, var(--pl-color-status-success) 45%, var(--pl-color-border)); }
-.activity-origin-webhook   { color: var(--pl-color-status-warning); border-color: color-mix(in srgb, var(--pl-color-status-warning) 45%, var(--pl-color-border)); }
-.activity-origin-a2a       { color: var(--pl-color-chart-series8); border-color: color-mix(in srgb, var(--pl-color-chart-series8) 45%, var(--pl-color-border)); }
-.activity-origin-operator  { color: var(--pl-color-accent); border-color: color-mix(in srgb, var(--pl-color-accent) 45%, var(--pl-color-border)); }
-.activity-trigger { font-family: var(--pl-font-mono); color: var(--pl-color-fg-muted); }
-.activity-time { margin-left: auto; color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted)); }
+/* The `OriginProvenance` badge row (ADR 0022) — the last survivor of the pre-Feed
+   timeline — retired with the component (feed slice 7), along with the old
+   `.activity-msg`/`.activity-role` entry markup nothing rendered anymore. */
 
 /* Unified feed (docs/design/feed.md) ----------------------------------------
    One dialog body, ONE list: queued / ran / failed composite-button rows under
    h3 day headings, newest first. The former pending `.inbox-*` section and its
-   styles are gone (`.inbox-pri*` stay in theme.css — the OriginProvenance
-   badge still renders them until slice 7 retires it). Tokens only. */
+   styles are gone. Tokens only. */
 .unified-feed {
   display: flex;
   flex-direction: column;
