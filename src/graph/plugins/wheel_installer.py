@@ -219,6 +219,16 @@ def install(
     failure — nothing partial is recorded in the lock."""
     sat = already_satisfied or (lambda _n: False)
     plan = resolve(requirements, already_satisfied=sat)
+    # Re-install is tamper-evident (ADR 0093 D6): a dep the lock already pinned at this
+    # version must still carry the recorded hash, checked before anything is fetched.
+    locked = _locked_hashes(plugin_id)
+    for name, version, wheel in plan:
+        pinned = locked.get((_canon(name), version))
+        got = ((wheel.get("digests") or {}).get("sha256") or "").lower()
+        if pinned and got != pinned:
+            raise WheelInstallError(
+                f"{name}=={version}: sha256 {got or '(none)'} != plugins.lock pin {pinned} — refusing"
+            )
     dest = plugin_deps_dir(plugin_id)
     dest.mkdir(parents=True, exist_ok=True)
     installed: list[str] = []
@@ -232,6 +242,23 @@ def install(
     prepend_to_syspath(dest)
     log.info("[wheel] installed %d dep(s) for %s into %s", len(installed), plugin_id, dest)
     return installed
+
+
+def _canon(name: str) -> str:
+    from packaging.utils import canonicalize_name
+
+    return canonicalize_name(name)
+
+
+def _locked_hashes(plugin_id: str) -> dict[tuple[str, str], str]:
+    """``{(canonical name, version): sha256}`` from this plugin's ``plugins.lock`` ``deps``."""
+    from graph.plugins.installer import _lock_entry
+
+    out: dict[tuple[str, str], str] = {}
+    for d in (_lock_entry(plugin_id) or {}).get("deps") or []:
+        if isinstance(d, dict) and d.get("name") and d.get("version") and d.get("sha256"):
+            out[(_canon(str(d["name"])), str(d["version"]))] = str(d["sha256"]).lower()
+    return out
 
 
 def _record_lock(plugin_id: str, pins: list[tuple[str, str, str]]) -> None:
