@@ -1171,9 +1171,12 @@ async def test_an_incognito_session_records_no_content(session_langfuse):
     async with tracing.trace_session("s1", name="chat", input="my SSN is 123-45-6789", incognito=True):
         assert tracing.io_allowed() is False
         tracing.set_session_output("noted")
+        tracing.trace_tool_call("lookup", {"q": "123-45-6789"}, "found 123-45-6789", 5, True)
     assert tracing.io_allowed() is True
 
     assert not [c for c in span.update.call_args_list if "input" in c.kwargs or "output" in c.kwargs]
+    tool = tracing._langfuse.start_observation.call_args.kwargs
+    assert (tool["name"], tool["input"], tool["output"]) == ("tool:lookup", None, None)
 
 
 async def test_session_input_is_capped(session_langfuse):

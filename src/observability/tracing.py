@@ -929,14 +929,17 @@ def trace_tool_call(
     ``parent`` (a span yielded by ``trace_span``) parents it EXPLICITLY, for a
     caller whose events arrive on a task that does not carry the span's context —
     an ACP client's reader loop, which outlives the turn it is reporting on.
+
+    In an incognito turn (``io_allowed``) the span records no args or result.
     """
     if not _enabled or _langfuse is None:
         return None
 
     # Truncate oversize args to keep Langfuse payloads lean. The full args
     # are already in the audit log for forensic reconstruction.
+    io_ok = io_allowed()
     safe_args = {}
-    for k, v in (args or {}).items():
+    for k, v in (args or {}).items() if io_ok else ():
         sv = str(v)
         safe_args[k] = sv[:500] if len(sv) > 500 else v
 
@@ -944,8 +947,8 @@ def trace_tool_call(
         span = (parent or _langfuse).start_observation(
             name=f"tool:{tool_name}",
             as_type="tool",
-            input=safe_args,
-            output=(result or "")[:1000],
+            input=safe_args if io_ok else None,
+            output=(result or "")[:1000] if io_ok else None,
             metadata={
                 **_inherited_meta_ctx.get(),
                 "duration_ms": duration_ms,
