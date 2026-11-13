@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 
 from events import ChangeLog, EventBus
+from events.change_log import LIVE_SEQ_PERSIST_EVERY as SLACK  # the restart reseed slack
 
 
 def _bus_with_log(tmp_path, **log_kw):
@@ -19,16 +21,20 @@ def _bus_with_log(tmp_path, **log_kw):
 
 
 def test_retained_publish_appends_to_the_log_in_seq_order(tmp_path):
-    """Every retained publish lands as one (seq, kind, entity_id, ts) row, in seq order."""
+    """Every retained publish lands as one (seq, kind, entity_id, ts) row, in seq
+    order — plus the payload key the identity arrived under, so a replay can re-frame
+    the entity the way the original publish named it."""
     bus, clog = _bus_with_log(tmp_path)
     bus.publish("chat.resumed", {"session_id": "s-1"})
     bus.publish("task.updated", {"id": "task-9"})
     bus.publish("background.completed", {"job_id": "bg-2"})
+    bus.publish("turn.input_required", {"task_id": "t-4", "context_id": "ctx-7", "prompt": "pick one"})
     rows = clog.read_since(0)
-    assert [(r["seq"], r["kind"], r["entity_id"]) for r in rows] == [
-        (1, "chat.resumed", "s-1"),
-        (2, "task.updated", "task-9"),
-        (3, "background.completed", "bg-2"),
+    assert [(r["seq"], r["kind"], r["entity_id"], r["entity_key"]) for r in rows] == [
+        (1, "chat.resumed", "s-1", "session_id"),
+        (2, "task.updated", "task-9", "id"),
+        (3, "background.completed", "bg-2", "job_id"),
+        (4, "turn.input_required", "ctx-7", "context_id"),
     ]
     assert all(isinstance(r["ts"], float) for r in rows)
 
@@ -57,18 +63,22 @@ def test_unretained_progress_frames_stay_live_only(tmp_path):
 
 
 def test_resume_after_restart_replays_every_retained_change_in_order(tmp_path):
-    """A new process on the same log continues the seq and serves a client's old cursor:
-    rows past the new ring come back as identity-only frames, in-ring rows keep their
-    payloads, and the live stream follows with no duplicates."""
+    """A new process on the same log continues the seq (past a restart-slack window, so
+    even unretained frames' seqs are never re-minted) and serves a client's old cursor:
+    rows past the new ring come back as identity-only frames keyed the way the original
+    publish named its entity, in-ring rows keep their payloads, and the live stream
+    follows with no duplicates."""
     bus1, clog1 = _bus_with_log(tmp_path)
     for i in range(1, 6):
         bus1.publish("task.updated", {"id": f"task-{i}"})
     clog1.close()  # server stops
 
+    s = 5 + SLACK  # the new run reseeds past the old high-water plus the slack window
+
     async def run():
         bus2 = EventBus()
         bus2.attach_change_log(ChangeLog(tmp_path / "change-log.db"))
-        bus2.publish("task.updated", {"id": "task-6"})  # continues at seq 6, not 1
+        bus2.publish("task.updated", {"id": "task-6"})  # continues past seq 5, never back at 1
         bus2.publish("chat.completed", {"session_id": "s-9", "n": 7})
         sub = bus2.subscribe(since=2)
         replayed = [await asyncio.wait_for(sub.__anext__(), timeout=1) for _ in range(5)]
@@ -80,32 +90,106 @@ def test_resume_after_restart_replays_every_retained_change_in_order(tmp_path):
         return replayed, live
 
     replayed, live = asyncio.run(run())
-    assert [p["seq"] for p in replayed] == [3, 4, 5, 6, 7]
-    # Seqs 3–5 predate the restart: the new ring never saw them → identity-only (D2).
+    assert [p["seq"] for p in replayed] == [3, 4, 5, s + 1, s + 2]
+    # Seqs 3–5 predate the restart: the new ring never saw them → identity-only (D2),
+    # with the id ALSO under the original payload key so the deck/console still key
+    # their state correctly (a bare entity_id read as session_id="" lingered forever).
     assert replayed[0] == {
         "event": "task.updated",
-        "data": {"entity_id": "task-3"},
+        "data": {"entity_id": "task-3", "id": "task-3"},
         "seq": 3,
         "ts": replayed[0]["ts"],
     }
-    # Seqs 6–7 are in the live ring → replayed verbatim, payload intact.
+    # The two post-restart rows are in the live ring → replayed verbatim, payload intact.
     assert replayed[4]["data"] == {"session_id": "s-9", "n": 7}
-    assert live["seq"] == 8 and live["event"] == "chat.resumed"
+    assert live["seq"] == s + 3 and live["event"] == "chat.resumed"
 
 
-def test_bare_bus_without_log_keeps_ring_replay(tmp_path):
-    """No log attached (unit tests, CLI): ?since= replay still comes from the ring."""
+def test_progress_frame_cursor_survives_a_restart(tmp_path):
+    """SSE stamps id: on unretained frames too, so a client's Last-Event-ID can be a
+    progress-frame seq the log has no row for. The restarted bus must reseed PAST those
+    (the resume slack covers the unpersisted tail) — otherwise it re-mints seqs under
+    the cursor and a later resume silently skips real changes."""
+    bus1, clog1 = _bus_with_log(tmp_path)
+    bus1.publish("task.updated", {"id": "task-1"})  # seq 1 — the only logged row
+    for i in range(3):  # seqs 2–4: stamped on live frames, never logged
+        bus1.publish("chat.progress", {"i": i}, retain=False)
+    clog1.close()  # restart, with a client cursor parked at 4
+
+    async def run():
+        bus2 = EventBus()
+        bus2.attach_change_log(ChangeLog(tmp_path / "change-log.db"))
+        bus2.publish("task.updated", {"id": "task-2"})
+        sub = bus2.subscribe(since=4)
+        first = await asyncio.wait_for(sub.__anext__(), timeout=1)
+        await sub.aclose()
+        return first
+
+    first = asyncio.run(run())
+    # The new change replays (its seq is above the cursor) — not skipped, no resync.
+    assert first["event"] == "task.updated" and first["data"] == {"id": "task-2"}
+    assert first["seq"] > 4
+
+
+def test_live_high_water_is_persisted_past_the_throttle(tmp_path):
+    """A pure-progress stretch longer than the persist window still lands its high-water
+    in the meta row, so the restart slack never has more than one window to cover."""
+    clog = ChangeLog(tmp_path / "log.db", live_persist_every=4)
+    bus = EventBus()
+    bus.attach_change_log(clog)
+    bus.publish("task.updated", {"id": "t-1"})  # seq 1
+    for i in range(9):  # seqs 2–10; the throttled meta writes land at 5 and 9
+        bus.publish("chat.progress", {"i": i}, retain=False)
+    clog.close()
+
+    reopened = ChangeLog(tmp_path / "log.db", live_persist_every=4)
+    assert reopened.last_seq() == 9  # the persisted live mark, not the lone row's 1
+    bus2 = EventBus()
+    bus2.attach_change_log(reopened)
+    seen: list[dict] = []
+    bus2.subscribe_handler("#", seen.append)
+    bus2.publish("task.updated", {"id": "t-2"})
+    assert seen[0]["seq"] > 10  # past every seq the old run stamped on a frame
+
+
+def test_fresh_log_first_progress_frame_marks_the_log_used(tmp_path):
+    """A run that only ever emitted progress frames persists its FIRST live seq eagerly,
+    so the restart slack applies — while a log that never recorded anything issued no
+    cursors and reseeds from 0 (test buses keep their 1-based seqs)."""
+    clog = ChangeLog(tmp_path / "log.db", live_persist_every=100)
+    bus = EventBus()
+    bus.attach_change_log(clog)
+    for i in range(3):  # seqs 1–3: no retained publish at all
+        bus.publish("chat.progress", {"i": i}, retain=False)
+    clog.close()
+
+    reopened = ChangeLog(tmp_path / "log.db", live_persist_every=100)
+    assert reopened.last_seq() == 1  # the eager first-frame mark
+    assert reopened.resume_seq() >= 3  # the slack covers the unpersisted tail
+    assert ChangeLog(tmp_path / "virgin.db").resume_seq() == 0  # never used → no slack
+
+
+def test_bare_bus_stale_cursor_still_streams_live_events():
+    """No log attached (unit tests, CLI; the server's fallback when the log fails at
+    boot) and a cursor from a previous run — the bare counter restarts at 0, so the
+    cursor is ahead of everything: nothing replays, but every live event still flows,
+    exactly the pre-ADR-0130 ring-only contract. (Gating the live loop on the raw
+    cursor starved such subscribers until the counter caught up.)"""
 
     async def run():
         bus = EventBus()
-        bus.publish("a.1", {"i": 1})
+        bus.publish("a.1", {"i": 1})  # seqs 1–2: the ring holds nothing past 500
         bus.publish("a.2", {"i": 2})
-        sub = bus.subscribe(since=1)
-        replayed = await asyncio.wait_for(sub.__anext__(), timeout=1)
+        sub = bus.subscribe(since=500)
+        t = asyncio.ensure_future(sub.__anext__())
+        await asyncio.sleep(0)
+        bus.publish("b.live", {"i": 3})
+        live = await asyncio.wait_for(t, timeout=1)
         await sub.aclose()
-        return replayed
+        return live
 
-    assert asyncio.run(run())["seq"] == 2
+    live = asyncio.run(run())
+    assert live["event"] == "b.live" and live["seq"] == 3
 
 
 # --- resync_required (D2 gap handling) ---
@@ -188,6 +272,33 @@ def test_append_sweeps_opportunistically(tmp_path):
     assert clog.floor_seq() == 1
 
 
+def test_first_cut_schema_migrates_in_place(tmp_path):
+    """A change-log.db from before entity_key/live_seq existed (a dev instance that ran
+    the first S1 cut) grows the columns on open and keeps its rows and floor."""
+    db = tmp_path / "log.db"
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute(
+            "CREATE TABLE change_log (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, "
+            "entity_id TEXT NOT NULL DEFAULT '', ts REAL NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE change_log_meta ("
+            "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), floor_seq INTEGER NOT NULL)"
+        )
+        conn.execute("INSERT INTO change_log_meta VALUES (1, 2)")
+        conn.execute("INSERT INTO change_log VALUES (3, 'task.updated', 't-3', 1.0)")
+    conn.close()
+
+    clog = ChangeLog(db)
+    assert clog.floor_seq() == 2 and clog.last_seq() == 3
+    clog.append(4, "chat.resumed", "s-1", entity_key="session_id")
+    assert [(r["seq"], r["entity_id"], r["entity_key"]) for r in clog.read_since(0)] == [
+        (3, "t-3", ""),  # a pre-migration row replays entity_id-only, which is harmless
+        (4, "s-1", "session_id"),
+    ]
+
+
 def test_floor_and_high_water_survive_a_restart(tmp_path):
     """The sweep floor and seq high-water persist: a reopened instance still detects
     pre-retention cursors, and the bus never re-mints swept seqs."""
@@ -205,7 +316,7 @@ def test_floor_and_high_water_survive_a_restart(tmp_path):
     seen: list[dict] = []
     bus.subscribe_handler("#", seen.append)
     bus.publish("k.new", {"id": "e"})
-    assert seen[0]["seq"] == 4  # continues past the swept high-water
+    assert seen[0]["seq"] == 4 + SLACK  # past the swept high-water, plus the restart slack
 
 
 # --- the SSE surface (/api/events) ---

@@ -41,7 +41,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
 
-from events.change_log import entity_id_of
+from events.change_log import entity_ref_of
 
 if TYPE_CHECKING:
     from events.change_log import ChangeLog
@@ -85,10 +85,13 @@ class EventBus:
         """Make catch-up durable (ADR 0130 S1). From here on every retained publish
         appends a ``(seq, kind, entity_id, ts)`` row, and ``subscribe(since=…)``
         replays from the log instead of the in-memory ring. The bus seq continues
-        from the log's high-water mark, so after a restart new events never re-mint
-        seqs a client's ``Last-Event-ID`` cursor already points past."""
+        from the log's resume point — its durable high-water (rows, the sweep floor,
+        and the throttled mark unretained publishes leave) plus one persist window of
+        slack — so after a restart new events never re-mint seqs a client's
+        ``Last-Event-ID`` cursor already points past, even a cursor taken from a
+        live-only progress frame the log has no row for."""
         self._change_log = change_log
-        self._seq = max(self._seq, change_log.last_seq())
+        self._seq = max(self._seq, change_log.resume_seq())
 
     def _bind_loop(self) -> None:
         """Remember the running loop (if any) so off-loop publishes can find it."""
@@ -140,14 +143,23 @@ class EventBus:
         # about what it has already seen rather than silently rewinding.
         if retain:
             self._ring.append(payload)
-            if self._change_log is not None:
-                # The durable half of the ring (ADR 0130 S1): appended here, in the
-                # same step that assigned seq, so log order IS seq order. Identity
-                # only — a resuming client refetches the entity (D2).
-                try:
-                    self._change_log.append(self._seq, event, entity_id_of(data), payload["ts"])
-                except Exception:  # noqa: BLE001 — a full disk must not break live publish
-                    log.exception("[events] change-log append failed for %r", event)
+        if self._change_log is not None:
+            try:
+                if retain:
+                    # The durable half of the ring (ADR 0130 S1): appended here, in the
+                    # same step that assigned seq, so log order IS seq order. Identity
+                    # only — a resuming client refetches the entity (D2) — plus the
+                    # payload key it was named under, so a replay keeps the frame
+                    # shape today's clients key on.
+                    key, eid = entity_ref_of(data)
+                    self._change_log.append(self._seq, event, eid, payload["ts"], entity_key=key)
+                else:
+                    # A progress frame leaves no row, but its seq reaches clients (the
+                    # payload and the SSE id:), so the counter's high-water must survive
+                    # a restart or a resume cursor could be re-minted (throttled write).
+                    self._change_log.note_seq(self._seq)
+            except Exception:  # noqa: BLE001 — a full disk must not break live publish
+                log.exception("[events] change-log write failed for %r", event)
 
         # SSE consoles — drop-oldest on overflow.
         for q in list(self._subscribers):
@@ -196,31 +208,33 @@ class EventBus:
         (reconnect catch-up), then streams live. With a change log attached (ADR
         0130 S1) the replay comes from the durable log: rows the ring still holds
         come back with their full payloads, rows that aged out come back as
-        identity-only frames (``data = {"entity_id": …}``) the client resolves with
-        an entity fetch, and a cursor older than retention — or ahead of everything
-        this instance has seen (a wiped/foreign log) — gets one ``resync_required``
-        event telling the client to refetch its snapshots instead of trusting a
-        silent gap. A bare bus (no log — unit tests, CLI) replays from the ring
-        exactly as before."""
+        identity-only frames (``entity_id`` plus the payload key the original
+        publish named the entity under) the client resolves with an entity fetch,
+        and a cursor older than retention — or ahead of everything this instance
+        has seen (a wiped/foreign log) — gets one ``resync_required`` event telling
+        the client to refetch its snapshots instead of trusting a silent gap. A
+        bare bus (no log — unit tests, CLI) replays from the ring exactly as
+        before — and a cursor it can't place (a previous process's counter; the
+        bare seq restarts at 0) never gates the live stream."""
         self._bind_loop()
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self._max_queue)
         self._subscribers.add(q)
         try:
-            # Highest seq the replay below delivered: a publish that lands between
-            # queue registration (above) and the replay read shows up in both, so
-            # the live loop skips anything the replay already covered.
+            # Highest seq the replay below actually DELIVERED — deliberately not the
+            # raw cursor: a stale cursor (another run's counter) must never suppress
+            # live events. Queue registration (above) and the replay read run in one
+            # synchronous segment, so no publish can land in both; the filter is
+            # belt-and-braces for a replayed frame also sitting in the queue.
             replayed_to = 0
             if since is not None:
-                replayed_to = since
-                if self._change_log is not None:
-                    batch, replayed_to = self._log_replay(since)
-                    for payload in batch:
-                        yield payload
-                else:
-                    for payload in list(self._ring):
-                        if payload.get("seq", 0) > since:
-                            yield payload
-                            replayed_to = max(replayed_to, payload.get("seq", 0))
+                batch = (
+                    self._log_replay(self._change_log, since)
+                    if self._change_log is not None
+                    else [p for p in self._ring if p.get("seq", 0) > since]
+                )
+                for payload in batch:
+                    replayed_to = max(replayed_to, payload.get("seq", 0))
+                    yield payload
             while True:
                 payload = await q.get()
                 if payload.get("seq", 0) <= replayed_to:
@@ -229,40 +243,43 @@ class EventBus:
         finally:
             self._subscribers.discard(q)
 
-    def _log_replay(self, since: int) -> tuple[list[dict[str, Any]], int]:
+    def _log_replay(self, clog: ChangeLog, since: int) -> list[dict[str, Any]]:
         """The catch-up batch for a resuming cursor, from the durable log (ADR 0130).
 
-        Returns ``(payloads, replayed_to)``. Runs synchronously on the loop (no await
-        between the queue registration and this read), so the batch and the live queue
-        can overlap but never miss an event between them."""
-        clog = self._change_log
-        if clog is None:  # caller guards; belt-and-braces for a detach race
-            return [], since
+        Runs synchronously on the loop (no await between the queue registration and
+        this read), so no event can fall between the batch and the live queue."""
         if since > self._seq or not clog.covers(since):
             # Older than retention (or from another log's epoch): a full replay is
             # impossible, so say so once. The frame carries the server's current seq
             # as its id — after the client resyncs its snapshots, its next reconnect
             # resumes from here instead of re-triggering the resync forever.
-            payload = {
-                "event": "resync_required",
-                "data": {"since": since, "floor": clog.floor_seq(), "last_seq": self._seq},
-                "seq": self._seq,
-                "ts": time.time(),
-            }
-            return [payload], self._seq
+            return [
+                {
+                    "event": "resync_required",
+                    "data": {"since": since, "floor": clog.floor_seq(), "last_seq": self._seq},
+                    "seq": self._seq,
+                    "ts": time.time(),
+                }
+            ]
         ring_by_seq = {p.get("seq"): p for p in self._ring}
         batch: list[dict[str, Any]] = []
-        top = since
         for row in clog.read_since(since):
             seq = row["seq"]
-            # The ring still holds the full payload → replay it verbatim (today's
-            # clients read event data on replay); aged out → identity-only (D2).
-            batch.append(
-                ring_by_seq.get(seq)
-                or {"event": row["kind"], "data": {"entity_id": row["entity_id"]}, "seq": seq, "ts": row["ts"]}
-            )
-            top = max(top, seq)
-        return batch, top
+            live = ring_by_seq.get(seq)
+            if live is not None:
+                # The ring still holds the full payload → replay it verbatim (today's
+                # clients read event data on replay).
+                batch.append(live)
+                continue
+            # Aged out of the ring → identity-only (D2): the id under the generic key
+            # a sync client reads AND the key the original publish named it under, so
+            # today's consumers (the deck's feed keys turn.* on session_id/context_id)
+            # keep keying correctly instead of minting ""-keyed state.
+            data = {"entity_id": row["entity_id"]}
+            if row["entity_key"] and row["entity_key"] != "entity_id":
+                data[row["entity_key"]] = row["entity_id"]
+            batch.append({"event": row["kind"], "data": data, "seq": seq, "ts": row["ts"]})
+        return batch
 
     def subscriber_count(self) -> int:
         return len(self._subscribers)

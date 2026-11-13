@@ -85,9 +85,11 @@ function firstLine(text: string | undefined): string {
 function queuedRow(item: InboxItem, agentName: string): FeedRow {
   // Once the automatic retry budget is spent the sweeps will never pick this page up
   // again (types.ts `retries_exhausted`), so promising "runs when the agent is free"
-  // would be a lie — same wording ActivitySurface's queued-now flag uses.
+  // would be a lie. Such a page lands in Work › Needs you (work/tone groupFor), whose
+  // Delivery detail carries the one dismiss path — the row says so, but stays a quiet
+  // actionless row like every other (§1).
   const status = item.retries_exhausted
-    ? "Queued — automatic retries used up"
+    ? "Queued — automatic retries used up · needs you in Work"
     : `Queued — runs when ${agentName} is free`;
   return {
     key: `item:${item.id}`,

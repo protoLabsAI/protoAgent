@@ -57,6 +57,10 @@ describe("groupFor raw state classification", () => {
     const page = { id: 7, priority: "now", delivered_at: null, text: "p", source: "", created_at: "", dedup_key: null } as const;
     expect(groupFor({ ...item, kind: "delivery", raw: { ...page, needs_human: true } })).toBe("needs-you");
     expect(groupFor({ ...item, kind: "delivery", raw: { ...page } })).toBeNull();
+    // Retries spent: no sweep ever picks the page up again (and the Feed carries no
+    // dismiss), so it needs the operator — unless it was delivered after all.
+    expect(groupFor({ ...item, kind: "delivery", raw: { ...page, retries_exhausted: true } })).toBe("needs-you");
+    expect(groupFor({ ...item, kind: "delivery", raw: { ...page, retries_exhausted: true, delivered_at: "2026-09-03T10:01:00Z" } })).toBeNull();
     for (const state of ["pending", "completed", "cancelled"] as const) {
       expect(groupFor({ ...item, kind: "wait", raw: { state } })).toBe(state === "pending" ? "coming-up" : null);
     }

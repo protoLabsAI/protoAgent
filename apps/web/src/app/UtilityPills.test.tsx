@@ -1,5 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -108,13 +109,19 @@ it.each([0, 2])("routes background jobs to Work with %i running jobs", async (ru
 });
 
 it("counts unseen Feed items, clears on opening its OWN dialog, and resumes after close", async () => {
-  // ActivitySurface auto-scrolls its feed; jsdom doesn't implement element scrolling.
-  if (!HTMLElement.prototype.scrollTo) {
-    (HTMLElement.prototype as unknown as { scrollTo: () => void }).scrollTo = () => {};
-  }
   vi.spyOn(api, "inbox").mockResolvedValue({ items: [] });
   vi.spyOn(api, "activity").mockResolvedValue({ context_id: "s1", entries: [], messages: [] });
-  act(() => root.render(<ActivityWidget />));
+  // The Feed dialog body reads the agent's display name off the shared runtime probe.
+  vi.spyOn(api, "runtimeStatus").mockResolvedValue(
+    { identity: { name: "protoAgent", operator: "" } } as unknown as Awaited<ReturnType<typeof api.runtimeStatus>>,
+  );
+  act(() =>
+    root.render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ActivityWidget />
+      </QueryClientProvider>,
+    ),
+  );
   expect(pill("activity-badge")).toBeNull();
   emit("activity.message");
   emit("inbox.item");
@@ -126,7 +133,7 @@ it("counts unseen Feed items, clears on opening its OWN dialog, and resumes afte
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.textContent).toContain("Feed");
   expect(dialog.querySelector('[data-testid="unified-feed"]')).toBeTruthy();
-  expect(dialog.querySelector('[data-testid="feed-completed"]')).toBeTruthy();
+  expect(dialog.querySelector('[data-testid="feed-list"]')).toBeTruthy();
   expect(pill("activity-badge")).toBeNull();
   // Events arriving while the dialog is open stay read.
   emit("activity.message");

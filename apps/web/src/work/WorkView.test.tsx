@@ -337,6 +337,26 @@ it("a wait opens the existing schedule detail; a delivery opens the delivery det
   expect(detail.querySelector(".pl-badge")?.textContent).toBe("needs you");
 });
 
+// A retries-exhausted page is permanently stuck (no sweep retries it, and the Feed carries
+// no deliver/dismiss control — docs/design/feed.md §1), so it lands in Needs-you and the
+// Delivery detail's Dismiss is the one operator path that clears it.
+it("a retries-exhausted page lands in Needs-you and its Dismiss marks it delivered", async () => {
+  const deliver = vi.spyOn(api, "deliverInbox").mockResolvedValue({ ok: true, delivered: 1 });
+  data.sources.activity.groupItems = [{ kind: "delivery", id: "81", status: "needs-you", title: "card assigned", meta: "a2a",
+    raw: { id: 81, priority: "now", delivered_at: null, source: "a2a:sister", text: "card assigned", created_at: new Date().toISOString(),
+      dedup_key: null, retries_exhausted: true } } as GroupableWorkItem];
+  await render("modal");
+  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(".work-row")).find((node) => node.textContent?.includes("card assigned"))!.click());
+  const detail = host.querySelector(".work-view__detail")!;
+  expect(detail.textContent).toContain("retries used up");
+  await click("Dismiss…");
+  expect(host.textContent).toContain("Dismiss this page?");
+  await click("Dismiss");
+  expect(deliver).toHaveBeenCalledWith(81);
+  // The detail closes back to the list — the row leaves Needs-you on the inbox refetch.
+  expect(useUI.getState().surfaceStates.work.itemId).toBeUndefined();
+});
+
 it("round-trips selection, scroll and filters across frames and back", async () => {
   data.sources.tasks.items = [task("row")];
   useUI.setState({ surfaceStates: { work: { section: "overview", scrollTop: 75, filters: { thisChat: false } } } });

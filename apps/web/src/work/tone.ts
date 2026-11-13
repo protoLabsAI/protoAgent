@@ -33,9 +33,13 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
   const raw = item.raw as Record<string, unknown> | null;
   switch (item.kind) {
     case "decision": return raw?.state === "pending" ? "needs-you" : null;
-    // A pending now page only Needs-you when it is operator-class (needs_human): a merely
-    // undelivered page is queued — it retries on its own once the agent is free.
-    case "delivery": return ("priority" in item.raw ? needsOperatorAttention(item.raw) : !item.raw.delivered && item.raw.needsHuman) ? "needs-you" : null;
+    // A pending now page Needs-you when it is operator-class (needs_human) OR its automatic
+    // retry budget is spent (retries_exhausted — no sweep ever picks it up again, and the
+    // Feed carries no deliver/dismiss control, so only the operator can clear it here). A
+    // merely undelivered page is queued — it retries on its own once the agent is free.
+    case "delivery": return ("priority" in item.raw
+      ? needsOperatorAttention(item.raw) || (!item.raw.delivered_at && item.raw.retries_exhausted === true)
+      : !item.raw.delivered && item.raw.needsHuman) ? "needs-you" : null;
     case "goal":
       if (raw?.status === "active") return "doing-now";
       return raw?.status === "exhausted" || raw?.status === "unachievable" ? "needs-you" : null;
