@@ -96,6 +96,17 @@ def test_http_get_sends_the_github_token_to_github_only(monkeypatch, url, sent):
     assert ("Authorization" in seen) is sent
 
 
+@pytest.mark.parametrize("ref,ok", [("abc1234", True), ("ABC1234", True), ("deadbee", False), ("main", True)])
+def test_a_sha_shaped_ref_must_resolve_to_that_commit(monkeypatch, tmp_path, ref, ok):
+    monkeypatch.setattr(installer, "_fetch_archive", lambda url, r, dest: "abc1234" + "0" * 33)
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "archive")
+    if ok:
+        installer._fetch("https://github.com/o/r", ref, tmp_path)
+    else:
+        with pytest.raises(installer.InstallError, match="full 40-character SHA"):
+            installer._fetch("https://github.com/o/r", ref, tmp_path)
+
+
 @pytest.mark.parametrize("ref", ["main", "release/1.2", "v1.0.0", "a" * 40, "feature_x"])
 def test_validate_ref_accepts_real_refs(ref):
     installer._validate_ref(ref)  # no raise
