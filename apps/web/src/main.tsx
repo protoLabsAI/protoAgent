@@ -29,6 +29,11 @@ import { installStorageEviction } from "./lib/storageEviction";
 import { initTranscriptBackend, transcriptStoreIfOpen } from "./chat/chat-store";
 import { initPaletteThreads } from "./app/paletteChatStore";
 import { setSyncCursorStore } from "./lib/syncCursor";
+import { markBoot } from "./lib/bootTiming";
+
+// First executable line of the bundle (bd-aawcj): the clock for "how long did this switch take
+// to paint and become interactive". App marks first-render + ready and logs the segments.
+markBoot("script-start");
 
 // Back the live-sync change-feed cursor (ADR 0130 D3) with the shared transcript IndexedDB
 // connection, so an EventSource resume survives a closed tab. A live accessor: it returns

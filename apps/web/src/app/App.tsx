@@ -29,6 +29,8 @@ import { DecisionsWidget } from "../decisions/DecisionsWidget";
 import { useDecisions } from "../decisions/useDecisions";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { bootGatePhase, bootGateReady, BOOT_STUCK_MS, BOOT_FAILED_MS } from "./bootGate";
+import { markBoot, logBootTimings } from "../lib/bootTiming";
+import { cacheAgentName } from "../lib/agentNameCache";
 import { dedupeRailById } from "./rail";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
@@ -191,6 +193,9 @@ function useLocalStorageState(key: string, fallback: string) {
  * until it is reachable (or the operator explicitly chooses Continue anyway).
  */
 export function App() {
+  // First React render of the console (bd-aawcj) — the point where the static boot splash in
+  // index.html hands off to the live tree. Idempotent, so re-renders don't move the mark.
+  markBoot("first-render");
   const runtimeQ = useQuery({
     ...runtimeStatusQuery(),
     // Keep the probe alive across a slow cold start: the retry budget (bd-psfx) plus the
@@ -255,6 +260,22 @@ export function App() {
     const t = window.setTimeout(() => setBootTimedOut(true), BOOT_FAILED_MS);
     return () => window.clearTimeout(t);
   }, [bootReady]);
+
+  // Boot finished (the real console mounts): close out the boot timing and log the segment
+  // durations once at debug level, so a slow switch in the desktop webview can be measured.
+  useEffect(() => {
+    if (!bootReady) return;
+    markBoot("ready");
+    logBootTimings();
+  }, [bootReady]);
+
+  // Seed the boot splash's name cache (bd-aawcj) for THIS slug once the focused agent's identity
+  // resolves — so a direct open / reload / bookmark of this console names the agent on next load,
+  // even without going through the fleet switcher. Keyed by slug, refreshed after a rename.
+  useEffect(() => {
+    const name = runtime?.identity?.name;
+    if (name) cacheAgentName(focusedSlug, brandName(name));
+  }, [runtime, focusedSlug]);
 
   const gatePhase = bootGatePhase({ memberAuthFailed, agentDown, unreachable: agentUnreachable, bootFailed, bootStuck });
 

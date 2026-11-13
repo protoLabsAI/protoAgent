@@ -126,6 +126,9 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "editor", area: "local", pattern: /^protoagent\.editor$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "openFilesIn", area: "local", pattern: /^protoagent\.openFilesIn$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "projectPath", area: "local", pattern: /^protoagent\.projectPath$/, category: "prefs", slug: noSlug, evictable: false },
+  // The focused agent's display name per slug (lib/agentNameCache.ts) — the boot splash in
+  // index.html reads it before the bundle runs so a switch can name the agent it's opening.
+  { id: "agentName", area: "local", pattern: new RegExp(`^protoagent\\.agentName(?::${SLUG})?$`), category: "prefs", slug: (m) => hostOr(m[1]), evictable: false },
   // Settings → Storage's "Last automatic clear" (docs/design/settings-storage.md §3.5): when the
   // console last cleared old chats on its own, how many and from where. Written only by the
   // automatic paths (lib/storageEviction.ts), never by a clear the operator asks for.

@@ -26,16 +26,160 @@
          the proper media type; in the Tauri webview this link 404s inertly. -->
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+    <!-- Geist web fonts, loaded WITHOUT blocking first paint (bd-aawcj). The stylesheet
+         used to be a parser-inserted <link rel="stylesheet"> — render-blocking, so a switch
+         (a full page load, FleetSwitcher doSwitch → window.location.href) held on a dark
+         screen until Google answered. Now it is only preconnected + preloaded here; the boot
+         splash script below applies it with a script-inserted <link> (not render-blocking),
+         and `display=swap` falls back to the system stack until Geist arrives. The <noscript>
+         keeps fonts for the (JS-off) degraded case. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
+      rel="preload"
+      as="style"
       href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
     <title>protoAgent</title>
+    <!-- Boot splash (bd-aawcj): a static copy of App's BootGate painted on the FIRST frame of a
+         load, so an agent switch shows the brand + spinner instead of a dark #root while the 2 MB
+         bundle is read. Inline CSS only — the --pl-* token stylesheet ships inside the bundle, so
+         the literal fallbacks (matched to @protolabsai/design dark tokens) are what actually paint;
+         same `var(--pl-token, #literal)` convention as app-crash.css. React's createRoot replaces
+         the markup below on its first render; the layout/colours/spinner match so there is no jump. -->
+    <style>
+      .pa-boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 1900;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--pl-space-5, 20px);
+        background: var(--pl-color-bg, #0a0a0c);
+        color: var(--pl-color-fg, #ededed);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .pa-boot-splash__inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--pl-space-4, 16px);
+        max-width: 360px;
+        text-align: center;
+      }
+      .pa-boot-splash__mark {
+        display: inline-flex;
+        opacity: 0.9;
+        filter: drop-shadow(0 0 10px color-mix(in srgb, var(--pl-color-accent, #9b87f2) 25%, transparent));
+      }
+      .pa-boot-splash__spinner {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 2.5px solid var(--pl-color-border, rgba(255, 255, 255, 0.08));
+        border-top-color: var(--pl-color-accent, #9b87f2);
+        animation: pa-boot-spin 0.8s linear infinite;
+      }
+      .pa-boot-splash__title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: var(--pl-color-fg, #ededed);
+      }
+      @keyframes pa-boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pa-boot-splash__spinner {
+          animation-duration: 1.6s;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="pa-boot-splash" role="status" aria-live="polite">
+        <div class="pa-boot-splash__inner">
+          <div class="pa-boot-splash__mark" aria-hidden="true">
+            <!-- protoLabs outline mark (public/protolabs-icon-outline.svg), inlined so the
+                 splash needs no network. The stroke mirrors --pl-color-accent (dark #9b87f2). -->
+            <svg width="56" height="56" viewBox="0 0 256 256" aria-hidden="true" focusable="false">
+              <g
+                transform="translate(224, 32) scale(-8, 8)"
+                fill="none"
+                stroke="#9b87f2"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M12 8V4H8" />
+                <rect width="16" height="12" x="4" y="8" rx="2" />
+                <path d="M2 14h2" />
+                <path d="M20 14h2" />
+                <path d="M15 13v2" />
+                <path d="M9 13v2" />
+              </g>
+            </svg>
+          </div>
+          <div class="pa-boot-splash__spinner" aria-hidden="true"></div>
+          <div class="pa-boot-splash__title" id="pa-boot-title">Starting protoAgent…</div>
+        </div>
+      </div>
+    </div>
+    <script>
+      // Boot splash script (bd-aawcj). Runs during parse, before the app bundle — so the splash
+      // already names the agent by the time the heavy JS starts. This is the ONE inline script the
+      // console CSP allows; its sha256 is hashed into script-src from the built index.html by
+      // apps/web/scripts/csp.mjs. Keep it dependency-free and resilient (every access try/caught).
+      //
+      // The name is read from localStorage, keyed exactly as lib/agentNameCache.ts writes it
+      // (`protoagent.agentName:<slug>`) — the fleet switcher seeds it before navigating, and the
+      // boot gate refreshes it. Pre-bundle, this is the one place that must read storage raw
+      // (ADR 0114's lib/storage seam isn't loaded yet); it never writes.
+      (function () {
+        try {
+          var el = document.getElementById("pa-boot-title");
+          if (el) {
+            var m = location.pathname.match(/\/agent\/([^/?#]+)/);
+            if (m) {
+              var slug = decodeURIComponent(m[1]);
+              var name = "";
+              try {
+                name = localStorage.getItem("protoagent.agentName:" + slug) || "";
+              } catch (e) {
+                /* storage blocked — fall back to the generic agent copy */
+              }
+              el.textContent = name ? "Opening " + name + "…" : "Opening agent…";
+            } else {
+              el.textContent = "Starting protoAgent…";
+            }
+          }
+        } catch (e) {
+          /* leave the static default title */
+        }
+        // Apply Geist asynchronously: a script-inserted stylesheet is not render-blocking, so
+        // first paint keeps the system-stack fallback above until the font loads (display=swap).
+        try {
+          var fl = document.createElement("link");
+          fl.rel = "stylesheet";
+          fl.href =
+            "https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap";
+          document.head.appendChild(fl);
+        } catch (e) {
+          /* no document.head yet / blocked — the <noscript> link still covers JS-off */
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

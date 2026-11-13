@@ -321,6 +321,9 @@ describe("key registry — exact patterns, never prefixes", () => {
     expect(cat("protoagent.tenant.uid")).toBe("tenant");
     expect(cat("pl-theme")).toBe("theme");
     expect(cat("protoagent.keybindings")).toBe("prefs");
+    expect(cat("protoagent.agentName:gizmo")).toBe("prefs");
+    expect(slug("protoagent.agentName:gizmo")).toBe("gizmo");
+    expect(slug("protoagent.agentName")).toBe("host");
     expect(cat("protoagent.chat.draft:host:s1", "session")).toBe("ephemeral");
     expect(cat("protoagent.events.since:x", "session")).toBe("ephemeral");
     // Area matters: a session key isn't a local one.

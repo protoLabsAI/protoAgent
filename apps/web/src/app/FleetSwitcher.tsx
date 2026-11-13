@@ -9,6 +9,7 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 
 import { agentHref, api, currentSlug } from "../lib/api";
+import { cacheAgentName } from "../lib/agentNameCache";
 import { queryKeys } from "../lib/queries";
 import { readKey, writeKey } from "../lib/storage";
 import type { FleetAgent, FleetStatus } from "../lib/types";
@@ -193,6 +194,9 @@ export function FleetSwitcher({
     (a: FleetAgent) => {
       const target = slugOf(a);
       if (target === slug) return; // already here
+      // A switch is a full page load, so seed the boot splash's name cache (bd-aawcj) for the
+      // target first — then its next frame can show "Opening <name>…" before any JS runs.
+      cacheAgentName(target, nameOf(a));
       window.location.href = agentHref(target);
     },
     [slug],
