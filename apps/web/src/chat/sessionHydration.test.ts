@@ -28,6 +28,12 @@ import {
 import { MAX_SESSIONS } from "./chat-store";
 import { MAX_THUMB_LENGTH } from "./imageThumbnails";
 import { applyText, applyToolEvent } from "./turnReducers";
+import {
+  labelForOrigin,
+  noteTurnStarted,
+  resetServerTurns,
+  serverTurnLabel,
+} from "./server-turn-store";
 import { foldPlan, textRuns } from "./parts";
 import { normaliseMediaText, utf16Fnv1a } from "../lib/api/a2aStream";
 import { applyCanonicalTurnText } from "./turnText";
@@ -1974,6 +1980,52 @@ describe("a server turn that finished while the console was away (bd-wk4ti)", ()
     const bubbles = (update.messages ?? []).filter((message: ChatMessage) => message.taskId === "task-b");
     expect(bubbles).toHaveLength(1);
     expect(bubbles[0]).toMatchObject({ status: "done", content: "two" });
+  });
+});
+
+describe("the server-authoritative idle render does not clobber a turn that armed mid-hydration (review round 1)", () => {
+  // hydrateDurableChatSessions reads the index at the START of a pass but applies its idle
+  // snapshot at the END, after the per-session turn fetches await. A `turn.started` ServerTurnWatch
+  // handles DURING that window arms the indicator and composer lock; the snapshot, read before the
+  // turn existed, must not wipe them (bd-0ad5v) — the captured started-epoch is what tells them apart.
+  afterEach(() => resetServerTurns());
+
+  it("keeps the indicator and composer-lock control armed by a turn.started during the fetch window", async () => {
+    resetServerTurns();
+    const sessionId = "chat-race";
+    const idle: DurableChatSession = {
+      session_id: sessionId,
+      last_updated: "2026-08-20T12:00:00Z",
+      turn_count: 1,
+      status: "idle",
+      live_task_id: null,
+    };
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [idle] });
+    vi.spyOn(api, "chatSessionTurns").mockImplementation(async () => {
+      // The turn starts on the server while we are fetching its turns; ServerTurnWatch arms it.
+      noteTurnStarted(sessionId, labelForOrigin("scheduler"));
+      chatStore.setServerTurnControl({
+        sessionId,
+        taskId: "task-live",
+        origin: "scheduler",
+        trigger: "scheduler",
+        controllable: true,
+        operatorControllable: true,
+      });
+      return {
+        turns: [turn({ task_id: "task-live", state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } })],
+        live_task_id: "task-live",
+      };
+    });
+
+    await hydrateDurableChatSessions();
+
+    // The idle snapshot predates the live turn, so the render leaves both producers in place —
+    // no spinner is lost, and the next send still routes to the live turn as a steer.
+    expect(serverTurnLabel(sessionId)).not.toBeNull();
+    expect(chatStore.getSnapshot().serverTurnControls[sessionId]).toBeDefined();
+
+    chatStore.deleteSession(sessionId);
   });
 });
 

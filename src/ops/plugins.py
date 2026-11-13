@@ -518,6 +518,9 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
             "description": bundle.get("description"),
             "verified_against": bundle.get("verified_against"),
             "enabled": list(bundle.get("enabled") or []),
+            # Plugins the bundle's config switches OFF (``config.plugins.disabled``), so the setup
+            # finish step can say truthfully whether the new agent will be able to run code.
+            "disabled": _bundle_disabled(bundle),
             "members": members,
             # Catalog-shaped MCP servers ({template, inputs: [{key, label, …}]}) and the
             # secrets ({key, label, placeholder, secret, required}) this bundle will ask
@@ -538,6 +541,12 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
 
     _peek_cache[(url, ref or "")] = (now, result)
     return result
+
+
+def _bundle_disabled(bundle: dict) -> list[str]:
+    plugins = (bundle.get("config") or {}).get("plugins") if isinstance(bundle.get("config"), dict) else None
+    disabled = plugins.get("disabled") if isinstance(plugins, dict) else None
+    return [str(x) for x in disabled] if isinstance(disabled, list) else []
 
 
 async def peek_bundle(url: str, ref: str | None = None) -> dict:

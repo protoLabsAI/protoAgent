@@ -576,12 +576,19 @@ def test_archetype_preview_peeks_bundle(client, monkeypatch):
 
     async def _fake_peek(url, ref=None):
         assert url == "https://github.com/x/stack"
-        return {"kind": "bundle", "id": "stack", "members": [{"id": "m1", "builtin": False}]}
+        return {"kind": "bundle", "id": "stack", "members": [{"id": "m1", "builtin": False}], "disabled": ["cowork"]}
 
     monkeypatch.setattr(plugin_ops, "peek_bundle", _fake_peek)
+    import graph.config_io as config_io
+
+    host = {}
+    monkeypatch.setattr(config_io, "load_yaml_doc", lambda _path: host)
     body = client.get("/api/archetypes/stacked/preview").json()
     assert body["bundle"]["id"] == "stack"
     assert body["bundle"]["members"][0]["id"] == "m1"
+    assert body["bundle"]["disabled"] == ["cowork"]  # applied: the host sets no plugins.disabled
+    host["plugins"] = {"disabled": []}  # the host's own list wins over the bundle's default
+    assert client.get("/api/archetypes/stacked/preview").json()["bundle"]["disabled"] == []
 
 
 def test_archetype_preview_fetch_failure_is_502(client, monkeypatch):

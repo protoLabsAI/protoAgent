@@ -16,6 +16,7 @@ import {
   serverResultPreview,
   serverTurnLabel,
   serverTurnSessionsKey,
+  serverTurnStartedEpoch,
   WAIT_RESUME_ORIGIN,
 } from "./server-turn-store";
 
@@ -107,6 +108,19 @@ describe("server-turn store", () => {
     clearServerTurnsFor("s1");
     expect(serverTurnLabel("s1")).toBeNull(); // indicator gone…
     expect(originForSession("s1")).toBe("scheduler"); // …origin kept, like turn.finished leaves it
+  });
+
+  it("serverTurnStartedEpoch advances on every turn.started and never on finish (the idle-render freshness stamp)", () => {
+    // Captured when the index is read and re-checked after the hydration awaits (ADR 0130 D5):
+    // a start DURING that window bumps it past the captured value, so a stale idle snapshot
+    // skips clearing a live turn. A finish is not "newer", so it must not move the stamp.
+    expect(serverTurnStartedEpoch("s1")).toBe(0);
+    noteTurnStarted("s1", labelForOrigin("scheduler"));
+    noteTurnStarted("s1", labelForOrigin("scheduler")); // overlapping start advances it again
+    expect(serverTurnStartedEpoch("s1")).toBe(2);
+    noteTurnFinished("s1");
+    expect(serverTurnStartedEpoch("s1")).toBe(2); // a finish does NOT move it
+    expect(serverTurnStartedEpoch("s2")).toBe(0); // scoped to its own session
   });
 });
 

@@ -2366,6 +2366,8 @@ export type ArchetypePreview = {
     description?: string;
     verified_against?: string;
     enabled?: string[];
+    // Plugins the bundle's config switches off (`config.plugins.disabled`). Absent on older hosts.
+    disabled?: string[];
     members: ArchetypePreviewMember[];
     // What the bundle will ask the operator to fill (#2041): catalog-shaped MCP servers
     // (each with `${input}` placeholders + their `inputs` spec) and the standalone secrets

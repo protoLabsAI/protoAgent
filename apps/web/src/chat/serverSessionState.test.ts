@@ -9,7 +9,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DurableChatSession } from "../lib/api";
 import type { ServerTurnControlState } from "./chat-store";
 import { chatStore } from "./chat-store";
-import { labelForOrigin, noteTurnStarted, resetServerTurns, serverTurnLabel } from "./server-turn-store";
+import {
+  labelForOrigin,
+  noteTurnStarted,
+  resetServerTurns,
+  serverTurnLabel,
+  serverTurnStartedEpoch,
+} from "./server-turn-store";
 import { applyServerSessionState } from "./sessionHydration";
 import { beginLocalTurn } from "./sessionLiveness";
 
@@ -94,5 +100,46 @@ describe("applyServerSessionState (ADR 0130 D1/D5)", () => {
 
     expect(serverTurnLabel(session.id)).not.toBeNull();
     expect(snap().serverTurnControls[session.id]).toBeDefined();
+  });
+
+  // The freshness guard (review round 1). hydration reads the index at the START of a pass but
+  // applies the idle snapshot at the END, after per-session fetches await. A `turn.started`
+  // arming a session DURING that window is NEWER than the snapshot and must survive it; the
+  // started-epoch captured at index-read time, compared at apply time, tells the two apart.
+  describe("freshness guard against a stale idle snapshot (bd-0ad5v / review round 1)", () => {
+    it("does NOT clear a turn that armed after the index snapshot was read", () => {
+      const session = chatStore.createSession();
+      // Index read with this session idle — capture its started-epoch at that instant.
+      const epochAtRead = serverTurnStartedEpoch(session.id);
+      // A `turn.started` arms the session DURING the per-session fetch window (ServerTurnWatch).
+      armServerTurn(session.id, "task-live");
+
+      // The now-stale idle snapshot lands; the captured epoch is older than the live turn's.
+      applyServerSessionState(
+        indexSummary(session.id, { status: "idle", live_task_id: null }),
+        epochAtRead,
+      );
+
+      expect(serverTurnLabel(session.id)).not.toBeNull();
+      expect(snap().serverTurnControls[session.id]).toBeDefined();
+      expect(snap().sessionStatusMap[session.id]).toBe("streaming");
+    });
+
+    it("clears a lost turn whose start the snapshot already reflected (epoch unchanged)", () => {
+      const session = chatStore.createSession();
+      // The turn armed BEFORE the index was read — a server restart then lost it (bd-0ad5v),
+      // so the fresh idle snapshot already reflects its absence.
+      armServerTurn(session.id, "task-ghost");
+      const epochAtRead = serverTurnStartedEpoch(session.id); // captured after that start
+
+      applyServerSessionState(
+        indexSummary(session.id, { status: "idle", live_task_id: null }),
+        epochAtRead,
+      );
+
+      expect(serverTurnLabel(session.id)).toBeNull();
+      expect(snap().serverTurnControls[session.id]).toBeUndefined();
+      expect(snap().sessionStatusMap[session.id]).toBe("idle");
+    });
   });
 });
