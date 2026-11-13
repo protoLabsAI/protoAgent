@@ -76,7 +76,7 @@ def resolve(
             predecessor = db.execute(
                 "SELECT s.context_id, s.root_job_id, s.root_created_at FROM job_sessions s JOIN occurrences o "
                 "ON s.job_id = o.job_id AND s.created_at = o.created_at "
-                "WHERE s.job_id = ? AND o.state IN ('claimed', 'unknown') AND o.task_id IS NOT NULL "
+                "WHERE s.job_id = ? AND o.state IN ('claimed', 'unknown', 'running') AND o.task_id IS NOT NULL "
                 "AND s.hold_reason IS NULL LIMIT 1", (job["id"],)
             ).fetchone()
             if predecessor is None:
@@ -94,7 +94,7 @@ def resolve(
             parents = db.execute(
                 "SELECT o.message_id FROM occurrences o JOIN job_sessions s "
                 "ON o.job_id = s.job_id AND o.created_at = s.created_at "
-                "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown')",
+                "WHERE s.context_id = ? AND o.state IN ('claimed', 'unknown', 'running')",
                 (context,),
             ).fetchall()
             if len(parents) == 1:
@@ -141,8 +141,9 @@ def _held_predecessor(db: sqlite3.Connection, job_id: str, context_held):
 def pinned_contexts(db: sqlite3.Connection) -> set[str]:
     """``job:`` execution sessions whose durable work in THIS database is unresolved
     (ADR 0129 retention pins): a live scheduling row — a recurring job between fires,
-    a pending one-shot, a wait/watch continuation — or a claimed/unknown occurrence
-    (an accepted or unknown-acceptance send that has not settled). A restart-disposed
+    a pending one-shot, a wait/watch continuation — or a claimed/unknown/running
+    occurrence (an accepted, unknown-acceptance or still-running send that has not
+    settled). A restart-disposed
     occurrence (D7 ``interrupted`` / ``interrupted_needs_operator``) stays pinned too:
     the operator's Resume (S7) replays from exactly that checkpoint. While pinned, the
     session's checkpoint thread must survive normal retention; pins outside this
@@ -156,7 +157,7 @@ def pinned_contexts(db: sqlite3.Connection) -> set[str]:
     for (context,) in db.execute(
         "SELECT DISTINCT s.context_id FROM job_sessions s JOIN occurrences o "
         "ON s.job_id = o.job_id AND s.created_at = o.created_at "
-        "WHERE o.state IN ('claimed', 'unknown', 'interrupted', 'interrupted_needs_operator') "
+        "WHERE o.state IN ('claimed', 'unknown', 'running', 'interrupted', 'interrupted_needs_operator') "
         "AND s.context_id LIKE 'job:%'"
     ).fetchall():
         pins.add(context)
