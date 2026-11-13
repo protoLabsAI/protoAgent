@@ -15,6 +15,7 @@ import {
   SESSION_INDEX_LIMIT,
   SESSION_PARKED_LIMIT,
   SESSION_TURN_LIMIT,
+  hasStaleStreamingTurn,
   hydrateDurableChatSessions,
   isBehindServer,
   localTurnIds,
@@ -1833,12 +1834,17 @@ describe("a cached chat behind the server reconciles on reload (another client's
 
   it("leaves a copy whose own turn is still live to its reattach (retried next boot)", () => {
     const streaming: ChatMessage[] = [liveFirst[0], { ...liveFirst[1], status: "streaming" }];
-    expect(reconcileServerTurns(streaming, [first, second], null)).toBe("retry");
+    // The server reports task-a as its LIVE turn: the local stream / reattach owns the bubble.
+    const running = turn({ ...first, state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } });
+    expect(reconcileServerTurns(streaming, [running, second], "task-a")).toBe("retry");
+    // An older server that cannot say what is live gets the same caution, even when its
+    // rows read terminal — only an explicit marking may settle a streaming bubble.
+    expect(reconcileServerTurns(streaming, [first, second], undefined)).toBe("retry");
   });
 
   it("boot re-reads a behind session and commits the reconcile with the server's count", async () => {
     const local = cached(liveFirst);
-    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [local] } as never);
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [local], sessionStatusMap: {} } as never);
     vi.spyOn(chatStore, "captureHydrationEligibility").mockImplementation((id, opts) =>
       ({ sessionId: id, localSession: local, behind: opts?.behind }),
     );
@@ -1877,6 +1883,97 @@ describe("a cached chat behind the server reconciles on reload (another client's
     expect(after?.messages.map((message) => message.content)).toEqual(["first", "one", "second", "two"]);
     expect(after?.serverTurnCount).toBe(2);
     chatStore.deleteSession(session.id);
+  });
+});
+
+describe("a server turn that finished while the console was away (bd-wk4ti)", () => {
+  // The first turn as this browser rendered it, and the live preview ServerTurnWatch folded
+  // for a server-started second turn: streaming, with the turn's task id and the
+  // deterministic `server-turn-<task>` id. The bus events that settle the preview were
+  // missed, so it would spin forever while the turn's durable copy landed BESIDE it.
+  const liveFirst: ChatMessage[] = [
+    { id: "u-local", role: "user", content: "first", status: "done" },
+    { id: "a-local", role: "assistant", content: "one", status: "done", taskId: "task-a", parts: [{ kind: "text", text: "one" }] },
+  ];
+  const first = turn({ task_id: "task-a", history: [{ role: "ROLE_USER", parts: [{ text: "first" }] }], text: "one", artifacts: [{ parts: [{ text: "one" }] }] });
+  // A server-fired turn: its opening user frame carries the origin, so no prompt bubble.
+  const second = turn({
+    task_id: "task-b",
+    history: [{ role: "ROLE_USER", parts: [{ text: "[background report]" }], metadata: { origin: "background-resume" } }],
+    text: "two",
+    artifacts: [{ parts: [{ text: "two" }] }],
+  });
+  const preview = (over: Partial<ChatMessage> = {}): ChatMessage => ({
+    id: "server-turn-task-b",
+    role: "assistant",
+    content: "",
+    parts: [],
+    toolCalls: [],
+    status: "streaming",
+    taskId: "task-b",
+    ...over,
+  });
+  const cached = (messages: ChatMessage[]): ChatSession =>
+    ({ id: "chat-x", title: "first", messages, createdAt: 1, updatedAt: 1 }) as ChatSession;
+
+  it("reconciles a streaming placeholder plus its terminal server turn to ONE finalized bubble", () => {
+    const next = reconcileServerTurns([...liveFirst, preview()], [first, second], null);
+    if (!next || next === "retry") throw new Error("expected a reconciled transcript");
+    const bubbles = next.filter((message) => message.role === "assistant" && message.taskId === "task-b");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toMatchObject({ status: "done", content: "two" });
+    expect(next.some((message) => message.status === "streaming")).toBe(false);
+    expect(next.slice(0, 2)).toEqual(liveFirst); // the first turn keeps its local render
+  });
+
+  it("finalizes only the stranded live half when the turn also has locally rendered bubbles", () => {
+    const frozen: ChatMessage = { id: "server-turn-task-b:before:s1", role: "assistant", content: "so far", status: "done", taskId: "task-b", splitOf: "server-turn-task-b" };
+    const next = reconcileServerTurns([...liveFirst, frozen, preview({ content: "and then" })], [first, second], null);
+    if (!next || next === "retry") throw new Error("expected a reconciled transcript");
+    expect(next.filter((message) => message.taskId === "task-b").map((message) => [message.id, message.content, message.status])).toEqual([
+      ["server-turn-task-b:before:s1", "so far", "done"],
+      ["server-turn-task-b", "and then", "done"],
+    ]);
+  });
+
+  it("drops an empty preview that never learned its task id once the server reports nothing live", () => {
+    const orphan: ChatMessage = { id: "server-turn-chat-x", role: "assistant", content: "", parts: [], toolCalls: [], status: "streaming" };
+    const next = reconcileServerTurns([...liveFirst, orphan], [first, second], null);
+    if (!next || next === "retry") throw new Error("expected a reconciled transcript");
+    expect(next.some((message) => message.id === "server-turn-chat-x")).toBe(false);
+    expect(next.some((message) => message.status === "streaming")).toBe(false);
+    expect(next.filter((message) => message.role === "assistant").map((message) => message.content)).toEqual(["one", "two"]);
+    // …but not while the server still runs a turn here: the preview may be its live view.
+    expect(reconcileServerTurns([...liveFirst, orphan], [first], "task-b")).toBeNull();
+  });
+
+  it("flags the index's newest turn still shown streaming, and nothing else", () => {
+    const newest = (id?: string): DurableChatSession => ({ ...summary("chat-x"), turn_count: 2, ...(id ? { last_task_id: id } : {}) });
+    expect(hasStaleStreamingTurn(cached([...liveFirst, preview()]), newest("task-b"))).toBe(true);
+    expect(hasStaleStreamingTurn(cached([...liveFirst, preview({ status: "done" })]), newest("task-b"))).toBe(false);
+    // Parked on the operator is not stranded; an index without a newest id cannot vouch.
+    expect(hasStaleStreamingTurn(cached([...liveFirst, preview({ paused: true })]), newest("task-b"))).toBe(false);
+    expect(hasStaleStreamingTurn(cached([...liveFirst, preview()]), newest())).toBe(false);
+  });
+
+  it("boot re-reads the session (isBehindServer says in step) and finalizes the placeholder", async () => {
+    const local = cached([...liveFirst, preview()]);
+    expect(isBehindServer(local, { ...summary("chat-x"), turn_count: 2, last_task_id: "task-b" })).toBe(false);
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [local], sessionStatusMap: {} } as never);
+    vi.spyOn(chatStore, "captureHydrationEligibility").mockImplementation((id, opts) =>
+      ({ sessionId: id, localSession: local, behind: opts?.behind }),
+    );
+    const reconcile = vi.spyOn(chatStore, "reconcileSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [{ ...summary("chat-x"), turn_count: 2, last_task_id: "task-b" }] });
+    vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [first, second], live_task_id: null });
+
+    await hydrateDurableChatSessions();
+
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    const [update] = reconcile.mock.calls[0][0];
+    const bubbles = (update.messages ?? []).filter((message: ChatMessage) => message.taskId === "task-b");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toMatchObject({ status: "done", content: "two" });
   });
 });
 
