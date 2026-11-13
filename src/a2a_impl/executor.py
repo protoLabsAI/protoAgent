@@ -386,6 +386,25 @@ def _thread_holder(context_id: str, task_id: str) -> Callable[[], str | None]:
     return probe
 
 
+def _coerce_inbox_id(value: object) -> int | None:
+    """``metadata.inbox_id`` arrives untyped (an A2A caller can send anything), and the
+    protobuf Struct layer surfaces every JSON number as a float (``MessageToDict``), so
+    the id the server itself sends as an int lands here as ``5.0``. An int, integral
+    float or numeric string passes; anything else becomes None rather than raising."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 @dataclass
 class TurnOutcome:
     """Everything a host needs at the end of an A2A turn (ADR 0003 / 0006).
@@ -428,6 +447,9 @@ class TurnOutcome:
     # The triggering input text (the scheduled prompt / inbound message / webhook body),
     # truncated — so the Activity feed can show the response as an explicit reply to it (#1375).
     stimulus: str = ""
+    # The inbox item this turn drains, when one did (``metadata.inbox_id``) — so the
+    # Activity feed can join a queued item to its result (docs/design/feed.md §3).
+    inbox_id: int | None = None
     # The Langfuse trace this turn ran under, so a telemetry row can deep-link to
     # the trace tree. Captured DURING the stream, not after — see ``execute``.
     trace_id: str = ""
@@ -628,8 +650,9 @@ def _principal(context: Any) -> str:
     return hashlib.sha256(cred.encode()).hexdigest()
 
 
-#: The request-metadata keys that point a server-fired turn at the job it settles.
-_SERVER_FIRED_KEYS = ("trigger", "scheduler_job_id", "inbox_source", "background_job_id")
+#: The request-metadata keys that point a server-fired turn at the job it settles
+#: (or, for ``inbox_id``, the inbox item its feed entry joins — docs/design/feed.md §3).
+_SERVER_FIRED_KEYS = ("trigger", "scheduler_job_id", "inbox_source", "background_job_id", "inbox_id")
 #: Context-id prefixes the server keeps for its own job sessions (``background:<job>``,
 #: ADR 0050; ``job:<…>``, ADR 0129).
 _SERVER_CONTEXT_PREFIXES = ("background:", "job:")
@@ -988,6 +1011,9 @@ class ProtoAgentExecutor(AgentExecutor):
             _md["a2a.task_id"] = context.task_id
         _priority = str(_md.get("priority", "") or "")
         _trigger = str(_md.get("trigger") or _md.get("scheduler_job_id") or _md.get("inbox_source") or "")
+        # The inbox item this turn drains (docs/design/feed.md §3), joined to the
+        # Activity feed entry so the Feed can link a queued item to its result.
+        _inbox_id = _coerce_inbox_id(_md.get("inbox_id"))
         # The stimulus = this turn's input text, kept as a truncated preview so the Activity
         # feed can show the response as an explicit reply to what triggered it (#1375).
         _stimulus = (text or "").strip()
@@ -1280,6 +1306,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 trigger=_trigger,
                 priority=_priority,
                 stimulus=_stimulus,
+                inbox_id=_inbox_id,
                 trace_id=trace_id[0],
                 error=error,
                 requested_model=str(_md.get("model") or "").strip(),

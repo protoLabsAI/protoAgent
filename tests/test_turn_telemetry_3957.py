@@ -199,6 +199,17 @@ async def test_the_executor_carries_the_requested_model_onto_the_outcome(env):
     assert outcome.requested_model == _OVERRIDE
 
 
+@pytest.mark.asyncio
+async def test_the_executor_carries_the_inbox_id_onto_the_outcome(env):
+    # docs/design/feed.md §3: ``metadata.inbox_id`` rides the outcome so the Activity
+    # feed entry can be joined to the inbox item that caused the turn.
+    env.install([])
+
+    (outcome,) = await _execute("/lifecycle", {"inbox_id": 5})
+
+    assert outcome.inbox_id == 5
+
+
 # ── 2. a slash subagent / workflow bills its delegated model calls ──────────────────
 
 
