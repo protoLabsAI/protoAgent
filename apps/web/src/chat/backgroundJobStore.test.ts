@@ -8,6 +8,7 @@ import type { BackgroundJobDTO } from "../lib/types";
 // not put the job back to "running".
 
 const listeners: Record<string, (d: Record<string, unknown>) => void> = {};
+let connListener: ((c: boolean) => void) | null = null;
 let backgroundCall: () => Promise<{ enabled: boolean; jobs: unknown[] }>;
 
 vi.mock("../lib/api", () => ({
@@ -20,6 +21,13 @@ vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (d: Record<string, unknown>) => void) => {
     listeners[topic] = fn;
     return () => delete listeners[topic];
+  },
+  onConnectionChange: (fn: (c: boolean) => void) => {
+    connListener = fn;
+    fn(true); // subscribe-time connected callback — the store skips it so startup is one request
+    return () => {
+      connListener = null;
+    };
   },
 }));
 
@@ -92,8 +100,13 @@ describe("a hydration MERGES into what the bus already said (the progress-card f
     for (const k of Object.keys(listeners)) delete listeners[k];
   });
 
-  it("keeps a running job's live progress across a resync re-hydration", async () => {
-    // A resync_required re-hydrates (ADR 0130 D3). The list has no progress; it must not erase it.
+  // Re-hydration is driven two ways — an offline→online reconnect edge (a fresh stream with no
+  // resume cursor replays nothing) and a `resync_required` cursor-gap (ADR 0130 D3). Both must
+  // MERGE: the list has no progress; it must not erase a running job's live progress card.
+  it.each([
+    ["an offline→online reconnect edge", () => { connListener?.(false); connListener?.(true); }],
+    ["a resync_required cursor gap", () => listeners["resync_required"]({})],
+  ])("keeps a running job's live progress across re-hydration from %s", async (_label, rehydrate) => {
     backgroundCall = () => Promise.resolve({ enabled: true, jobs: [] });
     subscribeForTest(() => {});
     listeners["background.started"]({ job_id: "bg-1", origin_session: "s1", subagent_type: "delegate" });
@@ -101,14 +114,14 @@ describe("a hydration MERGES into what the bus already said (the progress-card f
     await new Promise((r) => setTimeout(r, 0));
     expect(snapshotForTest()["bg-1"].progress?.recentTools).toHaveLength(1);
 
-    // A cursor gap past retention forces a full re-hydrate from a list that has the job
-    // running and no progress — the merge must keep the live progress card alive.
+    // The re-hydrate reads a list that has the job running and no progress — the merge must
+    // keep the live progress card alive, never flicker it off even for one emit.
     let seen = 0;
     subscribeForTest(() => {
       if (!snapshotForTest()["bg-1"]?.progress) seen++;
     });
     backgroundCall = () => Promise.resolve({ enabled: true, jobs: [row()] });
-    listeners["resync_required"]({});
+    rehydrate();
     await new Promise((r) => setTimeout(r, 0));
     expect(snapshotForTest()["bg-1"].progress?.recentTools.map((t) => t.name)).toEqual(["board_create_feature"]);
     expect(snapshotForTest()["bg-1"].status).toBe("running");

@@ -8,13 +8,21 @@ import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const bus = vi.hoisted(() => ({ listeners: new Map<string, Set<(d: Record<string, unknown>) => void>>() }));
+const bus = vi.hoisted(() => ({
+  listeners: new Map<string, Set<(d: Record<string, unknown>) => void>>(),
+  conn: new Set<(connected: boolean) => void>(),
+}));
 vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (d: Record<string, unknown>) => void) => {
     const set = bus.listeners.get(topic) ?? new Set();
     set.add(fn);
     bus.listeners.set(topic, set);
     return () => set.delete(fn);
+  },
+  onConnectionChange: (fn: (connected: boolean) => void) => {
+    bus.conn.add(fn);
+    fn(true); // subscribe-time connected callback — no offline→online edge, so no refetch
+    return () => bus.conn.delete(fn);
   },
 }));
 vi.mock("../lib/notify", () => ({ notifyIfHidden: vi.fn() }));
@@ -42,6 +50,7 @@ let roots: Root[] = [];
 
 beforeEach(() => {
   bus.listeners.clear();
+  bus.conn.clear();
   all = [row("a", "pending")];
   // The pending endpoint the rail reads vs. the full list Work reads, both off one source.
   vi.spyOn(decisionsApi, "listDecisions").mockImplementation(async (state) => {

@@ -349,7 +349,6 @@ describe("Work decision actions", () => {
     await act(async () => {
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
-      fireResync();
     });
     expect(get.mock.calls.filter(([requested]) => requested === id)).toEqual([[id]]);
     expect(decisionsStoreForTest.getSnapshot().records[id]).toEqual(terminal);
@@ -358,6 +357,29 @@ describe("Work decision actions", () => {
     expect(detail.textContent).toContain(state === "answered" ? "Stop" : state === "expired" ? "No answer by" : "doesn't need this any more");
     expect(useUI.getState().surfaceStates.work).toEqual(saved);
     expect(host.querySelector(".work-view__list")?.scrollTop).toBe(81);
+  });
+
+  it("reconciles a selected decision on resync_required with the stream still up (no connection edge)", async () => {
+    // The cursor-gap case: a `resync_required` arrives on an OPEN stream (no offline→online
+    // edge), and the store must still re-read and reconcile the settled decision (ADR 0130 D3).
+    const id = "resync-answered";
+    const terminal = decisionRow(id, { state: "answered", answer_label: "Stop" });
+    data.sources.decisions.items = [decisionItem(decisionRow(id))];
+    workState({ section: "decisions", itemId: `decision:${id}`, filters: { thisChat: true } });
+    await render();
+    const detail = host.querySelector(".work-decision-detail")!;
+    expect(detail.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
+    const get = vi.mocked(decisionsApi.getDecision).mockImplementation(async (requested) => {
+      if (requested === id) return terminal;
+      throw new Error("unavailable");
+    });
+    vi.mocked(decisionsApi.listDecisions).mockResolvedValue({ decisions: [], pending: 0 });
+    await act(async () => fireResync());
+    expect(get.mock.calls.filter(([requested]) => requested === id)).toEqual([[id]]);
+    expect(decisionsStoreForTest.getSnapshot().records[id]).toEqual(terminal);
+    expect(host.querySelector(".work-decision-detail")).toBe(detail);
+    expect(detail.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
+    expect(detail.textContent).toContain("Stop");
   });
 
   it("drops a selected decision the server reports gone (404) after reconnect", async () => {
@@ -376,7 +398,6 @@ describe("Work decision actions", () => {
     await act(async () => {
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
-      fireResync();
     });
     expect(decisionsStoreForTest.getSnapshot().missing[id]).toBe(true);
     expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();
@@ -402,7 +423,6 @@ describe("Work decision actions", () => {
     await act(async () => {
       connection.online = true;
       connection.listeners.forEach((listener) => listener(true));
-      fireResync();
     });
     expect(decisionsStoreForTest.getSnapshot().records[id].state).toBe("pending");
     expect(host.querySelector('[role="group"][aria-label="Answer"]')).toBeNull();

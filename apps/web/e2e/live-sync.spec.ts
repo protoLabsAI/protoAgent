@@ -276,13 +276,14 @@ test("a client that dropped offline converges to the server's state on reconnect
 // ── Case 6 (S5) ─────────────────────────────────────────────────────────────────────────────
 // D4 extended to the Work / decisions feed (ADR 0130 S5): "A change to a decision, Work item or
 // Feed row in one client appears in another ≤2s." The decisions pill is driven by useDecisions,
-// now on the durable change feed (no poll, no reconnect hook). A decision seeded before either
-// client boots proves both converge on the server's decision state from their boot read (and
-// lets both event streams attach). Then a decision raised LIVE on the server publishes the
-// identity-only `decision.changed` over the scoped feed, and both clients — neither of which
-// triggered it — refetch and show it within the 2s clock; answering one elsewhere drops both the
-// same way. The pill count is the same `useDecisions` the Work "Needs you" rail reads, so the
-// rail and Work never disagree (r3).
+// whose LIVE path is the durable change feed — the identity-only `decision.changed` event, not a
+// poll (the reconnect refetch and resync re-read stay as fall-behind fallbacks, not the live
+// path this case measures). A decision seeded before either client boots proves both converge on
+// the server's decision state from their boot read (and lets both event streams attach). Then a
+// decision raised LIVE on the server publishes `decision.changed` over the scoped feed, and both
+// clients — neither of which triggered it — refetch and show it within the 2s clock; answering
+// one elsewhere drops both the same way. The pill count is the same `useDecisions` the Work
+// "Needs you" rail reads, so the rail and Work never disagree (r3).
 const decisionsPill = (client: Client, n: number) =>
   client.page.getByRole("button", { name: `Decisions, ${n} waiting on you` });
 test("a decision change in one client appears in the other within 2 seconds", async ({ browser, request }, testInfo) => {

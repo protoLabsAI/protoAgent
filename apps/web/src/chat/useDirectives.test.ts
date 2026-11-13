@@ -6,6 +6,7 @@ import type { DirectiveRow } from "../lib/api/chat";
 import { useUI } from "../state/uiStore";
 
 const listeners = new Map<string, Set<(data: Record<string, unknown>) => void>>();
+const connections = new Set<(connected: boolean) => void>();
 vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
     expect(["directive.changed", "resync_required"]).toContain(topic);
@@ -14,9 +15,15 @@ vi.mock("../lib/events", () => ({
     listeners.set(topic, set);
     return () => set.delete(fn);
   },
+  onConnectionChange: (fn: (connected: boolean) => void) => {
+    connections.add(fn);
+    fn(true); // subscribe-time connected callback — ignored until a real offline→online edge
+    return () => connections.delete(fn);
+  },
 }));
 const emit = (topic: string, data: Record<string, unknown> = {}) =>
   listeners.get(topic)?.forEach((fn) => fn(data));
+const setOnline = (online: boolean) => connections.forEach((fn) => fn(online));
 const subCount = (topic: string) => listeners.get(topic)?.size ?? 0;
 
 const { directivesStoreForTest } = await import("./useDirectives");
@@ -61,7 +68,7 @@ describe("directive ledger shared store", () => {
     expect(store.getSnapshot().loadedAt).toEqual(expect.any(Number));
   });
 
-  it("shares initial fetches and subscriptions; filters events and re-reads on resync_required", async () => {
+  it("shares initial fetches and subscriptions; filters events, re-reads on reconnect and on resync_required", async () => {
     const fetch = vi.spyOn(api, "listDirectives").mockResolvedValue(list());
     const store = mount();
     expect(mount()).toBe(store);
@@ -74,10 +81,18 @@ describe("directive ledger shared store", () => {
     emit("directive.changed", { session_id: sessionId });
     await settle();
     expect(fetch).toHaveBeenCalledTimes(2);
-    // A cursor gap past retention (ADR 0130 D3): no incremental signal, so re-read the ledger.
-    emit("resync_required");
+    // A drop never refreshes; the offline→online reconnect edge re-reads once, because a fresh
+    // stream with no resume cursor replays nothing (ADR 0130 D3).
+    setOnline(false);
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    setOnline(true);
     await settle();
     expect(fetch).toHaveBeenCalledTimes(3);
+    // A cursor gap past retention also re-reads the ledger with no incremental signal.
+    emit("resync_required");
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(4);
     expect(fetch).toHaveBeenLastCalledWith(sessionId);
     cleanup.forEach((off) => off());
     expect(subCount("directive.changed")).toBe(0);

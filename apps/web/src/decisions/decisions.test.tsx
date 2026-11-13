@@ -13,6 +13,7 @@ import { ApiError } from "../lib/api/http";
 // The decision bus + the native-notification seam, mocked so the store is driven by hand.
 const bus = vi.hoisted(() => ({
   listeners: new Map<string, Set<(d: Record<string, unknown>) => void>>(),
+  connections: new Set<(c: boolean) => void>(),
   topics: [] as string[],
 }));
 const mocks = vi.hoisted(() => ({ notify: vi.fn() }));
@@ -24,12 +25,19 @@ vi.mock("../lib/events", () => ({
     bus.listeners.set(topic, set);
     return () => set.delete(fn);
   },
+  onConnectionChange: (fn: (c: boolean) => void) => {
+    bus.connections.add(fn);
+    fn(true); // the store ignores the subscribe-time connected callback (no offline edge yet)
+    return () => bus.connections.delete(fn);
+  },
 }));
 vi.mock("../lib/notify", () => ({ notifyIfHidden: mocks.notify }));
 
 /** Fire one bus topic's listeners by hand (the store is driven, not transported). */
 const emit = (topic: string, data: Record<string, unknown> = {}) =>
   bus.listeners.get(topic)?.forEach((fn) => fn(data));
+/** Drive the connection state (an offline→online edge re-reads the list, ADR 0130 D3). */
+const setOnline = (online: boolean) => bus.connections.forEach((fn) => fn(online));
 
 const decision = (id: string, patch: Partial<DecisionRow> = {}): DecisionRow => ({
   id,
@@ -67,6 +75,7 @@ let root: Root;
 beforeEach(() => {
   vi.restoreAllMocks();
   bus.listeners.clear();
+  bus.connections.clear();
   bus.topics.length = 0;
   mocks.notify.mockClear();
   vi.stubGlobal("ResizeObserver", class {
@@ -126,7 +135,7 @@ describe("useDecisions store", () => {
     expect(store.getSnapshot().state).toBe("ready");
   });
 
-  it("refreshes on decision.changed and on resync_required, and never polls", async () => {
+  it("refreshes on decision.changed, on reconnect, and on resync_required, and never polls", async () => {
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([]));
     mountStore();
     await settle();
@@ -138,25 +147,34 @@ describe("useDecisions store", () => {
     await settle();
     expect(list).toHaveBeenCalledTimes(2);
 
-    // decision.changed replays from the durable log on a reconnect within retention; only a
-    // cursor gap past it sends resync_required, which forces a plain re-read (ADR 0130 D3).
-    emit("resync_required");
+    // A drop never refreshes; the offline→online reconnect edge re-reads once, because a fresh
+    // stream with no resume cursor replays nothing (ADR 0130 D3). Not the subscribe-time
+    // connected callback — only a real offline→online edge.
+    setOnline(false);
+    expect(list).toHaveBeenCalledTimes(2);
+    setOnline(true);
     await settle();
     expect(list).toHaveBeenCalledTimes(3);
+
+    // A cursor gap past retention sends resync_required, which also forces a plain re-read.
+    emit("resync_required");
+    await settle();
+    expect(list).toHaveBeenCalledTimes(4);
   });
 
-  it("reconciles departed cached pending records on resync_required and does not reread unchanged or terminal records", async () => {
+  it("reconciles departed cached pending records on reconnect and does not reread unchanged or terminal records", async () => {
     const list = vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([decision("departed"), decision("waiting")]));
     const get = vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(decision("historical", { state: "answered" }));
     const store = mountStore();
     await settle();
     await store.loadDecision("historical");
     get.mockClear();
+    setOnline(false);
     list.mockResolvedValue(listOf([decision("waiting")]));
     const terminal = decision("departed", { state: "expired" });
     let resolve!: (row: DecisionRow) => void;
     get.mockImplementation(() => new Promise((done) => { resolve = done; }));
-    emit("resync_required");
+    setOnline(true);
     await settle();
     expect(get).toHaveBeenCalledExactlyOnceWith("departed");
     // Keep the old list until its departed record has been reconciled.

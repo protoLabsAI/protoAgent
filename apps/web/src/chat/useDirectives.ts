@@ -3,7 +3,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { chatStore } from "./chat-store";
 import { api, ApiError } from "../lib/api";
 import type { DirectiveList, DirectiveRow } from "../lib/api/chat";
-import { onTopic } from "../lib/events";
+import { onConnectionChange, onTopic } from "../lib/events";
 
 export type DirectivesSnapshot = {
   state: "loading" | "ready" | "failed" | "stale";
@@ -95,14 +95,22 @@ function createStore(sessionId: string) {
     if (!stop) {
       void refresh();
       // A directive forced while the bus was down publishes a `directive.changed` the durable
-      // change log replays when the stream resumes (ADR 0130 D2), so the handler below refreshes
-      // on reconnect with no blanket connection hook. Only a cursor past retention cannot replay:
-      // the server sends `resync_required` (D3), and there we force a plain re-read.
+      // change log replays when the stream resumes (ADR 0130 D2). Two gaps the per-event replay
+      // can't cover, so both still re-read once: a reconnect with no resume cursor (a fresh
+      // stream replays nothing) — the offline→online edge below — and a cursor past retention,
+      // where the server sends `resync_required` (D3). onConnectionChange fires once on
+      // subscribe, so refetch only on an offline → online edge.
+      let wasOffline = false;
+      const offConn = onConnectionChange((connected) => {
+        if (connected && wasOffline) void refresh();
+        wasOffline = !connected;
+      });
       const offResync = onTopic("resync_required", () => void refresh());
       const offTopic = onTopic("directive.changed", (data) => {
         if (data.session_id === sessionId) void refresh();
       });
       stop = () => {
+        offConn();
         offResync();
         offTopic();
       };
