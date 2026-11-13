@@ -212,7 +212,10 @@ function stateOf<T>(result: UseQueryResult<T>, items: WorkItem[]): WorkSource {
 
 export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): WorkItems {
   const qc = useQueryClient();
-  // Schedules poll until the first `scheduler.changed` proves the bus carries it (§7.2).
+  // Schedules poll until the first `scheduler.changed` proves the bus carries it (§7.2). The
+  // server publishes `scheduler.changed` only from the console add path, not when the agent's
+  // own `schedule_task`/`wait`/`run_in_session` add a job, so the feed does not cover those
+  // adds — the self-disabling poll keeps them fresh until the bus proves it can.
   const [schedulerSeen, setSchedulerSeen] = useState(false);
 
   const results = useQueries({
@@ -310,6 +313,15 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       void qc.invalidateQueries({ queryKey });
     };
     const onBackground = invalidate(workKey("background"));
+    // Re-read every source at once — used by both the no-cursor reconnect edge and the
+    // past-retention `resync_required`, neither of which carries an incremental signal to
+    // invalidate just the source that changed.
+    const rereadAll = () => {
+      for (const queryKey of [workKey("decisions"), workKey("background"), workKey("directive-inventory"),
+        queryKeys.goals, queryKeys.watches, queryKeys.tasks, queryKeys.schedules, queryKeys.inbox]) {
+        void qc.invalidateQueries({ queryKey });
+      }
+    };
     let wasOffline = false;
     const offs = [
       // Prefix invalidation covers every focused-chat inventory cache.
@@ -328,18 +340,18 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
         void qc.invalidateQueries({ queryKey: queryKeys.schedules });
       }),
       onTopic("directive.changed", invalidate(workKey("directive-inventory"))),
-      // A decision answered, expired or withdrawn while the bus was down sends no event we'll
-      // ever see, so re-read the list once on reconnect (a one-shot refetch, not a poll).
-      // onConnectionChange fires once on subscribe, so refetch only on an offline → online edge.
+      // The durable change log (ADR 0130 D2) replays every retained frame, so a change that
+      // landed while the bus was down re-fires its own targeted invalidation above once the
+      // stream catches up. Two gaps the per-event replay cannot cover, so both re-read every
+      // source once: a reconnect with no resume cursor (a fresh stream replays nothing) — the
+      // offline→online edge below — and a cursor past retention, where the server answers
+      // `resync_required` (D3). onConnectionChange fires once on subscribe, so refetch only on
+      // an offline → online edge.
       onConnectionChange((connected) => {
-        if (connected && wasOffline) {
-          for (const queryKey of [workKey("decisions"), workKey("background"), workKey("directive-inventory"),
-            queryKeys.goals, queryKeys.watches, queryKeys.tasks, queryKeys.schedules, queryKeys.inbox]) {
-            void qc.invalidateQueries({ queryKey });
-          }
-        }
+        if (connected && wasOffline) rereadAll();
         wasOffline = !connected;
       }),
+      onTopic("resync_required", rereadAll),
     ];
     return () => {
       for (const off of offs) off();

@@ -94,19 +94,24 @@ function createStore(sessionId: string) {
     listeners.add(listener);
     if (!stop) {
       void refresh();
-      let initial = true;
+      // A directive forced while the bus was down publishes a `directive.changed` the durable
+      // change log replays when the stream resumes (ADR 0130 D2). Two gaps the per-event replay
+      // can't cover, so both still re-read once: a reconnect with no resume cursor (a fresh
+      // stream replays nothing) — the offline→online edge below — and a cursor past retention,
+      // where the server sends `resync_required` (D3). onConnectionChange fires once on
+      // subscribe, so refetch only on an offline → online edge.
+      let wasOffline = false;
       const offConn = onConnectionChange((connected) => {
-        if (initial) {
-          initial = false;
-          return;
-        }
-        if (connected) void refresh();
+        if (connected && wasOffline) void refresh();
+        wasOffline = !connected;
       });
+      const offResync = onTopic("resync_required", () => void refresh());
       const offTopic = onTopic("directive.changed", (data) => {
         if (data.session_id === sessionId) void refresh();
       });
       stop = () => {
         offConn();
+        offResync();
         offTopic();
       };
     }

@@ -407,6 +407,7 @@ function syncFor(req) {
       streams: new Set(), // open scoped /api/events connections: {write, res}
       a2aStreams: new Set(), // held scoped /a2a sockets — a restart drops them too
       sessions: new Map(), // session_id → { rows: [turn rows], liveTaskId }
+      decisions: [], // decision rows (pending + settled) — the S5 Work/decisions feed
       turnSeq: 0,
       bootId: 1, // bumped by the restart simulation
     });
@@ -690,6 +691,59 @@ function handleSyncSeed(res, body, sync) {
     }
   }
   return sendJson(res, { ok: true, seq: sync.seq });
+}
+
+/** One decision row (the `/api/decisions` wire shape) for the scope's store. */
+function syncDecisionRow(body) {
+  return {
+    id: String(body.id || ""),
+    session_id: String(body.session_id || "job:sync"),
+    agent: String(body.agent || "protoEngineer"),
+    question: String(body.question || "Ship the sync release?"),
+    options: Array.isArray(body.options) ? body.options : [],
+    created_at: new Date().toISOString(),
+    state: "pending",
+    answer: null,
+    answered_at: null,
+    expires_at: null,
+    default_option: null,
+    thread_id: "",
+    interrupt_id: "",
+    context: "",
+    default_action: null,
+    withdraw_reason: null,
+    answered_by: null,
+    answered_surface: null,
+    default_action_text: "",
+    answer_label: null,
+  };
+}
+
+/** `POST /api/__test__/sync/decision` — the S5 Work/decisions feed (ADR 0130 D2): raise or
+ *  settle a decision in the scope's store and publish the identity-only `decision.changed`
+ *  every client refetches on. `action: "raise"` (default) adds a pending row (an agent parking
+ *  on request_decision); `"settle"` flips an existing row to a terminal state (answered
+ *  elsewhere). The frame names ONLY the id — the console reacts by re-reading `/api/decisions`. */
+function handleSyncDecision(res, body, sync) {
+  const id = String(body.id || `dec-sync-${sync.decisions.length + 1}`);
+  const at = sync.decisions.findIndex((d) => d.id === id);
+  if (String(body.action || "raise") === "settle") {
+    if (at >= 0) {
+      sync.decisions[at] = {
+        ...sync.decisions[at],
+        state: String(body.state || "answered"),
+        answer_label: String(body.answer_label || ""),
+        answered_at: new Date().toISOString(),
+        answered_surface: "console",
+      };
+    }
+  } else {
+    const row = syncDecisionRow({ ...body, id });
+    if (at >= 0) sync.decisions[at] = row;
+    else sync.decisions.push(row);
+  }
+  const seq = syncPublish(sync, "decision.changed", { id });
+  return sendJson(res, { ok: true, id, seq });
 }
 
 function askHumanHistory(prompt, question) {
@@ -2220,6 +2274,22 @@ const server = createServer(async (req, res) => {
           const session = syncSession(sync, decodeURIComponent(turnsFor[1]));
           return sendJson(res, { turns: session.rows, live_task_id: session.liveTaskId });
         }
+        // The Work/decisions feed (ADR 0130 S5): the rail pill reads `?state=pending`, the Work
+        // view the full list, a source chat one `/{id}` — all from the scope's one store.
+        if (pathname === "/api/decisions") {
+          const state = url.searchParams.get("state");
+          const rows = state ? sync.decisions.filter((d) => d.state === state) : sync.decisions;
+          return sendJson(res, { decisions: rows, pending: sync.decisions.filter((d) => d.state === "pending").length });
+        }
+        const decFor = /^\/api\/decisions\/([^/]+)$/.exec(pathname);
+        if (decFor) {
+          const row = sync.decisions.find((d) => d.id === decodeURIComponent(decFor[1]));
+          return row ? sendJson(res, row) : sendJson(res, { detail: "decision not found" }, 404);
+        }
+        // How many of the scope's event streams are attached — a spec waits for both clients'
+        // SSE to connect before driving a LIVE change, so the change is never raced against an
+        // unattached stream (a fresh client with a null cursor replays nothing, by design).
+        if (pathname === "/api/__test__/sync/streams") return sendJson(res, { streams: sync.streams.size });
       }
       if (sync && req.method === "POST") {
         if (pathname === "/api/__test__/sync/seed") return handleSyncSeed(res, await readBody(req), sync);
@@ -2227,6 +2297,7 @@ const server = createServer(async (req, res) => {
           return handleSyncServerTurn(res, await readBody(req), sync);
         }
         if (pathname === "/api/__test__/sync/restart") return handleSyncRestart(res, sync);
+        if (pathname === "/api/__test__/sync/decision") return handleSyncDecision(res, await readBody(req), sync);
       }
     }
     if (req.method === "GET") {

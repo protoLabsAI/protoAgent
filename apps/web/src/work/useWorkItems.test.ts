@@ -4,8 +4,9 @@
 // a faked `onTopic` bus. Pins: every source goes READY with items mapped through ./tone;
 // `thisChatOnly` filters only the sources that carry a session id; one push refetches one
 // source; a first-load failure is `error` while a post-load failure is `stale` (items kept,
-// others untouched); schedules poll until the first `scheduler.changed`; undo + setScheduleEnabled
-// hit the new routes.
+// others untouched); schedules poll until the first `scheduler.changed`; an offline→online
+// edge and a `resync_required` (ADR 0130 D3) both re-read every source; undo +
+// setScheduleEnabled hit the new routes.
 import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -117,6 +118,7 @@ async function flush() {
 
 beforeEach(() => {
   mocks.listeners.clear();
+  mocks.conn.clear();
   spies = stubEverything();
 });
 afterEach(() => {
@@ -242,11 +244,17 @@ describe("useWorkItems — live refresh", () => {
     expect(r.current.decisions.status).toBe("ready");
   });
 
-  it("refetches decisions once on an offline → online edge, not on subscribe", async () => {
+  it("re-reads every source once on an offline→online edge and on resync_required, not on subscribe", async () => {
     const r = mount({ thisChatOnly: false });
     await flush();
-    expect(spies.decisions).toHaveBeenCalledTimes(1); // the subscribe-time "connected" is not a reconnect
+    // The subscribe-time connected callback fires no refetch — only a real reconnect edge does.
+    expect(spies.decisions).toHaveBeenCalledTimes(1);
+    expect(spies.goals).toHaveBeenCalledTimes(1);
+    expect(spies.schedules).toHaveBeenCalledTimes(1);
+    expect(spies.inbox).toHaveBeenCalledTimes(1);
 
+    // A drop never refetches; the offline→online edge re-reads every source once, because a
+    // fresh stream with no resume cursor replays nothing (ADR 0130 D3).
     spies.decisions.mockResolvedValue({ decisions: [dec("d1", "answered", "s1")], pending: 0 });
     for (const fn of mocks.conn) fn(false);
     await flush();
@@ -254,9 +262,21 @@ describe("useWorkItems — live refresh", () => {
     for (const fn of mocks.conn) fn(true);
     await flush();
     expect(spies.decisions).toHaveBeenCalledTimes(2);
-    expect(r.current.decisions.items[0]).toMatchObject({ id: "d1", status: "done" });
     expect(spies.goals).toHaveBeenCalledTimes(2);
+    expect(spies.watches).toHaveBeenCalledTimes(2);
+    expect(spies.tasks).toHaveBeenCalledTimes(2);
+    expect(spies.schedules).toHaveBeenCalledTimes(2);
+    expect(spies.background).toHaveBeenCalledTimes(2);
     expect(spies.inbox).toHaveBeenCalledTimes(2);
+    expect(r.current.decisions.items[0]).toMatchObject({ id: "d1", status: "done" });
+
+    // A cursor gap past retention sends resync_required, which also re-reads every source once.
+    emit("resync_required");
+    await flush();
+    expect(spies.decisions).toHaveBeenCalledTimes(3);
+    expect(spies.goals).toHaveBeenCalledTimes(3);
+    expect(spies.schedules).toHaveBeenCalledTimes(3);
+    expect(spies.inbox).toHaveBeenCalledTimes(3);
   });
 
   it("polls schedules every 60s until a scheduler.changed, then stops", async () => {
@@ -266,6 +286,8 @@ describe("useWorkItems — live refresh", () => {
     await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
     expect(spies.schedules).toHaveBeenCalledTimes(1);
 
+    // The agent's own schedule_task/wait/run_in_session adds publish no scheduler.changed, so
+    // the self-disabling poll keeps schedules fresh until the bus proves it carries the topic.
     await act(async () => void (await vi.advanceTimersByTimeAsync(SCHEDULE_POLL_MS)));
     expect(spies.schedules).toHaveBeenCalledTimes(2);
     await act(async () => void (await vi.advanceTimersByTimeAsync(SCHEDULE_POLL_MS)));
@@ -420,6 +442,7 @@ describe("live group adapters", () => {
     spies.schedules.mockResolvedValue({ jobs: [], backend: "local" });
     spies.sessions.mockResolvedValue({ sessions: [{ session_id: "new-chat", turn_count: 1, last_updated: null }] });
     spies.directives.mockResolvedValue({ directives: [dir("new", "in_force", "new-chat")], in_force: 1 });
+    // The offline→online edge re-reads every source at once — a fresh stream replays nothing.
     act(() => mocks.conn.forEach((fn) => fn(true)));
     await flush();
     const groups = workGroups(r.current);

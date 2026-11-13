@@ -5,20 +5,26 @@ import { api, ApiError } from "../lib/api";
 import type { DirectiveRow } from "../lib/api/chat";
 import { useUI } from "../state/uiStore";
 
-const listeners = new Set<(data: Record<string, unknown>) => void>();
+const listeners = new Map<string, Set<(data: Record<string, unknown>) => void>>();
 const connections = new Set<(connected: boolean) => void>();
 vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
-    expect(topic).toBe("directive.changed");
-    listeners.add(fn);
-    return () => listeners.delete(fn);
+    expect(["directive.changed", "resync_required"]).toContain(topic);
+    const set = listeners.get(topic) ?? new Set();
+    set.add(fn);
+    listeners.set(topic, set);
+    return () => set.delete(fn);
   },
   onConnectionChange: (fn: (connected: boolean) => void) => {
     connections.add(fn);
-    fn(true);
+    fn(true); // subscribe-time connected callback — ignored until a real offline→online edge
     return () => connections.delete(fn);
   },
 }));
+const emit = (topic: string, data: Record<string, unknown> = {}) =>
+  listeners.get(topic)?.forEach((fn) => fn(data));
+const setOnline = (online: boolean) => connections.forEach((fn) => fn(online));
+const subCount = (topic: string) => listeners.get(topic)?.size ?? 0;
 
 const { directivesStoreForTest } = await import("./useDirectives");
 const row = (id: string, patch: Partial<DirectiveRow> = {}): DirectiveRow => ({
@@ -62,28 +68,35 @@ describe("directive ledger shared store", () => {
     expect(store.getSnapshot().loadedAt).toEqual(expect.any(Number));
   });
 
-  it("shares initial fetches and subscriptions; filters events and refreshes on reconnect", async () => {
+  it("shares initial fetches and subscriptions; filters events, re-reads on reconnect and on resync_required", async () => {
     const fetch = vi.spyOn(api, "listDirectives").mockResolvedValue(list());
     const store = mount();
     expect(mount()).toBe(store);
     await settle();
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(listeners.size).toBe(1);
-    listeners.forEach((fn) => fn({ session_id: "elsewhere" }));
+    expect(subCount("directive.changed")).toBe(1);
+    emit("directive.changed", { session_id: "elsewhere" });
     await settle();
     expect(fetch).toHaveBeenCalledTimes(1);
-    listeners.forEach((fn) => fn({ session_id: sessionId }));
+    emit("directive.changed", { session_id: sessionId });
     await settle();
     expect(fetch).toHaveBeenCalledTimes(2);
-    connections.forEach((fn) => fn(false));
+    // A drop never refreshes; the offline→online reconnect edge re-reads once, because a fresh
+    // stream with no resume cursor replays nothing (ADR 0130 D3).
+    setOnline(false);
+    await settle();
     expect(fetch).toHaveBeenCalledTimes(2);
-    connections.forEach((fn) => fn(true));
+    setOnline(true);
     await settle();
     expect(fetch).toHaveBeenCalledTimes(3);
+    // A cursor gap past retention also re-reads the ledger with no incremental signal.
+    emit("resync_required");
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(4);
     expect(fetch).toHaveBeenLastCalledWith(sessionId);
     cleanup.forEach((off) => off());
-    expect(listeners.size).toBe(0);
-    expect(connections.size).toBe(0);
+    expect(subCount("directive.changed")).toBe(0);
+    expect(subCount("resync_required")).toBe(0);
   });
 
   it("does not lose invalidations arriving during an in-flight fetch", async () => {
@@ -92,8 +105,8 @@ describe("directive ledger shared store", () => {
       .mockImplementationOnce(() => new Promise((r) => { resolve = r; }))
       .mockResolvedValue(list([row("new")]));
     const store = mount();
-    listeners.forEach((fn) => fn({ session_id: sessionId }));
-    listeners.forEach((fn) => fn({ session_id: sessionId }));
+    emit("directive.changed", { session_id: sessionId });
+    emit("directive.changed", { session_id: sessionId });
     expect(fetch).toHaveBeenCalledTimes(1);
     resolve(list());
     await settle();
