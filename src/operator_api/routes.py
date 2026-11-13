@@ -244,8 +244,9 @@ async def _sse_event_stream(
     Emits a ``: connected`` comment up front (so the client's ``onopen`` fires),
     then one ``id:``/``event:``/``data:`` frame per published event, with periodic
     ``: keepalive`` comments to hold the connection open through idle stretches. The
-    ``id:`` is the bus seq — a reconnecting client passes it back as ``?since=`` to
-    replay events it missed from the ring buffer (ADR 0039).
+    ``id:`` is the bus seq — a reconnecting client passes it back (``Last-Event-ID``
+    or ``?since=``) to replay events it missed from the durable change log (ADR 0130
+    S1), or from the ring buffer on a bare bus (ADR 0039).
     """
     yield ": connected\n\n"
     agen = subscribe(since) if since is not None else subscribe()
@@ -1192,8 +1193,10 @@ def register_operator_routes(
 
         @app.get("/api/events")
         async def _events(request: Request):
-            # ?since=<seq> (or the SSE Last-Event-ID header) replays missed events
-            # from the ring buffer on reconnect (ADR 0039).
+            # ?since=<seq> (or the SSE Last-Event-ID header) replays missed events on
+            # reconnect — from the durable change log when the bus has one attached
+            # (ADR 0130 S1; a cursor older than retention gets `resync_required`),
+            # from the in-memory ring otherwise (ADR 0039).
             raw = request.query_params.get("since") or request.headers.get("last-event-id")
             try:
                 since = int(raw) if raw is not None else None

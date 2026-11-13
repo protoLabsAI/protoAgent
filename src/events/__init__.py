@@ -1,6 +1,7 @@
-"""In-process server→client event bus (ADR 0003)."""
+"""In-process server→client event bus (ADR 0003) + durable change log (ADR 0130)."""
 
 from events.bus import EventBus
+from events.change_log import ChangeLog
 
 # The single durable "Activity" thread (ADR 0003). Since ADR 0129 it is a
 # summary/feed surface: reactive producers (the scheduler, the inbox) execute on
@@ -16,4 +17,4 @@ ACTIVITY_CONTEXT = "system:activity"
 # with ``ACTIVITY_CONTEXT``).
 JOB_CONTEXT_PREFIX = "job:"
 
-__all__ = ["EventBus", "ACTIVITY_CONTEXT", "JOB_CONTEXT_PREFIX"]
+__all__ = ["ChangeLog", "EventBus", "ACTIVITY_CONTEXT", "JOB_CONTEXT_PREFIX"]
