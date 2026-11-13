@@ -378,11 +378,10 @@ def register_provider_routes(app) -> None:
 
         cfg = _config()
         pid = (req.id or "").strip().lower()
-        # ADR 0121 D4: a connection's endpoint is where every prompt goes, so a device-scope
-        # caller can't choose one (``providers`` is a credential-plane section).
-        if req.base_url.strip():
-            if (denied := credential_plane_refusal(request, [f"providers.{pid}.base_url"])) is not None:
-                return denied
+        # ADR 0121 D4: a connection is an endpoint every prompt can go to and a credential to
+        # use there, so adding one is full-scope only (``providers`` is a credential-plane section).
+        if (denied := credential_plane_refusal(request, [f"providers.{pid}"])) is not None:
+            return denied
         if not valid_provider_id(pid):
             raise HTTPException(
                 status_code=400,
@@ -472,12 +471,12 @@ def register_provider_routes(app) -> None:
 
         cfg = _config()
         pid = (pid or "").strip().lower()
+        if cfg.provider_by_id(pid) is None:
+            raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
         # ADR 0121 D4, as for add and edit: removing a connection (and re-pointing whatever
         # used it at another one) decides where prompts go — full scope only.
         if (denied := credential_plane_refusal(request, [f"providers.{pid}"])) is not None:
             return denied
-        if cfg.provider_by_id(pid) is None:
-            raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
 
         releases = dict((body.releases if body else None) or {})
         reported = {e["key"]: e for e in _referencing_entries(cfg, pid)}
