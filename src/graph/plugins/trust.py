@@ -77,6 +77,24 @@ def has_dot_segment(norm: str) -> bool:
     return False
 
 
+# A Windows drive path, bare (``C:/src/x``, ``C:\\src\\x``) or as ``file:///C:/…``. Normalizing
+# turns its drive colon into a ``/`` — an "empty segment" that is no traversal at all.
+_WINDOWS_LOCAL = re.compile(r"^(?:file:///)?[A-Za-z]:[\\/]")
+
+
+def source_has_dot_segment(url: str) -> bool:
+    """``has_dot_segment`` for a source as the operator wrote it. A Windows drive path is
+    judged on its own segments (``.`` / ``..`` only), since its drive colon would otherwise
+    read as an empty segment and every such local source would match nothing."""
+    raw = str(url or "").strip()
+    m = _WINDOWS_LOCAL.match(raw)
+    if m:
+        from urllib.parse import unquote
+
+        return bool({".", ".."} & set(re.split(r"[\\/]", unquote(raw[m.end() :]))))
+    return has_dot_segment(normalize_source(raw))
+
+
 def source_matches(url: str, globs: list[str] | None) -> bool:
     """THE match predicate — shared by the trust matcher and the installer
     allowlist so the two can never drift (they did, byte-for-byte, twice).
@@ -90,7 +108,7 @@ def source_matches(url: str, globs: list[str] | None) -> bool:
     ``.git`` trim (see ``_normalize_pattern``). A source with a dot/empty path
     segment matches nothing (``has_dot_segment``)."""
     norm = normalize_source(url)
-    if has_dot_segment(norm):
+    if source_has_dot_segment(url):
         return False
     pats = [_normalize_pattern(p) for p in globs or []]
     return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "/*") for pat in pats if pat)

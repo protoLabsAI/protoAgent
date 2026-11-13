@@ -79,6 +79,10 @@ def test_official_org_glob_matches_every_repo_in_the_org():
     ):
         assert not source_official(url, OFFICIAL), url
     assert source_trusted("file:///opt/plugins/x", official=[], acked=["file:///opt/plugins/*"])
+    # A Windows drive path's colon is not an empty segment — but its `..` still counts.
+    assert source_trusted("C:/src/x", official=[], acked=["C:/src/*"])
+    assert source_trusted("file:///C:/src/x", official=[], acked=["file:///C:/src/*"])
+    assert not source_trusted("C:/src/../x", official=[], acked=["C:/src/*"])
 
 
 def test_trusted_via_official_ack_or_global_switch():

@@ -642,7 +642,9 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
 # last ``github.com/x/y`` anywhere in the path, so a nested ``…/x/github.com/o/r`` fetched
 # o/r while the allowlist/consent checks had matched the outer path.
 _GH_RE = re.compile(
-    r"^(?:(?:https?|git|ssh)://)?(?:git@)?(?:www\.)?github\.com[/:]([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$",
+    # Optional userinfo (``git@``, or ``user:token@`` on a credentialed https URL) — then the
+    # host MUST be github.com: the userinfo can't contain ``/`` or a second ``@``.
+    r"^(?:(?:https?|git|ssh)://)?(?:[^@/\s]+@)?(?:www\.)?github\.com[/:]([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$",
     re.IGNORECASE,
 )
 
