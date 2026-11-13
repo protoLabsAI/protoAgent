@@ -1983,16 +1983,34 @@ describe("a server turn that finished while the console was away (bd-wk4ti)", ()
   });
 });
 
-describe("the server-authoritative idle render does not clobber a turn that armed mid-hydration (review round 1)", () => {
-  // hydrateDurableChatSessions reads the index at the START of a pass but applies its idle
-  // snapshot at the END, after the per-session turn fetches await. A `turn.started` ServerTurnWatch
-  // handles DURING that window arms the indicator and composer lock; the snapshot, read before the
-  // turn existed, must not wipe them (bd-0ad5v) — the captured started-epoch is what tells them apart.
+describe("the server-authoritative idle render does not clobber a turn that armed mid-hydration (review rounds 1–2)", () => {
+  // hydrateDurableChatSessions captures the started-epoch baseline BEFORE issuing the index
+  // request, but applies its idle snapshot only at the END — after the request resolves AND the
+  // per-session turn fetches await. A `turn.started` arming a session during EITHER window is
+  // newer than the baseline and must survive the stale idle render (bd-0ad5v): the index request
+  // in flight (round 2 — a baseline read after the request would fold the start in and wipe a
+  // live turn), or the per-session turn fetches (round 1). One behaviour, two windows.
   afterEach(() => resetServerTurns());
 
-  it("keeps the indicator and composer-lock control armed by a turn.started during the fetch window", async () => {
+  const arm = (sessionId: string) => {
+    noteTurnStarted(sessionId, labelForOrigin("scheduler"));
+    chatStore.setServerTurnControl({
+      sessionId,
+      taskId: "task-live",
+      origin: "scheduler",
+      trigger: "scheduler",
+      controllable: true,
+      operatorControllable: true,
+    });
+  };
+
+  it.each([
+    { window: "the index request is in flight (round 2)", armIn: "index" as const },
+    { window: "the per-session turn fetches run (round 1)", armIn: "turns" as const },
+  ])("keeps the indicator and composer lock when a turn.started arrives while $window", async ({ armIn }) => {
     resetServerTurns();
-    const sessionId = "chat-race";
+    // Distinct per case: deleteSession tombstones the id, which would skip hydration of a reused id.
+    const sessionId = `chat-race-${armIn}`;
     const idle: DurableChatSession = {
       session_id: sessionId,
       last_updated: "2026-08-20T12:00:00Z",
@@ -2000,32 +2018,28 @@ describe("the server-authoritative idle render does not clobber a turn that arme
       status: "idle",
       live_task_id: null,
     };
-    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [idle] });
+    vi.spyOn(api, "chatSessions").mockImplementation(async (_limit, opts = {}) => {
+      if (opts.parked) return { sessions: [] };
+      if (armIn === "index") arm(sessionId); // the start reaches the browser before this response is processed
+      return { sessions: [idle] };
+    });
     vi.spyOn(api, "chatSessionTurns").mockImplementation(async () => {
-      // The turn starts on the server while we are fetching its turns; ServerTurnWatch arms it.
-      noteTurnStarted(sessionId, labelForOrigin("scheduler"));
-      chatStore.setServerTurnControl({
-        sessionId,
-        taskId: "task-live",
-        origin: "scheduler",
-        trigger: "scheduler",
-        controllable: true,
-        operatorControllable: true,
-      });
+      if (armIn === "turns") arm(sessionId); // ServerTurnWatch arms it while we fetch its turns
       return {
         turns: [turn({ task_id: "task-live", state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } })],
         live_task_id: "task-live",
       };
     });
 
-    await hydrateDurableChatSessions();
-
-    // The idle snapshot predates the live turn, so the render leaves both producers in place —
-    // no spinner is lost, and the next send still routes to the live turn as a steer.
-    expect(serverTurnLabel(sessionId)).not.toBeNull();
-    expect(chatStore.getSnapshot().serverTurnControls[sessionId]).toBeDefined();
-
-    chatStore.deleteSession(sessionId);
+    try {
+      await hydrateDurableChatSessions();
+      // The idle snapshot predates the live turn, so the render leaves both producers in place —
+      // no spinner is lost, and the next send still routes to the live turn as a steer.
+      expect(serverTurnLabel(sessionId)).not.toBeNull();
+      expect(chatStore.getSnapshot().serverTurnControls[sessionId]).toBeDefined();
+    } finally {
+      chatStore.deleteSession(sessionId);
+    }
   });
 });
 

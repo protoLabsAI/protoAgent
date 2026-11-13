@@ -188,6 +188,18 @@ export function serverTurnStartedEpoch(sessionId: string): number {
   return startedEpochs.get(sessionId) ?? 0;
 }
 
+/** A point-in-time COPY of every session's started-epoch — the freshness baseline for the
+ *  server-authoritative idle render (ADR 0130 D5). Captured BEFORE the session-index request is
+ *  issued, not after it resolves: a `turn.started` arriving while that request is in flight (the
+ *  server has already computed its snapshot, the HTTP response is not yet processed) advances the
+ *  live epoch past this copy, so the session survives the stale idle snapshot. A copy taken after
+ *  the request would fold that in-flight start into the baseline and wipe a live turn. Sessions
+ *  with no start are simply absent; {@link serverTurnStartedEpoch} reads them as 0, and a first
+ *  `turn.started` moves them to 1 — above this baseline's `?? 0` default. */
+export function serverTurnStartedEpochs(): Map<string, number> {
+  return new Map(startedEpochs);
+}
+
 // Server turns this console has been told ENDED, by task id, per session. The ref-count above
 // answers "is ANY server turn in flight here" — which is not "is THIS turn still running" once
 // two overlap. A watch reaction that closes a task queues the self-improvement review into the

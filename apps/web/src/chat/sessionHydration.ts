@@ -25,7 +25,7 @@ import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
-import { clearServerTurnsFor, serverTurnStartedEpoch } from "./server-turn-store";
+import { clearServerTurnsFor, serverTurnStartedEpoch, serverTurnStartedEpochs } from "./server-turn-store";
 import { localTurnInFlight, reconcileSessionStatus } from "./sessionLiveness";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
 import { applyComponent, applyDecisionIdentity, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
@@ -646,15 +646,17 @@ function recordChangeSeq(summary: DurableChatSession): void {
  *  `paused` keep their existing producers (a live stream / reattach, a parked HITL bubble). An
  *  older server that sends no `status` (the field is absent) keeps today's local inference.
  *
- *  `startedEpochAtRead` is this session's {@link serverTurnStartedEpoch} captured the instant the
- *  index was read. The idle snapshot is applied only AFTER the per-session turn fetches await, so
- *  a `turn.started` that arms this session DURING that window is NEWER than the snapshot: clearing
- *  its indicator and composer lock would wipe a live turn no `turn.finished` ever restores, and
- *  the follow-up resync that `turn.started` queued would read `running` and restore nothing (the
- *  next send then races it as a competing turn, not a steer). When the epoch has advanced past the
- *  captured value, the snapshot is stale and the clear is skipped — the per-task freshness guard
- *  that `turn.finished` keeps (ServerTurnWatch), expressed for a snapshot that names no task.
- *  Omitting `startedEpochAtRead` (a caller applying a summary it just read) imposes no such guard. */
+ *  `startedEpochAtRead` is this session's {@link serverTurnStartedEpoch} captured BEFORE the index
+ *  request was issued (snapshotted via {@link serverTurnStartedEpochs}). The idle snapshot is
+ *  applied only AFTER that request resolves and the per-session turn fetches await, so a
+ *  `turn.started` that arms this session DURING either window — the request in flight, or the
+ *  turn fetches — is NEWER than the baseline: clearing its indicator and composer lock would wipe
+ *  a live turn no `turn.finished` ever restores, and the follow-up resync that `turn.started`
+ *  queued would read `running` and restore nothing (the next send then races it as a competing
+ *  turn, not a steer). When the epoch has advanced past the captured value, the snapshot is stale
+ *  and the clear is skipped — the per-task freshness guard that `turn.finished` keeps
+ *  (ServerTurnWatch), expressed for a snapshot that names no task. Omitting `startedEpochAtRead`
+ *  (a caller applying a summary it just read) imposes no such guard. */
 export function applyServerSessionState(summary: DurableChatSession, startedEpochAtRead?: number): void {
   const status = summary.status;
   if (typeof status !== "string" || !status) return; // pre-S2 server: no authoritative state
@@ -676,6 +678,13 @@ export function applyServerSessionState(summary: DurableChatSession, startedEpoc
  * Every read is best-effort: an offline/cold fleet member leaves local chat
  * untouched and will be tried again on the next full page boot. */
 export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}): Promise<void> {
+  // Freshness baseline captured BEFORE the index request is issued (ADR 0130 D5): the idle render
+  // below runs only AFTER the request resolves AND the per-session turn fetches await, so a
+  // `turn.started` arming a session during EITHER window — the index request in flight, or the
+  // turn fetches — is newer than this baseline and must survive it. Capturing it after the
+  // request resolved would fold an in-flight-request start into the baseline and wipe a live turn
+  // (review round 2). Snapshot the whole map once; per-session values are read out below.
+  const startedEpochsAtIssue = serverTurnStartedEpochs();
   let summaries: DurableChatSession[];
   try {
     const [newest, parked] = await Promise.all([
@@ -687,12 +696,10 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   } catch {
     return;
   }
-  // Freshness stamp per session at the instant the index was read (ADR 0130 D5): the idle
-  // render below runs only AFTER the per-session turn fetches await, so a `turn.started` that
-  // arms a session during that window is newer than this snapshot and must survive it. Captured
-  // here, compared in applyServerSessionState.
+  // The per-session baseline for applyServerSessionState: absent sessions read as 0, matching
+  // serverTurnStartedEpoch's default, so a first `turn.started` (which sets 1) shows as newer.
   const startedEpochAtRead = new Map(
-    summaries.map((summary) => [summary.session_id, serverTurnStartedEpoch(summary.session_id)]),
+    summaries.map((summary) => [summary.session_id, startedEpochsAtIssue.get(summary.session_id) ?? 0]),
   );
   const eligibility = new Map<string, HydrationEligibility>();
   const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
