@@ -77,15 +77,18 @@ or the **Artifact** panel.
 
 ## Activity and inbox {#reactive-surfaces-adr-0003}
 
-Open **Feed** from the bottom-left activity icon. It combines pending inbound
-messages with completed agent-initiated turns, including scheduled tasks.
-Completed entries show what triggered them; use **Open in reader** for the full
-result. The badge counts unread items.
+Open **Feed** from the bottom-left activity icon. It is one newest-first list,
+grouped by day: a pending inbound message shows as a quiet **Queued** row, a
+completed agent-initiated turn (including scheduled tasks) as a row showing the
+result and what triggered it, and a failed turn carries a **Failed** badge. The
+badge on the icon counts unread items.
 
 Inbox messages can come from webhooks, scripts, or other agents. A `now` item
 starts a turn immediately; `next` and `later` items wait for the agent to check
-them. Feed exposes pending items for inspection or dismissal. A failed immediate
-delivery remains visible as an **undelivered page**.
+them. Nothing in the Feed asks for action: a `now` item whose immediate delivery
+failed is retried automatically when the agent is free, and a page that genuinely
+needs you — operator-class, or out of automatic retries — appears in **Work ›
+Needs you**, where its Delivery detail lets you dismiss it.
 
 ## Change settings {#agent-settings-telemetry}
 
