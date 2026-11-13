@@ -1,1 +1,0 @@
-- **`protoagent dm` finds an agent by the start of its id.** `protoagent dm protoEngineer` now reaches the agent whose id is `protoEngineer-ba4c`, even when its label is `projectManager`. An ambiguous prefix lists only the agents it matches.

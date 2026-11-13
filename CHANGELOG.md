@@ -15,6 +15,326 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.238.0] - 2026-11-13
+
+### Added
+- **Interrupted turns resume after a restart (ADR 0129 D7 S6, #5149).** A restart used
+  to mark every mid-flight task failed, silently dropping scheduler-owned work — worst
+  of all a background `wait`/watch continuation, the agent's only way back into its
+  loop. On boot, tasks the scheduler holds accepted claims for are now classified from
+  their LangGraph checkpoint: a turn interrupted between steps or during a model call
+  resumes automatically from the checkpoint against its original thread and task handle
+  (completed steps are never repeated); a `wait:`/watch continuation interrupted during
+  a tool call resumes with the dangling call reported as "interrupted by a restart;
+  effect unknown — verify before repeating"; any other mid-tool-call or
+  checkpoint-less occurrence is held as `interrupted_needs_operator` (never failed,
+  never resent) for the S7 Needs-you card; a recurring job's interrupted occurrence is
+  skipped (`interrupted`) and its next slot runs normally. At most one automatic resume
+  per occurrence, counted on the occurrence row in the claim transaction — a second
+  interruption goes to the operator. Interactive chat turns keep today's fail-on-boot
+  behavior. Spared tasks are exempt from the 24h TTL sweep and the orphaned-WORKING
+  reaper until recovery disposes them, so long downtime can't destroy a row mid-resume;
+  a one-shot parked for the operator likewise keeps its jobs row past the 24h
+  missed-fire window (it can never refire on its own, so the row survives purely as
+  the operator's handle, where stale-fire recovery used to delete it);
+  a resumed turn follows the autonomous-origin HITL rule (`ask_human`-style pauses are
+  answered with the no-operator sentinel, only `request_decision` parks — with its
+  durable decisions-ledger record); and a parked `interrupted_needs_operator`
+  continuation stops counting as its owner's outstanding work, so the session's
+  recurring root keeps firing while the operator decides. A fire killed after its task
+  handle was saved but before the graph checkpointed its prompt is recognised as a
+  STALE checkpoint (the reused thread holds only the previous turn's messages) and goes
+  to the operator — never completed with the prior turn's reply — and a resumed turn
+  runs under the fire's original request metadata, so the model sees the job as this
+  turn's own fire, not as another pending schedule.
+
+- **Durable live-sync change log (#5196, ADR 0130 S1).** Every retained event-bus publish now also lands in a per-instance append-only SQLite log of `(seq, kind, entity_id, payload, ts)`, swept at 7 days / 100k rows. A client resuming `GET /api/events` via `Last-Event-ID` (or `?since=`) replays from that log — surviving ring eviction and server restarts — and a cursor older than retention gets a `resync_required` event instead of a silent gap. Replayed frames carry the original publish payload verbatim, so consumers that branch on payload fields (`turn.usage` costs, `turn.finished`'s `ok`) render a replay exactly like the live event; and a restarted server reseeds past every seq the previous run stamped on a frame — including live-only progress frames — so a resume cursor is never re-minted or silently skipped. Progress frames stay live-only, as before.
+
+- **Server-held session state + `session.changed` (#5196, ADR 0130 S2).** Each chat session now has a server-derived `{status: idle|running|paused, live_task_id, last_change_seq, updated_at}` — computed from the A2A task store and the turn lock, never from a client's local guess — exposed on `GET /api/chat/sessions` (per row) and `GET /api/chat/sessions/{id}`. Every transition publishes exactly one `session.changed` bus event (recorded in the S1 durable change log): turn start and end (whatever surface drives the turn, server-fired loopback turns included), a HITL/decision park (`paused`), a consumed steer, and session delete (`status: "deleted"`, event-only — the API answers 404 from then on). `last_change_seq` is the session's newest `session.changed` seq and reseeds from the change log after a restart, so a client can compare it against its cursor (D3) across server restarts; a restart-interrupted `working` row with no live turn derives `idle`, never a phantom `running`. A steer posted to an idle session keeps starting a fresh turn (bd-0ad5v) and announces itself through the same turn bracket.
+
+- **Console live-sync client: cursor resume + entity refetch (#5196, ADR 0130 S3).** The operator console now follows the server's change feed instead of guessing per device. The one `EventSource` persists its last bus seq per agent — a synchronous `sessionStorage` mirror plus a durable IndexedDB copy (`lib/syncCursor.ts`, a new `cursors` store on the transcript DB) — and resumes from that cursor (the `?since=` query param the server accepts alongside `Last-Event-ID`) on reconnect, when the tab regains focus or visibility, and on wake from sleep, so a slept laptop or a reopened pane replays from its cursor rather than refetching blind. A `session.changed` or `turn.*` frame routes to an entity refetch (the session index and any open session the server has moved past, deduped against the local transcript so no row doubles); `resync_required` forces a full refetch of the session list and every open session's turns; and on return the console compares each open session's `last_change_seq` with the server's as a backstop for anything the feed missed while the stream was down. This flips S0 case 1 (a send in one client appears in the other within 2s, no reload) to green.
+
+- **Console renders session status from the server (#5196, ADR 0130 S4).** The chat composer lock, Stop/spinner and queued-steer state now follow the server's authoritative session state (S2) delivered by the S3 sync client, rather than the console's own liveness inference. When the server reports a session idle — no live task — the console drops any stale local belief that a turn is running there: the `turn.started`-armed typing indicator is cleared outright (a server turn lost to a restart never fires a `turn.finished` to decrement its ref-count), the server-turn control that locked the composer is released, and a lingering `streaming` status is reconciled back to idle, so the next message starts a fresh turn instead of being swallowed as a steer against a turn the server no longer runs (bd-0ad5v). A turn this window is itself streaming stays its own optimistic draw until the server catches up (D1), and an older server that sends no `status` keeps the previous local-inference behavior. This flips S0 case 4 (a session the server reports idle never keeps a spinner or swallows a send) to green.
+
+- **Activity entries carry the inbox item they ran (bd-048fa) (#5186).** The Feed redesign
+  (docs/design/feed.md) joins a queued inbox item to the activity entry it becomes.
+  `ActivityLog` now stores an `inbox_id` column (added to existing DBs through the
+  additive migration), accepts `inbox_id` on `add()` — an int or numeric string
+  round-trips, anything else stores as NULL — and returns it from `recent()`.
+
+- **`activity.message` and the activity row carry `inbox_id` (bd-048fa) (#5191).** Feed redesign
+  slice 2 (docs/design/feed.md §3): the A2A executor reads `inbox_id` from the turn's
+  request metadata onto `TurnOutcome` (int or numeric string; junk becomes None, never an
+  error), the terminal hook passes it to `ActivityLog.add()` and onto the live
+  `activity.message` event, and the console's `ActivityEntry` type gains
+  `inbox_id?: number | null` — so a feed entry can be joined to the inbox item that
+  caused it. A federation caller claiming a server-fired origin loses the key along
+  with the other job-claiming metadata.
+
+- **Feed model: inbox items + activity entries merge into one newest-first list (bd-048fa) (#5202).**
+  Feed redesign slice 3 (docs/design/feed.md §1, §3, §4): `apps/web/src/activity/feedModel.ts`
+  exports pure functions — `mergeFeed()` turns pending inbox items into quiet "queued" rows
+  (saying "automatic retries used up", not "runs when the agent is free", once
+  `retries_exhausted` is set) and activity entries into "ran"/"failed" rows, joined by
+  `inbox_id` so each stimulus appears exactly once (the entry wins over its pending item); `applyLiveEntry()` swaps a
+  queued row for its result in place (idempotently) or prepends; `groupByDay()` buckets rows
+  under Today / Yesterday / short-date headings in local time. The scheduler wake-header
+  stripping (#5094) moved into the model (`stripWakeHeader`, re-exported from
+  `ActivitySurface`), and the removed Work Activity section's `triggeredByLabel()` is
+  re-homed here for the §4 source labels. No UI yet — slice 4 renders it.
+
+- **Feed: row detail view in the dialog body — "← Feed", dl fields, open-in-reader lives
+  here now (bd-048fa) (#5209).** Feed redesign slice 5 (docs/design/feed.md §5, §8): clicking a
+  feed row swaps the list for the new `FeedDetail` in the SAME dialog body — a ghost
+  "← Feed" button, a heading that receives focus on open, and a `dl` with what triggered
+  it, when (relative time, full stamp on hover) and the full stimulus (wake header
+  stripped). A ran entry shows its response as markdown; a failed entry shows "What went
+  wrong" with the entry's text; a queued item shows "Status: Queued. It runs when
+  <agent> finishes what it's doing now. Nothing for you to do." — unless its automatic
+  retries are used up, in which case the detail (like the list row) says so and points
+  at Work › Needs you instead of promising a run. The open detail follows live updates:
+  a queued page that completes while open turns into its result in place. The
+  open-in-reader action (ADR 0062) moves into the detail as a ghost icon button — list
+  rows carry no controls. "← Feed" returns to the list and puts focus back on the row
+  the detail was showing. Nothing in the detail dismisses, delivers or alerts.
+
+- **Tasks close with their work: links, auto-close and a `waiting` status (bd-4272u, ADR 0129 Q1/Q2) (#5160).**
+  `task_create` / `task_update` (and the console task routes) accept optional `links` —
+  board card ids (`bd-…`), scheduler job ids, a directive id, PR URLs — stored on the
+  task. When every linked item reaches a terminal state the task closes itself with an
+  attributed reason ("bd-c8r5h merged (#5146)"), driven by the existing event paths
+  (directive close, scheduler settlement and cancel, the new generic `task.link.closed`
+  bus topic a board plugin publishes when a card goes terminal) plus a cheap periodic
+  `gh` sweep for linked PRs, and publishes `task.changed`. Replacing a task's links
+  keeps already-finished refs resolved (their terminal event never repeats), and a
+  replacement whose kept refs have all finished closes the task on the spot. A new
+  `waiting` status marks a task parked on the operator's call instead of sitting
+  `in_progress` for days; the console Work view shows it under Needs you. Unlinked
+  tasks behave exactly as before.
+
+- **Work: a parked job reads "Waiting on you" in Needs you, and a day-quiet one offers a reasoned close (bd-axwpf) (#5206).**
+  A task the agent parked on the operator (`waiting`) now has a row of its own in
+  Needs you — in Work and the chat rail alike, counted by the same shared selector so
+  the two can't drift — leading with "Waiting on you:" in neutral tones and opening
+  the chat where the agent is waiting. An `in_progress` job with no update for 24 hours
+  stays in Doing now with a muted "No activity for N days" line (never a warning
+  colour); its detail gains a Close that asks what happened — the reason rides the
+  close route onto the record — plus an Open chat shortcut. Fresh jobs are untouched.
+
+- **Interrupted turns: the Needs-you recovery item (ADR 0129 D7 S7, #5149).** Every
+  occurrence a restart leaves `interrupted_needs_operator` now raises one neutral,
+  server-recorded decision in the job's execution session — naming the job, the step
+  count and the last tool call ("… was interrupted by a restart after N steps. Last
+  action: tool(args), and its effect is unknown.") — which renders in Work's Needs you
+  through the existing decision path. Resume continues from the checkpoint with the
+  dangling call reported as interrupted (the original task handle is reopened — or
+  re-minted under the same id when the 24h TTL sweep already deleted the failed row —
+  so the drive's real outcome lands on it; a Resume whose checkpoint no longer holds
+  the turn is refused with 400 and the card stays answerable, never silently converted
+  to a failure); Re-run starts one fresh turn from the job's prompt
+  through the scheduler's normal claim+fire path (the only answer that starts a new
+  turn — new occurrence, new message identity, never a resend); Drop settles the
+  occurrence as dropped without running anything. With no (or a stale) checkpoint only
+  Re-run and Drop are offered. Answers act exactly once — the decisions-ledger CAS
+  arbitrates concurrent answers (the loser gets 409) and every occurrence transition is
+  CAS'd on the held state — and dismissing the card never resumes anything. A held run
+  is never stranded cardless: an answer whose action cannot move the occurrence reopens
+  the card, and each boot repairs the card of every still-held occurrence (a missing
+  record is re-raised, an answered-but-unacted one reopened — but never one whose
+  answer is still mid-action in this process, such as an operator Resume whose drive is
+  running while the boot pass works, nor one whose run already moved on; a dismissed
+  card stays dismissed). Each S6 auto-resume now also appends an Activity entry — "Resumed
+  &lt;job&gt; after a restart (step N)" — saved to the feed and published live on the
+  bus.
+
+- **Directives close with their work: links and auto-fulfil (bd-nxkeo, ADR 0129 D4/Q2) (#5189).**
+  `record_directive` accepts optional `links` — GitHub issue/PR refs (`owner/repo#N` or
+  issue/PR URLs), board card ids (`bd-…`), scheduler job ids, task ids — stored on the
+  directive. When every linked item reaches a terminal state (issue/PR closed or merged,
+  card done or cancelled, job finished, task closed) the directive is fulfilled
+  automatically, `closed_by: "system"`, with an attributed reason
+  ("acme/widgets#879 closed; acme/widgets#873 closed"). The live paths: `task.changed`
+  closes, the scheduler's own post-settlement `scheduler.changed` publishes (a one-shot
+  fired and removed, a cron expired on max_fires/TTL, a cancel from the console or the
+  `cancel_schedule` tool — which now publishes it), and a cheap periodic `gh` sweep for
+  the GitHub refs. Card refs resolve through a new generic `task.link.closed` bus topic
+  the auto-fulfil subscribes to — an inbound seam for anything that can report a ref
+  finished (nothing in core publishes it yet; a board plugin can, when a card goes
+  done/cancelled).
+  The `directive.changed` publish makes the fulfilled directive leave
+  Work's "Your instructions" and drop the rail's "Told it N" live. Unlinked directives
+  behave exactly as before.
+
+- **Live sync S0: the multi-client sync contract suite (#5196).** ADR 0130's D4 contract is
+  now a Playwright suite (`apps/web/e2e/live-sync.spec.ts`) driving two real browser contexts
+  against one mock server: a send in one client appearing in the other, a server-started turn
+  finishing behind a hidden pane, components rendering after an away-and-return, a
+  server-idle session never holding a spinner or a queued steer, and drop/reconnect
+  convergence. The mock server grew the scoped world behind it — durable per-scope turn rows,
+  a seq'd change feed replayable from `?since=`/`Last-Event-ID`, server-started turns, and a
+  restart simulation. The two cases that fail on today's main are marked `test.fail()` with
+  the id they wait on (ADR 0130 S1–S3; bd-0ad5v / S2+S4), so the suite is green now and flips
+  as the slices land.
+
+### Changed
+- **Per-file SQLite write lock moved to a shared `infra.sqlite_locks` helper (#5122).** The per-database-file `threading.Lock` that queues same-process writers (so a waiter blocks instead of losing SQLite's busy-handler poll race and raising "database is locked", #5121) now lives in `src/infra/sqlite_locks.py` as `file_lock(path)`. The tasks store imports it instead of keeping a private copy; keying, guard and behaviour are unchanged. Slice 1 of 2 — slice 2 adopts the helper in the scheduler, background and metrics stores.
+
+- **Work, decisions, inbox and background jobs also recover through the durable change feed's resync signal (#5196, ADR 0130 S5).** The Work view (`useWorkItems`), the fleet-wide decisions store (`useDecisions`), the chat's background-job store and the per-session directive ledger each already reacted to their own targeted bus topics (`decision.changed`, `task.changed`, `scheduler.changed`, `background.{started,completed}`, `inbox.item`/`activity.message`, `directive.changed`), which the S1 durable change log now replays on reconnect from the client's resume cursor. They now ALSO re-read once when the server sends `resync_required` — the cursor-gap signal for a resume point older than the log's retention (D3) — so a client whose stream fell far behind reconciles without a reload. The existing one-shot reconnect refetch and the Work view's self-disabling 60s schedules poll stay in place, because the feed does not cover every gap (the agent's own `schedule_task`/`wait`/`run_in_session` adds publish no `scheduler.changed`, and a reconnect with no resume cursor replays nothing). The decisions pill and the Work "Needs you" rail read the same `useDecisions`, so their counts stay consistent. Adds an S0-style multi-client contract case: a decision raised or answered in one client appears in the other within 2s.
+
+- **Feed: one newest-first list — queued, ran and failed rows with day headings; no
+  dismiss, deliver or alert (bd-048fa) (#5205).** Feed redesign slice 4 (docs/design/feed.md §1,
+  §2, §4, §7, §8): `ActivitySurface` now renders the slice-3 feed model as ONE list,
+  newest first, opening at the top (the oldest-first render and auto-scroll are gone).
+  The pending inbox section, its NOW/NEXT/LATER pills, the "undelivered page" alert and
+  the dismiss button are removed — nothing in the Feed dismisses, delivers or alerts
+  (`api.deliverInbox` is never called from the Feed; bd-rbk7e retries undelivered
+  priority-now pages server-side, and anything operator-class goes to Work › Needs you).
+  A page whose automatic retry budget is spent (`retries_exhausted`) now also lands in
+  Work › Needs you, and the Delivery detail there carries the one operator Dismiss
+  (mark-delivered) path — so removing the Feed's dismiss never strands a stuck page.
+  Each item is a
+  compact composite-button row — `StatusDot` (error when failed), one "Failed" badge
+  before a failed title, one-line title + relative time + source/meta line — grouped
+  under `h3` day headings in an `ol`, with an `onOpenDetail` hook for the slice-5 detail
+  view. A live `activity.message` whose `inbox_id` matches a queued row turns that row
+  into its result in place, announced once through a polite live region; `inbox.item`
+  refetches so new queued rows appear. Empty / skeleton (`aria-busy`) / one
+  couldn't-load `Alert` states per §7.
+
+- **Feed pill: a plain unread count — the priority-now alert badge, label and info text
+  are gone (bd-048fa) (#5210).** Feed redesign slice 6 (docs/design/feed.md §2, §9.5, §10): the
+  utility-bar Feed pill's badge is now the bare DS `Count` (`9+` past nine), shown only
+  while there are unread items — the `activity-badge--alert` tint, `data-alert`
+  attribute and the `!` fallback are removed, and a priority-now `inbox.item` bumps the
+  count exactly like any other item (anything operator-class pages through Work › Needs
+  you, bd-048fa slice 4/tone.ts — never the pill). The label reads `Feed — N new` / `Feed`
+  and the hover info `N new item(s) since you last looked` / `Feed — what <agent> was
+  asked to do and what it did, newest first`; no "priority-now page" wording remains.
+  Unread still counts both `inbox.item` and `activity.message` while the dialog is
+  closed, opening clears it, and the pill still opens the Feed's own dialog at
+  `UTIL_DIALOG_WIDTH` — never the Work modal.
+
+- **The test-policy gate budgets each change's own diff (#5159).** It compared repo-wide totals to a ceiling, so once other work had spent the headroom it failed whichever PR came next — an 8-line fix was blocked. Now a change may add 250 test lines free, then 2 per Python source line (1.5 for the console) and 5 Playwright tests; a hardening PR that needs more takes the `test-budget` label. Repo-wide ratios are printed as a trend only.
+
+- **Work and Feed open at the same size (#5165).** Both utility-bar windows are now 800px wide (or 94% of a narrow screen) and share one height, instead of Work filling the whole screen around a short list. Work still shows its list and the selected item side by side.
+
+### Fixed
+- **`search_files` uses ripgrep and honours `.gitignore` (#5097).** A literal directory search now runs through `rg` when it's on PATH, so a gitignored build cache (the report's 8.3 GB `.turbo/cache`) is pruned at the walk instead of read file by file — rg took 0.12 s where the Python walk took 8.8 s and pushed agents onto `run_command` grep, losing the `file:line` contract. Output and ordering are unchanged; `.turbo` and `storybook-static` join the skipped-dir set; regex searches, `include_generated=true`, and hosts without `rg` fall back to the existing Python walk.
+
+- **`run_command` no longer hangs on a backgrounded child (#5207).** On POSIX the shell tool now returns once the top-level command exits instead of waiting for EOF on the captured pipes, so a command that starts a long-lived process with `&` (e.g. a dev server) returns right away with the output the command itself produced. The background child keeps running; its later output is not captured. Windows behaviour is unchanged.
+
+- **Idle agents now run queued priority-`next` inbox items (#5216).** A priority-`next` item used to wait forever for a `check_inbox` pull an idle agent never made — one sat two hours undelivered while the same text at `now` ran within a minute. The retry-when-free path (the turn-settle kick plus the periodic sweep) now also delivers pending `next` items when the agent is free, in priority-then-age order, firing a turn the way a `now` page does — after the current work, never interrupting a running turn. `POST /api/inbox/{id}/deliver` is also documented as marking an item handled (it does not start a turn).
+
+- **A message steered at a session with no live turn starts a turn instead of queueing forever (bd-0ad5v) (#5203).**
+  A console with a stale 'streaming' bubble sent the operator's next message as a
+  mid-turn steer; with nothing running, the text sat `pending` with nothing left to
+  drain it and the chat looked stuck. The steer POST now checks the session under the
+  real turn lock: idle (no running turn, no HITL-parked interrupt) means the message
+  runs as an ordinary operator turn over the same path as a normal send — same
+  messageId, so a duplicate POST joins the first task — and the reply's
+  `started_turn: <task_id>` tells the console to finalize its stale streaming state
+  and attach to the new turn. A steer still queued when its turn ends `completed`/
+  `failed` is likewise restarted as exactly one fresh turn (a park keeps holding its
+  messages for the operator's answer; a Stop's queued messages stay the console's to
+  take back) — and `GET …/steer` now reports each restarted id in a `started` map
+  (msg id → task id, `""` while the start is in flight), so the console's turn-end
+  reconcile attaches those bubbles to the fresh turn and streams its reply in, instead
+  of settling them as consumed by the turn that just ended and losing the answer.
+  A steer (and a server-turn interjection) now also carries the tab's per-message
+  `model` / `reasoning_effort` / `bypass_permissions`, exactly as a normal send stamps
+  them, so the turn started for it runs under the tab's settings rather than the
+  configured defaults; the deck TUI and the Zed ACP shim read `started_turn` and the
+  `started` map too, following the fresh turn for its reply instead of reporting the
+  message folded into the ended turn; and a restart that fails to start its turn takes
+  the popped ids back OUT of the drain log when it requeues them, so the message can't
+  read as both pending and already-read.
+
+- **ACP coders no longer end a turn "waiting" on a backgrounded command (bd-572g1) (#5211).** When Claude Code moves a long command to the background ("Command running in background with ID: …") and ends its turn with a waiting note, the ACP client now re-prompts the same session (up to 3 times, inside the turn's existing timeout) telling the agent to wait on the command itself and answer — over ACP no notification ever wakes it, so the old turn-end was taken as the final answer. Only the follow-up's text becomes the reply; if the command still isn't resolved, the turn carries a `background_pending` stop marker (booked as an unfinished, retry-worthy run, and spelled out on delegate replies) instead of a plausible "waiting…" answer. Agents that never produce the notice are unaffected.
+
+- **Undelivered priority-now inbox pages retry when the agent is free — not only at the next restart (bd-rbk7e) (#5187).**
+  A now page whose live delivery failed because the agent was mid-turn used to sit
+  pending for hours, surfaced only as a dismissable "undelivered page" alert, because
+  recovery ran once at boot. Delivery is now retried automatically the moment the last
+  in-flight turn settles, plus a bounded sweep every minute that runs only while no
+  turn holds the agent — reusing the existing claim/accept safety, so a page is still
+  delivered exactly once. While it waits, the page is a calm *queued* row ("Queued —
+  runs when the agent is free"), and `/api/inbox` rows carry `queued_since`,
+  `attempts` and `retries_exhausted`; only an operator-class page raises a Needs-you
+  alert — a declared `needs_human` on `POST /api/inbox`, or a page from a known
+  operator-class producer (a projectBoard block page), so existing plugins that cannot
+  pass the flag keep paging. Waiting out a busy stretch never spends the bounded retry
+  budget; once that budget is spent on genuine failures, the item records a visible
+  failed row in its Activity feed with the reason and its feed row stops promising a
+  retry — it never pages, and `check_inbox` can still pick the item up.
+
+- **A delivery's Work detail titles the page with a short summary, not the whole message (bd-rhybb) (#5214).**
+  An undelivered page's detail rendered the entire message — paragraphs of it — as the
+  bold heading, because the detail passed the raw page text straight into the title.
+  The heading (and the Needs-you row title) is now the first sentence of the first
+  line, whitespace collapsed, clipped to ~80 characters with an ellipsis — the same
+  rule schedules already apply to a prompt, via one shared `summaryTitle` helper. The
+  full text shows once, under the title, in a new Message field rendered as body text
+  (wrapping, line breaks preserved); the From / Waiting since / Status fields and the
+  Dismiss action are unchanged, and a page with an empty text keeps the "Delivery"
+  fallback title.
+
+- **A scheduled turn that outlives the fire timeout is "still running", not ERROR "delivery unknown" (bd-snei6) (#5200).**
+  A recurring job whose turn ran past `SCHEDULER_FIRE_TIMEOUT_S` (600s) used to log
+  `ERROR … delivery unknown; not automatically retried` with a TimeoutError traceback
+  on every long fire — 74 times over a weekend for one */10 follow-up job — even
+  though the send was accepted and every occurrence later settled completed. When a
+  task handle exists and only the bounded GetTask wait runs out, the occurrence is
+  now marked `running`: one INFO line ("still running after Ns; will settle when its
+  task ends"), no `last_error`, no traceback, and no failure streak or backoff. The
+  ownership hold stays while it runs (the next cron slot waits), reconciliation
+  settles it when the task ends, and `turn.finished` plus the result card publish
+  once, at real settlement. "delivery unknown" remains for real unknowns: no task id
+  after the send, a transport failure before acceptance, or a crash between claim
+  and send.
+
+- **Console: a server-started turn that finished while you were away no longer leaves a spinning empty bubble above its answer (bd-wk4ti) (#5199).**
+  A background delegation's result runs as a server-started turn; if you switched
+  agents while it ran, the console's live preview for it could be stranded streaming —
+  the bus events that settle it were missed — while durable hydration drew the turn's
+  finished text as a second bubble beside it. Hydration now keeps exactly one bubble
+  per task: when the server reports a turn terminal (and nothing live in the session),
+  the reconcile redraws the turn's durable copy over the stranded placeholder — or
+  finalizes the placeholder in place when the turn also has locally rendered bubbles
+  to keep — and the session's locked "streaming" status is handed back. A preview that
+  still holds the session's newest task id is also re-read on return, where the index
+  previously read "in step" and never fetched the finished turn.
+
+- **Scheduled result cards stay quiet when a run has nothing new to report (bd-x66jt) (#5158).**
+  A recurring job used to post a ScheduledReportCard to its origin chat on every fire —
+  74 cards in two days for one */10 follow-up job — even when the run had nothing to say.
+  Now a completed fire posts no card when its answer is empty or is an explicit quiet
+  reply (exactly `NO_UPDATE`, or ending with a `NO_UPDATE` line — the `schedule_task`
+  docstring documents the convention; `create_watch` warns it does NOT apply to watch
+  reactions, which reply as visible turns in their own chat), and no card when its
+  normalized answer (whitespace collapsed, timestamps masked) repeats the last card
+  delivered for the same job generation. The recurring-collapse flag now counts
+  delivered cards rather than fires, so quiet early runs no longer shrink a job's first
+  visible card to a chip. The run is still recorded (occurrence, Activity entry); errors
+  and failed turns always post, and a failure resets the repeat guard so a recovery run
+  posts again. Wait resumes and same-chat suppression are unchanged.
+
+- **Desktop: a turn that finished while you were away now shows its cards (#5161).** If you switched agents mid-turn and came back after it ended, the desktop app reattached silently and kept the half-drawn turn: its tool card showed, but the cards or other components it produced never rendered. A server rejection of the reattach now takes the same replay path as the browser, so the finished turn renders in full. A server rejection of a send is also reported instead of re-sent.
+
+- **`protoagent dm` finds an agent by the start of its id (#5156).** `protoagent dm protoEngineer` now reaches the agent whose id is `protoEngineer-ba4c`, even when its label is `projectManager`. An ambiguous prefix lists only the agents it matches.
+
+### Removed
+- **Feed: the old provenance row is gone (bd-048fa) (#5212).** Feed redesign slice 7, cleanup
+  (docs/design/feed.md §2, §9.8): the exported `OriginProvenance` component — the
+  pre-Feed origin-chip/trigger/priority/relative-time row that nothing rendered since
+  the slice-4 rows and slice-5 detail took over — is deleted from `ActivitySurface.tsx`
+  along with its `ORIGIN` icon map, the lucide imports and the `Badge as FailedBadge`
+  alias its test guard forced (the failed-row badge is a plain DS `Badge` again), and
+  `OriginProvenance.test.tsx` with it. The now-unused `.inbox-pri*` rules leave
+  `theme.css`, and the dead `.activity-prov`, `.activity-origin*`, `.activity-trigger`,
+  `.activity-time`, `.activity-msg` and `.activity-role` rules leave `activity.css` —
+  every deleted class grep-verified to have no remaining user. No behaviour change: the
+  Feed list, detail and pill look and act the same.
+
 ## [0.237.0] - 2026-11-12
 
 ### Added
