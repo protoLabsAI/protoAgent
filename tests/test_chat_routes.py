@@ -986,6 +986,7 @@ def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     assert c.get("/api/chat/sessions/s1/steer").json() == {
         "pending": [{"id": "m1", "text": "do X instead"}],
         "drained": [],
+        "started": {},
     }
 
     # ✕ before the turn folds it in → removed, queue empties.

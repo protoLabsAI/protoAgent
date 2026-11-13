@@ -10,6 +10,10 @@ stream.
 Each item carries a client-supplied ``id`` so the console can reconcile at
 turn-end: anything still queued when the turn finishes arrived after the last
 model call (not consumed) and is re-sent as a fresh turn; the rest were folded in.
+Since bd-0ad5v the server does that restart itself when a turn ends terminally
+(``server.chat.restart_undrained_steers`` → :func:`take_unfenced`), and a steer
+that arrives with NO live turn at all starts a fresh turn instead of queueing
+(``server.chat.steer_or_start_turn`` → the started registry below).
 
 A process-wide singleton dict is fine: the graph turn and the API endpoint run in
 the same process + event loop, so enqueue (API) and drain (graph) never race on
@@ -78,6 +82,8 @@ def enqueue(
     images: list[tuple[str, str]] | None = None,
     refs: str = "",
     vision: bool = False,
+    incognito: bool = False,
+    settings: dict | None = None,
 ) -> str | None:
     """Queue a user message for ``session_id``'s running turn. Returns its id (the
     client's if supplied, else a fresh one), or None on a blank message.
@@ -88,7 +94,14 @@ def enqueue(
     be acted on by the wider toolset of the (possibly unfenced) turn it lands in.
 
     ``images`` and persisted ``refs`` travel together; the API decides ``vision``
-    so the graph does not need to consult the server's model configuration."""
+    so the graph does not need to consult the server's model configuration.
+    ``incognito`` (ADR 0069 D3b) rides the item so a message left undrained at turn-end
+    can be restarted as a fresh turn WITHOUT losing its no-memory-trail promise.
+    ``settings`` — the sender's per-message turn settings (``model`` /
+    ``reasoning_effort`` / ``bypass_permissions``, the same keys a normal send stamps on
+    its A2A message metadata). A fold into a running turn ignores them (that turn already
+    has its own), but a message restarted as a FRESH turn at turn-end must carry them or
+    the restart falls back to the configured defaults (bd-0ad5v review)."""
     text = (text or "").strip()
     if not session_id or (not text and not images):
         return None
@@ -98,6 +111,10 @@ def enqueue(
         item.update(images=images, refs=refs, vision=vision)
     if fence:
         item["fence"] = [str(t) for t in fence]
+    if incognito:
+        item["incognito"] = True
+    if settings:
+        item["settings"] = dict(settings)
     _evict_stale(session_id)
     _QUEUES.setdefault(session_id, []).append(item)
     _QUEUE_TOUCHED.pop(session_id, None)
@@ -172,6 +189,121 @@ def drained(session_id: str) -> list[str]:
     return list(_DRAINED.get(session_id, ()))
 
 
+def forget_drained(session_id: str, ids: list[str]) -> None:
+    """Remove ``ids`` from the drain log — a turn-end restart that FAILED just put the
+    items back on the queue, and the log rows :func:`take_unfenced` wrote for them would
+    otherwise report each id as both ``pending`` and ``drained``: a console reads that as
+    "the agent read it" and settles the bubble while the message sits queued with nothing
+    to drain it (the bd-0ad5v stuck chat, reached through the failure path)."""
+    rows = _DRAINED.get(session_id)
+    if not rows:
+        return
+    drop = {mid for mid in ids if mid}
+    kept = [mid for mid in rows if mid not in drop]
+    if kept:
+        _DRAINED[session_id] = kept
+    else:
+        _DRAINED.pop(session_id, None)
+        _DRAINED_TOUCHED.pop(session_id, None)
+
+
+def take_unfenced(session_id: str) -> list[dict]:
+    """Pop the still-queued UNFENCED items for ``session_id`` (FIFO), noting them drained.
+
+    The turn-end restart (``server.chat.restart_undrained_steers``) is about to hand them
+    to a FRESH turn as its message, which reads them exactly like a fold — so the drain log
+    must say "the agent read this", or the console would re-offer words the agent is
+    already acting on. Fenced items stay queued untouched: a fenced message answers to its
+    own rules (#2972) and must never ride an unfenced restart into a wider toolset."""
+    q = _QUEUES.get(session_id)
+    if not q:
+        return []
+    taken = [item for item in q if not item.get("fence")]
+    if not taken:
+        return []
+    kept = [item for item in q if item.get("fence")]
+    if kept:
+        _QUEUES[session_id] = kept
+    else:
+        _QUEUES.pop(session_id, None)  # match drain(): no empty lists linger
+        _QUEUE_TOUCHED.pop(session_id, None)
+    _note_drained(session_id, [str(item.get("id") or "") for item in taken])
+    return taken
+
+
+# ── idle-steer turn starts ──────────────────────────────────────────────────────
+# (session_id, msg_id) → the A2A task a steer STARTED: it arrived with no live turn (or
+# was left undrained when its turn ended), so the server ran it as a fresh turn instead
+# of queueing it. The value is ``""`` from the moment that start is DECIDED until the
+# loopback send names its task — so a reader never sees the message as simply "gone"
+# while the start is in flight. Two consumers: the steer route answers a duplicate POST
+# of the same message with the same task (never enqueueing a second copy into the very
+# turn the first copy started), and ``GET …/steer`` serves the whole per-session map
+# (:func:`started_map`) so a console reconciling at turn-end attaches to the fresh turn
+# instead of settling the message as consumed by the turn that just ended. Bounded like
+# the drain log: it answers for the duplicate/reconcile window, not for the life of the
+# process (concurrent duplicates are the A2A message ledger's job — same
+# ``(contextId, messageId)`` joins the first task, #4975).
+_STARTED: dict[tuple[str, str], str] = {}
+_STARTED_CAP = 512
+
+
+def note_started(session_id: str, msg_id: str, task_id: str) -> None:
+    """Remember that ``msg_id`` for ``session_id`` started (or became) turn ``task_id``."""
+    if not session_id or not msg_id or not task_id:
+        return
+    _STARTED[(session_id, msg_id)] = task_id
+    while len(_STARTED) > _STARTED_CAP:
+        _STARTED.pop(next(iter(_STARTED)))
+
+
+def note_starting(session_id: str, msg_ids: list[str]) -> None:
+    """Mark each ``msg_id`` as having a fresh turn starting for it RIGHT NOW — the
+    loopback send is (about to be) in flight and has not named its task yet.
+
+    Recorded in the same synchronous frame as the queue pop, so no reader ever observes
+    the in-between state where a message has left the queue with nothing to show for it:
+    that absence reads as "consumed by the turn that just ended", and a console would
+    settle the bubble under a reply that never saw the message. ``note_started`` upgrades
+    the mark to the real task id; :func:`clear_starting` drops it when the start failed
+    and the items went back on the queue. A known task id is never downgraded."""
+    if not session_id:
+        return
+    for mid in msg_ids:
+        if mid and not _STARTED.get((session_id, mid)):
+            _STARTED[(session_id, mid)] = ""
+    while len(_STARTED) > _STARTED_CAP:
+        _STARTED.pop(next(iter(_STARTED)))
+
+
+def clear_starting(session_id: str, msg_ids: list[str]) -> None:
+    """Forget in-flight marks whose start FAILED (the items are queued again)."""
+    for mid in msg_ids:
+        if _STARTED.get((session_id, mid)) == "":
+            _STARTED.pop((session_id, mid), None)
+
+
+def starting(session_id: str, msg_id: str) -> bool:
+    """True while a fresh turn's start is in flight for ``msg_id`` (task not yet known)."""
+    return _STARTED.get((session_id, msg_id)) == ""
+
+
+def started_task(session_id: str, msg_id: str) -> str | None:
+    """The task a steer with ``msg_id`` already started for ``session_id``, or None.
+    None also while the start is still in flight (see :func:`starting`)."""
+    if not session_id or not msg_id:
+        return None
+    return _STARTED.get((session_id, msg_id)) or None
+
+
+def started_map(session_id: str) -> dict[str, str]:
+    """Every message of ``session_id``'s that started (or is starting) a fresh turn:
+    msg id → task id, ``""`` while the start is still in flight. ``GET …/steer``
+    carries this so a console reconciling at turn-end can attach to the restarted
+    turn instead of settling its message as consumed by the turn that just ended."""
+    return {mid: task for (sid, mid), task in _STARTED.items() if sid == session_id}
+
+
 def forget(session_id: str) -> None:
     """Drop everything remembered for ``session_id`` — a deleted or cleared chat.
 
@@ -185,6 +317,8 @@ def forget(session_id: str) -> None:
     _QUEUE_TOUCHED.pop(sid, None)
     _DRAINED.pop(sid, None)
     _DRAINED_TOUCHED.pop(sid, None)
+    for key in [k for k in _STARTED if k[0] == sid]:
+        _STARTED.pop(key, None)
 
 
 def _reset() -> None:
@@ -195,6 +329,7 @@ def _reset() -> None:
     _QUEUE_TOUCHED.clear()
     _DRAINED.clear()
     _DRAINED_TOUCHED.clear()
+    _STARTED.clear()
 
 
 def dequeue(session_id: str, msg_id: str) -> bool:

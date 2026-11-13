@@ -52,6 +52,10 @@ from deck.data import display_name, presence_of, slug_of
 
 STALL_IDLE_S = 45.0
 MAX_RECONNECTS = 10  # 10 silent windows ≈ 10 minutes of a tool call that says nothing
+# bd-0ad5v: how many 1s re-checks a steer in the `started` map's "" window gets (the
+# server popped it for a fresh turn whose loopback send hasn't named its task yet) before
+# the deck settles it as folded — the same grace the console gives that window.
+STEER_RESTART_RECHECKS = 4
 _PREVIEW = 60
 
 
@@ -813,18 +817,26 @@ class ConversationScreen(Screen):
     @work(thread=True, group="talk-steer")
     def _post_steer(self, st: Steer, task_id: str) -> None:
         app = self.app
+        started = ""
         try:
             if st.interjection:
                 out = app.backend.interject(self.agent, self.convo.session_id, task_id, st.id, st.text)  # type: ignore[attr-defined]
                 if not out.get("ok", True):
                     raise RuntimeError(str(out.get("reason") or "refused"))
             else:
-                app.backend.steer(self.agent, self.convo.session_id, st.id, st.text)  # type: ignore[attr-defined]
+                out = app.backend.steer(self.agent, self.convo.session_id, st.id, st.text)  # type: ignore[attr-defined]
+                started = str(out.get("started_turn") or "") if isinstance(out, dict) else ""
         except Exception as exc:  # noqa: BLE001
             app.call_from_thread(self._drop_steer, st)
             app.call_from_thread(self.notify, f"could not queue the message: {exc}", severity="error", timeout=8)
             return
         st.queued = True
+        if started:
+            # bd-0ad5v: the member had NO live turn (whatever this screen believed in was
+            # stale), so the server ran the message as a fresh ordinary turn instead of
+            # queueing it. Nothing is queued — follow that turn for the reply.
+            app.call_from_thread(self._follow_restarted_steers, [st], started, takeover=True)
+            return
         app.call_from_thread(self._enqueued, st)
 
     @_ui_safe
@@ -882,13 +894,53 @@ class ConversationScreen(Screen):
         comp.cursor_position = len(text)
         comp.focus()
 
+    @_ui_safe
+    def _follow_restarted_steers(self, steers: list[Steer], task_id: str, *, takeover: bool = False) -> bool:
+        """bd-0ad5v: the server ran these queued messages as a FRESH turn of their own (an
+        idle-session steer answered with ``started_turn``, or a turn-end restart named in
+        the ``started`` map). The reply comes from THAT task — marking them "folded in" is
+        exactly how it got lost before — so the bubbles become that turn's user message and
+        the screen follows it like any turn somebody else started. ``takeover`` (the steer
+        POST's own reply) retires a live exchange first: the server just said nothing was
+        running, so whatever this screen still believed in is a stale stream. Returns False
+        when a DIFFERENT turn is live and ``takeover`` is off — the caller leaves the
+        bubbles queued, and that turn's own end reconciles them again."""
+        live = self.convo.live
+        if live is not None and live.turn.task_id != task_id and not takeover:
+            return False
+        for st in steers:
+            self._drop_steer(st)
+        if live is not None:
+            if live.turn.task_id == task_id:
+                return True  # already following it
+            live.live = False
+            live.finished = True
+            if live.client is not None:
+                live.client.abort()  # free the dead socket; the reader finds `finished` and unwinds
+            self._render_live(live)
+        ex = Exchange(
+            user="\n\n".join(st.text for st in steers),
+            turn=a2a.Turn(context_id=self.convo.session_id, task_id=task_id),
+            live=True,
+            attached=True,
+            origin="steer",
+        )
+        self.convo.exchanges.append(ex)
+        self._append_exchange(ex)
+        self._render_work(ex.turn)
+        self._render_status()
+        self._render_head()
+        self._stream(ex, subscribe=task_id)
+        return True
+
     @work(thread=True, group="talk-steer-reconcile")
-    def _reconcile_steers(self, ex: Exchange) -> None:
-        """At turn end: the steers the member folded in settle; the ones still queued
-        arrived after its last model call. Ours are re-sent as a fresh turn — unless the
-        turn parked, in which case the server keeps holding them for after the answer;
-        interjections into a server-fired turn are simply reported as unread (this screen
-        never starts a turn in a session on the server's behalf)."""
+    def _reconcile_steers(self, ex: Exchange, rechecks: int = 0) -> None:
+        """At turn end: the steers the member folded in settle; one the server ran as a
+        FRESH turn of its own (bd-0ad5v's ``started`` map) is followed for its reply; the
+        ones still queued arrived after its last model call. Ours are re-sent as a fresh
+        turn — unless the turn parked, in which case the server keeps holding them for
+        after the answer; interjections into a server-fired turn are simply reported as
+        unread (this screen never starts a turn in a session on the server's behalf)."""
         app = self.app
         convo, gen = (
             self.convo,
@@ -900,28 +952,63 @@ class ConversationScreen(Screen):
         if not queued:
             return
         try:
-            pending = {r["id"] for r in app.backend.steer_pending(self.agent, convo.session_id)}  # type: ignore[attr-defined]
+            state = app.backend.steer_state(self.agent, convo.session_id)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001 — cannot tell consumed from not: leave them queued
             return
-        app.call_from_thread(self._reconcile_landed, convo, ex, gen, queued, pending)
+        pending = {str(r.get("id")) for r in state.get("pending") or [] if isinstance(r, dict) and r.get("id")}
+        raw = state.get("started")
+        started = {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        app.call_from_thread(self._reconcile_landed, convo, ex, gen, queued, pending, started, rechecks)
 
     @_ui_safe
     def _reconcile_landed(
-        self, convo: Conversation, ex: Exchange, gen: int, queued: list[Steer], pending: set[str]
+        self,
+        convo: Conversation,
+        ex: Exchange,
+        gen: int,
+        queued: list[Steer],
+        pending: set[str],
+        started: dict[str, str] | None = None,
+        rechecks: int = 0,
     ) -> None:
         """On the UI thread, against the state that exists NOW: the session may have been
         switched, an answer may have resumed the turn (its own end reconciles again), a
         new turn may be streaming."""
         if convo is not self.convo or ex.generation != gen:
             return  # a different session, or the turn lived again since we asked: this answer is stale
+        started = started or {}
         # Two reconciles can be in flight for one steer: `_finish` sees `st.queued` (set on the
         # POST worker) before that worker's `_enqueued` runs, and `_enqueued` then judges it
         # again. Whichever lands second must not re-send what the first already dropped.
         queued = [st for st in queued if st in convo.steers and not st.consumed]
+        # bd-0ad5v: a steer the server ran (or is running RIGHT NOW, "") as a fresh turn of
+        # its own is in the drain log too — "missing from pending" must not read as "folded
+        # into the ended turn", or the reply from the restart's task never shows here.
+        restarted: dict[str, list[Steer]] = {}
+        starting: list[Steer] = []
         for st in queued:
-            if st.id not in pending:
+            mark = started.get(st.id)
+            if mark:
+                restarted.setdefault(mark, []).append(st)
+            elif mark == "" and st.id not in pending:
+                starting.append(st)
+        for st in queued:
+            if st.id not in pending and started.get(st.id) is None:
                 st.consumed = True
                 self._render_steer(st)
+        for task_id, group in restarted.items():
+            # False = a different turn is live here: leave the bubbles queued — its own
+            # end runs this reconcile again and follows then.
+            self._follow_restarted_steers(group, task_id)
+        if starting:
+            # The restart's loopback send hasn't named its task yet: ask again shortly,
+            # bounded — past the grace, settle like a fold (the console's same call).
+            if rechecks < STEER_RESTART_RECHECKS:
+                self.set_timer(1.0, lambda: self._reconcile_steers(ex, rechecks + 1))
+            else:
+                for st in starting:
+                    st.consumed = True
+                    self._render_steer(st)
         left = [st for st in queued if st.id in pending]
         if not left:
             return

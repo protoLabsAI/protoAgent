@@ -73,6 +73,22 @@ function jsonRpcRejection(leftover: string): string | null {
 
 export type ChatImagePart = { b64: string; mime: string; name: string };
 
+/** The tab's per-message turn settings, as a normal send stamps them on its A2A metadata
+ *  (see `streamChat`'s `opts`). A steer/interjection carries them in its POST body so a
+ *  turn the server starts for the message (bd-0ad5v: an idle-session steer, or one left
+ *  undrained at turn-end) runs under them instead of the configured defaults. */
+export type SteerTurnSettings = { model?: string; reasoningEffort?: string; bypassPermissions?: boolean };
+
+/** The body fields `settings` adds to a steer/interjection POST — the server-side key
+ *  names, each present only when set, exactly like the A2A metadata of a normal send. */
+function turnSettingsBody(settings?: SteerTurnSettings) {
+  return {
+    ...(settings?.model ? { model: settings.model } : {}),
+    ...(settings?.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}),
+    ...(settings?.bypassPermissions ? { bypass_permissions: true } : {}),
+  };
+}
+
 /** The Task a unary `GetTask` answered with, or undefined (#3957).
  *
  *  A2A 1.0 serves the task FLAT on `result`, untagged; A2A 0.3 tags it `kind: "task"`; a
@@ -577,15 +593,32 @@ export const chatApi = {
   // into the media store and folds them into the next model call. They go only when
   // there are any, so a text-only steer still sends exactly `{id, text}` as before;
   // each part is a `[mime, data-URI]` pair, the shape the route's coercion takes.
-  steerChat(sessionId: string, id: string, text: string, images?: ChatImagePart[], incognito?: boolean) {
-    return request<{ ok: boolean; id: string | null; pending: number }>(
+  // `started_turn` (bd-0ad5v): the session had NO live turn, so instead of queueing a
+  // message nothing would ever drain, the server ran it as an ordinary operator turn —
+  // the caller should finalize its stale streaming state and attach to that task.
+  // `settings` are the tab's per-message turn settings, stamped exactly as a normal send
+  // stamps them on its A2A metadata: a steer that starts a turn (now, or restarted at
+  // turn-end) must carry them or that turn falls back to the configured defaults.
+  steerChat(
+    sessionId: string,
+    id: string,
+    text: string,
+    images?: ChatImagePart[],
+    incognito?: boolean,
+    settings?: SteerTurnSettings,
+  ) {
+    return request<{ ok: boolean; id: string | null; pending: number; started_turn?: string | null }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
       {
         method: "POST",
         body: {
           id,
           text,
-          ...(images?.length && incognito ? { incognito: true } : {}),
+          // Asserted per message, as on a normal send (there is no server marker to read):
+          // the route skips the media bridge on it, and a steer that STARTS a turn
+          // (started_turn below) must carry it or the fresh turn would leave a memory trail.
+          ...(incognito ? { incognito: true } : {}),
+          ...turnSettingsBody(settings),
           ...(images && images.length
             ? { images: images.map((img) => [img.mime, `data:${img.mime};base64,${img.b64}`]) }
             : {}),
@@ -600,10 +633,15 @@ export const chatApi = {
   // and the live boundary marker is best-effort), and the console must not guess between
   // settling a message the agent never saw and re-offering one it already used. Absent
   // from an older server, which reads as "can't say" rather than "not read".
+  // `started` (bd-0ad5v) maps msg id → task id for messages the server ran as a FRESH
+  // turn instead (an idle-session steer, or one left undrained at turn-end), "" while
+  // that turn's start is in flight: the caller attaches to the task, never settles.
   pendingSteer(sessionId: string) {
-    return request<{ pending: { id: string; text: string }[]; drained?: string[] }>(
-      `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
-    );
+    return request<{
+      pending: { id: string; text: string }[];
+      drained?: string[];
+      started?: Record<string, string>;
+    }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`);
   },
   // Cancel a still-queued steer (the ✕ on a pending bubble) before it folds into
   // the turn. `removed: false` means it was already drained — the agent will act
@@ -614,10 +652,12 @@ export const chatApi = {
       { method: "DELETE" },
     );
   },
-  serverTurnInterject(sessionId: string, taskId: string, id: string, text: string) {
+  // `settings` ride the queued item server-side so an interjection the turn never read is
+  // restarted (bd-0ad5v) under the tab's chosen model/effort/bypass, not the defaults.
+  serverTurnInterject(sessionId: string, taskId: string, id: string, text: string, settings?: SteerTurnSettings) {
     return request<{ ok: boolean; id?: string | null; pending: number; reason?: string }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/server-turns/${encodeURIComponent(taskId)}/interject`,
-      { method: "POST", body: { id, text } },
+      { method: "POST", body: { id, text, ...turnSettingsBody(settings) } },
     );
   },
   // Abort ONE running foreground subagent delegation (the Stop on a running `task`
