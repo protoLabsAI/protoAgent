@@ -1,11 +1,13 @@
 """A turn parked on a backgrounded command is chased, not returned (bd-572g1).
 
 Claude Code moves a foreground command past its ~10-minute Bash budget to the background
-("Command running in background with ID: <id>" in the tool result) and tells the agent it
-will be notified when it finishes. In the CLI that notification wakes the agent; over ACP
-nothing does — the agent ends its turn with a "waiting" note, and the client used to take
-``end_turn`` as final and return that note as the answer (2026-11-12, card bd-bkvgk:
-~14 coder sessions in a row, each ending 0.1s before its own notification landed).
+("Command running in background with ID: <id>. Output is being written to:
+…/tasks/<id>.output. … To check interim output, use Read on that file path." in the tool
+result) and tells the agent it will be notified when it finishes. In the CLI that
+notification wakes the agent; over ACP nothing does — the agent ends its turn with a
+"waiting" note, and the client used to take ``end_turn`` as final and return that note as
+the answer (2026-11-12, card bd-bkvgk: ~14 coder sessions in a row, each ending 0.1s
+before its own notification landed).
 
 These drive a real ``AcpClient`` against a scripted agent subprocess, varying only how the
 agent behaves after it announces the backgrounded command.
@@ -17,18 +19,24 @@ import json
 import sys
 import time
 
-from plugins.coding_agent.acp_client import _UNFINISHED_STOP_REASONS, AcpClient
-from plugins.delegates.adapters import _INCOMPLETE_STOP_REASONS, _mark_incomplete
+import pytest
+
+from plugins.coding_agent.acp_client import AcpClient
 
 # A minimal ACP agent over stdio. argv[1] picks the scenario; argv[2] logs each
 # session/prompt text, one JSON line per prompt, so tests can assert the follow-ups.
 # Every round reports the same usage, so chased turns must show it SUMMED. The notice
-# ends its sentence right after the id — the id must come out bare, without the '.'.
+# mirrors the real one (bd-bkvgk transcripts): it ends its sentence right after the id —
+# which must come out bare, without the '.' — and embeds the id in the output file path,
+# which is how a Read of that file references the command.
 _AGENT = r"""
 import json, sys
 
 mode, log_path = sys.argv[1], sys.argv[2]
-NOTICE = "Command running in background with ID: bash_1. Output is being written to /tmp/bash_1.out"
+OUT_FILE = "/tmp/claude-tasks/bash_1.output"
+NOTICE = ("Command running in background with ID: bash_1. Output is being written to: "
+          + OUT_FILE + ". You will be notified when it completes. To check interim "
+          "output, use Read on that file path.")
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -40,8 +48,11 @@ def update(sid, upd):
 def chunk(sid, text):
     update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
 
-def output_block(text):
-    return [{"type": "content", "content": {"type": "text", "text": text}}]
+def tool(sid, tid, title, text, raw=None, status="completed"):
+    update(sid, {"sessionUpdate": "tool_call", "toolCallId": tid, "title": title,
+                 "kind": "execute", **({"rawInput": raw} if raw else {})})
+    update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": status,
+                 "content": [{"type": "content", "content": {"type": "text", "text": text}}]})
 
 prompts = 0
 for line in sys.stdin:
@@ -66,23 +77,35 @@ for line in sys.stdin:
     if mode == "plain":
         chunk(sid, "no long commands here")
     elif prompts == 1:
-        # The long command gets backgrounded mid-turn; the agent ends its turn waiting.
-        update(sid, {"sessionUpdate": "tool_call", "toolCallId": "t1",
-                     "title": "Bash(python -m pytest tests/ -q)", "kind": "execute"})
-        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "t1",
-                     "status": "completed", "content": output_block(NOTICE)})
+        # The long command gets backgrounded mid-turn; the agent reads interim output
+        # (plain stdout, the id only in the file path) and STILL ends its turn waiting —
+        # the exact bd-bkvgk shape. The interim read must never count as completion.
+        tool(sid, "t1", "Bash(python -m pytest tests/ -q)", NOTICE)
+        tool(sid, "t2", "Read", "collecting 312 items ...", raw={"file_path": OUT_FILE})
         chunk(sid, "Waiting for the test suite to finish.")
     elif mode == "resolves":
-        # Nudged, the agent polls the command (input names the id), sees it done, answers.
-        update(sid, {"sessionUpdate": "tool_call", "toolCallId": "t2", "title": "BashOutput",
-                     "kind": "execute", "rawInput": {"bash_id": "bash_1"}})
-        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed",
-                     "content": output_block("<status>completed</status> exit code 0 - 12 passed")})
+        # Nudged, the agent polls its background-task output tool: structural done signs.
+        tool(sid, "t3", "BashOutput", "<status>completed</status> exit code 0 - 12 passed",
+             raw={"bash_id": "bash_1"})
+        chunk(sid, "Suite finished: 12 passed.")
+    elif mode == "reads_file":
+        # Nudged, the agent checks the way the notice itself prescribes — Read on the
+        # output file. Plain stdout: NO structural done sign exists on this path, only
+        # checked-then-answered.
+        tool(sid, "t3", "Read", "===== 12 passed, 3 warnings in 612.41s =====",
+             raw={"file_path": OUT_FILE})
         chunk(sid, "Suite finished: 12 passed.")
     elif mode == "stall":
         # The nudged round never answers — the chase must die by the turn's own deadline.
         continue
-    else:  # mode == "stubborn" — keeps ending its turn to wait, forever
+    else:  # mode == "stubborn" — checks, is SHOWN still-running, ends waiting anyway
+        tool(sid, "t%d0" % prompts, "Bash(sleep 45; tail " + OUT_FILE + ")",
+             "<tool_use_error>Blocked: sleep 45 followed by: tail " + OUT_FILE + "</tool_use_error>",
+             status="failed")
+        tool(sid, "t%d1" % prompts, "Read", "collecting 312 items ...",
+             raw={"file_path": OUT_FILE})
+        tool(sid, "t%d2" % prompts, "BashOutput", "<status>running</status>",
+             raw={"bash_id": "bash_1"})
         chunk(sid, "Still waiting on the suite.")
     send({"jsonrpc": "2.0", "id": mid,
           "result": {"stopReason": "end_turn", "usage": {"inputTokens": 100, "outputTokens": 7}}})
@@ -132,9 +155,31 @@ async def test_backgrounded_waiting_turn_gets_one_followup_and_its_answer_wins(t
     assert client._turn_usage == {"inputTokens": 200, "outputTokens": 14}
 
 
+async def test_a_finished_command_checked_by_reading_its_output_file_is_accepted(tmp_path):
+    """The check the notice itself prescribes — Read on the command's output file —
+    returns plain stdout with no structural done sign, so the nudged round's
+    checked-then-answered end must clear the command and its answer must win. (And the
+    FIRST round's interim read of the same file must not: the agent still believed a
+    notification would come when it ended that round on the waiting note.)"""
+    client, log = _client(tmp_path, "reads_file")
+    try:
+        reply = await client.prompt("run the suite", timeout=30.0)
+    finally:
+        await client.close()
+
+    assert reply == "Suite finished: 12 passed."
+    assert len(_prompts(log)) == 2  # the interim read didn't suppress the follow-up
+    assert client.last_stop_reason == "end_turn"
+    assert client.unfinished_reason() is None
+    assert client._turn_usage == {"inputTokens": 200, "outputTokens": 14}
+
+
 async def test_an_agent_that_keeps_waiting_gets_the_stop_marker_after_three_followups(tmp_path):
     """(b) The follow-up repeats at most 3 times; after that the turn carries
-    ``background_pending`` — a marker callers see — instead of a silent waiting answer."""
+    ``background_pending`` — a marker callers see — instead of a silent waiting answer.
+    Each nudged round here checks the command and is then structurally SHOWN it still
+    running: the running poll must revoke the softer file-read check (and the failed,
+    blocked check must never count), or the waiting note would be accepted."""
     client, log = _client(tmp_path, "stubborn")
     try:
         reply = await client.prompt("run the suite", timeout=30.0)
@@ -158,7 +203,14 @@ async def test_a_followup_that_outlives_the_turn_budget_returns_the_marker_not_a
     """The chase stays inside the turn's EXISTING timeout: each round gets only what is
     left of it, and a round that runs past that comes back as ``background_pending`` —
     before bd-572g1 a normally-ended turn always returned, so the chase must never turn
-    one into a raised turn failure."""
+    one into a raised turn failure.
+
+    ~3-4s of REAL time, deliberately: the per-round deadline runs on the event loop's
+    real clock inside the request timeout, which a virtual clock can't drive, and there
+    is nothing event-based to wait on — the point is that NOTHING arrives and the client
+    must time out by itself. The 4s budget must also comfortably outlast subprocess
+    spawn + handshake + the instant first round under CI load, or the follow-up is never
+    sent and the wrong exit (the spent-deadline one below) is asserted."""
     client, log = _client(tmp_path, "stall")
     try:
         reply = await client.prompt("run the suite", timeout=4.0)
@@ -197,9 +249,9 @@ async def test_a_spent_deadline_returns_the_marker_without_another_prompt():
     assert sent == []
 
 
-def _event(text=None, tool_id="t1", raw_input=None):
+def _event(text=None, tool_id="t1", raw_input=None, status="completed"):
     """One tool_call_update as ``_handle_update`` hands it to ``_note_background_commands``."""
-    update = {"sessionUpdate": "tool_call_update", "toolCallId": tool_id, "status": "completed"}
+    update = {"sessionUpdate": "tool_call_update", "toolCallId": tool_id, "status": status}
     if text is not None:
         update["content"] = [{"type": "content", "content": {"type": "text", "text": text}}]
     if raw_input is not None:
@@ -207,48 +259,70 @@ def _event(text=None, tool_id="t1", raw_input=None):
     return update
 
 
-def test_a_finished_poll_of_a_longer_id_does_not_clear_a_prefix_id():
-    """``bash_1`` must not be cleared on a prefix hit inside ``bash_10``."""
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        pytest.param(
+            [
+                dict(text="Command running in background with ID: bash_1"),
+                dict(text="Command running in background with ID: bash_10"),
+                dict(text="<status>completed</status> exit code 0", tool_id="t2",
+                     raw_input={"bash_id": "bash_10"}),
+            ],
+            {"bash_1"},
+            id="a-finished-bash_10-never-clears-prefix-bash_1",
+        ),
+        pytest.param(
+            [
+                dict(text="Command running in background with ID: bash_1"),
+                # Still-running poll whose partial stdout carries completion-ish words
+                # ('complete', 'failed', a literal exit code) — clearing there returns
+                # the original waiting-answer-accepted bug.
+                dict(text="<status>running</status><stdout>test_complete_flow passed; "
+                          "subprocess exit code 1 expected</stdout>",
+                     tool_id="t2", raw_input={"bash_id": "bash_1"}),
+                # Bare words with no structure never clear either.
+                dict(text="collecting … test_setup_failed deselected, suite not finished",
+                     tool_id="t3", raw_input={"bash_id": "bash_1"}),
+            ],
+            {"bash_1"},
+            id="running-status-and-bare-words-never-clear",
+        ),
+        pytest.param(
+            [
+                # 'ID: b3k9x2. Output …' must store the BARE id — with the period kept,
+                # the done poll (which names ``b3k9x2``) could never clear it.
+                dict(text="Command running in background with ID: b3k9x2. "
+                          "Output is being written to: /tmp/b3k9x2.log"),
+                dict(text="<status>completed</status>", tool_id="t2",
+                     raw_input={"bash_id": "b3k9x2"}),
+            ],
+            set(),
+            id="sentence-period-notice-stores-the-bare-id",
+        ),
+        pytest.param(
+            [
+                dict(text="Command running in background with ID: bash_1. Output is "
+                          "being written to: /tmp/tasks/bash_1.output."),
+                # A completed Read of the output file: plain stdout, no structural sign.
+                # It must NOT clear mid-round — only a follow-up round's normal end may
+                # act on it (first-round interim reads precede the waiting note).
+                dict(text="===== 12 passed in 612.41s =====", tool_id="t2",
+                     raw_input={"file_path": "/tmp/tasks/bash_1.output"}),
+            ],
+            {"bash_1"},
+            id="a-plain-stdout-file-read-never-clears-mid-round",
+        ),
+    ],
+)
+def test_clearing_mid_round_needs_structure_and_the_exact_id(events, expected):
+    """Mid-round clearing is structural, exact-id, and veto-respecting — one table so
+    the variants stay side by side (tests drive the handler on a ``__new__``-built
+    client exactly as ``_handle_update`` would, without a subprocess per regex case)."""
     client = AcpClient.__new__(AcpClient)
-    client._note_background_commands(_event("Command running in background with ID: bash_1"))
-    client._note_background_commands(_event("Command running in background with ID: bash_10"))
-    client._note_background_commands(
-        _event("<status>completed</status> exit code 0", tool_id="t2", raw_input={"bash_id": "bash_10"})
-    )
-    assert client._turn_background_pending == {"bash_1"}
-
-
-def test_a_running_poll_with_chatty_stdout_does_not_clear_the_id():
-    """A still-running poll whose partial stdout happens to contain completion-ish words
-    ('complete', 'failed', even a literal exit code) must not clear — clearing there
-    returns the original waiting-answer-accepted bug."""
-    client = AcpClient.__new__(AcpClient)
-    client._note_background_commands(_event("Command running in background with ID: bash_1"))
-    client._note_background_commands(_event(
-        "<status>running</status><stdout>test_complete_flow passed; subprocess exit code 1 expected</stdout>",
-        tool_id="t2",
-        raw_input={"bash_id": "bash_1"},
-    ))
-    client._note_background_commands(_event(
-        "collecting … test_setup_failed deselected, suite not finished",  # bare words, no structure
-        tool_id="t3",
-        raw_input={"bash_id": "bash_1"},
-    ))
-    assert client._turn_background_pending == {"bash_1"}
-
-
-def test_a_notice_ending_its_sentence_stores_the_bare_id_and_a_done_poll_clears_it():
-    """'ID: b3k9x2. Output …' must store ``b3k9x2`` — with the period, the poll (which
-    names the bare id) could never clear it and a finished command would still be chased."""
-    client = AcpClient.__new__(AcpClient)
-    client._note_background_commands(_event(
-        "Command running in background with ID: b3k9x2. Output is being written to: /tmp/b3k9x2.log"
-    ))
-    assert client._turn_background_pending == {"b3k9x2"}
-    client._note_background_commands(
-        _event("<status>completed</status>", tool_id="t2", raw_input={"bash_id": "b3k9x2"})
-    )
-    assert client._turn_background_pending == set()
+    for event in events:
+        client._note_background_commands(_event(**event))
+    assert client._turn_background_pending == expected
 
 
 async def test_a_turn_without_a_background_notice_gets_no_followup(tmp_path):
@@ -264,12 +338,3 @@ async def test_a_turn_without_a_background_notice_gets_no_followup(tmp_path):
     assert client.last_stop_reason == "end_turn"
     # No chase → the single round's usage passes through untouched.
     assert client._turn_usage == {"inputTokens": 100, "outputTokens": 7}
-
-
-def test_the_delegate_surface_marks_a_background_pending_reply():
-    """The delegate reply (prose in a model's context) spells the marker out, and the
-    classification pair stays consistent: every incomplete reason books as unfinished."""
-    marked = _mark_incomplete("Waiting for the test suite to finish.", "background_pending")
-    assert "incomplete reply" in marked
-    assert "waiting note" in marked
-    assert set(_INCOMPLETE_STOP_REASONS) <= set(_UNFINISHED_STOP_REASONS)

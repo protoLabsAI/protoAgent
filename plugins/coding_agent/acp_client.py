@@ -116,7 +116,13 @@ _BACKGROUND_NOTICE_RE = re.compile(r"Command running in background with ID:\s*([
 #: "failed" (a test name, a log line), and clearing on that returns the exact
 #: waiting-answer-accepted bug this file exists to fix. So only the poll tool's own
 #: status element, a reported exit code (digit required — prose alone doesn't count),
-#: or an explicit kill confirmation clear an id.
+#: or an explicit kill confirmation clear an id. This is the shape Claude Code's
+#: background-task output tool really emits (verified against the bd-bkvgk transcripts:
+#: ``<status>completed</status> … <exit_code>0</exit_code>``) — but it is NOT the only
+#: way an agent checks: the notice itself says "To check interim output, use Read on
+#: that file path", and a Read returns the command's plain stdout, which carries no
+#: structural sign either way. That path clears per follow-up ROUND instead — see
+#: ``_round_background_checked`` in ``_note_background_commands``.
 _BACKGROUND_DONE_RE = re.compile(
     r"<status>\s*(?:completed|failed|killed)\s*</status>"
     r"|\bexit[ _]code\b[>:=]?\s*-?\d"
@@ -707,12 +713,18 @@ class AcpClient:
         # turn end with this non-empty is a parked answer, not a finished one — see
         # ``_background_followups``. ``_turn_tool_refs`` is its sidecar: what each tool
         # call referenced (input + title), so a completion sign in one event connects to
-        # the id a sibling event named.
+        # the id a sibling event named. ``_round_background_checked`` is the per-ROUND
+        # sidecar: which pending ids this round's tool events checked without a
+        # structural still-running veto — the follow-up loop clears those at round end
+        # (the Read-the-output-file path, whose text carries no structural sign).
         self._turn_background_pending: set[str] = set()
         self._turn_tool_refs: dict[str, str] = {}
+        self._round_background_checked: set[str] = set()
         self._transcript_path: str | None = None
         self._reset_timeout_evidence()
-        # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
+        # Why the last turn ended — ACP's `session/prompt` result (#2279), or the
+        # synthetic `background_pending` this client itself stamps on a turn that ended
+        # parked on a command the agent had backgrounded (bd-572g1).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
         self.last_stop_reason: str | None = None
@@ -1067,19 +1079,37 @@ class AcpClient:
         accounted for them (bd-572g1).
 
         Claude Code reports a foreground command that outlived its Bash budget as
-        "Command running in background with ID: <id>" in the tool result; over ACP no
-        notification ever follows. An id stays pending until a LATER tool event both
-        references it (in its output, ``rawInput``, or title — the poll usually carries
-        the id in its input while the completion sign rides its output) and shows a
-        structural completion sign in its output text (``_BACKGROUND_DONE_RE``). Keyed
-        off the notice text itself, so ACP agents that never produce it are unaffected;
-        ``_background_followups`` reads what is left at turn end.
+        "Command running in background with ID: <id>. Output is being written to:
+        …/tasks/<id>.output. … To check interim output, use Read on that file path." —
+        and over ACP no notification ever follows. An id stays pending until either
+
+        * a LATER tool event both references it (in its output, ``rawInput``, or title —
+          the poll usually carries the id in its input while the completion sign rides
+          its output) and shows a structural completion sign in its output text
+          (``_BACKGROUND_DONE_RE``), or
+        * a FOLLOW-UP round checks it and then ends normally. A Read of the output file
+          — the check the notice itself prescribes, and its filename embeds the id — is
+          the command's plain stdout: no structural sign exists either way (verified
+          against the bd-bkvgk transcripts), so the agent's own checked-then-answered
+          judgment is the only sound completion signal, and only once a nudge has
+          corrected the "I will be notified" belief. ``_round_background_checked``
+          records which pending ids this round's COMPLETED tool events referenced (a
+          start event showed the agent nothing yet, a failed one — claude-agent-acp
+          maps a blocked/errored result there — showed it nothing at all), with a
+          structural still-running sign revoking the check; ``_background_followups``
+          clears what is checked when a follow-up round ends. Deliberately NEVER
+          applied to the first round: the same transcripts show agents reading interim
+          output right before ending on the exact waiting note this file catches.
+
+        Keyed off the notice text itself, so ACP agents that never produce it are
+        unaffected; ``_background_followups`` reads what is left at turn end.
         """
         if not hasattr(self, "_turn_background_pending"):
             # Same bare-client guard as ``_observe_tool``: tests drive ``_handle_update``
             # on an ``__new__``-built client that never saw ``__init__``.
             self._turn_background_pending = set()
             self._turn_tool_refs = {}
+            self._round_background_checked = set()
         text = _tool_output_text(update)
         raw = update.get("rawInput")
         if isinstance(raw, str):
@@ -1103,24 +1133,33 @@ class AcpClient:
             # Capped so a malformed or adversarial output can't grow the set unbounded.
             if len(self._turn_background_pending) < 32:
                 self._turn_background_pending.add(bg_id)
-        # Only ids NOT (re-)announced by this very event can be cleared by it — the
-        # notice itself must never read as its own completion.
+        # Only ids NOT (re-)announced by this very event can be cleared (or counted as
+        # checked) by it — the notice itself must never read as its own completion.
         pending = self._turn_background_pending - noticed
         if not pending or not text:
             return
-        # A poll that structurally reports the command still running never clears,
-        # whatever words ("failed", "exit code 1") its partial stdout carries.
-        if _BACKGROUND_RUNNING_RE.search(text):
-            return
-        if not _BACKGROUND_DONE_RE.search(text):
-            return
+        running = _BACKGROUND_RUNNING_RE.search(text) is not None
+        done = _BACKGROUND_DONE_RE.search(text) is not None
+        checked = str(update.get("status") or "") == "completed"
         haystack = f"{text} {ref} {self._turn_tool_refs.get(tool_id, '') if tool_id else ''}"
         for bg_id in pending:
             # Bounded on both sides by non-id characters: a finished ``bash_10`` must
             # not clear ``bash_1``, while punctuation around the id ("bash_1.log",
-            # '"bash_1"') still counts as a reference.
-            if re.search(rf"(?<![{_BACKGROUND_ID_CHARS}]){re.escape(bg_id)}(?![{_BACKGROUND_ID_CHARS}])", haystack):
+            # '"bash_1"') still counts as a reference — which is also how a Read of the
+            # notice's ``…/tasks/<id>.output`` file counts as checking that id.
+            if not re.search(rf"(?<![{_BACKGROUND_ID_CHARS}]){re.escape(bg_id)}(?![{_BACKGROUND_ID_CHARS}])", haystack):
+                continue
+            if running:
+                # A poll that structurally reports the command still running never
+                # clears, whatever words ("failed", "exit code 1") its partial stdout
+                # carries — and it REVOKES this round's softer file-read check: the
+                # agent has just been shown the command still going.
+                self._round_background_checked.discard(bg_id)
+            elif done:
                 self._turn_background_pending.discard(bg_id)
+                self._round_background_checked.discard(bg_id)
+            elif checked:
+                self._round_background_checked.add(bg_id)
 
     def _note_transcript(self, result: Any) -> None:
         # ACP has no standard transcript filename/layout. Only use an explicit
@@ -2309,6 +2348,7 @@ class AcpClient:
         self._turn_open_tools = {}
         self._turn_background_pending = set()
         self._turn_tool_refs = {}
+        self._round_background_checked = set()
         self._turn_usage = None
         self._turn_cost_usd = None
         self._turn_thoughts = ""
@@ -2421,6 +2461,14 @@ class AcpClient:
         ``background_pending`` stop reason so callers see a parked turn (an unfinished,
         retry-worthy run) instead of a plausible "waiting…" answer.
 
+        A command is accounted for two ways (see ``_note_background_commands``): a tool
+        event with a structural done sign clears it mid-round, any round; a follow-up
+        round that CHECKED it — the notice prescribes Read on the command's output
+        file, whose plain stdout carries no structural sign — and then ended normally
+        without a later still-running veto clears it here at round end, because after
+        the nudge corrected the "I will be notified" belief, checked-then-answered is
+        the agent's own completion judgment.
+
         A chase round that DIES — its shrinking per-round timeout, a transport drop, an
         agent-side error on the nudge — degrades to that same marker instead of raising:
         before bd-572g1 a normally-ended turn always returned its answer, and the chase
@@ -2452,10 +2500,13 @@ class AcpClient:
             # The "waiting" note must not leak into the real answer: reset the per-round
             # accumulation exactly as a fresh turn would, keeping the rest of the
             # per-turn state (tool counts, open cards, the pending set) cumulative.
+            # The checked set resets too — only a check made AFTER this nudge (the
+            # agent now knows no notification will come) can vouch for a round end.
             self._answer = ""
             self._text_after_tool = False
             self._last_chunk = ""
             self._segment, self._segment_chunks = "", 0
+            self._round_background_checked = set()
             try:
                 result = await self._prompt_request(_BACKGROUND_FOLLOWUP_PROMPT.format(ids=ids), timeout=remaining)
             except asyncio.CancelledError:
@@ -2477,6 +2528,12 @@ class AcpClient:
                     _BACKGROUND_PENDING_SIGNAL,
                 )
                 return self._background_pending_result(result, usage, followups)
+            if self._ended_normally(result):
+                # The output-file path: a round that checked the command (its Read/poll
+                # referenced the id, structural done signs or not) and then ended
+                # normally — with no later still-running sign revoking the check — IS
+                # the agent's completion judgment, so this round's text is the answer.
+                self._turn_background_pending -= self._round_background_checked
         if usage is not None and isinstance(result, dict):
             # A resolved chase reports the whole turn's tokens, not the last round's.
             result = {**result, "usage": self._merge_usage(usage, result.get("usage"))}
