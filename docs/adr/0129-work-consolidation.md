@@ -298,7 +298,7 @@ chat turns keep today's behavior: the operator sees the interruption and resends
 |---|---|---|
 | Between steps, or during a model call: every tool call in the last AI message has its ToolMessage | any | **Resume automatically** from the checkpoint. Completed steps aren't repeated. |
 | During a tool call: an AI message has tool calls without results | `wait:` / watch continuation | **Resume**, and report the uncertain call to the model as interrupted ("this tool call was interrupted by a restart; its effect is unknown, so verify before repeating"). The agent's loop continues. |
-| During a tool call | any other job occurrence | **Ask in Needs you**: "<Job> was interrupted by a restart after <N> steps. Last action: <tool>(<short args>), and its effect is unknown." Options: **Resume** (continue with the uncertain call reported as interrupted), **Re-run** (fresh turn from the job's prompt), **Drop**. Neutral tone, never an error. |
+| During a tool call | any other job occurrence | **Ask in Needs you**: "&lt;Job&gt; was interrupted by a restart after &lt;N&gt; steps. Last action: &lt;tool&gt;(&lt;short args&gt;), and its effect is unknown." Options: **Resume** (continue with the uncertain call reported as interrupted), **Re-run** (fresh turn from the job's prompt), **Drop**. Neutral tone, never an error. |
 | any | a recurring job's occurrence | **Skip** the interrupted occurrence (record it as `interrupted`, not `failed`). The next scheduled occurrence runs as usual. If it stopped mid-tool-call, also raise the Needs you item, without Re-run. |
 
 **Guards.**
@@ -313,7 +313,7 @@ chat turns keep today's behavior: the operator sees the interruption and resends
   item is the only path that starts a fresh turn, and only the operator can pick it.
 - **Ownership.** The resume runs under the occurrence's execution-session lock
   (D6 serialization), before the owner admits any new independent fire.
-- **Visibility.** Every auto-resume emits an Activity entry ("Resumed <job> after a
+- **Visibility.** Every auto-resume emits an Activity entry ("Resumed &lt;job&gt; after a
   restart (step N)"), so an automatic recovery is never silent. The Needs you item
   links to that job's trace.
 - **No checkpoint.** If the checkpoint is missing or unreadable, raise the Needs you
