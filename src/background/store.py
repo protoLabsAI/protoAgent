@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from infra.sqlite_locks import file_lock
+
 log = logging.getLogger("protoagent.background")
 
 STATUSES = ("running", "completed", "failed", "canceled")
@@ -178,6 +180,13 @@ class BackgroundStore:
     def __init__(self, db_path: str) -> None:
         self.path = str(db_path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        # The shared per-file write lock (#5122): a second connection waiting on a
+        # write can lose SQLite's busy-handler poll to a holder that commits and
+        # re-begins at once and raise "database is locked" after busy_timeout. A
+        # blocking lock queues same-process writers instead; busy_timeout still
+        # covers other processes. Keyed by the file, so two BackgroundStore objects
+        # on one jobs.db serialize too.
+        self._lock = file_lock(self.path)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -191,10 +200,11 @@ class BackgroundStore:
         return db
 
     def _init_db(self) -> None:
-        db = self._connect()
-        try:
-            db.execute(
-                """
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute(
+                    """
                 CREATE TABLE IF NOT EXISTS background_jobs (
                     id             TEXT PRIMARY KEY,
                     agent_name     TEXT NOT NULL,
@@ -218,49 +228,49 @@ class BackgroundStore:
                     peer_task_id   TEXT NOT NULL DEFAULT '',
                     peer_message_id TEXT NOT NULL DEFAULT '',
                     amends         TEXT NOT NULL DEFAULT ''
+                    )
+                    """
                 )
-                """
-            )
-            # Migrate a pre-ADR-0051 DB: add the a2a_task_id column if it's missing.
-            cols = {r[1] for r in db.execute("PRAGMA table_info(background_jobs)").fetchall()}
-            if "a2a_task_id" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN a2a_task_id TEXT")
-            # Migrate a pre-ADR-0070 DB: incognito propagation (existing rows default 0).
-            if "origin_incognito" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN origin_incognito INTEGER NOT NULL DEFAULT 0")
-            # Migrate a pre-#1766 DB: fan-out batch key (existing rows are unbatched → NULL).
-            if "batch_id" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN batch_id TEXT")
-            # Migrate a pre-#1808 DB: soft-dismiss flag (existing rows are undismissed → 0).
-            if "dismissed" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
-            # Migrate a pre-#2363 DB: deterministic-work flag. Existing rows default 0 —
-            # i.e. they keep the ADR 0070 report treatment, which is what they got when
-            # they were written, so a drain of an old row can't change shape under us.
-            if "deterministic" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN deterministic INTEGER NOT NULL DEFAULT 0")
-            # Migrate a pre-#3051 DB: explicit authored-result identity. Existing jobs
-            # stay ordinary task notifications; only newly spawned delegate work sets it.
-            if "result_author" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN result_author TEXT NOT NULL DEFAULT ''")
-            # Migrate a pre-origin-fence DB: existing rows were spawned unfenced-recorded → [].
-            if "origin_fence" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN origin_fence TEXT NOT NULL DEFAULT '[]'")
-            # Migrate a pre-#3945 DB: a failed job's terminal error (existing rows → '').
-            if "error" not in cols:
-                db.execute("ALTER TABLE background_jobs ADD COLUMN error TEXT NOT NULL DEFAULT ''")
-            # Migrate a pre-#5053 DB: peer identity + amendment link (existing rows → '').
-            for col in ("peer_task_id", "peer_message_id", "amends"):
-                if col not in cols:
-                    db.execute(f"ALTER TABLE background_jobs ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
-            db.execute(
-                "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
-            )
-            db.execute("CREATE INDEX IF NOT EXISTS ix_bg_status ON background_jobs(status)")
-            db.execute("CREATE INDEX IF NOT EXISTS ix_bg_batch ON background_jobs(batch_id)")
-            db.commit()
-        finally:
-            db.close()
+                # Migrate a pre-ADR-0051 DB: add the a2a_task_id column if it's missing.
+                cols = {r[1] for r in db.execute("PRAGMA table_info(background_jobs)").fetchall()}
+                if "a2a_task_id" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN a2a_task_id TEXT")
+                # Migrate a pre-ADR-0070 DB: incognito propagation (existing rows default 0).
+                if "origin_incognito" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN origin_incognito INTEGER NOT NULL DEFAULT 0")
+                # Migrate a pre-#1766 DB: fan-out batch key (existing rows are unbatched → NULL).
+                if "batch_id" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN batch_id TEXT")
+                # Migrate a pre-#1808 DB: soft-dismiss flag (existing rows are undismissed → 0).
+                if "dismissed" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
+                # Migrate a pre-#2363 DB: deterministic-work flag. Existing rows default 0 —
+                # i.e. they keep the ADR 0070 report treatment, which is what they got when
+                # they were written, so a drain of an old row can't change shape under us.
+                if "deterministic" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN deterministic INTEGER NOT NULL DEFAULT 0")
+                # Migrate a pre-#3051 DB: explicit authored-result identity. Existing jobs
+                # stay ordinary task notifications; only newly spawned delegate work sets it.
+                if "result_author" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN result_author TEXT NOT NULL DEFAULT ''")
+                # Migrate a pre-origin-fence DB: existing rows were spawned unfenced-recorded → [].
+                if "origin_fence" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN origin_fence TEXT NOT NULL DEFAULT '[]'")
+                # Migrate a pre-#3945 DB: a failed job's terminal error (existing rows → '').
+                if "error" not in cols:
+                    db.execute("ALTER TABLE background_jobs ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+                # Migrate a pre-#5053 DB: peer identity + amendment link (existing rows → '').
+                for col in ("peer_task_id", "peer_message_id", "amends"):
+                    if col not in cols:
+                        db.execute(f"ALTER TABLE background_jobs ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+                db.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
+                )
+                db.execute("CREATE INDEX IF NOT EXISTS ix_bg_status ON background_jobs(status)")
+                db.execute("CREATE INDEX IF NOT EXISTS ix_bg_batch ON background_jobs(batch_id)")
+                db.commit()
+            finally:
+                db.close()
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -291,33 +301,34 @@ class BackgroundStore:
         is the id of the earlier job this one amends (#5053)."""
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
         created = (now or datetime.now(UTC)).isoformat()
-        db = self._connect()
-        try:
-            db.execute(
-                "INSERT INTO background_jobs "
-                "(id, agent_name, origin_session, subagent_type, description, prompt, "
-                " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, "
-                " batch_id, deterministic, result_author, origin_fence, amends) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?, ?, ?, ?)",
-                (
-                    job_id,
-                    agent_name,
-                    origin_session,
-                    subagent_type,
-                    description,
-                    prompt,
-                    created,
-                    1 if origin_incognito else 0,
-                    batch_id or None,
-                    1 if deterministic else 0,
-                    result_author or "",
-                    json.dumps([str(t) for t in (origin_fence or [])]),
-                    amends or "",
-                ),
-            )
-            db.commit()
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute(
+                    "INSERT INTO background_jobs "
+                    "(id, agent_name, origin_session, subagent_type, description, prompt, "
+                    " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, "
+                    " batch_id, deterministic, result_author, origin_fence, amends) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?, ?, ?, ?)",
+                    (
+                        job_id,
+                        agent_name,
+                        origin_session,
+                        subagent_type,
+                        description,
+                        prompt,
+                        created,
+                        1 if origin_incognito else 0,
+                        batch_id or None,
+                        1 if deterministic else 0,
+                        result_author or "",
+                        json.dumps([str(t) for t in (origin_fence or [])]),
+                        amends or "",
+                    ),
+                )
+                db.commit()
+            finally:
+                db.close()
         return job_id
 
     def set_a2a_task_id(self, job_id: str, a2a_task_id: str) -> None:
@@ -326,15 +337,16 @@ class BackgroundStore:
         late frame can't clobber it."""
         if not a2a_task_id:
             return
-        db = self._connect()
-        try:
-            db.execute(
-                "UPDATE background_jobs SET a2a_task_id = ? WHERE id = ? AND (a2a_task_id IS NULL OR a2a_task_id = '')",
-                (a2a_task_id, job_id),
-            )
-            db.commit()
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute(
+                    "UPDATE background_jobs SET a2a_task_id = ? WHERE id = ? AND (a2a_task_id IS NULL OR a2a_task_id = '')",
+                    (a2a_task_id, job_id),
+                )
+                db.commit()
+            finally:
+                db.close()
 
     def set_peer_identity(self, job_id: str, peer_task_id: str, peer_message_id: str = "") -> None:
         """Record the peer's task id (and the messageId we sent) for a background
@@ -342,17 +354,18 @@ class BackgroundStore:
         so a later poll frame can't rewrite the identity of the request that was sent."""
         if not peer_task_id:
             return
-        db = self._connect()
-        try:
-            db.execute(
-                "UPDATE background_jobs SET peer_task_id = ?, "
-                "peer_message_id = CASE WHEN peer_message_id = '' THEN ? ELSE peer_message_id END "
-                "WHERE id = ? AND peer_task_id = ''",
-                (peer_task_id, peer_message_id or "", job_id),
-            )
-            db.commit()
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute(
+                    "UPDATE background_jobs SET peer_task_id = ?, "
+                    "peer_message_id = CASE WHEN peer_message_id = '' THEN ? ELSE peer_message_id END "
+                    "WHERE id = ? AND peer_task_id = ''",
+                    (peer_task_id, peer_message_id or "", job_id),
+                )
+                db.commit()
+            finally:
+                db.close()
 
     def mark_complete(
         self,
@@ -385,17 +398,18 @@ class BackgroundStore:
         if status not in _TERMINAL:
             raise ValueError(f"mark_complete status must be terminal, got {status!r}")
         completed = (now or datetime.now(UTC)).isoformat()
-        db = self._connect()
-        try:
-            cur = db.execute(
-                "UPDATE background_jobs SET status = ?, result = ?, error = ?, completed_at = ? "
-                "WHERE id = ? AND status = 'running'",
-                (status, result or "", "" if status == "completed" else (error or ""), completed, job_id),
-            )
-            db.commit()
-            transitioned = cur.rowcount > 0
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                cur = db.execute(
+                    "UPDATE background_jobs SET status = ?, result = ?, error = ?, completed_at = ? "
+                    "WHERE id = ? AND status = 'running'",
+                    (status, result or "", "" if status == "completed" else (error or ""), completed, job_id),
+                )
+                db.commit()
+                transitioned = cur.rowcount > 0
+            finally:
+                db.close()
 
         # Close out the delegation ledger edge this job opened at spawn. Hooked HERE, in
         # the store, because `mark_complete` is the one funnel every settle path goes
@@ -440,23 +454,24 @@ class BackgroundStore:
         UPDATE flipped every pending row of the session — so a job that settled between the
         two was marked delivered without ever being returned, and two concurrent drains
         could both return the same row."""
-        db = self._connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            rows = db.execute(
-                "SELECT * FROM background_jobs "
-                "WHERE origin_session = ? AND status IN ('completed', 'failed', 'canceled') "
-                "AND notified = 0 ORDER BY completed_at ASC",
-                (origin_session,),
-            ).fetchall()
-            if rows:
-                ids = [r["id"] for r in rows]
-                marks = ", ".join("?" for _ in ids)
-                db.execute(f"UPDATE background_jobs SET notified = 1 WHERE id IN ({marks})", ids)
-            db.commit()
-            return [_row_to_job(r) for r in rows]
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                rows = db.execute(
+                    "SELECT * FROM background_jobs "
+                    "WHERE origin_session = ? AND status IN ('completed', 'failed', 'canceled') "
+                    "AND notified = 0 ORDER BY completed_at ASC",
+                    (origin_session,),
+                ).fetchall()
+                if rows:
+                    ids = [r["id"] for r in rows]
+                    marks = ", ".join("?" for _ in ids)
+                    db.execute(f"UPDATE background_jobs SET notified = 1 WHERE id IN ({marks})", ids)
+                db.commit()
+                return [_row_to_job(r) for r in rows]
+            finally:
+                db.close()
 
     def undelivered_terminal(self, *, since: datetime) -> list[BackgroundJob]:
         """Finished jobs whose outcome never drained into their session, settled at or after
@@ -571,17 +586,18 @@ class BackgroundStore:
             return 0
         cutoff = ((now or datetime.now(UTC)) - timedelta(days=older_than_days)).isoformat()
         marks = ", ".join("?" for _ in _TERMINAL)
-        db = self._connect()
-        try:
-            cur = db.execute(
-                f"DELETE FROM background_jobs WHERE status IN ({marks}) AND notified = 1 "
-                "AND completed_at IS NOT NULL AND completed_at < ?",
-                (*_TERMINAL, cutoff),
-            )
-            db.commit()
-            return cur.rowcount
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                cur = db.execute(
+                    f"DELETE FROM background_jobs WHERE status IN ({marks}) AND notified = 1 "
+                    "AND completed_at IS NOT NULL AND completed_at < ?",
+                    (*_TERMINAL, cutoff),
+                )
+                db.commit()
+                return cur.rowcount
+            finally:
+                db.close()
 
     # ── reads ───────────────────────────────────────────────────────────────
 
@@ -630,16 +646,17 @@ class BackgroundStore:
         by id after the worker is gone (ADR 0070: the report outlives the disposable worker).
         A running job is left alone — cancel it first. Returns ``True`` if a row was dismissed
         (already-dismissed rows don't count, so a double-dismiss reports ``False``)."""
-        db = self._connect()
-        try:
-            cur = db.execute(
-                "UPDATE background_jobs SET dismissed = 1 WHERE id = ? AND status != 'running' AND dismissed = 0",
-                (job_id,),
-            )
-            db.commit()
-            return cur.rowcount > 0
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                cur = db.execute(
+                    "UPDATE background_jobs SET dismissed = 1 WHERE id = ? AND status != 'running' AND dismissed = 0",
+                    (job_id,),
+                )
+                db.commit()
+                return cur.rowcount > 0
+            finally:
+                db.close()
 
     def dismiss_finished(self, origin_session: str | None = None) -> int:
         """Dismiss all finished (non-running) jobs from the panel (#1808), optionally scoped to
@@ -649,10 +666,11 @@ class BackgroundStore:
         if origin_session is not None:
             clauses.append("origin_session = ?")
             params.append(origin_session)
-        db = self._connect()
-        try:
-            cur = db.execute(f"UPDATE background_jobs SET dismissed = 1 WHERE {' AND '.join(clauses)}", params)
-            db.commit()
-            return cur.rowcount
-        finally:
-            db.close()
+        with self._lock:
+            db = self._connect()
+            try:
+                cur = db.execute(f"UPDATE background_jobs SET dismissed = 1 WHERE {' AND '.join(clauses)}", params)
+                db.commit()
+                return cur.rowcount
+            finally:
+                db.close()
