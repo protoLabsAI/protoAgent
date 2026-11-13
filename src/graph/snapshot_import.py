@@ -110,7 +110,12 @@ def _capabilities(config: dict) -> list[tuple[str, str]]:
             out.append((f"providers.{p.get('id') or '?'}.base_url", f"a model endpoint ({p['base_url']})"))
     seen = [k for k, _ in out]
     for key in credential_plane_keys(config, nested=True):
-        if not any(key == s or key.startswith(s + ".") for s in seen):
+        # A key that is present but EMPTY grants nothing (an exported snapshot carries blank
+        # ``tracing.host`` / ``auth.token`` rows), and one already named above — itself, a
+        # parent or a child of a listed entry — is not listed twice.
+        if not _dotted(config, key):
+            continue
+        if not any(key == s or key.startswith(s + ".") or s.startswith(key + ".") for s in seen):
             out.append((key, "an access, network or command setting"))
     return out
 
