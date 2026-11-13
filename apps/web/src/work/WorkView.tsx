@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@protolabsai/ui/primitives";
 import { Plus, X } from "lucide-react";
 import { WorkEmpty as Empty } from "./WorkEmpty";
@@ -7,6 +8,8 @@ import { useSurfaceFrame } from "../shell/SurfaceFrame";
 import { SideNav } from "@protolabsai/ui/navigation";
 import { useToast, Tooltip } from "@protolabsai/ui/overlays";
 import { isConnected, onConnectionChange } from "../lib/events";
+import { api } from "../lib/api";
+import { queryKeys } from "../lib/queries";
 import { useDecisions } from "../decisions/useDecisions";
 import { decisionMeta, fromDecision, relTime, type GroupableWorkItem, type WorkGroupId } from "./tone";
 import type { InboxItem } from "../lib/types";
@@ -69,8 +72,11 @@ function GoalCreatorHost({ state }: { state: SurfaceState }) {
 }
 
 /** An undelivered page (§2 "Delivery") — no section renderer owns the inbox, so the
- *  detail renders here from the normalized row. */
-function DeliveryDetail({ item }: { item: GroupableWorkItem }) {
+ *  detail renders here from the normalized row. This detail is the ONE operator path that
+ *  clears a stuck page (the Feed carries no deliver/dismiss control, docs/design/feed.md §1):
+ *  Dismiss marks the page delivered, so the retry sweeps and `check_inbox` stop holding it. */
+function DeliveryDetail({ item, onDone }: { item: GroupableWorkItem; onDone: () => void }) {
+  const qc = useQueryClient();
   const row = item.raw as InboxItem;
   return <WorkDetail
     title={item.title || "Delivery"}
@@ -78,8 +84,28 @@ function DeliveryDetail({ item }: { item: GroupableWorkItem }) {
     fields={[
       { label: "From", value: row.source || null },
       { label: "Waiting since", value: row.created_at ? relTime(row.created_at).text : null },
+      { label: "Status", value: row.retries_exhausted
+        ? "Couldn't be delivered automatically — retries used up"
+        : row.needs_human ? "Needs you" : null },
     ]}
-    actions={[]}
+    actions={[{
+      id: "dismiss",
+      label: "Dismiss…",
+      destructive: true,
+      confirm: {
+        prompt: "Dismiss this page?",
+        explanation: "It's marked delivered and the agent won't run it. There is no undo.",
+        confirmLabel: "Dismiss",
+        keepLabel: "Keep it",
+      },
+      run: async () => {
+        await api.deliverInbox(row.id);
+        // No bus event follows a console deliver — refetch the inbox so the row leaves
+        // Needs-you (and the Feed's next merge) without waiting for the next push.
+        await qc.invalidateQueries({ queryKey: queryKeys.inbox });
+        onDone();
+      },
+    }]}
     technical={{ Id: String(row.id), "Dedup key": row.dedup_key ?? "" }}
     type="Delivery"
   />;
@@ -311,7 +337,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       </div>
       {state.itemId && <div className="work-view__detail" ref={detailRef}>
         <div className="work-view__close"><Tooltip label="Close details"><Button icon variant="ghost" size="sm" aria-label="Close details" onClick={onBack}><X aria-hidden="true" /></Button></Tooltip></div>
-        {selected?.kind === "delivery" ? <DeliveryDetail item={selected} />
+        {selected?.kind === "delivery" ? <DeliveryDetail item={selected} onDone={onBack} />
           : detailRenderer?.render(context) ?? <Empty title={selected?.title ?? "Item unavailable"} description="Details will appear here." />}
       </div>}
     </div>

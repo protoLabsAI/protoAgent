@@ -15,7 +15,7 @@ import { ActivitySurface } from "./ActivitySurface";
  * ADR 0022) — incrementing only while the Feed dialog is closed; opening it clears
  * the badge. The dialog is the feed's own home: history left Work with the four-group
  * consolidation (ADR 0129 Q3, S4c removed the Activity section), so the pill opens the
- * full `ActivitySurface` (pending triage + completed provenance timeline) right here
+ * full `ActivitySurface` (one merged newest-first list, docs/design/feed.md) right here
  * instead of routing into the Work modal.
  */
 export function ActivityWidget() {
@@ -64,7 +64,7 @@ export function ActivityWidget() {
       }
       info={
         pendingNow
-          ? "A priority-now page could not be delivered automatically — open the feed to deliver or dismiss it"
+          ? "A priority-now page could not be delivered automatically — it's waiting for you in Work › Needs you"
           : unread
             ? `${unread} new item${unread === 1 ? "" : "s"} since you last looked`
             : "Feed — pending inbox items + what the agent did on its own"
