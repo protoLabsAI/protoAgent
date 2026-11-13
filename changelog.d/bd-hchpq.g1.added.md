@@ -14,6 +14,10 @@
   occurrence as dropped without running anything. With no (or a stale) checkpoint only
   Re-run and Drop are offered. Answers act exactly once — the decisions-ledger CAS
   arbitrates concurrent answers (the loser gets 409) and every occurrence transition is
-  CAS'd on the held state — and dismissing the card never resumes anything. Each S6
-  auto-resume now also appends an Activity entry: "Resumed &lt;job&gt; after a restart
-  (step N)".
+  CAS'd on the held state — and dismissing the card never resumes anything. A held run
+  is never stranded cardless: an answer whose action cannot move the occurrence reopens
+  the card, and each boot repairs the card of every still-held occurrence (a missing
+  record is re-raised, an answered-but-unacted one reopened; a dismissed card stays
+  dismissed). Each S6 auto-resume now also appends an Activity entry — "Resumed
+  &lt;job&gt; after a restart (step N)" — saved to the feed and published live on the
+  bus.

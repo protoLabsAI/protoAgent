@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { WorkRow } from "./WorkRow";
 import type { WatchState } from "../lib/types";
-import { formatWatchDuration, watchLifetime, fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, statusTone, statusWord, type WorkStatus } from "./tone";
+import { formatWatchDuration, watchLifetime, fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, staleTaskMeta, statusTone, statusWord, taskStaleDays, type WorkStatus } from "./tone";
 import rowCss from "./work-row.css?raw";
 import { groupFor, type GroupableWorkItem, type WorkGroupId } from "./tone";
 
@@ -138,6 +138,33 @@ it.each([
 it("hides invalid timestamps and does not describe future times as ago", () => {
   expect(relTime("bad")).toEqual({ text: "", tooltip: "" });
   expect(relTime(new Date(2026, 10, 9, 19, 14).toISOString(), new Date(2026, 10, 9, 18, 14).getTime()).text).toBe("today at 19:14");
+});
+
+describe("the 24h quiet rule for started jobs (ADR 0129)", () => {
+  const now = new Date("2026-11-12T12:00:00Z").getTime();
+  const ago = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+
+  it("flags only an in_progress job quiet past 24h, in whole days", () => {
+    expect(taskStaleDays({ status: "in_progress", updated_at: ago(23) }, now)).toBeNull();
+    expect(taskStaleDays({ status: "in_progress", updated_at: ago(24) }, now)).toBe(1);
+    expect(taskStaleDays({ status: "in_progress", updated_at: ago(6 * 24) }, now)).toBe(6);
+    // The freshest timestamp wins; creation only stands in when nothing was ever updated.
+    expect(taskStaleDays({ status: "in_progress", created_at: ago(72), updated_at: ago(2) }, now)).toBeNull();
+    expect(taskStaleDays({ status: "in_progress", created_at: ago(72) }, now)).toBe(3);
+  });
+
+  it("never flags other statuses or a job it cannot date", () => {
+    for (const status of ["open", "blocked", "waiting", "closed", undefined]) {
+      expect(taskStaleDays({ status, updated_at: ago(90) }, now)).toBeNull();
+    }
+    expect(taskStaleDays({ status: "in_progress" }, now)).toBeNull();
+    expect(taskStaleDays({ status: "in_progress", updated_at: "bad" }, now)).toBeNull();
+  });
+
+  it("reads as plain prose with days pluralized", () => {
+    expect(staleTaskMeta(1)).toBe("No activity for 1 day");
+    expect(staleTaskMeta(3)).toBe("No activity for 3 days");
+  });
 });
 
 it.each(statuses)("renders one accessible %s row", (status, tone, word) => {

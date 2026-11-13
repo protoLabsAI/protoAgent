@@ -19,6 +19,8 @@ Element.prototype.setPointerCapture ??= () => {};
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
 vi.mock("./useWorkItems", () => ({ useWorkItems: () => data.sources }));
+const openChat = vi.hoisted(() => vi.fn(async () => true));
+vi.mock("./openSourceChat", () => ({ openSourceChat: openChat }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let client: QueryClient;
 let root: Root;
@@ -450,6 +452,18 @@ it("announces group totals and newly arriving Needs you items", async () => {
   data.sources.decisions.items = [decision("answer")];
   await render("modal");
   expect(host.querySelector('[role="status"]')?.textContent).toBe("Overview, 1 items. 1 new Needs you items.");
+});
+
+it("a waiting job reads 'Waiting on you: <title>' in Needs you, neutral, and its row opens the chat", async () => {
+  data.sources.tasks.items = [{ ...task("parked", "waiting"), status: "needs-you", sessionId: "chat-7" }];
+  await render("modal");
+  const row = Array.from(host.querySelectorAll<HTMLElement>(".work-row")).find((node) => node.textContent?.includes("parked"))!;
+  expect(row.querySelector(".work-row__title")?.textContent).toBe("Waiting on you: parked");
+  expect(row.querySelector(".pl-badge")?.textContent).toBe("Job");
+  expect(row.querySelector(".pl-badge--warning")).toBeNull(); // neutral, never an alarm
+  await act(async () => row.click());
+  expect(openChat).toHaveBeenCalledWith("chat-7", false);
+  expect(host.querySelector(".work-view__detail")).toBeNull(); // the chat, not the detail pane
 });
 
 // Importing WorkView alone must load the built-in detail renderers. Do not import

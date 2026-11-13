@@ -1492,9 +1492,13 @@ def _main():
     # server — exposed on STATE like the other cross-layer seams, every boot (an
     # answer can arrive long after the boot that raised the item).
     STATE.interrupted_recovery = InterruptedTurnRecovery()
-    if _interrupted_job_tasks and STATE.scheduler is not None:
+    if STATE.scheduler is not None:
         _note_interrupted = getattr(STATE.scheduler, "note_interrupted_tasks", None)
         if _note_interrupted is not None:
+            # Even with nothing newly interrupted the seam must reach the scheduler:
+            # its recovery pass also repairs the Needs-you card of every occurrence
+            # still held from an earlier boot (S7 — an answer a crash cut down between
+            # the ledger CAS and the action must get its card back).
             _note_interrupted(_interrupted_job_tasks, recovery=STATE.interrupted_recovery)
     log.info("[a2a] durable stores ready (tasks=%s, push=%s)", task_db, push_db)
 

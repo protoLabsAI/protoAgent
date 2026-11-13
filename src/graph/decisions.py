@@ -497,6 +497,50 @@ class DecisionStore:
     def expire(self, decision_id: str) -> Decision:
         return self._close_record(decision_id, STATE_EXPIRED)
 
+    def reopen(self, decision_id: str) -> Decision:
+        """Put an ANSWERED restart-recovery decision back to ``pending`` (ADR 0129 D7
+        S7): the answer's action provably did not land — the occurrence it acts on is
+        still held — so the card must come back instead of leaving the run
+        answered-but-wedged with nothing to act through. Restart-recovery records only
+        (an ordinary parked decision's checkpoint interrupt is consumed by its answer;
+        re-asking it would fork the turn), and only from ``answered`` — a withdrawn
+        card was dismissed on purpose and stays closed. Idempotent on a record already
+        pending. Publishes ``decision.changed``."""
+        decision_id = (decision_id or "").strip()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT * FROM decisions WHERE id = ?", (decision_id,)).fetchone()
+                if row is None:
+                    raise DecisionNotFound(f"no decision {decision_id!r}")
+                rec = Decision.from_row(row)
+                if not str(rec.interrupt_id or "").startswith(RESTART_RECOVERY_PREFIX):
+                    raise DecisionError(f"decision {decision_id} is not a restart-recovery record; it cannot reopen")
+                if rec.pending:
+                    db.rollback()
+                    return rec
+                if rec.state != STATE_ANSWERED:
+                    raise DecisionClosed(f"decision {decision_id} is {rec.state}; only an answered one reopens")
+                rec.state = STATE_PENDING
+                rec.answer = None
+                rec.answered_at = None
+                rec.answered_by = None
+                rec.answered_surface = None
+                db.execute(
+                    "UPDATE decisions SET state = ?, answer = NULL, answered_at = NULL, "
+                    "answered_by = NULL, answered_surface = NULL WHERE id = ? AND state = ?",
+                    (STATE_PENDING, rec.id, STATE_ANSWERED),
+                )
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+            finally:
+                self._close(db)
+        _publish("decision.changed", {"id": rec.id, "session_id": rec.session_id, "state": rec.state})
+        return rec
+
     def _close_record(self, decision_id: str, state: str, *, answer: str | None = None,
                       answered_by: str | None = None, answered_surface: str | None = None,
                       withdraw_reason: str = "") -> Decision:

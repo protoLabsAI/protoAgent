@@ -116,7 +116,9 @@ function taskItem(over: Partial<TaskRaw> = {}): WorkItem {
     assignee: "casey",
     description: "Steps to reproduce are in the ticket.",
     created_at: "2026-11-07T09:00:00Z",
-    updated_at: "2026-11-09T09:00:00Z",
+    // Fresh by default (tests run on the real clock): the 24h stale rule is opted into
+    // per test with an explicitly old update.
+    updated_at: new Date(Date.now() - 3_600_000).toISOString(),
     closed_at: null,
     ...over,
   };
@@ -125,6 +127,7 @@ function taskItem(over: Partial<TaskRaw> = {}): WorkItem {
 type TaskRaw = {
   id: string; title: string; status: string; type: string; priority: number;
   assignee: string; description: string; created_at: string; updated_at: string; closed_at: string | null;
+  session_id?: string;
 };
 
 async function mount(node: ReactNode) {
@@ -399,6 +402,39 @@ describe("Tasks section (§2.7)", () => {
     expect(apiMock.closeTask).not.toHaveBeenCalled();
   });
 
+  it("a stale job's Close asks why, sends the trimmed reason to the close route, and offers Open chat", async () => {
+    const openChat = vi.fn();
+    const stale = taskItem({ updated_at: new Date(Date.now() - 2 * 86_400_000).toISOString(), session_id: "chat-9" });
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([stale]) }),
+      state: { itemId: "task:task-3" },
+      decisionActions: { agentOnline: true, openSourceChat: openChat, answerDecision: vi.fn() },
+    })));
+    expect(allText()).toContain("No activity for 2 days"); // the muted Activity field
+    await act(async () => button("Close…").click());
+    expect(allText()).toContain("Close this job?");
+    // The confirm stays primary — closing a quiet job is housekeeping, not destruction.
+    expect(button("Close job").className).not.toContain("pl-btn--danger");
+    await changeValue(document.querySelector<HTMLInputElement>(".work-detail__confirm input")!, "  Shipped elsewhere ");
+    await act(async () => button("Close job").click());
+    await flush();
+    expect(apiMock.closeTask).toHaveBeenCalledWith("task-3", "Shipped elsewhere");
+    await act(async () => button("Open chat").click());
+    expect(openChat).toHaveBeenCalledWith("chat-9");
+  });
+
+  it("a fresh in-progress job keeps the plain one-step Close and no Open chat", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ session_id: "chat-9" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    expect(allText()).not.toContain("No activity");
+    expect(() => button("Open chat")).toThrow();
+    await act(async () => button("Close").click());
+    await flush();
+    expect(apiMock.closeTask).toHaveBeenCalledWith("task-3");
+  });
+
   it("Delete returns an undo token; Undo redeems it via the undo API (r4)", async () => {
     await mount(h(TasksSection, ctx({
       sources: sources({ tasks: src([taskItem()]) }),
@@ -445,6 +481,16 @@ describe("Jobs in the list (§2, r1)", () => {
     expect(groupFor(blocked as GroupableWorkItem)).toBe("coming-up");
     await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([blocked]) }) })));
     expect(host!.querySelector(".work-row__meta")?.textContent).toContain("not started");
+  });
+
+  it("a day-quiet in_progress job leads its meta with the muted stale line; a fresh one shows none", async () => {
+    const stale = taskItem({ updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString() });
+    const fresh = taskItem({ id: "t-fresh", title: "t-fresh" });
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([stale, fresh]) }) })));
+    const metas = Array.from(host!.querySelectorAll(".work-row__meta")).map((n) => n.textContent);
+    expect(metas).toEqual(["No activity for 3 days · Bug · high", "Bug · high"]);
+    // No warning paint anywhere — the stale row keeps the neutral Job badge (operator copy).
+    expect(host!.querySelector(".pl-badge--warning")).toBeNull();
   });
 
   it("a closed job leaves the list — finished work leaves Work", async () => {

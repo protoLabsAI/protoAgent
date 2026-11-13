@@ -427,15 +427,113 @@ async def test_no_checkpoint_offers_rerun_and_drop_only(tmp_path, monkeypatch):
         await _shutdown(coord, gen2)
 
 
+# ── failure safety: an answer whose action cannot land gives the card back ──────────
+
+
+@pytest.mark.asyncio
+async def test_drop_failure_restores_the_card_for_another_answer(tmp_path, monkeypatch):
+    """A store error after the answer CAS (the occurrence CAS returns False) must not
+    leave the run held behind an answered record with no card: the decision reopens,
+    and a later answer performs the action normally."""
+    coord, saver, claim, gen2, owner, rec = await _held_one_shot(tmp_path, monkeypatch, "s7-dropfail")
+    try:
+        gen2.sched.drop_interrupted_occurrence = lambda *a: False  # the simulated store error
+        assert (await _answer(_api_app(), rec.id, "drop")).status_code == 200
+        reopened = await _wait_until(
+            lambda: (lambda r: r if r and r.pending else None)(STATE.decision_store.get(rec.id)),
+            message="the failed answer reopened the card",
+        )
+        assert reopened.answer is None
+        assert _occurrence(gen2.sched.path, "job-oneshot")["state"] == "interrupted_needs_operator"
+
+        del gen2.sched.drop_interrupted_occurrence  # the store recovered
+        assert (await _answer(_api_app(), rec.id, "drop")).status_code == 200
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-oneshot") or {"state": ""})["state"] == "settled",
+            message="the retried drop settled the occurrence",
+        )
+        assert _occurrence(gen2.sched.path, "job-oneshot")["task_state"] == "dropped"
+        assert STATE.decision_store.get(rec.id).answer == "drop"
+    finally:
+        await _shutdown(coord, gen2)
+
+
+@pytest.mark.asyncio
+async def test_crash_between_answer_and_action_reraises_the_card_at_boot(tmp_path, monkeypatch):
+    """A restart in the answered-but-unacted window (e.g. mid operator Resume) leaves an
+    answered record over a still-held occurrence. The next boot's recovery pass reopens
+    the card — and its Resume still drives the turn onto the ORIGINAL handle."""
+    coord, saver, claim, gen2, owner, rec = await _held_one_shot(tmp_path, monkeypatch, "s7-crash")
+    STATE.decision_store.answer(rec.id, "resume")  # the CAS landed; the crash ate the action
+    await _sigterm(coord, saver, gen2)
+    await _let_zombies_unwind()
+
+    gen3 = await _restart(tmp_path, monkeypatch, coord, saver, "s7-crash", release=True)
+    try:
+        reopened = await _wait_until(
+            lambda: (lambda r: r if r and r.pending else None)(STATE.decision_store.get(rec.id)),
+            message="boot repair reopened the answered-but-unacted card",
+        )
+        assert [o["id"] for o in reopened.options] == ["resume", "rerun", "drop"]
+        assert len([r for r in STATE.decision_store.list(session_id=owner) if r.pending]) == 1
+
+        assert (await _answer(_api_app(), rec.id, "resume")).status_code == 200
+        await _wait_until(
+            lambda: (_occurrence(gen3.sched.path, "job-oneshot") or {"state": ""})["state"] == "settled",
+            message="the resumed occurrence settled",
+        )
+        settled = _occurrence(gen3.sched.path, "job-oneshot")
+        assert settled["task_state"] == "completed"
+        assert settled["task_id"] == claim["task_id"]  # the ORIGINAL handle
+        assert coord.tool_runs["risky_step"] == 1  # the dangling call was never re-run
+    finally:
+        await _shutdown(coord, gen3)
+
+
+@pytest.mark.asyncio
+async def test_dismissing_the_card_never_resumes_and_stays_dismissed(tmp_path, monkeypatch):
+    """Dismissing a recovery card over the real cancel route only withdraws the record —
+    no clearing resume runs on the job session (only Re-run may start a turn) — and the
+    boot repair leaves the dismissal standing (only MISSING or ANSWERED records come
+    back): the held occurrence stays the durable trace."""
+    coord, saver, claim, gen2, owner, rec = await _held_one_shot(tmp_path, monkeypatch, "s7-dismiss")
+    api = _api_app()
+    async with _REAL_ASYNC_CLIENT(transport=httpx.ASGITransport(app=api), base_url="http://api") as client:
+        response = await client.post(f"/api/decisions/{rec.id}/cancel", json={"reason": "not needed"})
+    assert response.status_code == 200
+    await _quiesce_polls(gen2.sched)
+    assert len(coord.views["ONESHOT-TOOL"]) == 1  # no clearing resume drove the session
+    assert coord.tool_runs["risky_step"] == 1
+    await _sigterm(coord, saver, gen2)
+    await _let_zombies_unwind()
+
+    gen3 = await _restart(tmp_path, monkeypatch, coord, saver, "s7-dismiss", release=True)
+    try:
+        await _quiesce_polls(gen3.sched)
+        assert STATE.decision_store.get(rec.id).state == "withdrawn"
+        assert [r for r in STATE.decision_store.list(session_id=owner) if r.pending] == []
+        assert _occurrence(gen3.sched.path, "job-oneshot")["state"] == "interrupted_needs_operator"
+        assert len(coord.views["ONESHOT-TOOL"]) == 1  # still nothing ran
+    finally:
+        await _shutdown(coord, gen3)
+
+
 # ── r4: an S6 auto-resume emits one Activity entry ──────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_auto_resume_emits_one_activity_entry(tmp_path, monkeypatch):
+    import server as server_pkg
     from activity import ActivityLog
 
     feed = ActivityLog(str(tmp_path / "activity.db"))
     monkeypatch.setattr(STATE, "activity_log", feed, raising=False)
+    # The console's Activity surfaces refresh on the LIVE event, not by re-reading the
+    # saved log: the entry must also be published on the bus.
+    events = []
+    monkeypatch.setattr(
+        server_pkg._event_bus, "publish", lambda topic, data=None, **kw: events.append((topic, data))
+    )
     agent = "s7-feed"
     coord, saver, claim = await _fire_and_kill(
         tmp_path, monkeypatch, agent, prompt="SLOW-MODEL digest the overnight queue",
@@ -455,5 +553,11 @@ async def test_auto_resume_emits_one_activity_entry(tmp_path, monkeypatch):
         assert entries[0]["context_id"] == json.loads(claim["job_snapshot"])["context_id"]
         assert entries[0]["origin"] == "scheduler"
         assert entries[0]["task_id"] == claim["task_id"]
+        live = [d for t, d in events if t == "activity.message" and (d or {}).get("text", "").startswith("Resumed")]
+        assert len(live) == 1  # the saved entry also went out live, once
+        assert live[0]["text"] == entries[0]["text"]
+        assert live[0]["context_id"] == entries[0]["context_id"]
+        assert live[0]["task_id"] == claim["task_id"]
+        assert live[0]["state"] == "completed"
     finally:
         await _shutdown(coord, gen2)

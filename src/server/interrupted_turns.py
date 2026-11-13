@@ -37,8 +37,10 @@ raises one Needs-you decision in the job's session (:meth:`InterruptedTurnRecove
 raise_needs_operator_decision`), and answering it performs Resume / Re-run / Drop exactly
 once (:meth:`InterruptedTurnRecovery.operator_action`) — reached by the decision routes
 through ``STATE.interrupted_recovery``, since ``operator_api`` must not import ``server``.
-Each resume that recovers a turn also appends a ``Resumed <job> after a restart (step N)``
-Activity entry.
+A held run is never stranded cardless: an answer whose action cannot move the occurrence
+reopens its record, and each boot repairs the card of every occurrence still held
+(:meth:`InterruptedTurnRecovery.ensure_needs_operator_decision`). Each resume that
+recovers a turn also appends a ``Resumed <job> after a restart (step N)`` Activity entry.
 """
 
 from __future__ import annotations
@@ -412,16 +414,37 @@ class InterruptedTurnRecovery:
         feed = getattr(STATE, "activity_log", None)
         if feed is None:
             return
+        text = f"Resumed {_job_title(prompt, job_id)} after a restart (step {steps})"
         try:
             feed.add(
                 context_id=context_id,
                 origin=origin or "scheduler",
                 trigger=job_id or "",
-                text=f"Resumed {_job_title(prompt, job_id)} after a restart (step {steps})",
+                text=text,
                 task_id=task_id,
             )
         except Exception:  # noqa: BLE001 — provenance, never a gate
             log.exception("[interrupted-turns] could not record the resume Activity entry for %s", job_id)
+            return
+        try:
+            # Live update, like every other Activity writer (server/a2a.py): the console's
+            # Activity surfaces refresh on this event, not by polling the saved log.
+            from server import _event_bus
+
+            _event_bus.publish(
+                "activity.message",
+                {
+                    "role": "assistant",
+                    "text": text,
+                    "context_id": context_id,
+                    "origin": origin or "scheduler",
+                    "trigger": job_id or "",
+                    "state": "completed",
+                    "task_id": task_id,
+                },
+            )
+        except Exception:  # noqa: BLE001 — the saved entry stands; the live push is best-effort
+            log.exception("[interrupted-turns] could not publish the resume Activity event for %s", job_id)
 
     async def _seal_dangling_calls(self, graph, config: dict, dangling: list[dict]) -> None:
         """Record the interruption report as the tools node's output for each dangling
@@ -565,7 +588,11 @@ class InterruptedTurnRecovery:
         (:class:`DecisionError` → the route's 400; the record stays pending, Re-run / Drop
         remain), and a failed handle the 24h TTL sweep already deleted is re-minted under
         the original task id (``reopen_restart_failed_task``) so the drive's real outcome
-        still lands on the handle the occurrence carries."""
+        still lands on the handle the occurrence carries. An answer whose action cannot
+        move the held occurrence REOPENS the record — the card comes back, answerable
+        again — never an answered record over a run wedged with no way to act (the next
+        boot's :meth:`ensure_needs_operator_decision` repairs the same shape after a
+        crash)."""
         from graph.decisions import DecisionClosed, DecisionError, decision_store
         from scheduler.interface import parse_iso_to_utc
 
@@ -617,11 +644,56 @@ class InterruptedTurnRecovery:
 
         # The exactly-once gate: one concurrent answer wins this CAS, the other raises.
         store.answer(rec.id, answer, answered_by=answered_by, answered_surface=answered_surface)
+        # From here the record reads "answered". If the action below cannot move the
+        # occurrence out of its held state (every transition is CAS'd and returns False
+        # on a store error), the card is REOPENED: an answered record over a still-held
+        # occurrence would wedge the run forever — boot reconciliation reads only
+        # claimed/unknown/running rows, and no new card is ever raised for a held one.
+        # A crash in this window is repaired the same way at the next boot
+        # (:meth:`ensure_needs_operator_decision`).
+        try:
+            acted = await self._apply_operator_answer(
+                answer,
+                scheduler,
+                job_id=job_id,
+                next_fire=next_fire,
+                created_at=created_at,
+                context_id=context_id,
+                task_id=task_id,
+                fired_after=fired_after,
+                prompt=prompt,
+                origin=origin,
+                fence=fence,
+            )
+        except BaseException:
+            self._reopen_recovery_card(store, rec.id, answer=answer, job_id=job_id)
+            raise
+        if not acted:
+            self._reopen_recovery_card(store, rec.id, answer=answer, job_id=job_id)
 
+    async def _apply_operator_answer(
+        self,
+        answer: str,
+        scheduler,
+        *,
+        job_id: str,
+        next_fire: str,
+        created_at: str,
+        context_id: str,
+        task_id: str,
+        fired_after,
+        prompt: str,
+        origin: str,
+        fence,
+    ) -> bool:
+        """Perform one answered recovery action (:meth:`operator_action`). True only when
+        the occurrence moved out of ``interrupted_needs_operator``; False means it is
+        provably still held, so the caller must put the card back."""
         if answer == DROP_OPTION:
             if scheduler.drop_interrupted_occurrence(job_id, next_fire, created_at):
                 log.warning("[interrupted-turns] operator dropped the interrupted run of %s", job_id)
-            return
+                return True
+            return False
         if answer == RERUN_OPTION:
             # The reused session thread may still hold the dangling call; answer it with
             # the interruption report (under the session's turn lock) before any fresh
@@ -629,7 +701,8 @@ class InterruptedTurnRecovery:
             await self.seal_dangling(context_id)
             if scheduler.rerun_interrupted_occurrence(job_id, next_fire, created_at):
                 log.warning("[interrupted-turns] operator re-ran %s: a fresh fire is due now", job_id)
-            return
+                return True
+            return False
 
         # RESUME. The disposition failed the original handle (fail_task), and the resume
         # finalizer CAS-es on the interrupted states — reopen the handle first so the
@@ -656,12 +729,11 @@ class InterruptedTurnRecovery:
         if drove:
             # The handle now holds the turn's real outcome; normal reconciliation
             # settles the occurrence from it, exactly once.
-            scheduler.release_interrupted_occurrence(
+            return scheduler.release_interrupted_occurrence(
                 job_id, next_fire, created_at, state="unknown",
                 diagnostic="resumed by the operator after a restart interruption (ADR 0129 D7); "
                            "settling from the task handle",
             )
-            return
         # The resume could not act after all: the pre-flight passed but the under-lock
         # re-check lost a race (the thread moved past this fire between the two reads),
         # or the handle could not be reopened. Never leave the owner wedged: put the
@@ -671,9 +743,63 @@ class InterruptedTurnRecovery:
             await self.fail_task(
                 task_id, reason="Operator-ordered resume could not act; the checkpoint no longer holds this turn."
             )
-        scheduler.release_interrupted_occurrence(
+        released = scheduler.release_interrupted_occurrence(
             job_id, next_fire, created_at, state="settled", task_state="failed",
             diagnostic="operator-ordered resume could not act (no recoverable checkpoint); "
                        "settled failed (ADR 0129 D7)",
         )
         log.error("[interrupted-turns] operator resume for %s could not act (task %s)", job_id, task_id)
+        return released
+
+    def _reopen_recovery_card(self, store, decision_id: str, *, answer: str, job_id: str) -> None:
+        """Restore the Needs-you card after an answer whose action did not land: the
+        occurrence is still held, so the operator must be able to act again. Best-effort —
+        a ledger error here leaves the boot repair (:meth:`ensure_needs_operator_decision`)
+        as the backstop."""
+        try:
+            store.reopen(decision_id)
+            log.error(
+                "[interrupted-turns] the %s answer for %s could not act; its recovery item is pending again",
+                answer, job_id,
+            )
+        except Exception:  # noqa: BLE001 — the boot repair re-raises the card
+            log.exception("[interrupted-turns] could not restore the recovery item for %s", job_id)
+
+    async def ensure_needs_operator_decision(
+        self,
+        *,
+        job_id: str,
+        context_id: str,
+        task_id: str,
+        next_fire: str,
+        created_at: str,
+        fired_after=None,
+        prompt: str = "",
+    ) -> None:
+        """Boot repair for one held occurrence's Needs-you card (ADR 0129 D7 S7): a run
+        left ``interrupted_needs_operator`` must always be actionable. A MISSING record
+        (the disposal's ledger write failed) is created; an ANSWERED one is reopened —
+        the occurrence is still held, so the answer's action provably never finished (a
+        restart cut it down between the ledger CAS and the occurrence transition). A
+        dismissed (withdrawn/cancelled) card stays closed: the operator silenced it, and
+        the held row in the job's diagnostics remains the durable trace."""
+        from graph.decisions import STATE_ANSWERED, decision_store, restart_recovery_interrupt_id
+
+        store = decision_store()
+        rec = store.for_interrupt("", restart_recovery_interrupt_id(job_id, next_fire, created_at, task_id))
+        if rec is None:
+            await self.raise_needs_operator_decision(
+                job_id=job_id,
+                context_id=context_id,
+                task_id=task_id,
+                next_fire=next_fire,
+                created_at=created_at,
+                fired_after=fired_after,
+                prompt=prompt,
+            )
+        elif rec.state == STATE_ANSWERED:
+            store.reopen(rec.id)
+            log.warning(
+                "[interrupted-turns] reopened the recovery item for %s: its %s answer never completed",
+                job_id, rec.answer,
+            )
