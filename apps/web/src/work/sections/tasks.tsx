@@ -19,14 +19,16 @@ import { useWorkActionSize } from "../../shell/SurfaceFrame";
  * Edit (the existing PATCH, reusing `TaskCreateDialog`) and Delete…, which hands back an
  * `undo_token` (bd-0ia51.5) driving the §4.5 undo toast.
  */
-import { useState, type CSSProperties } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRef, useState, type CSSProperties } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
 import { Button, Callout } from "@protolabsai/ui/primitives";
+import { FormField, Input } from "@protolabsai/ui/forms";
 import { CircleDashed } from "lucide-react";
 import { WorkEmpty as Empty } from "../WorkEmpty";
 import { useToast } from "@protolabsai/ui/overlays";
 
+import { chatStore } from "../../chat/chat-store";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
 import type { Task } from "../../lib/types";
@@ -122,7 +124,107 @@ function jobMeta(item: WorkItem): string {
   return typeAndPriority(task);
 }
 
-function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId: string) => void }) {
+async function sourceHasTurns(sessionId: string): Promise<boolean> {
+  if (!sessionId) return false;
+  const result = await api.chatSessionTurns(sessionId, 1);
+  // This read endpoint also reports store outages as a successful, empty response.
+  if (result.reason) throw new Error(result.reason);
+  return result.turns.length > 0;
+}
+
+/** Waiting jobs are answered here even when their originating session was never a chat. */
+function WaitingTaskDetail({ task, actions, openChat, refresh }: {
+  task: Task; actions: WorkAction[]; openChat?: (sessionId: string) => void | Promise<void>;
+  refresh: () => Promise<unknown>;
+}) {
+  const size = useWorkActionSize();
+  const [reply, setReply] = useState("");
+  const [closing, setClosing] = useState(false);
+  // Keep the destination and message id through a failed PATCH or a lost send response.
+  // Retrying finishes the same reply instead of creating another chat or turn.
+  const attempt = useRef<{ sessionId: string; id: string; text: string; sent: boolean; fresh: boolean } | null>(null);
+  const source = task.session_id ?? "";
+  const history = useQuery({
+    queryKey: ["work-task-source", task.id, source],
+    queryFn: () => sourceHasTurns(source),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnMount: "always",
+  });
+  const ask = task.ask?.trim() || task.description?.split("\n")[0]?.trim() || "";
+  const send = useMutation({
+    mutationFn: async () => {
+      if (!attempt.current) {
+        // Recheck before sending: a source may have gained turns since detail opened.
+        const hasTurns = await sourceHasTurns(source);
+        attempt.current = {
+          sessionId: hasTurns ? source : `chat-${crypto.randomUUID()}`,
+          id: crypto.randomUUID(), fresh: !hasTurns, sent: false,
+          text: hasTurns ? reply.trim() : [task.title, ask].filter(Boolean).map((text) =>
+            text.split("\n").map((line) => `> ${line}`).join("\n")).join("\n>\n") + `\n\n${reply.trim()}`,
+        };
+      }
+      const pending = attempt.current;
+      if (pending.fresh) await api.registerSession(pending.sessionId, { title: `Re: ${task.title}` });
+      if (!pending.sent) {
+        const result = await api.steerChat(pending.sessionId, pending.id, pending.text);
+        if (!result.ok || (pending.fresh && !result.started_turn)) throw new Error("Reply has not started yet");
+        pending.sent = true;
+      }
+      await api.updateTask(task.id, { session_id: pending.sessionId, status: "open" });
+      await refresh();
+      await openChat?.(pending.sessionId);
+      if (pending.fresh) chatStore.renameSession(pending.sessionId, `Re: ${task.title}`);
+    },
+  });
+  const waitingActions: WorkAction[] = (["done", "dismissed"] as const).map((outcome) => ({
+    id: outcome, label: outcome === "done" ? "Done…" : "Dismiss…",
+    destructive: outcome === "dismissed",
+    confirm: {
+      prompt: outcome === "done" ? "Mark this job done?" : "Dismiss this job?",
+      explanation: "The agent will be told the outcome and your reason.",
+      confirmLabel: outcome === "done" ? "Done" : "Dismiss", keepLabel: "Keep it",
+      reason: { label: "Reason (optional)" },
+    },
+    run: async (reason) => {
+      setClosing(true);
+      try { await api.closeTask(task.id, reason, outcome); await refresh(); }
+      finally { setClosing(false); }
+    },
+  }));
+  if (history.data && !history.isError && openChat) waitingActions.push({
+    id: "open-chat", label: "Open chat", run: async () => openChat(source),
+  });
+  const provenance = source.startsWith("job:") ? "Started by a background job"
+    : source.startsWith("chat-") ? "Its chat was deleted" : "Started in an agent-to-agent conversation";
+  return <WorkDetail title={task.title} status="needs-you" type="Job" technical={{ Id: task.id }}
+    onUndo={async (token) => { await api.undo(token); await refresh(); }}
+    actions={send.isPending ? [] : [...waitingActions, ...actions]}
+    fields={[
+      { label: "Ask", value: ask },
+      { label: "Links", value: task.links?.length ? <ul>{task.links.map(({ ref }) => <li key={ref}>
+        {/^(https?:)\/\//i.test(ref) ? <a href={ref} target="_blank" rel="noreferrer">{ref}</a> : ref}
+      </li>)}</ul> : null },
+      { label: "Waiting since", value: task.updated_at || task.created_at
+        ? relTime((task.updated_at || task.created_at)!).text : null },
+      { label: "Description", value: task.description ? <Description text={task.description} /> : null },
+      ...taskFields(task).filter((field) => field.label !== "Description"),
+      { label: "Source", value: history.isError ? <Alert status="warning">Couldn't check this chat. <Button size={size}
+        onClick={() => void history.refetch()}>Retry</Button></Alert>
+        : history.isPending ? "Checking source chat…" : !history.data ? provenance : null },
+      { label: "Reply", value: <form onSubmit={(event) => { event.preventDefault(); if (reply.trim() && !send.isPending && !closing && !history.isPending && !history.isError) send.mutate(); }}>
+        <FormField label="Your reply"><Input value={reply} disabled={send.isPending || !!attempt.current}
+          onChange={(event) => setReply(event.target.value)} /></FormField>
+        <Button size={size} type="submit" disabled={!reply.trim() || history.isPending || history.isError || send.isPending || closing}>
+          {send.isError ? "Retry reply" : "Send reply"}
+        </Button>
+        {send.isError && <Alert status="warning">Couldn't finish sending your reply. Retry to continue.</Alert>}
+      </form> },
+    ]} />;
+}
+
+function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId: string) => void | Promise<void> }) {
   const task = item.raw as Task;
   const qc = useQueryClient();
   const toast = useToast();
@@ -251,7 +353,8 @@ function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId:
 
   return (
     <>
-      <WorkDetail
+      {status === "waiting" ? <WaitingTaskDetail task={task} openChat={openChat} refresh={refresh}
+        actions={actions.filter((action) => action.id === "edit" || action.id === "delete")} /> : <WorkDetail
         title={task.title}
         status={item.status}
         fields={taskFields(task)}
@@ -259,7 +362,7 @@ function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId:
         technical={{ Id: task.id }}
         type="Job"
         onUndo={async (token) => { await api.undo(token); refresh(); }}
-      />
+      />}
       <TaskCreateDialog
         open={editOpen}
         onClose={() => setEditOpen(false)}
@@ -325,7 +428,7 @@ export function TasksSection({ sources, state, onOpen, decisionActions }: WorkSe
     const item = source.items.find(
       (candidate) => `${candidate.kind}:${candidate.id}` === state.itemId || candidate.id === state.itemId,
     );
-    return item ? <TaskDetail item={item} openChat={decisionActions?.openSourceChat} /> : null;
+    return item ? <TaskDetail key={item.id} item={item} openChat={decisionActions?.openSourceChat} /> : null;
   }
   return <TaskList source={source} onOpen={onOpen} />;
 }

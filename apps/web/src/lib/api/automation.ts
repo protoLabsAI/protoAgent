@@ -406,6 +406,8 @@ export const automationApi = {
   updateTask(
     issueId: string,
     update: {
+      ask?: string;
+      session_id?: string;
       title?: string;
       description?: string;
       status?: string;
@@ -420,10 +422,10 @@ export const automationApi = {
     });
   },
 
-  closeTask(issueId: string, reason?: string) {
+  closeTask(issueId: string, reason?: string, outcome?: "done" | "dismissed") {
     return request<{ issue: Task }>(`/api/tasks/issues/${encodeURIComponent(issueId)}/close`, {
       method: "POST",
-      body: { reason },
+      body: { reason, ...(outcome ? { outcome } : {}) },
     });
   },
 
