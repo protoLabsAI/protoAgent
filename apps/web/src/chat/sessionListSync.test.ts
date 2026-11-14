@@ -6,6 +6,7 @@ import { readKey, removeKey } from "../lib/storage";
 import type { ChatMessage } from "../lib/types";
 import { chatStore, DEFAULT_SESSION_TITLE, SESSION_LIST_MIGRATED_KEY } from "./chat-store";
 import {
+  markServerKnownSessions,
   migrateLocalSessionsOnce,
   pendingSessionListIntents,
   pushClose,
@@ -95,6 +96,31 @@ describe("syncServerSessionList", () => {
     expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(true);
   });
 
+  it("does NOT clear a dismissal when the server's closed list is not authoritative (closedKnown false, r5)", () => {
+    const id = "chat-closed-but-leaked";
+    // Shown, then closed here (dismissed + remembered as a local tombstone).
+    chatStore.syncServerSessionList({ summaries: [{ session_id: id, title: "Shared", turn_count: 0 }], closedIds: [] });
+    chatStore.syncServerSessionList({ summaries: [], closedIds: [id] });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(false);
+    // The index could NOT read its server-held list (registry failure): the closed chat LEAKS back
+    // into `summaries` as an apparent open session, and the server's `closed` array is unknown
+    // (closedKnown false). Clearing the dismissal here would un-hide a tab the user closed, so the
+    // server-wins un-dismiss MUST be skipped — the tab stays hidden and the dismissal is intact.
+    chatStore.syncServerSessionList({
+      summaries: [{ session_id: id, title: "Shared", turn_count: 0 }],
+      closedIds: [],
+      closedKnown: false,
+    });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(false);
+    // Once a TRUSTWORTHY read reports it genuinely open again, the server wins and the tab returns.
+    chatStore.syncServerSessionList({
+      summaries: [{ session_id: id, title: "Shared", turn_count: 0 }],
+      closedIds: [],
+      closedKnown: true,
+    });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(true);
+  });
+
   // ── the swallow-then-revert race (review round 2): a close/rename this device pushed must not
   //    be reverted by a resync that races it, and it must still converge once the server confirms.
   it("keeps a tab this device closed hidden on resync until the server confirms the close", () => {
@@ -125,6 +151,7 @@ describe("syncServerSessionList", () => {
   it("keeps a rename this device pushed until the server reflects it (no revert to the stale title)", () => {
     const id = "chat-renamed-here";
     chatStore.syncServerSessionList({ summaries: [{ session_id: id, title: "Old", turn_count: 0 }], closedIds: [] });
+    markServerKnownSessions([id]); // the server named it, so renaming it propagates (not local-only)
     chatStore.renameSession(id, "New");
     pushRename(id, "New");
     // A resync races it: the index still carries the OLD title. The guard keeps the local "New".
@@ -171,11 +198,26 @@ describe("session-list push", () => {
     expect(api.registerSession).not.toHaveBeenCalled();
   });
 
-  it("pushes a rename and a close to the server", () => {
-    pushRename("chat-r", "Renamed");
-    expect(api.updateSession).toHaveBeenCalledWith("chat-r", { title: "Renamed" });
+  it("pushes a rename for a SENT (server-known) tab, and a close", () => {
+    // A sent tab has turns → the server already knows it, so the rename propagates to every device.
+    const sent = chatStore.createSession();
+    chatStore.updateMessages(sent.id, [userMsg("Deploy status")]);
+    pushRename(sent.id, "Renamed");
+    expect(api.updateSession).toHaveBeenCalledWith(sent.id, { title: "Renamed" });
     pushClose("chat-c");
     expect(api.updateSession).toHaveBeenCalledWith("chat-c", { closed: true });
+  });
+
+  it("does NOT push a rename for a never-sent local tab (stays local-only until its first send, r3)", () => {
+    // rename_session registers an unknown session as an OPEN row, so pushing a never-sent tab's
+    // rename would surface an empty, never-sent tab on every device — the leak the gate prevents.
+    const localOnly = chatStore.createSession();
+    pushRename(localOnly.id, "Just a draft");
+    expect(api.updateSession).not.toHaveBeenCalled();
+    // Once the server itself names it (via the index / change feed), a later rename DOES propagate.
+    markServerKnownSessions([localOnly.id]);
+    pushRename(localOnly.id, "Now shared");
+    expect(api.updateSession).toHaveBeenCalledWith(localOnly.id, { title: "Now shared" });
   });
 
   it("never pushes a rename for an INCOGNITO tab (renamed locally only, no server row)", () => {

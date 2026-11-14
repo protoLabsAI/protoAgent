@@ -1740,9 +1740,16 @@ export const chatStore = {
    *  add registered OPEN sessions this device lacks that have no durable turn yet (a tab created
    *  on another device — turn-bearing ones arrive through durable hydration). A session the
    *  server doesn't name is left alone (it stays local-only until its first send registers it). */
-  syncServerSessionList({ summaries, closedIds, pending }: {
+  syncServerSessionList({ summaries, closedIds, closedKnown = true, pending }: {
     summaries: ServerSessionSummary[];
     closedIds: string[];
+    // Whether the server's closed list for this read is AUTHORITATIVE. False when the index could
+    // not read its server-held list (the `closed` array is then absent, not empty): on a registry
+    // read failure a CLOSED chat can leak into `summaries` as an apparent open session, so treating
+    // its absence from `closedIds` as "server-open" and clearing its dismissal would un-hide tabs
+    // the user closed. When false, the un-dismiss (server-wins) step below is SKIPPED so persisted
+    // dismissals are left intact until a trustworthy read lands (ADR 0130 S6, r5).
+    closedKnown?: boolean;
     // The list intents THIS device pushed that a server read hasn't reflected yet (sessionListSync).
     // The server-wins reconciliation below DEFERS to them, so a stale index read can't revert a
     // close/reopen/rename this device just made before the push landed (review round 2).
@@ -1776,12 +1783,19 @@ export const chatStore = {
     // hidden while every other device shows it. EXCEPT a tab THIS device just closed whose close
     // the server hasn't reflected yet (pending.close): keeping its dismissal is what stops a stale
     // read — or a close PATCH still retrying — from re-showing the tab the user closed here.
+    //
+    // SKIPPED when the closed list is NOT authoritative (closedKnown false — the index couldn't
+    // read its server-held list): a CLOSED chat can then leak into `summaries` as an apparent open
+    // session, and clearing its dismissal would un-hide a tab the user closed. Leaving the dismissals
+    // intact lets a later trustworthy read re-close them; the dismissal itself is never lost (r5).
     let reopenCleared = false;
-    for (const summary of summaries) {
-      const id = summary.session_id;
-      if (!id || closed.has(id) || pending?.close.has(id)) continue;
-      if (locallyDismissedIds.delete(id)) reopenCleared = true;
-      locallyDeletedIds.delete(id);
+    if (closedKnown) {
+      for (const summary of summaries) {
+        const id = summary.session_id;
+        if (!id || closed.has(id) || pending?.close.has(id)) continue;
+        if (locallyDismissedIds.delete(id)) reopenCleared = true;
+        locallyDeletedIds.delete(id);
+      }
     }
     if (reopenCleared) persistDismissedIds(locallyDismissedIds);
 

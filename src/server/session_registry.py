@@ -383,23 +383,28 @@ async def migrate_sessions(items: list[dict]) -> int:
 async def read_session_list() -> dict[str, dict[str, Any]]:
     """Every registered session as ``{session_id: {title, created_at, closed}}`` (the registry
     is bounded by real console usage, so it is read whole). ``created_at`` is zoned ISO-8601
-    UTC; ``closed`` is whether the tab is closed. Empty without a task store."""
+    UTC; ``closed`` is whether the tab is closed. Empty ``{}`` without a task store — there is
+    no registry to read, legitimately.
+
+    RAISES on a genuine read failure rather than returning ``{}``: an empty registry and a failed
+    read are NOT the same, and conflating them is a data-loss bug (review round 5). If this
+    swallowed the error, the index route would see ``{}`` — no closed ids — and let every CLOSED
+    chat through its open-session list with an empty ``closed`` array; the client would then clear
+    those tabs' persisted dismissals and un-hide them. The caller (``_api_chat_sessions``) instead
+    catches this, OMITS the authoritative ``closed`` array from its response, and the client leaves
+    its dismissals untouched until a trustworthy read lands."""
     engine = _engine()
     if engine is None:
         return {}
     from sqlalchemy import select
 
-    try:
-        async with engine.begin() as conn:
-            table = await _ensure(conn)
-            rows = (
-                await conn.execute(
-                    select(table.c.context_id, table.c.title, table.c.created_at, table.c.closed_at)
-                )
-            ).fetchall()
-    except Exception:  # noqa: BLE001 — discovery is opportunistic (matches the index route)
-        log.warning("[session-registry] list read failed", exc_info=True)
-        return {}
+    async with engine.begin() as conn:
+        table = await _ensure(conn)
+        rows = (
+            await conn.execute(
+                select(table.c.context_id, table.c.title, table.c.created_at, table.c.closed_at)
+            )
+        ).fetchall()
     return {
         r.context_id: {"title": r.title, "created_at": _iso(r.created_at), "closed": r.closed_at is not None}
         for r in rows

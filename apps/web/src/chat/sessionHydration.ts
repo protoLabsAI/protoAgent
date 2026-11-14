@@ -21,7 +21,12 @@ import {
   type SessionReconcile,
 } from "./chat-store";
 import { onTopic } from "../lib/events";
-import { migrateLocalSessionsOnce, pendingSessionListIntents, reconcilePendingListIntents } from "./sessionListSync";
+import {
+  markServerKnownSessions,
+  migrateLocalSessionsOnce,
+  pendingSessionListIntents,
+  reconcilePendingListIntents,
+} from "./sessionListSync";
 import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
@@ -693,6 +698,12 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   const startedEpochsAtIssue = serverTurnStartedEpochs();
   let summaries: DurableChatSession[];
   let closedIds: string[] = [];
+  // Whether the server's closed list is AUTHORITATIVE this read. The index OMITS `closed` (leaves
+  // it undefined) when it could not read its server-held list — distinct from an empty `[]` that
+  // means "nothing is closed". A pre-S6 server also omits it. In both cases the closed list is
+  // unknown, so the server-wins un-dismiss below is skipped and this device's dismissals are left
+  // intact until a trustworthy read lands (ADR 0130 S6, r5).
+  let closedKnown = false;
   try {
     const [newest, parked] = await Promise.all([
       api.chatSessions(SESSION_INDEX_LIMIT),
@@ -700,6 +711,7 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
       api.chatSessions(SESSION_PARKED_LIMIT, { parked: true }).catch(() => ({ sessions: [] })),
     ]);
     summaries = pinParkedSessions(newest.sessions, parked.sessions ?? []);
+    closedKnown = Array.isArray(newest.closed);
     closedIds = newest.closed ?? []; // ADR 0130 S6: sessions the server reports CLOSED
   } catch {
     return;
@@ -803,8 +815,12 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   // reflects and re-push any that still diverge (so a close/rename/reopen lost to a transient
   // failure is retried), then hand the still-pending set to syncServerSessionList so a stale read
   // can't revert an intent the server hasn't caught up to yet (review round 2).
-  reconcilePendingListIntents({ summaries, closedIds });
-  chatStore.syncServerSessionList({ summaries, closedIds, pending: pendingSessionListIntents() });
+  // Every session the server named is server-known: a subsequent rename of one (including a
+  // turnless tab another device created and this device adopted) should propagate, unlike a
+  // never-sent local tab (ADR 0130 S6, r3 — the pushRename gate reads this).
+  markServerKnownSessions(summaries.map((summary) => summary.session_id));
+  reconcilePendingListIntents({ summaries, closedIds, closedKnown });
+  chatStore.syncServerSessionList({ summaries, closedIds, closedKnown, pending: pendingSessionListIntents() });
 }
 
 /** How often a visible console re-reads the session index while it stays open. */

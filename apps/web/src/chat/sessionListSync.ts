@@ -65,15 +65,31 @@ function pushListPatch(sessionId: string, patch: { title?: string; closed?: bool
   void api.updateSession(sessionId, patch).catch(() => {});
 }
 
+/** Mark sessions the SERVER already holds (named in the index / change feed) as server-known, so a
+ *  later rename of one — e.g. a turnless tab another device created and this device adopted — still
+ *  propagates, while a never-sent LOCAL tab does not (the pushRename gate below). Called by
+ *  hydrateDurableChatSessions with the index summaries. */
+export function markServerKnownSessions(ids: Iterable<string>): void {
+  for (const id of ids) if (id) registered.add(id);
+}
+
 /** Push an operator rename so the title shows on every device (r3). Held PENDING until a server
  *  read reports the new title: a resync reading the stale (pre-rename) title must not clobber the
  *  local one back — the same swallow-then-revert race a close has (review round 2) — and a failed
  *  push is retried on the next resync. */
 export function pushRename(sessionId: string, title: string): void {
+  const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   // An INCOGNITO tab is renamed LOCALLY only: pushing it would CREATE a server-held row carrying
   // the operator's title (rename_session registers an unknown session), leaking an incognito chat
   // to every device — the same leak the send-time guard prevents (ADR 0069 D3b).
-  if (chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.incognito) return;
+  if (session?.incognito) return;
+  // A session the server doesn't know stays LOCAL-ONLY until its first send (r3). Renaming a
+  // never-sent empty tab must NOT PATCH the server: rename_session registers an unknown session as
+  // an OPEN row, so the rename alone would surface an empty, never-sent tab on every device. Push
+  // only once the tab is server-known — it has turns (was sent), or was registered/migrated, or the
+  // server's own index/events named it (markServerKnownSessions). A rename made before the first
+  // send is carried into registerSessionOnSend's title instead, so it is not lost.
+  if (!registered.has(sessionId) && !(session?.messages.length ?? 0)) return;
   registered.add(sessionId);
   const wanted = title.trim() || DEFAULT_SESSION_TITLE;
   pendingTitle.set(sessionId, wanted);
@@ -118,10 +134,18 @@ export function pendingSessionListIntents(): {
 export function reconcilePendingListIntents({
   summaries,
   closedIds,
+  closedKnown = true,
 }: {
   summaries: { session_id: string; title?: string | null }[];
   closedIds: string[];
+  // Whether the server's closed list is authoritative this read (see syncServerSessionList). When
+  // false the index couldn't read its list, so a CLOSED session may masquerade as open in
+  // `summaries`: reconciling against it could falsely clear a pending open/close/title intent as
+  // "confirmed". Leave every pending intent in place — the next trustworthy read reconciles it, and
+  // meanwhile the intent keeps winning locally rather than being silently dropped (ADR 0130 S6, r5).
+  closedKnown?: boolean;
 }): void {
+  if (!closedKnown) return;
   const closed = new Set(closedIds.filter((id): id is string => typeof id === "string" && !!id));
   const openTitle = new Map(summaries.map((s) => [s.session_id, (s.title ?? "").trim()]));
   for (const id of [...pendingClose]) {

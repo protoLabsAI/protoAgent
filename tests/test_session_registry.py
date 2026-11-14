@@ -25,8 +25,15 @@ AT = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture(autouse=True)
 def _fresh():
+    # The ``_engine`` helper sets the process-global ``rs.STATE.a2a_task_engine``; snapshot and
+    # restore it so a test's engine never leaks into a later test on the same xdist worker (PROTO.md
+    # requires process-global state be reset — conftest.py has no reset for this attribute).
+    import runtime.state as rs
+
+    prior_engine = getattr(rs.STATE, "a2a_task_engine", None)
     sr._reset_for_tests()
     yield
+    rs.STATE.a2a_task_engine = prior_engine
     sr._reset_for_tests()
 
 
@@ -241,6 +248,26 @@ def test_migrate_raises_on_a_store_failure_so_the_client_never_latches_a_loss(mo
     assert bus_events == []
 
 
+def test_read_session_list_raises_on_a_read_failure_so_it_is_distinct_from_empty(tmp_path, monkeypatch):
+    # An empty registry and a FAILED read are NOT the same. If the read swallowed its failure and
+    # returned {}, the index route would see no closed ids and let CLOSED chats through its open list
+    # with an empty `closed` array, and the client would then un-hide tabs the user closed. The read
+    # RAISES so the route can signal the failure instead (ADR 0130 S6, r5). An ABSENT engine still
+    # returns {} — that is a legitimately empty registry (test_no_engine_is_a_safe_noop), not a loss.
+    _engine(tmp_path, "list-read-fail")
+
+    async def _boom(_conn):
+        raise RuntimeError("list db down")
+
+    monkeypatch.setattr(sr, "_ensure", _boom)
+
+    async def _run():
+        with pytest.raises(RuntimeError):
+            await sr.read_session_list()
+
+    asyncio.run(_run())
+
+
 # ── GET /api/chat/sessions merge + write routes ─────────────────────────────────
 
 
@@ -400,6 +427,28 @@ def test_index_hides_a_tombstoned_registry_row(tmp_path, monkeypatch):
     # resurface the deleted chat as an open, empty tab on every device (ADR 0130 S6).
     _tombstone(engine, "chat-ghost")
     assert "chat-ghost" not in {s["session_id"] for s in client.get("/api/chat/sessions").json()["sessions"]}
+
+
+def test_index_omits_closed_and_signals_reason_on_a_list_read_failure(tmp_path, monkeypatch):
+    # When the server-held list read FAILS, the route must not publish a (necessarily empty)
+    # authoritative `closed` array — the client would read `closed: []` as "nothing is closed" and
+    # clear the dismissals of tabs that are in fact closed, un-hiding them. Instead it DEGRADES to a
+    # registry-less listing, OMITS `closed`, and names a `reason` (ADR 0130 S6, r5).
+    engine = _engine(tmp_path, "index-list-fail")
+    _seed_task_rows(engine, [{"id": "t1", "context_id": "chat-live", "state": "TASK_STATE_COMPLETED"}])
+    client = _client(monkeypatch)
+
+    import operator_api.chat_routes as cr
+
+    async def _boom():
+        raise RuntimeError("list db down")
+
+    monkeypatch.setattr(cr, "read_chat_session_list", _boom)
+    body = client.get("/api/chat/sessions").json()
+    assert "closed" not in body  # OMITTED, not `[]` — the client leaves its dismissals intact
+    assert "read failed" in body["reason"]
+    # Degraded, not bailed: the turn-bearing session still lists from the task store.
+    assert "chat-live" in {s["session_id"] for s in body["sessions"]}
 
 
 def test_patch_rename_and_reopen(tmp_path, monkeypatch):

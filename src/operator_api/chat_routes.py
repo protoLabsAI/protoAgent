@@ -1183,10 +1183,23 @@ def register_chat_routes(app, ui: str) -> None:
         # the window, a closed chat would consume one of the ``limit`` slots and could push an
         # open, turn-bearing chat that has no S6 registry row (a pre-S6 chat) out of the newest-N
         # window before the Python closed-skip ever runs — the behaviour that worked before S6.
-        registry = await read_chat_session_list()
+        reason: str | None = None
+        # The server-held list read SIGNALS its own failure rather than returning ``{}`` (an empty
+        # registry and a failed read are different). On a failure we CANNOT know which sessions are
+        # closed, so we must not publish a (necessarily empty) authoritative ``closed`` array that a
+        # client would read as "nothing is closed" and use to clear its tabs' dismissals. Instead,
+        # degrade to a registry-less listing and OMIT ``closed`` from the response below so the
+        # client leaves its dismissals alone until a trustworthy read lands (ADR 0130 S6, r5).
+        registry: dict[str, Any] = {}
+        registry_ok = True
+        try:
+            registry = await read_chat_session_list()
+        except Exception as exc:  # noqa: BLE001 — a list-read failure must be SIGNALLED, not hidden
+            log.warning("[chat] session list read failed: %s", exc)
+            registry_ok = False
+            reason = f"session list read failed: {type(exc).__name__}"
         closed_ids = [sid for sid, meta in registry.items() if meta["closed"]]
         rows: list = []
-        reason: str | None = None
         try:
             from sqlalchemy import exists, select
 
@@ -1348,8 +1361,14 @@ def register_chat_routes(app, ui: str) -> None:
                         **live_state_fields(sid),
                     }
                 )
-        closed = [sid for sid, meta in registry.items() if meta["closed"]]
-        result = {"sessions": sessions, "closed": closed}
+        result: dict[str, Any] = {"sessions": sessions}
+        # Only carry the authoritative ``closed`` array when the list read SUCCEEDED. On a failure
+        # it would be empty-by-construction (registry is ``{}``) and indistinguishable from "nothing
+        # is closed", so the client would clear the dismissals of tabs that are in fact closed and
+        # un-hide them (ADR 0130 S6, r5). Omitting it tells the client the closed list is unknown
+        # this read, so it leaves its dismissals untouched — the same shape a pre-S6 server returns.
+        if registry_ok:
+            result["closed"] = [sid for sid, meta in registry.items() if meta["closed"]]
         if reason is not None:
             result["reason"] = reason
         return result
