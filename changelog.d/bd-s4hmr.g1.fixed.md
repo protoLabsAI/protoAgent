@@ -1,1 +1,0 @@
-- **Answer waiting jobs in Work.** Show the ask, links, and source context in the detail, with inline replies and Done or Dismiss outcomes. Replies start a named chat when the source has no durable turns.
