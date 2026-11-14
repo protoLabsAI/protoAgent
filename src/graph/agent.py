@@ -6,6 +6,8 @@ Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
 
 import logging
 import re
+import threading
+import time
 from typing import Annotated, Any
 
 from langchain.agents import create_agent
@@ -17,7 +19,7 @@ from langgraph.errors import GraphBubbleUp
 from langgraph.prebuilt import InjectedState
 
 from graph.config import LangGraphConfig
-from graph.llm import create_llm
+from graph.llm import RETRYABLE_STREAM_ERRORS, create_llm
 from graph.middleware.quota_routing import account_for_model, is_blocked_for_model, quota_429, resolve_account
 from graph.prompts import build_system_prompt, build_subagent_prompt
 from graph.middleware.audit import AuditMiddleware, NativeToolReceiptMiddleware
@@ -96,6 +98,83 @@ def _emit_fallback_event(
             )
     except Exception:  # noqa: BLE001 — observability must never break the turn
         logger.exception("[routing] failed to publish model.fallback event")
+
+
+# ── primary breaker (#5257) ─────────────────────────────────────────────────────
+# A primary that is UNAVAILABLE (transport drop, timeout, first-token stall) costs its
+# whole reconnect budget before the fallback runs: 3 x 120 s on a wedged gateway lane.
+# Without memory, every call pays that again, so a multi-step workflow whose stages have
+# 300-450 s budgets never reaches its fallback at all (Vera, 2026-11-13: 4.5 h with no
+# completed review while the fallback was healthy). After one such failure the breaker
+# routes calls for that primary straight to the fallbacks for a cool-off that doubles
+# per consecutive trip; the first call after it expires probes the primary again.
+# Process-wide, keyed by primary model name, because every subagent step builds its own
+# middleware instance.
+_BREAKER_BASE_S = 60.0
+_BREAKER_MAX_S = 600.0
+_breaker_lock = threading.Lock()
+_breaker: dict[str, tuple[float, float, BaseException]] = {}  # name -> (open_until, cooloff, exc)
+
+
+def _unavailable_errors() -> tuple[type[BaseException], ...]:
+    # NOT bare TimeoutError: GatewayQueueTimeout subclasses it and means OUR in-flight
+    # queue is congested, not that the primary is down (review on #5258). The stall and
+    # SDK timeouts that do mean "unreachable" are named here explicitly.
+    errors: tuple[type[BaseException], ...] = tuple(RETRYABLE_STREAM_ERRORS)
+    try:  # pragma: no cover - trivial import guard
+        import openai
+
+        errors += (openai.APIConnectionError,)  # includes APITimeoutError
+    except ImportError:  # pragma: no cover
+        pass
+    return errors
+
+
+_UNAVAILABLE_ERRORS = _unavailable_errors()
+
+
+def _is_unavailable(exc: BaseException) -> bool:
+    """The primary could not be REACHED or went silent, as opposed to refusing the request
+    (4xx, quota 429, context overflow), which another call to it may well pass."""
+    from graph.llm_limiter import GatewayQueueTimeout
+
+    return isinstance(exc, _UNAVAILABLE_ERRORS) and not isinstance(exc, GatewayQueueTimeout)
+
+
+def _breaker_key(model) -> str:
+    """The primary's name; a bare string IS the name (``_model_label`` would say ``str``)."""
+    return model if isinstance(model, str) else _model_label(model)
+
+
+def _breaker_open(name: str, now: float | None = None) -> BaseException | None:
+    """The exception that tripped ``name``'s breaker while it is open, else None."""
+    now = time.monotonic() if now is None else now
+    with _breaker_lock:
+        hit = _breaker.get(name)
+    return hit[2] if hit and hit[0] > now else None
+
+
+def _breaker_trip(name: str, exc: BaseException, now: float | None = None) -> float:
+    now = time.monotonic() if now is None else now
+    with _breaker_lock:
+        prev = _breaker.get(name)
+        cooloff = min(prev[1] * 2, _BREAKER_MAX_S) if prev else _BREAKER_BASE_S
+        _breaker[name] = (now + cooloff, cooloff, exc)
+    return cooloff
+
+
+def _breaker_reset(name: str) -> None:
+    with _breaker_lock:
+        _breaker.pop(name, None)
+
+
+def reset_primary_breakers() -> None:
+    """Close every breaker (tests; an operator config reload)."""
+    with _breaker_lock:
+        _breaker.clear()
+
+
+_ALL_FAILED = object()  # every fallback failed or was skipped
 
 
 class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
@@ -200,49 +279,90 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
         )
         _emit_fallback_event(primary_exc, fallback_model, index, skipped_blocked)
 
+    def _on_primary_failure(self, request, primary_exc: Exception) -> None:
+        logger.warning(
+            "Primary model failed, trying fallback models: %s",
+            primary_exc.__class__.__name__,
+        )
+        if self.models and _is_unavailable(primary_exc):
+            name = _breaker_key(request.model)
+            cooloff = _breaker_trip(name, primary_exc)
+            logger.warning(
+                "[routing] primary %s unavailable (%s) — routing straight to fallbacks for %.0fs (#5257)",
+                name,
+                primary_exc.__class__.__name__,
+                cooloff,
+            )
+
     def wrap_model_call(self, request, handler):
+        key = _breaker_key(request.model)
+        tripped = _breaker_open(key) if self.models else None
+        if tripped is not None:
+            result = self._try_fallbacks(request, handler, tripped)
+            if result is not _ALL_FAILED:
+                return result
         try:
-            return handler(request)
+            result = handler(request)
         except GraphBubbleUp:
             raise
         except Exception as primary_exc:
-            logger.warning(
-                "Primary model failed, trying fallback models: %s",
-                primary_exc.__class__.__name__,
-            )
-            order, skipped_blocked = self._fallback_plan(request, primary_exc)
-            for i, fallback_model in order:
-                try:
-                    result = handler(request.override(model=fallback_model))
-                except GraphBubbleUp:
-                    raise
-                except Exception:  # noqa: BLE001 — try the next fallback
-                    continue
-                self._observe_fallback(primary_exc, fallback_model, i, skipped_blocked)
-                return result
-            raise primary_exc
+            self._on_primary_failure(request, primary_exc)
+            if tripped is not None:  # the fallbacks already failed this same call
+                raise
+            result = self._try_fallbacks(request, handler, primary_exc)
+            if result is _ALL_FAILED:
+                raise primary_exc
+            return result
+        _breaker_reset(key)
+        return result
+
+    def _try_fallbacks(self, request, handler, primary_exc):
+        order, skipped_blocked = self._fallback_plan(request, primary_exc)
+        for i, fallback_model in order:
+            try:
+                result = handler(request.override(model=fallback_model))
+            except GraphBubbleUp:
+                raise
+            except Exception:  # noqa: BLE001 — try the next fallback
+                continue
+            self._observe_fallback(primary_exc, fallback_model, i, skipped_blocked)
+            return result
+        return _ALL_FAILED
 
     async def awrap_model_call(self, request, handler):
+        key = _breaker_key(request.model)
+        tripped = _breaker_open(key) if self.models else None
+        if tripped is not None:
+            result = await self._atry_fallbacks(request, handler, tripped)
+            if result is not _ALL_FAILED:
+                return result
         try:
-            return await handler(request)
+            result = await handler(request)
         except GraphBubbleUp:
             raise
         except Exception as primary_exc:
-            logger.warning(
-                "Primary model failed, trying fallback models: %s",
-                primary_exc.__class__.__name__,
-            )
-            order, skipped_blocked = self._fallback_plan(request, primary_exc)
-            for i, fallback_model in order:
-                try:
-                    result = await handler(request.override(model=fallback_model))
-                except GraphBubbleUp:
-                    raise
-                except Exception:  # noqa: BLE001 — try the next fallback
-                    continue
-                self._observe_fallback(primary_exc, fallback_model, i, skipped_blocked)
-                return result
-            raise primary_exc
+            self._on_primary_failure(request, primary_exc)
+            if tripped is not None:  # the fallbacks already failed this same call
+                raise
+            result = await self._atry_fallbacks(request, handler, primary_exc)
+            if result is _ALL_FAILED:
+                raise primary_exc
+            return result
+        _breaker_reset(key)
+        return result
+
+    async def _atry_fallbacks(self, request, handler, primary_exc):
+        order, skipped_blocked = self._fallback_plan(request, primary_exc)
+        for i, fallback_model in order:
+            try:
+                result = await handler(request.override(model=fallback_model))
+            except GraphBubbleUp:
+                raise
+            except Exception:  # noqa: BLE001 — try the next fallback
+                continue
+            self._observe_fallback(primary_exc, fallback_model, i, skipped_blocked)
+            return result
+        return _ALL_FAILED
 
 
 def _build_middleware(
