@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.241.1] - 2026-11-14
+
+### Fixed
+- **Opening a task in Work no longer crashes the console (v0.241.0) (#5276).** The tasks API sends a task's links as a JSON string, and the new task detail tried to list them as an array, so clicking a task with links crashed the view. The console now reads links in either shape.
+
 ## [0.241.0] - 2026-11-14
 
 ### Fixed
