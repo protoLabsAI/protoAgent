@@ -13,6 +13,7 @@ import type { WorkItems, WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, withSharedDecisions, workGroups } from "../work/workGroups";
 import type { GroupableWorkItem } from "../work/tone";
 import { ChatStatusRail, needsYouSpokenLabel } from "./ChatStatusRail";
+import { useUI } from "../state/uiStore";
 import { fallbackCap } from "./peopleFit";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -159,12 +160,12 @@ describe("the fleet-wide marker", () => {
     expect([markerCount(), expectedCount()]).toEqual(["2", 2]);
   });
 
-  it("counts a `waiting` task (ADR 0129 Q1) in the marker — its row opens the chat it is parked in", async () => {
+  it("counts a `waiting` task (ADR 0129 Q1) in the marker — its row opens its Work detail", async () => {
     const parked: GroupableWorkItem = {
       kind: "task", id: "t-parked", status: "needs-you", title: "Ship the release", meta: "",
       sessionId: "other-chat", raw: { status: "waiting" },
     };
-    // The section now draws a row for the parked task (Open chat is the thing to act on),
+    // The section draws a row for the parked task,
     // so the marker counts it exactly like Work's Needs-you group — the two can't drift.
     await render(rail([parked]));
     expect([markerCount(), expectedCount()]).toEqual(["1", 1]);
@@ -174,8 +175,9 @@ describe("the fleet-wide marker", () => {
     await click(marker());
     expect(panel()!.querySelector("h2")!.textContent).toBe("Needs you · 2");
     expect(section()!.textContent).toContain("Waiting on you: Ship the release");
-    await click(button("Open chat"));
-    expect(dec.openChat).toHaveBeenCalledWith("other-chat", false);
+    await click(section()!.querySelector(".chat-needs-you__task button"));
+    expect(useUI.getState().surfaceStates.work?.itemId).toBe("task:t-parked");
+    expect(dec.openChat).not.toHaveBeenCalled();
   });
 
   it("phone: the marker never folds — people fall back to +K alone; the sheet restores focus", async () => {

@@ -1,0 +1,1 @@
+- **Answer waiting tasks from the chat rail.** Needs you opens the shared Work detail with the ask, links, Reply, Done and Dismiss, including tasks whose source has no chat turns.

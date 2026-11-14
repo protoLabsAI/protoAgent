@@ -119,13 +119,13 @@ export function workSectionForGroup(group: WorkGroupId): string {
  *  rides the VISIT (work/visitScope), never the saved surface state: the saved filters are
  *  what every other Work entry restores, and one rail click must not rewrite them.
  *  (Needs you deliberately doesn't scope — it is never filtered.) */
-export function openWorkGroup(group: WorkGroupId) {
+export function openWorkGroup(group: WorkGroupId, itemId?: string) {
   const ui = useUI.getState();
   const prior = ui.surfaceStates.work;
   ui.setSurfaceState("work", {
     ...prior,
     section: workSectionForGroup(group),
-    itemId: undefined,
+    itemId,
     scrollTop: 0,
     filters: prior?.filters,
   });
@@ -537,7 +537,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
         answer={decisionsShared.answer}
         mobile={mobile}
         onNavigate={onNavigate}
-        openWork={() => openWorkGroup("needs-you")}
+        openWork={(itemId) => openWorkGroup("needs-you", itemId)}
         goalsRetry={() => sources.goals.retry()}
       />
     ) : undefined;
