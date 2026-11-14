@@ -506,6 +506,28 @@ class _TaskStoreAdapter:
             ) from exc
 
 
+def _issue_out(issue: Any) -> Any:
+    """A task issue as the API returns it: ``links`` decoded to a list of ``{ref, …}``
+    dicts. The store keeps links as a JSON TEXT column, and returning that string made
+    the console's task detail crash on ``links.map`` (v0.241.0). Tolerant: a missing,
+    empty or malformed value becomes ``[]``."""
+    if not isinstance(issue, dict):
+        return issue
+    raw = issue.get("links")
+    if isinstance(raw, list):
+        links = raw
+    elif isinstance(raw, str) and raw.strip():
+        try:
+            links = json.loads(raw)
+        except ValueError:
+            links = []
+    else:
+        links = []
+    if not isinstance(links, list):
+        links = []
+    return {**issue, "links": [e for e in links if isinstance(e, dict) and e.get("ref")]}
+
+
 def _delete_task_with_undo(task_svc: _TaskStoreAdapter, project_path: str, issue_id: str) -> dict[str, Any]:
     """Delete an issue and, when the store can read the row back, stash it for a server-side
     undo (#4955 Q10). TaskStore captures the snapshot in the deletion transaction; older
@@ -768,7 +790,7 @@ def register_operator_routes(
         _require_tasks()
         try:
             issues = await asyncio.to_thread(task_svc.list, project_path)
-            return {"issues": issues}
+            return {"issues": [_issue_out(issue) for issue in issues]}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -777,7 +799,7 @@ def register_operator_routes(
         _require_tasks()
         try:
             issue = await asyncio.to_thread(task_svc.create, req.project_path, _model_payload(req))
-            return {"issue": issue}
+            return {"issue": _issue_out(issue)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -786,7 +808,7 @@ def register_operator_routes(
         _require_tasks()
         try:
             issue = await asyncio.to_thread(task_svc.update, req.project_path, issue_id, _model_payload(req))
-            return {"issue": issue}
+            return {"issue": _issue_out(issue)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -816,7 +838,7 @@ def register_operator_routes(
                 dispatch_task_review(issue, reason=req.reason or "")
             except Exception:  # noqa: BLE001 — curation must never turn a successful close into a 500
                 log.exception("[self-improvement] task-close review scheduling failed")
-            return {"issue": issue}
+            return {"issue": _issue_out(issue)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
