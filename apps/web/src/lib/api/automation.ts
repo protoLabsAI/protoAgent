@@ -29,7 +29,7 @@ import { request } from "./http";
 /** Normalize a task's `links` to an array. The server stored them as a JSON string and,
  *  until v0.241.1, returned that string as-is; the task detail then crashed on
  *  `links.map` (v0.241.0). Accept either shape so the console never trusts it blindly. */
-export function normalizeTaskLinks<T extends { links?: unknown }>(task: T): T {
+export function normalizeTaskLinks<T extends { links?: unknown }>(task: T): Omit<T, "links"> & { links: { ref: string; kind?: string; state?: string; reason?: string }[] } {
   let links: unknown = task.links;
   if (typeof links === "string") {
     try {
@@ -39,7 +39,7 @@ export function normalizeTaskLinks<T extends { links?: unknown }>(task: T): T {
     }
   }
   const list = Array.isArray(links)
-    ? links.filter((e): e is { ref: string } => Boolean(e) && typeof e === "object" && typeof (e as { ref?: unknown }).ref === "string")
+    ? links.filter((e): e is { ref: string; kind?: string; state?: string; reason?: string } => Boolean(e) && typeof e === "object" && typeof (e as { ref?: unknown }).ref === "string")
     : [];
   return { ...task, links: list };
 }
