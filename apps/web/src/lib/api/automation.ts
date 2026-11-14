@@ -404,9 +404,9 @@ export const automationApi = {
     });
   },
 
-  async tasks() {
+  async tasks(): Promise<{ issues: Task[] }> {
     const res = await request<{ issues: Task[] }>("/api/tasks/issues");
-    return { ...res, issues: (res.issues ?? []).map(normalizeTaskLinks) };
+    return { ...res, issues: (res.issues ?? []).map((task) => normalizeTaskLinks(task) as Task) };
   },
 
   createTask(issue: {
