@@ -139,7 +139,8 @@ class TaskStore:
                     close_reason TEXT,
                     session_id   TEXT NOT NULL DEFAULT '',
                     ask          TEXT NOT NULL DEFAULT '',
-                    links        TEXT NOT NULL DEFAULT ''
+                    links        TEXT NOT NULL DEFAULT '',
+                    stall_nudges INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -157,6 +158,11 @@ class TaskStore:
 
             if "ask" not in cols:
                 self._conn.execute("ALTER TABLE issues ADD COLUMN ask TEXT NOT NULL DEFAULT ''")
+
+            # Stall-nudge counter (ADR 0129 D9): nudges sent since the task's last real
+            # update. Same guarded, non-destructive upgrade — existing rows default to 0.
+            if "stall_nudges" not in cols:
+                self._conn.execute("ALTER TABLE issues ADD COLUMN stall_nudges INTEGER NOT NULL DEFAULT 0")
 
             # Persist the high-water mark independently of surviving tasks. Seed
             # existing boards from their rows without lowering it on restart.
@@ -349,6 +355,10 @@ class TaskStore:
             now = _now()
             sets.append("updated_at = ?")
             vals.append(now)
+            # A real update ends the stall-nudge lineage (ADR 0129 D9 item 2): the task
+            # moved, so the next sweep starts its count from zero.
+            sets.append("stall_nudges = ?")
+            vals.append(0)
             self._conn.execute(f"UPDATE issues SET {', '.join(sets)} WHERE id = ?", (*vals, issue_id))
             # The all-links-done invariant survives a replacement: when every ref the
             # caller kept has already finished, no further terminal event will ever
@@ -426,6 +436,25 @@ class TaskStore:
         for issue_id, action in affected:
             _publish("task.changed", {"id": issue_id, "action": action})
         return results
+
+    def record_stall_nudge(self, issue_id: str) -> int:
+        """Increment the task's stall-nudge counter and return the new count (ADR 0129 D9).
+
+        Deliberately does NOT touch ``updated_at``: a nudge is server bookkeeping, not a
+        real update — bumping ``updated_at`` would make the task look freshly worked and
+        reset its own count (``update`` zeroes it). The sweep uses the returned count to
+        dedupe nudges and to decide when the cap (:data:`tasks.stall.STALL_NUDGE_CAP`) is
+        reached. Raises ``KeyError`` for an unknown id, like :meth:`update`/:meth:`close`.
+        No ``task.changed`` publish — the visible task state is unchanged."""
+        if not issue_id:
+            raise ValueError("issue_id is required")
+        with self._write():
+            row = self._row(issue_id)
+            if row is None:
+                raise KeyError(f"unknown issue {issue_id!r}")
+            count = int(row["stall_nudges"] or 0) + 1
+            self._conn.execute("UPDATE issues SET stall_nudges = ? WHERE id = ?", (count, issue_id))
+        return count
 
     def delete(self, issue_id: str) -> bool:
         return self.delete_with_snapshot(issue_id) is not None

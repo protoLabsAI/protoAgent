@@ -257,6 +257,33 @@ class TestListAndCancel:
         assert gp.cancel_job(gw_job.id) is False
         assert len(gw.list_jobs()) == 1
 
+    def test_list_jobs_strict_reads_same_rows_as_list_jobs(self, tmp_path):
+        s = _make_scheduler(tmp_path)
+        s.add_job("sweep", "0 9 * * *", job_id="j-strict", origin_session="chat-7")
+        strict = s.list_jobs_strict()
+        assert [j.id for j in strict] == ["j-strict"]
+        assert strict[0].origin_session == "chat-7"
+
+    def test_list_jobs_strict_raises_where_list_jobs_swallows(self, tmp_path, monkeypatch):
+        # A scheduler DB read failure: list_jobs() fails quiet to [] (its UI/console
+        # callers tolerate a hiccup), but list_jobs_strict() RAISES so the stall driver
+        # test (tasks.stall) treats a hiccup as "driven" rather than a false "no pending
+        # job" that could nudge a task that is in fact being driven (ADR 0129 D9).
+        s = _make_scheduler(tmp_path)
+        s.add_job("sweep", "0 9 * * *", job_id="j-boom")
+
+        class _BoomConn:
+            def execute(self, *a, **k):
+                raise sqlite3.DatabaseError("database disk image is malformed")
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(s, "_connect", lambda: _BoomConn())
+        assert s.list_jobs() == []
+        with pytest.raises(sqlite3.DatabaseError):
+            s.list_jobs_strict()
+
 
 class TestUpdateJob:
     def test_in_place_update_keeps_id_and_recomputes_next_fire(self, tmp_path):

@@ -935,6 +935,23 @@ class LocalScheduler:
             db.close()
         return [_row_to_job(r) for r in rows]
 
+    def list_jobs_strict(self) -> list[Job]:
+        """Like :meth:`list_jobs`, but a DB read failure RAISES instead of being read
+        as an empty job list. The stall driver test (``tasks.stall``, ADR 0129 D9)
+        reads jobs through this so a scheduler DB hiccup counts as *driven*: the
+        swallowed ``[]`` that :meth:`list_jobs` returns on a hiccup would otherwise
+        look like "no pending job" and could nudge a task that is in fact being driven
+        (fail-quiet — never nudge a task on missing evidence)."""
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT * FROM jobs WHERE agent_name = ? ORDER BY next_fire ASC",
+                (self.agent_name,),
+            ).fetchall()
+        finally:
+            db.close()
+        return [_row_to_job(r) for r in rows]
+
     def execution_session_pins(self) -> set[str] | None:
         """``job:`` execution sessions this store still holds unresolved work for
         (ADR 0129): a live scheduling row — a recurring job between fires, a pending
