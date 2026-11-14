@@ -407,6 +407,7 @@ function syncFor(req) {
       streams: new Set(), // open scoped /api/events connections: {write, res}
       a2aStreams: new Set(), // held scoped /a2a sockets — a restart drops them too
       sessions: new Map(), // session_id → { rows: [turn rows], liveTaskId }
+      registry: new Map(), // session_id → { title, created_at, closed } — the S6 server-held LIST
       decisions: [], // decision rows (pending + settled) — the S5 Work/decisions feed
       turnSeq: 0,
       bootId: 1, // bumped by the restart simulation
@@ -451,17 +452,105 @@ function syncSessionState(sync, sessionId) {
 function syncIndexPayload(sync, params) {
   // The parked pin read (#3957) — this harness parks nothing.
   if (params.get("parked") === "true") return { sessions: [] };
-  const sessions = [...sync.sessions.entries()]
-    .filter(([, session]) => session.rows.length)
-    .map(([sessionId, session]) => ({
+  // ADR 0130 S6: fold the server-held LIST over the turn index — titles applied, closed
+  // sessions dropped from the open list and named in `closed`, and a registered turnless
+  // session (a tab created on another device) included even with no durable turn.
+  const seen = new Set();
+  const sessions = [];
+  for (const [sessionId, session] of sync.sessions.entries()) {
+    if (!session.rows.length) continue;
+    const meta = sync.registry.get(sessionId);
+    if (meta?.closed) continue;
+    seen.add(sessionId);
+    sessions.push({
       session_id: sessionId,
       last_updated: session.rows.map((r) => r.last_updated).sort().at(-1) ?? null,
       turn_count: session.rows.length,
       last_task_id: session.rows.at(-1)?.task_id ?? null,
+      title: meta?.title ?? null,
       ...syncSessionState(sync, sessionId),
-    }))
-    .sort((a, b) => String(b.last_updated).localeCompare(String(a.last_updated)));
-  return { sessions };
+    });
+  }
+  for (const [sessionId, meta] of sync.registry) {
+    if (meta.closed || seen.has(sessionId)) continue;
+    sessions.push({
+      session_id: sessionId,
+      last_updated: meta.created_at ?? null,
+      turn_count: 0,
+      last_task_id: null,
+      title: meta.title ?? null,
+      ...syncSessionState(sync, sessionId),
+    });
+  }
+  sessions.sort((a, b) => String(b.last_updated).localeCompare(String(a.last_updated)));
+  const closed = [...sync.registry].filter(([, meta]) => meta.closed).map(([id]) => id);
+  return { sessions, closed };
+}
+
+/** The S6 server-held LIST writes: register (create/reopen/rename), rename, close, reopen,
+ *  delete and the one-time migrate, each publishing its change-log event so the other client's
+ *  sync client converges (sessionHydration.watchServerChangeFeed). */
+function syncRegister(sync, sessionId, { title, created_at } = {}) {
+  if (!sessionId) return;
+  const clean = typeof title === "string" && title.trim() ? title.trim() : null;
+  const existing = sync.registry.get(sessionId);
+  if (!existing) {
+    sync.registry.set(sessionId, { title: clean, created_at: created_at || new Date().toISOString(), closed: false });
+    syncPublish(sync, "session.created", { session_id: sessionId, title: clean, kind: "created" });
+  } else if (existing.closed) {
+    existing.closed = false;
+    if (clean !== null) existing.title = clean;
+    syncPublish(sync, "session.reopened", { session_id: sessionId, title: existing.title, kind: "reopened" });
+  } else if (clean !== null && clean !== existing.title) {
+    existing.title = clean;
+    syncPublish(sync, "session.renamed", { session_id: sessionId, title: clean, kind: "renamed" });
+  }
+}
+
+function syncRenameSession(sync, sessionId, title) {
+  const clean = typeof title === "string" && title.trim() ? title.trim() : null;
+  const existing = sync.registry.get(sessionId);
+  if (!existing) {
+    sync.registry.set(sessionId, { title: clean, created_at: new Date().toISOString(), closed: false });
+    syncPublish(sync, "session.created", { session_id: sessionId, title: clean, kind: "created" });
+  } else if (clean !== existing.title) {
+    existing.title = clean;
+    syncPublish(sync, "session.renamed", { session_id: sessionId, title: clean, kind: "renamed" });
+  }
+}
+
+function syncCloseSession(sync, sessionId) {
+  const existing = sync.registry.get(sessionId) || { title: null, created_at: new Date().toISOString(), closed: false };
+  if (existing.closed) return;
+  existing.closed = true;
+  sync.registry.set(sessionId, existing);
+  syncPublish(sync, "session.closed", { session_id: sessionId, title: existing.title, kind: "closed" });
+}
+
+function syncReopenSession(sync, sessionId) {
+  const existing = sync.registry.get(sessionId);
+  if (!existing || !existing.closed) return;
+  existing.closed = false;
+  syncPublish(sync, "session.reopened", { session_id: sessionId, title: existing.title, kind: "reopened" });
+}
+
+function syncDeleteSession(sync, sessionId) {
+  sync.registry.delete(sessionId);
+  sync.sessions.delete(sessionId);
+  syncPublish(sync, "session.deleted", { session_id: sessionId, kind: "deleted" });
+}
+
+function syncMigrate(sync, items) {
+  let migrated = 0;
+  for (const item of Array.isArray(items) ? items : []) {
+    const sessionId = String(item?.session_id || "");
+    if (!sessionId || sync.registry.has(sessionId)) continue;
+    const clean = typeof item.title === "string" && item.title.trim() ? item.title.trim() : null;
+    sync.registry.set(sessionId, { title: clean, created_at: item.created_at || new Date().toISOString(), closed: false });
+    syncPublish(sync, "session.created", { session_id: sessionId, title: clean, kind: "created" });
+    migrated += 1;
+  }
+  return migrated;
 }
 
 /** Settle a sync turn's durable row FROM the exact wire frames it streamed, so what a late
@@ -2298,6 +2387,34 @@ const server = createServer(async (req, res) => {
         }
         if (pathname === "/api/__test__/sync/restart") return handleSyncRestart(res, sync);
         if (pathname === "/api/__test__/sync/decision") return handleSyncDecision(res, await readBody(req), sync);
+        // ADR 0130 S6 server-held LIST writes.
+        if (pathname === "/api/chat/sessions/migrate") {
+          const body = await readBody(req);
+          return sendJson(res, { ok: true, migrated: syncMigrate(sync, body.sessions) });
+        }
+        if (pathname === "/api/chat/sessions") {
+          const body = await readBody(req);
+          syncRegister(sync, String(body.session_id || ""), { title: body.title, created_at: body.created_at });
+          return sendJson(res, { ok: true, session_id: String(body.session_id || "") });
+        }
+      }
+      if (sync && req.method === "PATCH") {
+        const patchFor = /^\/api\/chat\/sessions\/([^/]+)$/.exec(pathname);
+        if (patchFor) {
+          const sessionId = decodeURIComponent(patchFor[1]);
+          const body = await readBody(req);
+          if (typeof body.title === "string") syncRenameSession(sync, sessionId, body.title);
+          if (body.closed === true) syncCloseSession(sync, sessionId);
+          else if (body.closed === false) syncReopenSession(sync, sessionId);
+          return sendJson(res, { ok: true, session_id: sessionId });
+        }
+      }
+      if (sync && req.method === "DELETE") {
+        const delFor = /^\/api\/chat\/sessions\/([^/?]+)/.exec(pathname);
+        if (delFor) {
+          syncDeleteSession(sync, decodeURIComponent(delFor[1]));
+          return sendJson(res, { deleted: true, harvested: false });
+        }
       }
     }
     if (req.method === "GET") {

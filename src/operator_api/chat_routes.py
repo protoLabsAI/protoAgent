@@ -58,6 +58,43 @@ class DirectiveUpdateRequest(BaseModel):
     conditions: str = ""
 
 
+# ADR 0130 S6: the server-held session LIST write surface. The console registers a session
+# on its first send, renames/closes it, and migrates its open tabs once; every write publishes
+# a change-log event so other devices converge (``server.session_registry``).
+class SessionRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    title: str | None = None
+    created_at: str | None = None
+
+
+class SessionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # A rename (``title``) and/or a tab close/reopen (``closed`` true/false). Both optional —
+    # a body setting neither is a no-op.
+    title: str | None = None
+    closed: bool | None = None
+
+
+class SessionMigrateItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    title: str | None = None
+    created_at: str | None = None
+    # A device-local dismissal (DISMISSED_STORAGE_KEY) being migrated as CLOSED so the dismissal
+    # is preserved server-side (ADR 0130 S6, r4), not silently re-opened on other devices.
+    closed: bool = False
+
+
+class SessionMigrateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessions: list[SessionMigrateItem] = []
+
+
 class _delete_lock:
     """``async with _delete_lock(sid)`` serializes deletes of one chat session."""
 
@@ -91,13 +128,20 @@ from server.chat import (
     _resolve_thread_id,
     aside_session,
     chat,
+    close_chat_session_list,
     compact_session,
+    delete_chat_session_list,
     export_session,
     forget_delegate_conversations,
     forget_delegate_conversations_for_session,
     fork_session,
     live_state_fields,
+    migrate_chat_session_list,
     note_session_deleted,
+    read_chat_session_list,
+    register_chat_session_list,
+    rename_chat_session_list,
+    reopen_chat_session_list,
     rewind_session,
     steer_or_start_turn,
     turn_error,
@@ -1069,6 +1113,11 @@ def register_chat_routes(app, ui: str) -> None:
         # ADR 0130 S2: the session's rows are gone (a `retire=false` clear included — the
         # API answers 404 until a new turn lands), so every other device must refetch.
         note_session_deleted(session_id)
+        # ADR 0130 S6: drop the session's LIST row and publish ``session.deleted`` so every
+        # device removes the tab. On a `retire=false` clear the tab stays (the id is reusable),
+        # so leave the list row — only a real retirement removes the chat everywhere.
+        if retire:
+            await delete_chat_session_list(session_id)
         return {"deleted": True, "harvested": chunk_id is not None, "forgotten": forgotten}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
@@ -1129,6 +1178,28 @@ def register_chat_routes(app, ui: str) -> None:
             except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
                 log.warning("[chat] parked session index read failed: %s", exc)
                 return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
+        # ADR 0130 S6: read the server-held session LIST (title + open/closed) FIRST so the
+        # CLOSED ids can be excluded from the windowed task-store query below. If they stayed in
+        # the window, a closed chat would consume one of the ``limit`` slots and could push an
+        # open, turn-bearing chat that has no S6 registry row (a pre-S6 chat) out of the newest-N
+        # window before the Python closed-skip ever runs — the behaviour that worked before S6.
+        reason: str | None = None
+        # The server-held list read SIGNALS its own failure rather than returning ``{}`` (an empty
+        # registry and a failed read are different). On a failure we CANNOT know which sessions are
+        # closed, so we must not publish a (necessarily empty) authoritative ``closed`` array that a
+        # client would read as "nothing is closed" and use to clear its tabs' dismissals. Instead,
+        # degrade to a registry-less listing and OMIT ``closed`` from the response below so the
+        # client leaves its dismissals alone until a trustworthy read lands (ADR 0130 S6, r5).
+        registry: dict[str, Any] = {}
+        registry_ok = True
+        try:
+            registry = await read_chat_session_list()
+        except Exception as exc:  # noqa: BLE001 — a list-read failure must be SIGNALLED, not hidden
+            log.warning("[chat] session list read failed: %s", exc)
+            registry_ok = False
+            reason = f"session list read failed: {type(exc).__name__}"
+        closed_ids = [sid for sid, meta in registry.items() if meta["closed"]]
+        rows: list = []
         try:
             from sqlalchemy import exists, select
 
@@ -1140,15 +1211,19 @@ def register_chat_routes(app, ui: str) -> None:
                 # turn: a client compares ``last_task_id`` against the turns it holds to
                 # tell it is behind even when it still remembers turns the store has
                 # already swept, which a bare count cannot (ADR 0104).
-                newest = _newest_turn_ranked(
-                    TaskModel,
-                    conn.dialect.name,
+                window_filter = (
                     # The task store also contains delegation, Activity,
                     # fleet-room, and API contexts. Only console-created
                     # chat tabs use the stable ``chat-`` id prefix.
                     TaskModel.context_id.like("chat-%")
-                    & ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)),
+                    & ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id))
                 )
+                if closed_ids:
+                    # Drop the server-CLOSED sessions BEFORE ``.limit(limit)`` so they never
+                    # occupy a window slot (the open list hides them anyway); their ids still
+                    # ride the top-level ``closed`` array below.
+                    window_filter = window_filter & ~TaskModel.context_id.in_(closed_ids)
+                newest = _newest_turn_ranked(TaskModel, conn.dialect.name, window_filter)
                 rows = (
                     await conn.execute(
                         select(
@@ -1165,14 +1240,32 @@ def register_chat_routes(app, ui: str) -> None:
                 ).fetchall()
         except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
             log.warning("[chat] session index read failed: %s", exc)
-            return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
-        return {
-            "sessions": [
+            # Degrade, don't bail: a fresh instance with no task table yet (or a transient
+            # read error) must still return the server-held session LIST below — a registered
+            # turnless session has no task row to depend on (ADR 0130 S6, r1).
+            rows = []
+            reason = f"read failed: {type(exc).__name__}"
+        # ADR 0130 S6: fold in the server-held session LIST (``registry``, read above). A row the
+        # registry marks CLOSED is already out of the window (excluded before ``.limit``) and out
+        # of the open list (its tab is hidden everywhere, the chat kept); every open row carries
+        # its server title; and a registered session with no durable turn yet (a just-created tab
+        # from another device) is added even though the task-store window has nothing for it.
+        # ``closed`` names the closed sessions so a client reconciling on boot removes those tabs
+        # too, and the Work surface keeps reading their directives (useWorkItems.ts).
+        sessions: list[dict] = []
+        seen: set[str] = set()
+        for r in rows:
+            meta = registry.get(r.context_id)
+            if meta and meta["closed"]:
+                continue
+            seen.add(r.context_id)
+            sessions.append(
                 {
                     "session_id": r.context_id,
                     "last_updated": _utc_iso(r.last_updated),
                     "turn_count": r.turn_count,
                     "last_task_id": r.task_id,
+                    "title": (meta or {}).get("title"),
                     # ADR 0130 D1 server-held state, from the same windowed row + the
                     # turn lock — no extra query per session.
                     **live_state_fields(
@@ -1182,9 +1275,168 @@ def register_chat_routes(app, ui: str) -> None:
                         newest_updated=r.last_updated,
                     ),
                 }
-                for r in rows
-            ]
-        }
+            )
+        # Open registry rows the newest-N turn window didn't reach. Two corrections over a
+        # bare turnless fold:
+        #  * DELETED chats must not resurface (r1): a leftover list row from a stale
+        #    register/rename/migrate would otherwise reappear as an open, empty tab everywhere,
+        #    so drop any the operator has tombstoned.
+        #  * a registered chat can have DURABLE turns outside the window (an older but still-open
+        #    tab): reporting turn_count 0 / last_task_id None for it would make the client record
+        #    serverTurnCount 0 and believe the chat is empty, so read each survivor's real
+        #    newest-turn summary rather than hardcoding zero.
+        candidate_ids = [sid for sid, meta in registry.items() if not meta["closed"] and sid not in seen]
+        extra_turns: dict[str, Any] = {}
+        tombstoned: set[str] = set()
+        if candidate_ids:
+            try:
+                from sqlalchemy import select
+
+                from a2a.server.tasks.database_task_store import TaskModel
+
+                async with engine.begin() as conn:
+                    tombstones = await _ensure_chat_tombstones(conn)
+                    tombstoned = {
+                        r.context_id
+                        for r in (
+                            await conn.execute(
+                                select(tombstones.c.context_id).where(tombstones.c.context_id.in_(candidate_ids))
+                            )
+                        ).fetchall()
+                    }
+                    live_ids = [sid for sid in candidate_ids if sid not in tombstoned]
+                    if live_ids:
+                        newest = _newest_turn_ranked(
+                            TaskModel, conn.dialect.name, TaskModel.context_id.in_(live_ids)
+                        )
+                        for r in (
+                            await conn.execute(
+                                select(
+                                    newest.c.context_id,
+                                    newest.c.task_id,
+                                    newest.c.last_updated,
+                                    newest.c.turn_count,
+                                    newest.c.status,
+                                ).where(newest.c.rn == 1)
+                            )
+                        ).fetchall():
+                            extra_turns[r.context_id] = r
+            except Exception as exc:  # noqa: BLE001 — opportunistic, same as the window read
+                log.warning("[chat] turnless session fold read failed: %s", exc)
+        turnless = sorted(
+            (
+                (sid, meta)
+                for sid, meta in registry.items()
+                if not meta["closed"] and sid not in seen and sid not in tombstoned
+            ),
+            key=lambda kv: kv[1]["created_at"] or "",
+            reverse=True,
+        )
+        # Build the open registry rows the window didn't reach as full session dicts. A row with
+        # durable turns outside the window carries its REAL newest-turn summary (``extra_turns``,
+        # read above); a genuinely turnless just-created tab carries turn_count 0 and its
+        # ``created_at`` as the effective activity stamp.
+        turnless_sessions: list[dict] = []
+        for sid, meta in turnless:
+            turn = extra_turns.get(sid)
+            if turn is not None:
+                turnless_sessions.append(
+                    {
+                        "session_id": sid,
+                        "last_updated": _utc_iso(turn.last_updated),
+                        "turn_count": turn.turn_count,
+                        "last_task_id": turn.task_id,
+                        "title": meta["title"],
+                        **live_state_fields(
+                            sid,
+                            newest_state=_status_state(turn.status),
+                            newest_task_id=turn.task_id,
+                            newest_updated=turn.last_updated,
+                        ),
+                    }
+                )
+            else:
+                turnless_sessions.append(
+                    {
+                        "session_id": sid,
+                        "last_updated": meta["created_at"],
+                        "turn_count": 0,
+                        "last_task_id": None,
+                        "title": meta["title"],
+                        **live_state_fields(sid),
+                    }
+                )
+        # Honour ``limit`` across the WHOLE response (ADR 0130 S6, r6/r7) WITHOUT starving a
+        # just-created turnless tab (r8): MERGE the turn-bearing window with the turnless rows,
+        # re-rank the combined list newest-activity-first (``last_updated`` desc, nulls last, then
+        # id desc — the same order the SQL window used), and slice ONCE to ``limit``. A brand-new
+        # chat created on another device (``created_at`` = now) therefore ranks at the top and is
+        # returned even when the turn window was already full, instead of being dropped by a
+        # ``remaining = limit - len(window)`` budget that a full window zeroes out. Any out-of-window
+        # turn-bearing row is older than every windowed row, so it only surfaces when the window has
+        # spare budget — the cap and the newest-first order both hold.
+        sessions = sorted(
+            sessions + turnless_sessions,
+            key=lambda s: (s["last_updated"] is not None, s["last_updated"] or "", s["session_id"]),
+            reverse=True,
+        )[:limit]
+        result: dict[str, Any] = {"sessions": sessions}
+        # Only carry the authoritative ``closed`` array when the list read SUCCEEDED. On a failure
+        # it would be empty-by-construction (registry is ``{}``) and indistinguishable from "nothing
+        # is closed", so the client would clear the dismissals of tabs that are in fact closed and
+        # un-hide them (ADR 0130 S6, r5). Omitting it tells the client the closed list is unknown
+        # this read, so it leaves its dismissals untouched — the same shape a pre-S6 server returns.
+        if registry_ok:
+            result["closed"] = [sid for sid, meta in registry.items() if meta["closed"]]
+        if reason is not None:
+            result["reason"] = reason
+        return result
+
+    @app.post("/api/chat/sessions")
+    async def _api_register_session(req: SessionRegisterRequest):
+        """Register a chat session in the server-held list (ADR 0130 S6): the console calls
+        this on a session's FIRST send so its title and open state become server-held and
+        every device sees the tab. Idempotent — create, or reopen a closed one, or rename on a
+        changed title (``server.session_registry.register_session``)."""
+        await register_chat_session_list(req.session_id, title=req.title, created_at=req.created_at)
+        return {"ok": True, "session_id": req.session_id}
+
+    @app.post("/api/chat/sessions/migrate")
+    async def _api_migrate_sessions(req: SessionMigrateRequest):
+        """One-time migration of a client's device-local open tabs + titles into the
+        server-held list (ADR 0130 S6, r4), so nobody loses a chat when the list becomes
+        server-authoritative. Only creates rows that don't already exist — the server copy
+        wins after the first migrate. Returns how many new sessions were registered.
+
+        A store failure answers 503 (NOT a 200 ``ok: true``): the client latches this one-time
+        migration only on a successful call, so a swallowed failure would make it latch a LOSS —
+        this device's tabs + dismissals would never reach the server list. A non-2xx lets the
+        client retry on a later boot (ADR 0130 S6, r4)."""
+        from fastapi import HTTPException
+
+        try:
+            migrated = await migrate_chat_session_list([item.model_dump() for item in req.sessions])
+        except Exception as exc:  # noqa: BLE001 — translate a store failure into a retryable 503
+            log.warning("[chat] session-list migrate failed: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "migrate_failed", "reason": f"migrate failed: {type(exc).__name__}"},
+            ) from exc
+        return {"ok": True, "migrated": migrated}
+
+    @app.patch("/api/chat/sessions/{session_id}")
+    async def _api_update_session(session_id: SessionId, req: SessionUpdateRequest):
+        """Rename a session and/or close/reopen its tab (ADR 0130 S6). ``title`` renames it;
+        ``closed: true`` closes the tab everywhere (kept retrievable, not deleted);
+        ``closed: false`` reopens it. Each change publishes its change-log event so every
+        device converges."""
+        if req.title is not None:
+            await rename_chat_session_list(session_id, req.title)
+        if req.closed is True:
+            await close_chat_session_list(session_id)
+        elif req.closed is False:
+            await reopen_chat_session_list(session_id)
+        return {"ok": True, "session_id": session_id}
 
     @app.get("/api/chat/sessions/{session_id}")
     async def _api_chat_session(session_id: SessionId):

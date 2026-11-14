@@ -30,6 +30,7 @@ import { useSessionsWithBackgroundWork } from "./backgroundJobStore";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { isEmptyChatSession, resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
 import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSession, type ChatMemoryChoice } from "./sessionRetirement";
+import { pushClose, pushRename } from "./sessionListSync";
 import { ChatSessionSlot } from "./ChatSessionSlot";
 
 // The composer predicates moved with ChatSessionSlot (#3841); re-exported so existing
@@ -413,7 +414,11 @@ export function ChatSurface({
           })}
           onSelect={(id) => chatStore.switchSession(id)}
           onClose={requestClose}
-          onRename={(id, label) => chatStore.renameSession(id, label)}
+          onRename={(id, label) => {
+            chatStore.renameSession(id, label);
+            // ADR 0130 S6: push the rename so the title shows on every device (r3).
+            pushRename(id, label);
+          }}
           onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
           onAdd={() => chatStore.createSession()}
           onTabContextMenu={onTabContextMenu}
@@ -459,9 +464,11 @@ export function ChatSurface({
           const id = pendingClose;
           void (async () => {
             if (closingGoal && !stopGoalOnClose) {
-              // DETACH deliberately keeps the server session/goal. This is a local
-              // tab dismissal, not durable retirement.
+              // DETACH deliberately keeps the server session/goal running; the TAB closes.
+              // ADR 0130 S6: close it server-side so every device hides the tab too (kept
+              // retrievable, not deleted) — the list is server-authoritative now.
               void api.resumeGoal(id).catch(() => {});
+              pushClose(id);
               chatStore.dismissSession(id);
               advanceClose();
               return;

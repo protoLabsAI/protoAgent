@@ -101,6 +101,9 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   },
   // ── dismissal / seen sets ──
   { id: "chat.dismissed", area: "local", pattern: new RegExp(`^protoagent\\.chat\\.sessions(?::${SLUG})?\\.dismissed$`), category: "dismissals", slug: (m) => hostOr(m[1]), evictable: false },
+  // ADR 0130 S6: a per-agent latch recording that this device already migrated its local tabs
+  // + titles into the server-held session list (the one-time push happens once, then the server wins).
+  { id: "chat.listMigrated", area: "local", pattern: new RegExp(`^protoagent\\.chat\\.sessions(?::${SLUG})?\\.listMigrated$`), category: "prefs", slug: (m) => hostOr(m[1]), evictable: false },
   { id: "chat.dismissedReports", area: "local", pattern: /^protoagent\.chat\.dismissedReports$/, category: "dismissals", slug: noSlug, evictable: false },
   { id: "chat.dismissedScheduled", area: "local", pattern: /^protoagent\.chat\.dismissedScheduled$/, category: "dismissals", slug: noSlug, evictable: false },
   { id: "chat.dismissedToolCalls", area: "local", pattern: /^protoagent\.chat\.dismissedToolCalls$/, category: "dismissals", slug: noSlug, evictable: false },

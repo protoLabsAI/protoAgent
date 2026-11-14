@@ -75,7 +75,21 @@ describe("the console sync client (ADR 0130 D3)", () => {
   it("subscribes to the change-feed topics and resync_required", () => {
     watchServerChangeFeed();
     expect([...handlers.keys()].sort()).toEqual(
-      ["resync_required", "session.changed", "turn.completed", "turn.failed", "turn.finished", "turn.resumed", "turn.started"].sort(),
+      [
+        "resync_required",
+        "session.changed",
+        "turn.completed",
+        "turn.failed",
+        "turn.finished",
+        "turn.resumed",
+        "turn.started",
+        // ADR 0130 S6 session-LIST events — the tab list follows the server.
+        "session.created",
+        "session.renamed",
+        "session.reopened",
+        "session.closed",
+        "session.deleted",
+      ].sort(),
     );
   });
 

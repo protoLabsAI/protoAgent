@@ -28,6 +28,7 @@ import {
   sessionCast,
   type SessionStatus,
 } from "./chat-store";
+import { registerSessionOnSend } from "./sessionListSync";
 import { findSlashCommand } from "../ext/slashRegistry";
 import { continueRun, leadingRun, toggleMention } from "./mentionRun";
 import { insertRoomBubble, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
@@ -799,6 +800,9 @@ export function ChatSessionSlot({
     }
     if (!canSend) return;
     const text = draft.trim();
+    // ADR 0130 S6: a session registers server-side on its FIRST send, so its title and tab
+    // appear on every device (r3). Idempotent and fire-and-forget — the turn runs regardless.
+    registerSessionOnSend(session, text);
     recordSubmitted(text); // record for ↑/↓ recall, then reset nav to the newest
     setDraft("");
     // The slash popover tracks the TEXTAREA's live token via keyup/click/focus

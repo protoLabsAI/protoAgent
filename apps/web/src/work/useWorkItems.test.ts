@@ -518,6 +518,21 @@ describe("live group adapters", () => {
     expect(r.current.directives.items.map((i) => i.id)).toEqual(["reason-focused"]);
   });
 
+  it("includes CLOSED sessions' directives so a chat closed elsewhere keeps contributing (S6)", async () => {
+    // ADR 0130 S6: a session the server lists as CLOSED (its tab is hidden on every device) is
+    // NOT deleted — its directive ledger stands — so the Work inventory must pull its id from the
+    // top-level `closed` array too, or a chat closed anywhere silently stops contributing.
+    spies.sessions.mockResolvedValue({
+      sessions: [{ session_id: "open-chat", turn_count: 1, last_updated: null }],
+      closed: ["closed-chat"],
+    });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(id, "in_force", id)], in_force: 1 }));
+    const r = mount({ sessionId: "focus", thisChatOnly: false });
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["focus", "open-chat", "closed-chat"]);
+  });
+
   it("keeps successful initial ledgers across batches when another fails", async () => {
     const focused = "partial-focused";
     const others = Array.from({ length: 5 }, (_, i) => `partial-${i}`);
