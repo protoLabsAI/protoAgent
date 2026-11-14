@@ -368,6 +368,88 @@ context, offered only when it exists.
 Decisions keep their own inline answers (D4). The chat rail's Needs you section
 follows the same rules as the Work view.
 
+### D9 — A task nobody is driving wakes the agent (Josh, 2026-11-14)
+
+**Problem.** Task status is only a label; nothing checks that the work behind it
+is actually moving. On 2026-11-14 protoEngineer left `task-59` `in_progress` with
+no linked work running, no schedule, no watch and no background job — nothing that
+would ever bring the agent back to it. The Work view still showed it under "Doing
+now" (`apps/web/src/work/tone.ts` `groupFor`: `in_progress` → doing-now
+unconditionally), so Josh believed the agent was working on it. It wasn't, and it
+never would be. The one existing signal — the stale line gated by
+`STALE_TASK_MS` in `tone.ts` — only appears after 24 h and is UI-only; it changes
+a label but wakes no one. Separately, protoAgent#5270: a recurring follow-up job
+reported the same parked work about 17 times in one afternoon while it waited on
+an operator decision, because "no change" was not a reason to slow down.
+
+**Decision.** A task's status is a claim the server verifies. An `in_progress`
+task with nothing driving it is woken; a follow-up that keeps reporting no change
+while it waits on a human backs off.
+
+1. **The driver test.** A task is *driven* when at least one of these holds:
+   - it has a linked item that is not yet resolved — a board card, PR, scheduler
+     job or directive, from the task's existing `links`;
+   - a pending scheduler job (one-shot or `wait`) or an active watch belongs to
+     the task's `session_id`;
+   - a background job or delegation is running for that session;
+   - a turn is running in that session.
+
+   One shared server function answers "is this task driven?", and every consumer
+   below (the stall check, the Work view status and the `task_update` warning)
+   calls that same function, so they can never disagree.
+
+2. **Stall check.** On the task link sweep's cadence (every **5 minutes**), a task
+   whose status is `in_progress`, that is **not driven**, and whose `updated_at`
+   is older than **30 minutes** is *stalled*. For each stalled task the server
+   queues one agent-owned inbox item (priority `next`, never operator-class,
+   source `task-stall`), deduplicated on task id + `updated_at`, so one stall
+   produces exactly one nudge until the task actually changes.
+
+3. **The wake turn must reconcile status.** The nudge text tells the agent to do
+   exactly one of: act on it now; link the work that drives it; schedule a
+   follow-up (`wait` / `schedule_task`); set `waiting` with an ask; set `deferred`;
+   or close it. Re-stating progress is not one of the options — a status with
+   nothing behind it is the thing being corrected.
+
+4. **Nudge cap.** The task counts the nudges sent since its last real update.
+   After **3 nudges** with no update, the server moves the task to `waiting` with
+   the ask "Stalled: no progress after 3 reminders — continue, defer or close?",
+   so it surfaces in Needs you marked stalled rather than looping forever in the
+   agent's inbox. Any real update to the task resets the count to zero.
+
+5. **Work view status.** "Doing now" shows a task as *active* only when it is
+   driven (same driver test, evaluated client-side against the Work data).
+   An undriven `in_progress` task reads "in progress · idle Nm" (minutes since its
+   last update); a stalled one reads "stalled". The task **stays in the Doing now
+   group** — only the label changes, so the operator sees at a glance which of the
+   "doing now" rows are really moving. The 24 h stale line (`STALE_TASK_MS`)
+   remains for very old tasks.
+
+6. **`task_update` warning.** Setting a task `in_progress` when it is not driven
+   still succeeds — the agent may be about to link the work — but the tool result
+   adds one line telling the agent that nothing is driving the task and naming the
+   fix: link the work, schedule a follow-up, or set `waiting`.
+
+7. **Follow-up backoff (#5270).** A recurring scheduler job whose consecutive runs
+   report no change (the existing repeated-result / `NO_UPDATE` detection in
+   `src/server/a2a.py`) and whose origin chat has a task in `waiting` or a pending
+   decision **backs off**: after **2 unchanged runs** it fires at most **hourly**,
+   and it returns to its normal cadence as soon as a run reports something new or
+   the waiting task / decision is answered. One "still waiting on you" card is
+   posted at the moment it backs off; the unchanged runs after that post nothing.
+   This is what stops the ~17-reports-an-afternoon loop.
+
+**Defaults.** 30 min idle threshold, 5 min sweep cadence, 3 nudges before
+`waiting`, 2 unchanged runs before backoff, hourly backoff cadence. These are
+written as constants, not settings, for now.
+
+**Not covered.** This does not change what a running turn does; it only wakes a
+task that has no turn, schedule, watch, job or unresolved link behind it. The
+driver test is a point-in-time check on durable state, so a task that is driven
+again (a new link, a scheduled follow-up) is simply not stalled on the next sweep;
+the nudge dedup on task id + `updated_at` means it is also never double-woken for
+the same unchanged state.
+
 ## Consequences
 
 - **Good:** one mental model for operator and agent. Fewer wrong-tool calls and fewer contradictory records (a watch versus an approval). Work becomes scannable, and decisions stop hiding in background sessions.
@@ -385,6 +467,7 @@ follows the same rules as the Work view.
 - **S5:** D5 prompt capability map and tool-count reduction. Remove the aliases one release after S4.
 - **S6 (D7):** classify interrupted tasks from their checkpoint on boot; auto-resume the safe cases with the one-retry cap; skip interrupted recurring occurrences. **S7 (D7):** the Needs you recovery item (Resume / Re-run / Drop) and the Activity entry for each auto-resume.
 - **S8 (D8):** server: the task `ask` field, `session_id` updatable, `task_update` requiring an ask for `waiting`, and the agent-owned outcome inbox item on a console close or dismiss. **S9 (D8):** console: waiting tasks open their detail; ask, links, Reply / Done / Dismiss; Open chat only when the source has turns; provenance line and honest copy. **S10 (D8):** the chat rail's Needs you section follows S9.
+- **S11 (D9):** server. The shared driver test (one function every consumer calls), and the 5-minute stall check on the task link sweep that queues the `task-stall` inbox nudge (priority `next`, deduped on task id + `updated_at`), caps at 3 nudges and then moves the task to `waiting` with the stalled ask. **S12 (D9):** console. "Doing now" reads "in progress · idle Nm" / "stalled" for an undriven `in_progress` task using the same driver test client-side; the row stays in the group; the 24 h stale line stays. **S13 (D9):** the `task_update` warning line when a task is set `in_progress` while undriven. **S14 (D9, #5270):** the follow-up backoff — a recurring job with unchanged runs and a waiting task / pending decision in its origin chat fires at most hourly after 2 unchanged runs, posts one "still waiting on you" card at the moment it backs off, and resumes normal cadence on the next changed run or when the wait is answered.
 
 Independent fixes in flight that this ADR keeps: #5099 (a decision answer returns as soon as it is consumed) and projectBoard-plugin#735 (human page text, and pages retire when their card does).
 
