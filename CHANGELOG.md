@@ -15,6 +15,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.240.0] - 2026-11-14
+
+### Changed
+- **Every device now shows the same chat tabs (#5262).** The chat tab list is server-authoritative
+  (ADR 0130 S6): creating, renaming, closing or deleting a chat on one device now shows on all
+  the others within a couple of seconds, and a chat's title is held by the server rather than
+  only in the browser that named it. Closing a tab closes it everywhere — the chat stays
+  retrievable, it isn't deleted — and a client's existing tabs migrate to the server once so none
+  are lost. Previously the desktop and the phone could show entirely different chats.
+
+### Fixed
+- **Inbox recovery no longer replays a stale backlog one turn at a time (#5256).**
+  Boot recovery used to claim every pending `now`/`next` item regardless of age and fire a
+  self-A2A turn for each — a ~73-day pile-up of pr-reviewer alarms was replayed one turn
+  apiece. Recovery now skips pending items older than 24h (`RECOVERY_MAX_AGE`): they stay
+  queued, so `check_inbox` still returns them in a single pull with no waking turn each, and
+  each pass logs how many it left behind. Accepted-but-unmarked completions are exempt and
+  are still claimed at any age.
+
+### Security
+- **A federation-token A2A caller cannot approve or bypass a gated `run_command`, now proven end to end (#5162).**
+  The trust-tier approval authority from #5138 — a federation credential may not answer an approval
+  card or skip the gate with `bypass_permissions` — is now covered by a test that drives a real
+  `/a2a` `SendMessage` through the auth middleware and the streaming turn driver into the live gate:
+  the federation caller is refused the command, while the operator credential runs the same request
+  past the gate.
+
 ## [0.239.0] - 2026-11-14
 
 ### Changed
