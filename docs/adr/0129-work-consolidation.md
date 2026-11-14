@@ -323,6 +323,51 @@ chat turns keep today's behavior: the operator sees the interruption and resends
 that ran but whose result was never written stays uncertain, and the policy
 makes that uncertainty visible: to the model on resume, or to the operator.
 
+### D8 — A "waiting on you" item is answered where it is shown (Josh, 2026-11-14)
+
+**Problem.** A task the agent parks on the operator (`waiting`, Q1) carries the
+`session_id` of the conversation it was created in. Clicking the row in Needs you
+skips the detail and calls `openSourceChat`, which only works if that session has
+durable chat turns. Often it doesn't: the agent created the task in an
+agent-to-agent conversation (`agent-browser-handoff-2026-11-09`), a background job
+(`job:3ab48335…`), or a chat that was later deleted. On protoEngineer on 2026-11-14,
+all four Needs you tasks pointed at sessions with zero turns. The operator saw
+"Couldn't open source chat. Try again when the agent is connected," the agent
+was connected, and there was no other way to answer.
+
+**Decision.** The item itself is where the operator answers. The source chat is
+context, offered only when it exists.
+
+1. **Opening a waiting task shows its detail**, never an automatic jump to a chat.
+   The detail leads with the **ask** (what the agent needs from the operator),
+   then the links (issue or PR, as links), who is waiting and since when, then
+   the description.
+2. **The ask is its own field.** A task carries an optional short `ask`, set by
+   the agent when it parks the task (`task_update(status="waiting", ask=…)`).
+   The tool requires an ask when the status is `waiting`. Older tasks fall back
+   to the first line of the description.
+3. **Actions that don't depend on the source chat:**
+   - **Reply.** The operator types an answer in the detail. If the source chat
+     has durable turns, the reply is sent there. Otherwise it starts a new chat
+     titled "Re: &lt;task title&gt;" (server-held, ADR 0130 S6, so every device sees
+     it) whose first message quotes the task and the ask. The task's
+     `session_id` then points at that chat, so the next Open chat works. The task
+     leaves `waiting` (back to `open`) once the reply is sent.
+   - **Done**, with an optional reason: closes the task.
+   - **Dismiss**, with an optional reason: closes the task as not needed.
+   - The agent is told the outcome. Closing or dismissing a waiting task from
+     the console queues an agent-owned inbox item (priority `next`, never
+     operator-class) naming the task, the action and the reason.
+4. **Open chat only when there is one.** The action appears only when the source
+   session has durable turns. Otherwise the detail says where the task started:
+   "Started in an agent-to-agent conversation", "Started by a background job",
+   or "Its chat was deleted". There's no error toast.
+5. **Honest failure copy.** If an Open chat still fails, the toast says the chat
+   isn't available. It never says to retry when the agent is connected.
+
+Decisions keep their own inline answers (D4). The chat rail's Needs you section
+follows the same rules as the Work view.
+
 ## Consequences
 
 - **Good:** one mental model for operator and agent. Fewer wrong-tool calls and fewer contradictory records (a watch versus an approval). Work becomes scannable, and decisions stop hiding in background sessions.
@@ -339,6 +384,7 @@ makes that uncertainty visible: to the model on resume, or to the operator.
 - **S4:** D2 follow-up primitive, plus aliases and the migration.
 - **S5:** D5 prompt capability map and tool-count reduction. Remove the aliases one release after S4.
 - **S6 (D7):** classify interrupted tasks from their checkpoint on boot; auto-resume the safe cases with the one-retry cap; skip interrupted recurring occurrences. **S7 (D7):** the Needs you recovery item (Resume / Re-run / Drop) and the Activity entry for each auto-resume.
+- **S8 (D8):** server: the task `ask` field, `session_id` updatable, `task_update` requiring an ask for `waiting`, and the agent-owned outcome inbox item on a console close or dismiss. **S9 (D8):** console: waiting tasks open their detail; ask, links, Reply / Done / Dismiss; Open chat only when the source has turns; provenance line and honest copy. **S10 (D8):** the chat rail's Needs you section follows S9.
 
 Independent fixes in flight that this ADR keeps: #5099 (a decision answer returns as soon as it is consumed) and projectBoard-plugin#735 (human page text, and pages retire when their card does).
 
