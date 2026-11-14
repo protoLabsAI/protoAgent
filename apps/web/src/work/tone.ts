@@ -1,7 +1,8 @@
 import { needsOperatorAttention } from "../lib/queries";
 import type { Status } from "@protolabsai/ui/primitives";
-import type { InboxItem, ScheduledJob, Task, WatchState } from "../lib/types";
+import type { BackgroundJobDTO, GoalState, InboxItem, ScheduledJob, Task, WatchState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
+import type { DirectiveRow } from "../lib/api/chat";
 import type { WorkItem } from "./useWorkItems";
 
 /** The four canonical Work groups, in display order — the registry validates
@@ -177,6 +178,85 @@ export function relTime(epochOrIso: number | string, now: number = Date.now()): 
     ? `${minutes} min ago`
     : `${sameDay ? "today" : day} at ${time}`;
   return { text, tooltip: date.toLocaleString("en-GB", { dateStyle: "full", timeStyle: "long" }) };
+}
+
+/** The future counterpart to {@link relTime}, with the same en-GB time/day style and
+ * `{ text, tooltip }` shape. Text forms: "at 21:30" (today), "tomorrow at 14:00",
+ * "18 Nov at 09:00" (later). The caller prefixes "Next ". `now` is epoch ms; a numeric
+ * input timestamp is epoch seconds. No time-of-day qualifier is implied for today — the
+ * bare "at HH:MM" reads as "later today". */
+export function nextTime(epochOrIso: number | string, now: number = Date.now()): { text: string; tooltip: string } {
+  const date = new Date(typeof epochOrIso === "number" ? epochOrIso * 1000 : epochOrIso);
+  if (!Number.isFinite(date.getTime())) return { text: "", tooltip: "" };
+  const current = new Date(now);
+  const time = date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const day = date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const tomorrow = new Date(current);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const text = date.toDateString() === current.toDateString()
+    ? `at ${time}`
+    : date.toDateString() === tomorrow.toDateString()
+      ? `tomorrow at ${time}`
+      : `${day} at ${time}`;
+  return { text, tooltip: date.toLocaleString("en-GB", { dateStyle: "full", timeStyle: "long" }) };
+}
+
+/** The one quiet line under a Work row (chat-status-rail-v2 §1 D2): the item's age or next
+ * time, never a status word and never a warning colour. Returns "" when the source carries no
+ * usable timestamp — an empty cue beats an invented one. Needs-you kinds (decision, waiting
+ * task, delivery, stopped goal) are out of scope here; they return "" too. */
+export function railCue(item: GroupableWorkItem, now: number = Date.now()): string {
+  const raw = item.raw as Record<string, unknown> | null;
+  if (!raw) return "";
+  switch (item.kind) {
+    case "directive": {
+      const when = relTime((raw as DirectiveRow).created_at ?? "", now).text;
+      return when ? `Set ${when}` : "";
+    }
+    case "background": {
+      // The job's start time (src/background/store.py sets created_at on creation); no other
+      // start field exists, so an absent created_at means no line.
+      const created = (raw as BackgroundJobDTO).created_at;
+      const when = created ? relTime(created, now).text : "";
+      return when ? `Started ${when}` : "";
+    }
+    case "goal": {
+      const { iteration, max_iterations } = raw as GoalState;
+      if (typeof iteration !== "number") return "";
+      return max_iterations != null ? `Step ${iteration} of ${max_iterations}` : `Step ${iteration}`;
+    }
+    case "task": {
+      const task = raw as Task;
+      if (task.status === "in_progress" || task.status === "blocked") {
+        // Past 24h an in_progress job reads "No activity for N days" (taskStaleDays is
+        // in_progress-only by design — a blocked task always falls through to "Updated").
+        const days = taskStaleDays(task, now);
+        if (days != null) return staleTaskMeta(days);
+        const when = relTime(task.updated_at || task.created_at || "", now).text;
+        return when ? `Updated ${when}` : "";
+      }
+      if (!task.status || task.status === "open" || task.status === "deferred") {
+        const when = task.created_at ? relTime(task.created_at, now).text : "";
+        return when ? `Added ${when}` : "";
+      }
+      return "";
+    }
+    case "schedule":
+    case "wait": {
+      const job = raw as ScheduledJob;
+      if (job.enabled === false) return "Paused";
+      const when = job.next_fire ? nextTime(job.next_fire, now).text : "";
+      return when ? `Next ${when}` : "";
+    }
+    case "watch": {
+      // WatchState.created_at is epoch SECONDS — relTime's numeric branch reads it as such.
+      const created = (raw as WatchState).created_at;
+      const when = created != null ? relTime(created, now).text : "";
+      return when ? `Since ${when}` : "";
+    }
+    default:
+      return "";
+  }
 }
 
 /** Who answered, in plain words: the operator is "you"; otherwise the agent/name as given. */
