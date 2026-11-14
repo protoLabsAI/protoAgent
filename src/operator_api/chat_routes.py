@@ -1332,16 +1332,15 @@ def register_chat_routes(app, ui: str) -> None:
             key=lambda kv: kv[1]["created_at"] or "",
             reverse=True,
         )
-        # Honour ``limit`` across the WHOLE response (ADR 0130 S6, r6/r7): the windowed turn
-        # query is already capped, but the turnless fold must not append every open registry
-        # row on top of it, or ``?limit=N`` could return far more than N sessions once many
-        # chats are registered. ``turnless`` is newest-created-first, so the slice keeps the
-        # newest open tabs and drops the oldest beyond the budget the window left unfilled.
-        remaining = max(0, limit - len(sessions))
-        for sid, meta in turnless[:remaining]:
+        # Build the open registry rows the window didn't reach as full session dicts. A row with
+        # durable turns outside the window carries its REAL newest-turn summary (``extra_turns``,
+        # read above); a genuinely turnless just-created tab carries turn_count 0 and its
+        # ``created_at`` as the effective activity stamp.
+        turnless_sessions: list[dict] = []
+        for sid, meta in turnless:
             turn = extra_turns.get(sid)
             if turn is not None:
-                sessions.append(
+                turnless_sessions.append(
                     {
                         "session_id": sid,
                         "last_updated": _utc_iso(turn.last_updated),
@@ -1357,7 +1356,7 @@ def register_chat_routes(app, ui: str) -> None:
                     }
                 )
             else:
-                sessions.append(
+                turnless_sessions.append(
                     {
                         "session_id": sid,
                         "last_updated": meta["created_at"],
@@ -1367,6 +1366,20 @@ def register_chat_routes(app, ui: str) -> None:
                         **live_state_fields(sid),
                     }
                 )
+        # Honour ``limit`` across the WHOLE response (ADR 0130 S6, r6/r7) WITHOUT starving a
+        # just-created turnless tab (r8): MERGE the turn-bearing window with the turnless rows,
+        # re-rank the combined list newest-activity-first (``last_updated`` desc, nulls last, then
+        # id desc — the same order the SQL window used), and slice ONCE to ``limit``. A brand-new
+        # chat created on another device (``created_at`` = now) therefore ranks at the top and is
+        # returned even when the turn window was already full, instead of being dropped by a
+        # ``remaining = limit - len(window)`` budget that a full window zeroes out. Any out-of-window
+        # turn-bearing row is older than every windowed row, so it only surfaces when the window has
+        # spare budget — the cap and the newest-first order both hold.
+        sessions = sorted(
+            sessions + turnless_sessions,
+            key=lambda s: (s["last_updated"] is not None, s["last_updated"] or "", s["session_id"]),
+            reverse=True,
+        )[:limit]
         result: dict[str, Any] = {"sessions": sessions}
         # Only carry the authoritative ``closed`` array when the list read SUCCEEDED. On a failure
         # it would be empty-by-construction (registry is ``{}``) and indistinguishable from "nothing

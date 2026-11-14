@@ -373,6 +373,39 @@ def test_index_caps_total_at_limit(tmp_path, monkeypatch):
     assert set(ids) == {"chat-4", "chat-3"}  # the two newest-created tabs survive the cap
 
 
+def test_index_returns_a_just_created_session_even_when_the_turn_window_is_full(tmp_path, monkeypatch):
+    # r8: when the turn-bearing window already holds ``limit`` open sessions, a just-created
+    # turnless tab (created on another device) must STILL appear — the cap must not zero its
+    # budget out. The index merges the window and the turnless rows and re-ranks newest-first, so
+    # the brand-new tab lands at the top and the oldest windowed row rolls off, rather than the new
+    # tab never appearing (which broke "a just-created session appears on every device").
+    engine = _engine(tmp_path, "full-window-new")
+    _seed_task_rows(
+        engine,
+        [
+            {"id": "w1", "context_id": "chat-w1", "state": "TASK_STATE_COMPLETED",
+             "at": datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc)},
+            {"id": "w2", "context_id": "chat-w2", "state": "TASK_STATE_COMPLETED",
+             "at": datetime(2026, 11, 1, 9, 0, tzinfo=timezone.utc)},
+        ],
+    )
+    client = _client(monkeypatch)
+    # Two turn-bearing chats already fill a limit=2 window; a newer turnless chat is registered.
+    client.post(
+        "/api/chat/sessions",
+        json={"session_id": "chat-fresh", "title": "No turns yet", "created_at": "2026-11-05T00:00:00+00:00"},
+    )
+
+    sessions = client.get("/api/chat/sessions?limit=2").json()["sessions"]
+    ids = [s["session_id"] for s in sessions]
+    assert len(ids) == 2  # still capped at limit
+    assert ids[0] == "chat-fresh"  # the brand-new tab ranks first (newest-activity-first)
+    by_id = {s["session_id"]: s for s in sessions}
+    assert by_id["chat-fresh"]["turn_count"] == 0 and by_id["chat-fresh"]["title"] == "No turns yet"
+    assert "chat-w1" in by_id  # the newer windowed row survives; the oldest (chat-w2) rolls off
+    assert "chat-w2" not in by_id
+
+
 def test_index_reports_real_turns_for_a_folded_session_when_the_window_read_degrades(tmp_path, monkeypatch):
     # The whole response is now capped at ``limit`` (ADR 0130 S6, r7), so a registered,
     # turn-bearing session only reaches the TURNLESS fold when the windowed turn query itself
