@@ -3,9 +3,8 @@
     "version": "v0.240.0",
     "date": "2026-11-14",
     "changes": [
-      "Inbox recovery no longer replays a stale backlog one turn at a time (#5256).",
       "Every device now shows the same chat tabs (#5262).",
-      "Web E2E: the chat-frame-scrollback 192-block variant no longer times out under shard contention (#5263).",
+      "Inbox recovery no longer replays a stale backlog one turn at a time (#5256).",
       "A federation-token A2A caller cannot approve or bypass a gated run_command, now proven end to end (#5162)."
     ]
   },
