@@ -21,7 +21,7 @@ import {
   type SessionReconcile,
 } from "./chat-store";
 import { onTopic } from "../lib/events";
-import { migrateLocalSessionsOnce } from "./sessionListSync";
+import { migrateLocalSessionsOnce, pendingSessionListIntents, reconcilePendingListIntents } from "./sessionListSync";
 import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
@@ -798,8 +798,13 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   // ADR 0130 S6: follow the server-held session LIST — apply server titles, add registered
   // turnless tabs this device lacks (one created on another device), and remove tabs the server
   // reports closed or deleted. Runs AFTER durable hydration added the turn-bearing sessions, so
-  // the add step only ever fills in the genuinely-missing turnless ones.
-  chatStore.syncServerSessionList({ summaries, closedIds });
+  // the add step only ever fills in the genuinely-missing turnless ones. First reconcile this
+  // device's own pending list intents against the index just read: clear the ones the server now
+  // reflects and re-push any that still diverge (so a close/rename/reopen lost to a transient
+  // failure is retried), then hand the still-pending set to syncServerSessionList so a stale read
+  // can't revert an intent the server hasn't caught up to yet (review round 2).
+  reconcilePendingListIntents({ summaries, closedIds });
+  chatStore.syncServerSessionList({ summaries, closedIds, pending: pendingSessionListIntents() });
 }
 
 /** How often a visible console re-reads the session index while it stays open. */

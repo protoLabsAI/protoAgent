@@ -7,8 +7,11 @@ import type { ChatMessage } from "../lib/types";
 import { chatStore, DEFAULT_SESSION_TITLE, SESSION_LIST_MIGRATED_KEY } from "./chat-store";
 import {
   migrateLocalSessionsOnce,
+  pendingSessionListIntents,
   pushClose,
   pushRename,
+  pushReopen,
+  reconcilePendingListIntents,
   registerSessionOnSend,
   resetSessionListSyncForTests,
 } from "./sessionListSync";
@@ -91,6 +94,57 @@ describe("syncServerSessionList", () => {
     chatStore.syncServerSessionList({ summaries: [{ session_id: id, title: "Shared", turn_count: 0 }], closedIds: [] });
     expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(true);
   });
+
+  // ── the swallow-then-revert race (review round 2): a close/rename this device pushed must not
+  //    be reverted by a resync that races it, and it must still converge once the server confirms.
+  it("keeps a tab this device closed hidden on resync until the server confirms the close", () => {
+    const id = "chat-closed-here";
+    chatStore.syncServerSessionList({ summaries: [{ session_id: id, title: "Shared", turn_count: 0 }], closedIds: [] });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(true);
+    // The user closes it here: the local dismissal, plus a server-close push that is still in
+    // flight (or failed) — the index has NOT caught up.
+    chatStore.dismissSession(id);
+    pushClose(id);
+    // A resync races the close: the index STILL reports the session OPEN. Without the pending guard
+    // this cleared the dismissal and re-showed the tab the user just closed — the revert.
+    const racyOpen = { summaries: [{ session_id: id, title: "Shared", turn_count: 0 }], closedIds: [] };
+    reconcilePendingListIntents(racyOpen);
+    chatStore.syncServerSessionList({ ...racyOpen, pending: pendingSessionListIntents() });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(false);
+    // The server catches up (reports it closed). The pending intent clears → server-wins resumes.
+    reconcilePendingListIntents({ summaries: [], closedIds: [id] });
+    chatStore.syncServerSessionList({ summaries: [], closedIds: [id], pending: pendingSessionListIntents() });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(false);
+    expect(pendingSessionListIntents().close.has(id)).toBe(false);
+    // And now a GENUINE reopen elsewhere (server reports OPEN) re-shows it — the guard is gone.
+    reconcilePendingListIntents(racyOpen);
+    chatStore.syncServerSessionList({ ...racyOpen, pending: pendingSessionListIntents() });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(true);
+  });
+
+  it("keeps a rename this device pushed until the server reflects it (no revert to the stale title)", () => {
+    const id = "chat-renamed-here";
+    chatStore.syncServerSessionList({ summaries: [{ session_id: id, title: "Old", turn_count: 0 }], closedIds: [] });
+    chatStore.renameSession(id, "New");
+    pushRename(id, "New");
+    // A resync races it: the index still carries the OLD title. The guard keeps the local "New".
+    reconcilePendingListIntents({ summaries: [{ session_id: id, title: "Old" }], closedIds: [] });
+    chatStore.syncServerSessionList({
+      summaries: [{ session_id: id, title: "Old", turn_count: 0 }],
+      closedIds: [],
+      pending: pendingSessionListIntents(),
+    });
+    expect(chatStore.getSnapshot().sessions.find((s) => s.id === id)?.title).toBe("New");
+    // The server catches up to "New": the pending title clears and server-wins resumes.
+    reconcilePendingListIntents({ summaries: [{ session_id: id, title: "New" }], closedIds: [] });
+    chatStore.syncServerSessionList({
+      summaries: [{ session_id: id, title: "New", turn_count: 0 }],
+      closedIds: [],
+      pending: pendingSessionListIntents(),
+    });
+    expect(chatStore.getSnapshot().sessions.find((s) => s.id === id)?.title).toBe("New");
+    expect(pendingSessionListIntents().title.has(id)).toBe(false);
+  });
 });
 
 // ── the write side: register on send, rename/close push, migrate once ───────────
@@ -117,6 +171,29 @@ describe("session-list push", () => {
     expect(api.updateSession).toHaveBeenCalledWith("chat-r", { title: "Renamed" });
     pushClose("chat-c");
     expect(api.updateSession).toHaveBeenCalledWith("chat-c", { closed: true });
+  });
+
+  it("pushReopen marks the session open and supersedes a pending close", () => {
+    pushClose("chat-x");
+    expect(pendingSessionListIntents().close.has("chat-x")).toBe(true);
+    pushReopen("chat-x");
+    expect(pendingSessionListIntents().close.has("chat-x")).toBe(false);
+    expect(pendingSessionListIntents().open.has("chat-x")).toBe(true);
+    expect(api.updateSession).toHaveBeenLastCalledWith("chat-x", { closed: false });
+  });
+
+  it("re-pushes a still-diverged close on reconcile, and clears it once the server confirms", () => {
+    pushClose("chat-stuck");
+    const update = api.updateSession as unknown as ReturnType<typeof vi.fn>;
+    update.mockClear();
+    // The index still reports it OPEN → the dropped close is re-pushed (retry rides the resync).
+    reconcilePendingListIntents({ summaries: [{ session_id: "chat-stuck", title: "x" }], closedIds: [] });
+    expect(update).toHaveBeenCalledWith("chat-stuck", { closed: true });
+    // Once the server reports it closed, the intent clears and nothing is re-pushed.
+    update.mockClear();
+    reconcilePendingListIntents({ summaries: [], closedIds: ["chat-stuck"] });
+    expect(update).not.toHaveBeenCalled();
+    expect(pendingSessionListIntents().close.has("chat-stuck")).toBe(false);
   });
 
   it("migrates this device's non-empty open tabs exactly once, skipping empty placeholders", async () => {

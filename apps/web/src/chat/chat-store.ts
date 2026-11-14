@@ -1740,11 +1740,24 @@ export const chatStore = {
    *  add registered OPEN sessions this device lacks that have no durable turn yet (a tab created
    *  on another device — turn-bearing ones arrive through durable hydration). A session the
    *  server doesn't name is left alone (it stays local-only until its first send registers it). */
-  syncServerSessionList({ summaries, closedIds }: { summaries: ServerSessionSummary[]; closedIds: string[] }) {
-    const closed = new Set(closedIds.filter((id): id is string => typeof id === "string" && !!id));
+  syncServerSessionList({ summaries, closedIds, pending }: {
+    summaries: ServerSessionSummary[];
+    closedIds: string[];
+    // The list intents THIS device pushed that a server read hasn't reflected yet (sessionListSync).
+    // The server-wins reconciliation below DEFERS to them, so a stale index read can't revert a
+    // close/reopen/rename this device just made before the push landed (review round 2).
+    pending?: { close: ReadonlySet<string>; open: ReadonlySet<string>; title: ReadonlyMap<string, string> };
+  }) {
+    // A tab this device just REOPENED, whose reopen the server hasn't caught up to, is NOT treated
+    // as closed even if this (stale) read still lists it closed — else it would be re-dropped and
+    // re-dismissed the moment after the user reopened it. The pending-open id clears once a read
+    // reports it open.
+    const closed = new Set(
+      closedIds.filter((id): id is string => typeof id === "string" && !!id && !pending?.open.has(id)),
+    );
     // Persist the server-closed ids as local dismissals so boot hydration won't re-add them
-    // (reopenable via restoreDismissedSession on a session.reopened, #S6). A close is
-    // non-destructive, so the dismissal — not a hard delete — is the right local shape.
+    // (reopenable via restoreDismissedSession on a session.reopened). A close is non-destructive,
+    // so the dismissal — not a hard delete — is the right local shape.
     let dismissChanged = false;
     for (const id of closed) {
       if (!locallyDismissedIds.has(id)) {
@@ -1760,11 +1773,13 @@ export const chatStore = {
     // missed `session.reopened`, or is recovering via full resync, must re-show a tab another
     // device reopened, so clear its persisted dismissal AND the cross-tab tombstone here —
     // otherwise the add loop and durable hydration (which also honor these sets) both keep it
-    // hidden while every other device shows it.
+    // hidden while every other device shows it. EXCEPT a tab THIS device just closed whose close
+    // the server hasn't reflected yet (pending.close): keeping its dismissal is what stops a stale
+    // read — or a close PATCH still retrying — from re-showing the tab the user closed here.
     let reopenCleared = false;
     for (const summary of summaries) {
       const id = summary.session_id;
-      if (!id || closed.has(id)) continue;
+      if (!id || closed.has(id) || pending?.close.has(id)) continue;
       if (locallyDismissedIds.delete(id)) reopenCleared = true;
       locallyDeletedIds.delete(id);
     }
@@ -1777,11 +1792,15 @@ export const chatStore = {
       let sessions = current.sessions.filter((session) => !closed.has(session.id));
       if (sessions.length !== current.sessions.length) changed = true;
       // 2. Apply server titles. The server wins for a REAL title (r4); but a stale pre-rename
-      //    read carrying the default placeholder must never clobber a real local title.
+      //    read carrying the default placeholder must never clobber a real local title, and a
+      //    rename THIS device pushed that the server hasn't reflected yet (pending.title) must not
+      //    be reverted to the stale server title — the same swallow-then-revert race as a close.
       sessions = sessions.map((session) => {
         const serverTitle = byId.get(session.id)?.title?.trim();
         if (!serverTitle || serverTitle === session.title) return session;
         if (serverTitle === DEFAULT_SESSION_TITLE && session.title !== DEFAULT_SESSION_TITLE) return session;
+        const wanted = pending?.title.get(session.id);
+        if (wanted !== undefined && serverTitle !== wanted) return session;
         changed = true;
         return { ...session, title: serverTitle };
       });
