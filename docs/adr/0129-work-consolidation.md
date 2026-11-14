@@ -400,10 +400,16 @@ while it waits on a human backs off.
 
 2. **Stall check.** On the task link sweep's cadence (every **5 minutes**), a task
    whose status is `in_progress`, that is **not driven**, and whose `updated_at`
-   is older than **30 minutes** is *stalled*. For each stalled task the server
-   queues one agent-owned inbox item (priority `next`, never operator-class,
-   source `task-stall`), deduplicated on task id + `updated_at`, so one stall
-   produces exactly one nudge until the task actually changes.
+   is older than **30 minutes** is *stalled*. The server tracks a **nudge count**
+   on the task (the number of nudges sent since its last real update). Each sweep
+   that finds the task still stalled queues one agent-owned inbox item (priority
+   `next`, never operator-class, source `task-stall`) and increments the count.
+   The inbox item is deduplicated on task id + `updated_at` + that nudge count, so
+   a sweep never double-queues the *same* nudge (for example after a restart that
+   re-runs the sweep for a tick it already handled), but the *next* sweep still
+   queues the next nudge. A real update changes `updated_at` and resets the count,
+   ending the lineage, so a task that actually moved is never nudged for a state
+   it has already left.
 
 3. **The wake turn must reconcile status.** The nudge text tells the agent to do
    exactly one of: act on it now; link the work that drives it; schedule a
@@ -411,11 +417,13 @@ while it waits on a human backs off.
    or close it. Re-stating progress is not one of the options — a status with
    nothing behind it is the thing being corrected.
 
-4. **Nudge cap.** The task counts the nudges sent since its last real update.
-   After **3 nudges** with no update, the server moves the task to `waiting` with
-   the ask "Stalled: no progress after 3 reminders — continue, defer or close?",
-   so it surfaces in Needs you marked stalled rather than looping forever in the
-   agent's inbox. Any real update to the task resets the count to zero.
+4. **Nudge cap.** Once the nudge count from item 2 reaches **3** and the task is
+   still stalled, the next sweep moves the task to `waiting` instead of queuing a
+   fourth nudge, with the ask "Stalled: no progress after 3 reminders — continue,
+   defer or close?", so it surfaces in Needs you marked stalled rather than looping
+   forever in the agent's inbox. Any real update to the task resets the count to
+   zero (item 2), so a task that moves and later stalls again gets the full three
+   nudges afresh.
 
 5. **Work view status.** "Doing now" shows a task as *active* only when it is
    driven (same driver test, evaluated client-side against the Work data).
@@ -446,9 +454,10 @@ written as constants, not settings, for now.
 **Not covered.** This does not change what a running turn does; it only wakes a
 task that has no turn, schedule, watch, job or unresolved link behind it. The
 driver test is a point-in-time check on durable state, so a task that is driven
-again (a new link, a scheduled follow-up) is simply not stalled on the next sweep;
-the nudge dedup on task id + `updated_at` means it is also never double-woken for
-the same unchanged state.
+again (a new link, a scheduled follow-up) is simply not stalled on the next sweep.
+The nudge dedup (item 2) keys on the nudge count as well as `updated_at`, so an
+unchanged task is woken once per sweep up to the cap of three and then parked in
+`waiting` (item 4) — never a fourth time, and never twice for the same sweep tick.
 
 ## Consequences
 
@@ -467,7 +476,7 @@ the same unchanged state.
 - **S5:** D5 prompt capability map and tool-count reduction. Remove the aliases one release after S4.
 - **S6 (D7):** classify interrupted tasks from their checkpoint on boot; auto-resume the safe cases with the one-retry cap; skip interrupted recurring occurrences. **S7 (D7):** the Needs you recovery item (Resume / Re-run / Drop) and the Activity entry for each auto-resume.
 - **S8 (D8):** server: the task `ask` field, `session_id` updatable, `task_update` requiring an ask for `waiting`, and the agent-owned outcome inbox item on a console close or dismiss. **S9 (D8):** console: waiting tasks open their detail; ask, links, Reply / Done / Dismiss; Open chat only when the source has turns; provenance line and honest copy. **S10 (D8):** the chat rail's Needs you section follows S9.
-- **S11 (D9):** server. The shared driver test (one function every consumer calls), and the 5-minute stall check on the task link sweep that queues the `task-stall` inbox nudge (priority `next`, deduped on task id + `updated_at`), caps at 3 nudges and then moves the task to `waiting` with the stalled ask. **S12 (D9):** console. "Doing now" reads "in progress · idle Nm" / "stalled" for an undriven `in_progress` task using the same driver test client-side; the row stays in the group; the 24 h stale line stays. **S13 (D9):** the `task_update` warning line when a task is set `in_progress` while undriven. **S14 (D9, #5270):** the follow-up backoff — a recurring job with unchanged runs and a waiting task / pending decision in its origin chat fires at most hourly after 2 unchanged runs, posts one "still waiting on you" card at the moment it backs off, and resumes normal cadence on the next changed run or when the wait is answered.
+- **S11 (D9):** server. The shared driver test (one function every consumer calls), and the 5-minute stall check on the task link sweep that queues the `task-stall` inbox nudge (priority `next`, deduped on task id + `updated_at` + the per-task nudge count so each sweep queues the next nudge rather than a duplicate), increments that count, and once it reaches 3 moves the task to `waiting` with the stalled ask. **S12 (D9):** console. "Doing now" reads "in progress · idle Nm" / "stalled" for an undriven `in_progress` task using the same driver test client-side; the row stays in the group; the 24 h stale line stays. **S13 (D9):** the `task_update` warning line when a task is set `in_progress` while undriven. **S14 (D9, #5270):** the follow-up backoff — a recurring job with unchanged runs and a waiting task / pending decision in its origin chat fires at most hourly after 2 unchanged runs, posts one "still waiting on you" card at the moment it backs off, and resumes normal cadence on the next changed run or when the wait is answered.
 
 Independent fixes in flight that this ADR keeps: #5099 (a decision answer returns as soon as it is consumed) and projectBoard-plugin#735 (human page text, and pages retire when their card does).
 
