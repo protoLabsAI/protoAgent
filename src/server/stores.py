@@ -286,6 +286,21 @@ async def recover_pending_now_inbox_items(
         log.exception("[inbox] now-recovery claim failed")
         return {"claimed": 0, "accepted": 0, "failed": 0}
 
+    # Pages older than RECOVERY_MAX_AGE (24h) are left pending for the check_inbox pull
+    # (one call, no waking turn each) rather than claimed and fired one self-A2A turn
+    # apiece (#5256). Surface how many were left so the backlog is visible once per pass.
+    # Best-effort: a failure here is logged and never breaks the pass.
+    try:
+        stale_left = await asyncio.to_thread(
+            store.count_stale_recovery_items,
+            priorities=priorities,
+            now=now,
+        )
+        if stale_left > 0:
+            log.info("[inbox] now-recovery left %d item(s) older than 24h for check_inbox", stale_left)
+    except Exception:  # noqa: BLE001 — the stale count is diagnostic; never break the pass
+        log.exception("[inbox] now-recovery could not count stale items")
+
     accepted = 0
     failed = 0
     if not items:
