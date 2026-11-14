@@ -863,6 +863,15 @@ class LocalScheduler:
                     "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
                     (job_id, self.agent_name),
                 ).fetchone()
+                # An explicit edit is the operator engaging with the job, so any
+                # follow-up backoff it carried must clear and the job fire fresh (ADR
+                # 0129 S14, #5270). Best-effort — a registry hiccup never fails the edit.
+                try:
+                    from scheduler import followup_backoff
+
+                    followup_backoff.clear(job_id)
+                except Exception:  # noqa: BLE001
+                    log.exception("[scheduler] could not clear follow-up backoff on edit of %s", job_id)
                 return _row_to_job(row)
             finally:
                 db.close()
@@ -1111,6 +1120,12 @@ class LocalScheduler:
         now = datetime.now(UTC)
         due = self._claim_due_jobs(now)
         for job in due:
+            if self._followup_backed_off(job, now):
+                # ADR 0129 S14 (#5270): skip this due occurrence while the follow-up is
+                # backed off — nothing is claimed, fired or counted as a failure, and
+                # next_fire is left where it is so the slot simply waits and fires once
+                # on the first tick after the backoff elapses.
+                continue
             message_id = self._claim_occurrence(job, advance_at=now)
             if not message_id:
                 continue
@@ -1546,6 +1561,26 @@ class LocalScheduler:
                 log.exception("[scheduler] could not settle occurrence for %s", job.id)
             finally:
                 db.close()
+
+    def _followup_backed_off(self, job: Job, now: datetime) -> bool:
+        """Whether a recurring follow-up's due occurrence should be skipped because it is
+        backed off (ADR 0129 S14, #5270).
+
+        The server arms the backoff when a recurring follow-up whose origin chat is
+        waiting on the operator keeps reporting nothing new (``server.a2a``); the shared
+        registry lives in ``scheduler.followup_backoff`` because the scheduler must never
+        import the server. Only recurring jobs are ever backed off — a one-shot or a
+        ``wait:`` resume (an ISO schedule) never is, so is_cron gates this. A registry
+        hiccup fails open (fire normally) rather than stalling a job."""
+        if not is_cron(job.schedule):
+            return False
+        try:
+            from scheduler import followup_backoff
+
+            return followup_backoff.is_backed_off(job.id, job.created_at, now.timestamp())
+        except Exception:  # noqa: BLE001 — the backoff is an optimization, never a gate that can stall a fire
+            log.exception("[scheduler] follow-up backoff check failed for %s; firing normally", job.id)
+            return False
 
     def _claim_due_jobs(self, now: datetime) -> list[Job]:
         db = self._connect()
