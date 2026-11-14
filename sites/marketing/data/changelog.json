@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.239.0",
+    "date": "2026-11-14",
+    "changes": [
+      "Switching agents paints a loading splash on the first frame instead of a dark screen (#5245).",
+      "Scheduler, background and metrics SQLite stores no longer raise \"database is locked\" under in-process write contention (#5122).",
+      "Scheduler and now-inbox hardening (#5126).",
+      "A late-delivered inbox item now says how old it is, so the agent can weigh it against newer instructions (#5241).",
+      "A stalled primary model no longer costs every call its full reconnect budget before the fallback runs (#5257)."
+    ]
+  },
+  {
     "version": "v0.238.0",
     "date": "2026-11-13",
     "changes": [
