@@ -1570,14 +1570,35 @@ class LocalScheduler:
         waiting on the operator keeps reporting nothing new (``server.a2a``); the shared
         registry lives in ``scheduler.followup_backoff`` because the scheduler must never
         import the server. Only recurring jobs are ever backed off — a one-shot or a
-        ``wait:`` resume (an ISO schedule) never is, so is_cron gates this. A registry
-        hiccup fails open (fire normally) rather than stalling a job."""
+        ``wait:`` resume (an ISO schedule) never is, so is_cron gates this.
+
+        The deadline is not the only exit: a backoff only makes sense while the origin chat
+        is still waiting, so when one is armed we RE-TEST that each tick via the predicate
+        the server injected (it owns the stores — import layering keeps them out of the
+        scheduler). If the chat has stopped waiting (the operator answered the task or
+        settled the decision), the backoff is cleared and the job fires now instead of
+        stalling for the rest of the hour. A missing predicate (scheduler-only process) or
+        an unreadable store means we fall back to the deadline / fire — never stay stuck. A
+        registry hiccup fails open (fire normally) rather than stalling a job."""
         if not is_cron(job.schedule):
             return False
         try:
             from scheduler import followup_backoff
 
-            return followup_backoff.is_backed_off(job.id, job.created_at, now.timestamp())
+            if not followup_backoff.is_backed_off(job.id, job.created_at, now.timestamp()):
+                return False
+            # Armed and within the deadline — but re-test whether the chat is STILL waiting.
+            # ``still_waiting`` is False only when a registered predicate reports "no longer
+            # waiting"; ``None`` (no predicate) or ``True`` (still waiting) both hold the
+            # backoff on its deadline, so the gate never stalls a job it can't re-evaluate.
+            if followup_backoff.still_waiting(job.origin_session or "") is False:
+                followup_backoff.clear(job.id, job.created_at)
+                log.info(
+                    "[scheduler] job %s is no longer waiting on you — clearing its follow-up backoff",
+                    job.id,
+                )
+                return False
+            return True
         except Exception:  # noqa: BLE001 — the backoff is an optimization, never a gate that can stall a fire
             log.exception("[scheduler] follow-up backoff check failed for %s; firing normally", job.id)
             return False

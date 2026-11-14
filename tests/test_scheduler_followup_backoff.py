@@ -94,7 +94,7 @@ def test_two_unchanged_runs_while_waiting_back_off_and_post_one_card(monkeypatch
     _setup(monkeypatch, tasks=_FakeTasks(waiting_for="chat-42"))
     _run(text="NO_UPDATE")  # run 1: unchanged, count 1 — no card yet
     _run(text="NO_UPDATE")  # run 2: unchanged, count 2 — arm + the one card
-    _run(text="NO_UPDATE")  # run 3 (post-backoff hourly fire): extends, no new card
+    _run(text="NO_UPDATE")  # run 3: still quiet-and-waiting — extends the deadline, no 2nd card
     cards = _cards(_events)
     assert len(cards) == 1
     assert cards[0]["summary"] == a2a._FOLLOWUP_WAITING_SUMMARY
@@ -236,6 +236,58 @@ def test_followup_backed_off_gate(tmp_path):
     # Elapsed deadline → fire normally again.
     followup_backoff.set_backoff(cron.id, cron.created_at, (now - timedelta(seconds=1)).timestamp())
     assert scheduler._followup_backed_off(cron, now) is False
+
+
+def test_backed_off_gate_clears_when_chat_stops_waiting(tmp_path):
+    # r2 (the blocking fix): a backed-off slot must re-test whether the chat is STILL
+    # waiting — not wait out the whole hour. With the server's waiting predicate injected,
+    # the gate holds while the chat waits, then clears the backoff and fires the instant the
+    # operator answers (the predicate flips to "not waiting"), well before the deadline.
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("rewait", invoke_url="http://test", db_dir=tmp_path)
+    cron = scheduler.add_job("follow up", "*/5 * * * *", origin_session="chat-42")
+    now = datetime.now(UTC)
+    deadline = (now + timedelta(hours=1)).timestamp()
+    followup_backoff.set_backoff(cron.id, cron.created_at, deadline)
+
+    waiting = {"on": True}
+    followup_backoff.set_waiting_check(lambda sid: waiting["on"])
+    # Still waiting, deadline far off → skip.
+    assert scheduler._followup_backed_off(cron, now) is True
+    assert followup_backoff.backoff_until(cron.id, cron.created_at) == deadline
+
+    # Operator answered → not waiting. The gate clears the backoff and fires now.
+    waiting["on"] = False
+    assert scheduler._followup_backed_off(cron, now) is False
+    assert followup_backoff.backoff_until(cron.id, cron.created_at) is None
+
+
+def test_backed_off_gate_without_a_predicate_holds_on_the_deadline(tmp_path):
+    # No predicate registered (scheduler-only process / before any arm): the re-test is a
+    # no-op and the backoff holds purely on its deadline — never stays stuck, never fires early.
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("nopred", invoke_url="http://test", db_dir=tmp_path)
+    cron = scheduler.add_job("follow up", "*/5 * * * *", origin_session="chat-42")
+    now = datetime.now(UTC)
+    followup_backoff.set_backoff(cron.id, cron.created_at, (now + timedelta(hours=1)).timestamp())
+    # still_waiting → None (no predicate) → hold on the deadline.
+    assert followup_backoff.still_waiting("chat-42") is None
+    assert scheduler._followup_backed_off(cron, now) is True
+
+
+def test_arming_registers_the_scheduler_waiting_recheck(monkeypatch, _events):
+    # End-to-end wiring: arming the backoff (server path) registers the live waiting test as
+    # the scheduler's re-check seam, so the scheduler gate reads the real store state. When
+    # the operator answers, the same seam the gate calls now reports "not waiting".
+    tasks = _FakeTasks(waiting_for="chat-42")
+    _setup(monkeypatch, tasks=tasks)
+    _run(text="NO_UPDATE")
+    _run(text="NO_UPDATE")  # arms the backoff — and registers the re-check
+    assert followup_backoff.still_waiting("chat-42") is True
+    tasks._waiting_for = None  # operator answered the waiting task
+    assert followup_backoff.still_waiting("chat-42") is False
 
 
 def test_editing_a_job_clears_its_backoff(tmp_path):

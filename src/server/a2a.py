@@ -1824,7 +1824,10 @@ def _apply_followup_backoff(outcome, payload):
         return None
     # Quiet AND waiting past the threshold: back off to hourly. Post the card only on the
     # transition into backoff; a later hourly fire that is still quiet-and-waiting just
-    # extends the deadline with no new card.
+    # extends the deadline with no new card. Register the waiting re-check so the scheduler
+    # can clear this backoff the moment the chat stops waiting (it owns neither store —
+    # import layering — so the server, which does, injects its waiting test here). Idempotent.
+    followup_backoff.set_waiting_check(_followup_waiting_on_operator)
     already = followup_backoff.backoff_until(job.id, generation)
     followup_backoff.set_backoff(
         job.id, generation, (datetime.now(UTC) + timedelta(seconds=_FOLLOWUP_BACKOFF_SECONDS)).timestamp()
