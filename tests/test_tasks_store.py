@@ -185,6 +185,13 @@ def test_session_id_column_migrates_onto_a_legacy_board(tmp_path):
     rows = store.list()
     assert rows and rows[0]["id"] == "task-1"
     assert rows[0]["session_id"] == ""  # existing row backfilled to the default
+    assert rows[0]["ask"] == ""
+    store.update("task-1", ask="Approve?", session_id="chat-new")
+    reopened = TaskStore(db_path=db)
+    assert reopened.get("task-1")["ask"] == "Approve?"
+    assert reopened.get("task-1")["session_id"] == "chat-new"
+    snapshot = reopened.delete_with_snapshot("task-1")
+    assert reopened.restore(snapshot) == snapshot
     # and new session-attributed creates work on the migrated board
     assert store.create("new", session_id="s9")["session_id"] == "s9"
 
@@ -553,3 +560,95 @@ def test_competing_deletes_return_exactly_one_snapshot(store, monkeypatch):
         assert store.restore(row) == row
     finally:
         other._conn.close()
+
+
+@pytest.mark.parametrize("ask", ["", "   ", "Approve the release?"])
+def test_waiting_tool_requires_an_ask_and_reuses_it(store, ask):
+    from tools.scheduler_tools import _build_task_tools
+
+    update = {t.name: t for t in _build_task_tools(store)}["task_update"]
+    issue = store.create("Release")
+    result = update.invoke({"issue_id": issue["id"], "status": "waiting", "ask": ask})
+    if not ask.strip():
+        assert result.startswith("Error:") and "ask" in result
+        assert store.get(issue["id"])["status"] == "open"
+        return
+    assert store.get(issue["id"])["ask"] == ask
+    store.update(issue["id"], status="in_progress")
+    assert update.invoke({"issue_id": issue["id"], "status": "waiting"}).startswith("Updated")
+    assert store.get(issue["id"])["status"] == "waiting"
+    assert update.invoke({"issue_id": "missing", "status": "waiting"}).startswith("Error:")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", [None, "done", "dismissed"])
+async def test_console_waiting_task_fields_and_outcome_inbox(store, tmp_path, monkeypatch, outcome):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from inbox.store import InboxStore, needs_operator_attention
+    from operator_api.console_handlers import _operator_inbox_add
+    from operator_api.routes import register_operator_routes
+    from runtime.state import STATE
+
+    inbox = InboxStore(str(tmp_path / "inbox.db"))
+    monkeypatch.setattr(STATE, "inbox_store", inbox)
+    monkeypatch.setattr("graph.self_improvement.dispatch_task_review", lambda *a, **kw: None)
+    app = FastAPI()
+    register_operator_routes(
+        app, runtime_status=lambda: {}, subagent_list=lambda: [],
+        subagent_run=lambda r: None, subagent_batch=lambda r: None,
+        tasks_store=store, inbox_add=_operator_inbox_add,
+    )
+    issue = store.create("Choose release", session_id="background-job")
+    url = f"/api/tasks/issues/{issue['id']}"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        fields = {"ask": "Which release?", "session_id": "chat-reply", "status": "waiting"}
+        patched = await client.patch(url, json=fields)
+        assert patched.status_code == 200
+        listed = (await client.get("/api/tasks/issues")).json()["issues"][0]
+        assert all(listed[key] == value for key, value in fields.items())
+        assert store.list(session_id="background-job") == []
+        assert store.list(session_id="chat-reply")[0]["ask"] == fields["ask"]
+        assert (await client.post(url + "/close", json={"outcome": "invalid"})).status_code == 422
+        body = {"reason": "Use the stable release"}
+        if outcome is not None:
+            body["outcome"] = outcome
+        response = await client.post(url + "/close", json=body)
+        assert response.status_code == 200
+        assert response.json()["issue"]["close_reason"] == body["reason"]
+        # A repeated close and a non-waiting close must not page the agent again.
+        assert (await client.post(url + "/close", json=body)).status_code == 200
+        other = store.create("Ordinary task")
+        assert (await client.post(f"/api/tasks/issues/{other['id']}/close", json={})).status_code == 200
+        assert (await client.post("/api/tasks/issues/missing/close", json={})).status_code == 404
+    items = inbox.list()
+    assert len(items) == 1
+    item = items[0]
+    assert item["priority"] == "next" and not needs_operator_attention(item)
+    for text in (issue["id"], issue["title"], f"Outcome: {outcome or 'done'}", body["reason"]):
+        assert text in item["text"]
+
+
+@pytest.mark.asyncio
+async def test_failed_outcome_enqueue_keeps_task_waiting(store):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from operator_api.routes import register_operator_routes
+
+    async def unavailable(payload):
+        raise RuntimeError("inbox unavailable")
+
+    app = FastAPI()
+    register_operator_routes(
+        app, runtime_status=lambda: {}, subagent_list=lambda: [],
+        subagent_run=lambda r: None, subagent_batch=lambda r: None,
+        tasks_store=store, inbox_add=unavailable,
+    )
+    issue = store.create("Waiting")
+    store.update(issue["id"], status="waiting", ask="Proceed?")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/tasks/issues/{issue['id']}/close", json={})
+    assert response.status_code == 500
+    assert store.get(issue["id"])["status"] == "waiting"

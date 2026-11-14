@@ -7,7 +7,7 @@ surface and the console's Tasks panel both read/write it. Per-instance
 
 Issue shape (the fields the console + tools use):
   id, title, description, status, priority, issue_type, assignee,
-  created_at, updated_at, closed_at, close_reason, links
+  created_at, updated_at, closed_at, close_reason, session_id, ask, links
 
 ``links`` (ADR 0129 Q1) ties a task to the work that delivers it — board card ids
 (``bd-…``), scheduler job ids, a directive id, PR URLs — stored as a JSON array of
@@ -135,6 +135,7 @@ class TaskStore:
                     closed_at    TEXT,
                     close_reason TEXT,
                     session_id   TEXT NOT NULL DEFAULT '',
+                    ask          TEXT NOT NULL DEFAULT '',
                     links        TEXT NOT NULL DEFAULT ''
                 )
                 """
@@ -150,6 +151,9 @@ class TaskStore:
             # non-destructive upgrade as session_id above.
             if "links" not in cols:
                 self._conn.execute("ALTER TABLE issues ADD COLUMN links TEXT NOT NULL DEFAULT ''")
+
+            if "ask" not in cols:
+                self._conn.execute("ALTER TABLE issues ADD COLUMN ask TEXT NOT NULL DEFAULT ''")
 
             # Persist the high-water mark independently of surviving tasks. Seed
             # existing boards from their rows without lowering it on restart.
@@ -308,7 +312,7 @@ class TaskStore:
     def update(self, issue_id: str, **fields: Any) -> dict[str, Any]:
         if not issue_id:
             raise ValueError("issue_id is required")
-        allowed = {"title", "description", "status", "priority", "issue_type", "assignee", "links"}
+        allowed = {"title", "description", "status", "priority", "issue_type", "assignee", "links", "ask", "session_id"}
         # Accept `type` as an alias for issue_type (the console/tools use both).
         if "type" in fields and "issue_type" not in fields:
             fields["issue_type"] = fields.pop("type")
