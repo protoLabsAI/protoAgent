@@ -1319,13 +1319,17 @@ def test_session_index_is_bounded_recent_and_grouped(monkeypatch, tmp_path):
                 "last_updated": "2026-08-19T12:03:00+00:00",
                 "turn_count": 2,
                 "last_task_id": "a-2",
+                # ADR 0130 S6: the server-held title (None until a client registers/renames it).
+                "title": None,
                 # ADR 0130 S2 server-held state (newest turn settled, nothing in flight).
                 "status": "idle",
                 "live_task_id": None,
                 "last_change_seq": None,
                 "updated_at": "2026-08-19T12:03:00+00:00",
             }
-        ]
+        ],
+        # ADR 0130 S6: no session is closed in this scope.
+        "closed": [],
     }
 
 
@@ -1402,6 +1406,7 @@ def test_session_index_names_the_newest_created_turn_and_skips_tombstones(monkey
             "last_updated": "2026-08-19T12:05:00+00:00",
             "turn_count": 2,
             "last_task_id": "new",
+            "title": None,  # ADR 0130 S6: no client has registered a title here
             "status": "idle",
             "live_task_id": None,
             "last_change_seq": None,

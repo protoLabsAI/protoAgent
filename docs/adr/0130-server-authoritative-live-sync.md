@@ -3,7 +3,7 @@
 - Status: Accepted (2026-11-12, Josh: "yes as suggested")
 - Date: 2026-11-12
 - Deciders: Josh Mabry; protoAgent maintainers
-- Implementation: not started. Slices S0–S5 below.
+- Implementation: in progress. Slices S0–S6 below (S6 — the server-held chat list — done 2026-11-13).
 - Builds on: [ADR 0104](./0104-session-turns-read-api.md) (durable session turns are the transcript of record), the event bus (`src/events/bus.py`). Supersedes the console's local turn-liveness inference (`apps/web/src/chat/sessionLiveness.ts`, the reattach races in `chat/reattach.ts`) once S4 lands.
 
 ## Context
@@ -105,5 +105,6 @@ Every stuck-state bug of this class becomes a server-state bug with one place to
 - **S3:** the console sync client: cursor persistence, resume, visibility, agent-switch and sleep hooks, and entity refetch.
 - **S4:** the console renders session status from server state (D1). Remove local liveness inference (D5).
 - **S5:** Work, decisions, inbox and Feed consumers move onto the same feed, replacing their per-surface polling and invalidation.
+- **S6 (done, 2026-11-13):** the **chat list itself is server-held**, so every device shows the same chats. S0–S5 synced each session's turns and live status but left the *tab list* device-local — a tab's existence was local, closing was a local dismissal (`chat-store.ts` `DISMISSED_STORAGE_KEY`), and titles lived only in the client (`GET /api/chat/sessions` returned `title: null`), so the desktop and the phone showed different tabs (Josh, 2026-11-13). D2's "sessions created, renamed and deleted" was never built. S6 adds a durable per-agent session-list store (`server/session_registry.py`: `created_at`, `title`, open/closed, beside the chat tombstones) and the `session.created` / `session.renamed` / `session.closed` / `session.reopened` / `session.deleted` change-log events. `GET /api/chat/sessions` folds the list over the turn index (open sessions carry their title — a turnless one included — closed ones drop out and are named in `closed`). The console registers a session on its first send, pushes renames/closes, migrates its open tabs + titles once, and follows the server's list on those events and on boot/focus/resync (`sessionListSync.ts`, `chat-store.syncServerSessionList`, `sessionHydration`). The S0 contract tests (`apps/web/e2e/live-sync.spec.ts`) gain the cross-device create/rename/close/delete cases.
 
 Related fixes already on the board stay valid and ship first: #5161 (desktop reattach rejection), bd-wk4ti (one bubble per task) and bd-0ad5v (a steer with no live turn starts a turn).

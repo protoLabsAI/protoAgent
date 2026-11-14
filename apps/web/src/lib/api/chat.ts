@@ -271,9 +271,39 @@ export const chatApi = {
   // its `last_state` — a server that predates it ignores the flag and serves the newest.
   chatSessions(limit = 50, opts: { parked?: boolean } = {}) {
     const parked = opts.parked ? "&parked=true" : "";
-    return request<{ sessions: DurableChatSession[]; reason?: string }>(
+    // `closed` (ADR 0130 S6): the session ids the server reports CLOSED, so a client
+    // reconciling on boot removes those tabs even if it was offline when they closed.
+    return request<{ sessions: DurableChatSession[]; closed?: string[]; reason?: string }>(
       `/api/chat/sessions?limit=${Math.max(1, Math.min(limit, 200))}${parked}`,
     );
+  },
+
+  // ADR 0130 S6 — the server-held session LIST write surface. A client registers a session on
+  // its first send (so its title + open state become server-held and every device sees the
+  // tab), renames/closes it, and migrates its open tabs once.
+  registerSession(sessionId: string, opts: { title?: string; createdAt?: string } = {}) {
+    return request<{ ok: boolean; session_id: string }>("/api/chat/sessions", {
+      method: "POST",
+      body: { session_id: sessionId, ...(opts.title ? { title: opts.title } : {}), ...(opts.createdAt ? { created_at: opts.createdAt } : {}) },
+    });
+  },
+
+  /** Rename and/or close/reopen a session's tab (ADR 0130 S6). `closed: true` hides the tab
+   *  everywhere (the chat is kept, not deleted); `closed: false` reopens it. */
+  updateSession(sessionId: string, patch: { title?: string; closed?: boolean }) {
+    return request<{ ok: boolean; session_id: string }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "PATCH", body: patch },
+    );
+  },
+
+  /** One-time migration (ADR 0130 S6, r4): push this client's open tabs + titles so the
+   *  server-held list adopts anything only this device knew, before it becomes authoritative. */
+  migrateSessions(sessions: { session_id: string; title?: string; created_at?: string }[]) {
+    return request<{ ok: boolean; migrated: number }>("/api/chat/sessions/migrate", {
+      method: "POST",
+      body: { sessions },
+    });
   },
 
   chatSessionTurns(sessionId: string, limit = 50) {

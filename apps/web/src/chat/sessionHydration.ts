@@ -21,6 +21,7 @@ import {
   type SessionReconcile,
 } from "./chat-store";
 import { onTopic } from "../lib/events";
+import { migrateLocalSessionsOnce } from "./sessionListSync";
 import { applyDelegateProgressTo } from "./delegateProgress";
 import { attachmentDisplay, displayWithoutThumbnailNames, validThumbnails } from "./imageThumbnails";
 import { rendersText, replaceText, textRuns } from "./parts";
@@ -684,8 +685,14 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   // turn fetches — is newer than this baseline and must survive it. Capturing it after the
   // request resolved would fold an in-flight-request start into the baseline and wipe a live turn
   // (review round 2). Snapshot the whole map once; per-session values are read out below.
+  // ADR 0130 S6: push this device's local tabs + titles into the server-held list ONCE, so
+  // nothing only this device knew is lost as the list becomes server-authoritative. Latched
+  // (a no-op on every later call) and fire-and-forget — the index read below doesn't depend on
+  // it, and a created event from the server reconciles any device that raced the push.
+  void migrateLocalSessionsOnce();
   const startedEpochsAtIssue = serverTurnStartedEpochs();
   let summaries: DurableChatSession[];
+  let closedIds: string[] = [];
   try {
     const [newest, parked] = await Promise.all([
       api.chatSessions(SESSION_INDEX_LIMIT),
@@ -693,6 +700,7 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
       api.chatSessions(SESSION_PARKED_LIMIT, { parked: true }).catch(() => ({ sessions: [] })),
     ]);
     summaries = pinParkedSessions(newest.sessions, parked.sessions ?? []);
+    closedIds = newest.closed ?? []; // ADR 0130 S6: sessions the server reports CLOSED
   } catch {
     return;
   }
@@ -787,6 +795,11 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   for (const summary of summaries) {
     applyServerSessionState(summary, startedEpochAtRead.get(summary.session_id));
   }
+  // ADR 0130 S6: follow the server-held session LIST — apply server titles, add registered
+  // turnless tabs this device lacks (one created on another device), and remove tabs the server
+  // reports closed or deleted. Runs AFTER durable hydration added the turn-bearing sessions, so
+  // the add step only ever fills in the genuinely-missing turnless ones.
+  chatStore.syncServerSessionList({ summaries, closedIds });
 }
 
 /** How often a visible console re-reads the session index while it stays open. */
@@ -885,6 +898,31 @@ export function onServerChange(opts: { full?: boolean } = {}): void {
 export function watchServerChangeFeed(): () => void {
   const offs = SYNC_TOPICS.map((topic) => onTopic(topic, () => onServerChange()));
   offs.push(onTopic("resync_required", () => onServerChange({ full: true })));
+  // ADR 0130 S6 session-LIST events (D2: "sessions created, renamed and deleted"). Created /
+  // renamed / reopened refetch the list (titles + additions flow through hydrateDurableChatSessions);
+  // closed / deleted remove the named tab precisely and at once, the refetch being the backstop. A
+  // reopen clears the local dismissal the close left so the refetch can bring the tab back.
+  offs.push(onTopic("session.created", () => onServerChange()));
+  offs.push(onTopic("session.renamed", () => onServerChange()));
+  offs.push(
+    onTopic("session.reopened", (data) => {
+      const id = String(data.session_id ?? "");
+      if (id) chatStore.restoreDismissedSession(id);
+      onServerChange();
+    }),
+  );
+  offs.push(
+    onTopic("session.closed", (data) => {
+      const id = String(data.session_id ?? "");
+      if (id) chatStore.dismissSession(id); // remove the tab everywhere; kept, reopenable
+    }),
+  );
+  offs.push(
+    onTopic("session.deleted", (data) => {
+      const id = String(data.session_id ?? "");
+      if (id) chatStore.deleteSession(id);
+    }),
+  );
   return () => offs.forEach((off) => off());
 }
 

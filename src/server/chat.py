@@ -163,6 +163,20 @@ from server.session_state import (  # noqa: F401 — re-export
     note_session_deleted,
 )
 
+# Server-held session LIST state (ADR 0130 S6). Same grandfathered re-export edge: the
+# registry writes/reads the durable chat-session list (created_at/title/open-closed) and
+# publishes the session.created/renamed/closed/reopened/deleted events. COPIES of the
+# bindings — patch server.session_registry, never these names.
+from server.session_registry import (  # noqa: F401 — re-export
+    close_session as close_chat_session_list,
+    delete_session as delete_chat_session_list,
+    migrate_sessions as migrate_chat_session_list,
+    read_session_list as read_chat_session_list,
+    register_session as register_chat_session_list,
+    rename_session as rename_chat_session_list,
+    reopen_session as reopen_chat_session_list,
+)
+
 # Session ops (/compact, export, /btw, rewind, fork) moved to
 # server/chat_session_ops.py and the non-streaming usage/telemetry helpers to
 # server/turn_telemetry.py (#3810). Re-exported so ``from server.chat import …`` and

@@ -578,6 +578,12 @@ def build_a2a_stores() -> tuple[
 #: ``operator_api.chat_routes`` owns its schema and every write (one row per RETIRED console
 #: chat, never count-evicted); :func:`tombstoned_chat_sessions` is its synchronous reader.
 CHAT_TOMBSTONE_TABLE = "chat_session_tombstones"
+
+#: The durable per-agent chat-session LIST table (ADR 0130 S6), beside the task store in
+#: ``a2a-tasks.db``. One row per registered console chat — ``(context_id, created_at, title,
+#: closed_at)`` — so the tab list, its titles and its open/closed state are server-held, not
+#: device-local. ``server.session_registry`` owns its schema and every write.
+CHAT_SESSION_LIST_TABLE = "chat_session_list"
 _TOMBSTONE_QUERY_CHUNK = 500  # below SQLite's oldest bound-parameter limit (999)
 
 

@@ -99,6 +99,12 @@ export type DurableChatSession = {
   last_change_seq?: number | null;
   /** When the server-held state last changed (ISO 8601). */
   updated_at?: string | null;
+  // Server-held session LIST state (ADR 0130 S6). The server owns the tab's title and when it
+  // was created, so every device shows the same titled tabs. Absent on a pre-S6 server.
+  /** The server-held tab title, or null until a client registers/renames it. */
+  title?: string | null;
+  /** When the session was first registered (ISO 8601) — the created_at a turnless tab orders by. */
+  created_at?: string | null;
 };
 
 export type DurableChatTurn = {

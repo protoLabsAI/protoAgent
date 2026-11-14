@@ -315,3 +315,95 @@ test("a decision change in one client appears in the other within 2 seconds", as
   await expect(decisionsPill(a, 1)).toBeVisible({ timeout: 2_000 });
   await expect(decisionsPill(b, 1)).toBeVisible({ timeout: 2_000 });
 });
+
+// ── Cases 7–10 (S6) ───────────────────────────────────────────────────────────────────────
+// D4 extended to the chat LIST itself (ADR 0130 S6): the server owns each tab's existence,
+// title and open/closed state, so every device shows the same chats (Josh, 2026-11-13: desktop
+// and phone showed different tabs). A chat created/renamed/closed/deleted in one client converges
+// in the other within 2s off the server's change feed — the contract the earlier cases hold for
+// turns, now for the tab strip. Rename and close have no plain-chat DOM gesture (the tab ✕ is a
+// destructive delete), so those two are driven through the server-held LIST route from the acting
+// client's own request context — the exact call the console makes — which is what the other client
+// must follow.
+const TAB = ".pl-tabbar__tab";
+const tabNamed = (client: Client, name: string) => client.page.locator(TAB).filter({ hasText: name });
+/** Wait until both clients' SSE streams are attached, so a LIVE change is never raced against a
+ *  still-connecting stream (a fresh, never-cursored stream replays nothing — by design). */
+async function bothStreamsAttached(request: APIRequestContext, scope: string) {
+  await expect
+    .poll(async () => (await (await syncGet(request, scope, "streams")).json()).streams, { timeout: 15_000 })
+    .toBe(2);
+}
+
+test("a chat created in one client appears in the other within 2 seconds", async ({ browser, request }, testInfo) => {
+  const scope = syncScope(testInfo, "list-create");
+  const a = await openClient(browser, scope);
+  const b = await openClient(browser, scope);
+  await bothStreamsAttached(request, scope);
+
+  // A creates a chat by sending its first message — the session registers server-side (title +
+  // open state), the turn runs. The console that never touched it must gain the titled tab.
+  await sendMessage(a.page, "Fleet health review");
+  await expect(a.page.locator(SLOT).getByText(CANNED_ANSWER)).toBeVisible();
+
+  await expect(tabNamed(b, "Fleet health review")).toBeVisible({ timeout: 2_000 });
+});
+
+test("a rename in one client shows in the other within 2 seconds", async ({ browser, request }, testInfo) => {
+  const scope = syncScope(testInfo, "list-rename");
+  const session = "chat-sync-rename";
+  await seedChat(request, scope, session, "Quarterly plan", "Seeded — the plan is ready.");
+
+  const a = await openClient(browser, scope);
+  const b = await openClient(browser, scope);
+  await expect(tabNamed(a, "Quarterly plan")).toBeVisible();
+  await expect(tabNamed(b, "Quarterly plan")).toBeVisible();
+  await bothStreamsAttached(request, scope);
+
+  // A renames the chat (the server-held title). It converges on BOTH clients within the 2s clock.
+  await a.page.request.patch(`/api/chat/sessions/${session}`, { data: { title: "Launch readiness" } });
+  await expect(tabNamed(a, "Launch readiness")).toBeVisible({ timeout: 2_000 });
+  await expect(tabNamed(b, "Launch readiness")).toBeVisible({ timeout: 2_000 });
+});
+
+test("closing a tab in one client removes it from the other, but keeps the chat", async ({ browser, request }, testInfo) => {
+  const scope = syncScope(testInfo, "list-close");
+  await seedChat(request, scope, "chat-sync-keep", "Keep me open", "Kept.");
+  await seedChat(request, scope, "chat-sync-close", "Close this tab", "Still retrievable.");
+
+  const a = await openClient(browser, scope);
+  const b = await openClient(browser, scope);
+  await expect(tabNamed(a, "Close this tab")).toBeVisible();
+  await expect(tabNamed(b, "Close this tab")).toBeVisible();
+  await bothStreamsAttached(request, scope);
+
+  // A closes the tab server-side (non-destructive). It disappears on BOTH clients…
+  await a.page.request.patch(`/api/chat/sessions/chat-sync-close`, { data: { closed: true } });
+  await expect(tabNamed(a, "Close this tab")).toHaveCount(0, { timeout: 2_000 });
+  await expect(tabNamed(b, "Close this tab")).toHaveCount(0, { timeout: 2_000 });
+  // …while the other chat stays, and the closed chat is kept, not deleted — its turns are still there.
+  await expect(tabNamed(b, "Keep me open")).toBeVisible();
+  const kept = await request.get(`/api/chat/sessions/chat-sync-close/turns`, { headers: { "x-e2e-sync": scope } });
+  expect(((await kept.json()) as { turns?: unknown[] }).turns?.length ?? 0).toBeGreaterThan(0);
+});
+
+test("a chat deleted in one client disappears from the other within 2 seconds", async ({ browser, request }, testInfo) => {
+  const scope = syncScope(testInfo, "list-delete");
+  await seedChat(request, scope, "chat-sync-stay", "Stay put", "Kept.");
+  await seedChat(request, scope, "chat-sync-del", "Delete this chat", "Doomed.");
+
+  const a = await openClient(browser, scope);
+  const b = await openClient(browser, scope);
+  await expect(tabNamed(a, "Delete this chat")).toBeVisible();
+  await expect(tabNamed(b, "Delete this chat")).toBeVisible();
+  await bothStreamsAttached(request, scope);
+
+  // A deletes the chat through the real tab ✕ → confirm dialog (a destructive retirement).
+  await tabNamed(a, "Delete this chat").locator(".pl-tabbar__close").click();
+  await a.page.getByRole("dialog", { name: "Delete this chat?" }).waitFor({ state: "visible" });
+  await a.page.getByRole("button", { name: "Delete chat" }).click();
+
+  // It disappears from the OTHER client, which never touched it, within the 2s clock.
+  await expect(tabNamed(b, "Delete this chat")).toHaveCount(0, { timeout: 2_000 });
+  await expect(tabNamed(b, "Stay put")).toBeVisible();
+});

@@ -92,6 +92,17 @@ export type ServerTurnControlState = {
   operatorControllable: boolean;
 };
 
+// The fields `syncServerSessionList` reads off a server session summary (ADR 0130 S6). A
+// subset of `DurableChatSession` named locally so the store needn't import the api layer.
+export type ServerSessionSummary = {
+  session_id: string;
+  title?: string | null;
+  turn_count?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_updated?: string | null;
+};
+
 export type PersistedChatState = {
   version: number;
   sessions: ChatSession[];
@@ -135,6 +146,10 @@ const STORAGE_KEY = (() => {
 // intentionally leaves its durable session running, so remember that local UI
 // choice across reloads instead of letting boot hydration reopen the tab.
 const DISMISSED_STORAGE_KEY = `${STORAGE_KEY}.dismissed`;
+
+// ADR 0130 S6: the per-agent latch recording this device already pushed its local tabs +
+// titles to the server-held list. The one-time migration (sessionListSync) reads/writes it.
+export const SESSION_LIST_MIGRATED_KEY = `${STORAGE_KEY}.listMigrated`;
 
 function loadDismissedIds(): Set<string> {
   try {
@@ -340,11 +355,19 @@ function id(prefix: string) {
  *  auto-title on first reply only fires while the title is still this. */
 export const DEFAULT_SESSION_TITLE = "New chat";
 
+/** The tab title a piece of send text yields: trimmed and capped at 52 chars (…), or the
+ *  default when empty. Exported so the first-send server registration (ADR 0130 S6) titles
+ *  the session exactly as the first-message auto-title below does. */
+export function sessionTitleFromText(text: string): string {
+  const t = text.trim();
+  if (!t) return DEFAULT_SESSION_TITLE;
+  return t.length > 52 ? `${t.slice(0, 49)}...` : t;
+}
+
 function titleFromMessages(messages: ChatMessage[]) {
   const first = messages.find((message) => message.role === "user");
   const text = first?.content.trim() || attachmentDisplay("", first?.attachments?.map((a) => a.name) ?? []);
-  if (!text) return DEFAULT_SESSION_TITLE;
-  return text.length > 52 ? `${text.slice(0, 49)}...` : text;
+  return sessionTitleFromText(text);
 }
 
 function createSession(opts: { incognito?: boolean } = {}): ChatSession {
@@ -1702,6 +1725,90 @@ export const chatStore = {
         }
       }
       return { ...current, sessions: next };
+    });
+  },
+
+  /** Follow the server-held session LIST (ADR 0130 S6, r3): on the change feed and on boot /
+   *  focus / resync, remove tabs the server reports closed or deleted, apply server titles, and
+   *  add registered OPEN sessions this device lacks that have no durable turn yet (a tab created
+   *  on another device — turn-bearing ones arrive through durable hydration). A session the
+   *  server doesn't name is left alone (it stays local-only until its first send registers it). */
+  syncServerSessionList({ summaries, closedIds }: { summaries: ServerSessionSummary[]; closedIds: string[] }) {
+    const closed = new Set(closedIds.filter((id): id is string => typeof id === "string" && !!id));
+    // Persist the server-closed ids as local dismissals so boot hydration won't re-add them
+    // (reopenable via restoreDismissedSession on a session.reopened, #S6). A close is
+    // non-destructive, so the dismissal — not a hard delete — is the right local shape.
+    let dismissChanged = false;
+    for (const id of closed) {
+      if (!locallyDismissedIds.has(id)) {
+        locallyDismissedIds.add(id);
+        locallyDeletedIds.add(id); // the cross-tab merge tombstone, so a stale sibling can't re-add it
+        dismissChanged = true;
+      }
+    }
+    if (dismissChanged) persistDismissedIds(locallyDismissedIds);
+
+    setState((current) => {
+      const byId = new Map(summaries.map((summary) => [summary.session_id, summary]));
+      let changed = false;
+      // 1. Drop closed/deleted tabs the server reports gone.
+      let sessions = current.sessions.filter((session) => !closed.has(session.id));
+      if (sessions.length !== current.sessions.length) changed = true;
+      // 2. Apply server titles. The server wins for a REAL title (r4); but a stale pre-rename
+      //    read carrying the default placeholder must never clobber a real local title.
+      sessions = sessions.map((session) => {
+        const serverTitle = byId.get(session.id)?.title?.trim();
+        if (!serverTitle || serverTitle === session.title) return session;
+        if (serverTitle === DEFAULT_SESSION_TITLE && session.title !== DEFAULT_SESSION_TITLE) return session;
+        changed = true;
+        return { ...session, title: serverTitle };
+      });
+      // 3. Add registered turnless OPEN sessions this device lacks.
+      const have = new Set(sessions.map((session) => session.id));
+      const additions: ChatSession[] = [];
+      for (const summary of summaries) {
+        const id = summary.session_id;
+        if (have.has(id) || closed.has(id) || locallyDeletedIds.has(id) || locallyDismissedIds.has(id)) continue;
+        if ((summary.turn_count ?? 0) > 0) continue; // turn-bearing: durable hydration owns it
+        const parsed = Date.parse(summary.created_at ?? summary.last_updated ?? summary.updated_at ?? "");
+        const at = Number.isFinite(parsed) ? parsed : Date.now();
+        additions.push({
+          id,
+          title: summary.title?.trim() || DEFAULT_SESSION_TITLE,
+          messages: [],
+          createdAt: at,
+          updatedAt: at,
+        });
+      }
+      if (additions.length) changed = true;
+      if (!changed) return current;
+      // Keep existing tabs; only fill free slots with remote additions (never evict a tab here).
+      let nextSessions = [...sessions, ...additions].slice(0, MAX_SESSIONS);
+      // A window always has a chat: if the server closed the last open tab, start a blank one
+      // locally, the same floor a delete-to-empty keeps.
+      if (!nextSessions.length) nextSessions = [createSession()];
+      const currentSessionId = nextSessions.some((session) => session.id === current.currentSessionId)
+        ? current.currentSessionId
+        : (nextSessions[0]?.id ?? null);
+      const sessionStatusMap = { ...current.sessionStatusMap };
+      const serverTurnControls = { ...current.serverTurnControls };
+      for (const id of Object.keys(sessionStatusMap)) {
+        if (!nextSessions.some((session) => session.id === id)) delete sessionStatusMap[id];
+      }
+      for (const id of Object.keys(serverTurnControls)) {
+        if (!nextSessions.some((session) => session.id === id)) delete serverTurnControls[id];
+      }
+      const activeSessions = ensureActiveSessions(
+        {
+          ...current,
+          sessions: nextSessions,
+          currentSessionId,
+          activeSessions: current.activeSessions.filter((id) => nextSessions.some((session) => session.id === id)),
+          sessionStatusMap,
+        },
+        currentSessionId,
+      );
+      return { ...current, sessions: nextSessions, currentSessionId, activeSessions, sessionStatusMap, serverTurnControls };
     });
   },
 

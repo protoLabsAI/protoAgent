@@ -58,6 +58,40 @@ class DirectiveUpdateRequest(BaseModel):
     conditions: str = ""
 
 
+# ADR 0130 S6: the server-held session LIST write surface. The console registers a session
+# on its first send, renames/closes it, and migrates its open tabs once; every write publishes
+# a change-log event so other devices converge (``server.session_registry``).
+class SessionRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    title: str | None = None
+    created_at: str | None = None
+
+
+class SessionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # A rename (``title``) and/or a tab close/reopen (``closed`` true/false). Both optional —
+    # a body setting neither is a no-op.
+    title: str | None = None
+    closed: bool | None = None
+
+
+class SessionMigrateItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    title: str | None = None
+    created_at: str | None = None
+
+
+class SessionMigrateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessions: list[SessionMigrateItem] = []
+
+
 class _delete_lock:
     """``async with _delete_lock(sid)`` serializes deletes of one chat session."""
 
@@ -91,13 +125,20 @@ from server.chat import (
     _resolve_thread_id,
     aside_session,
     chat,
+    close_chat_session_list,
     compact_session,
+    delete_chat_session_list,
     export_session,
     forget_delegate_conversations,
     forget_delegate_conversations_for_session,
     fork_session,
     live_state_fields,
+    migrate_chat_session_list,
     note_session_deleted,
+    read_chat_session_list,
+    register_chat_session_list,
+    rename_chat_session_list,
+    reopen_chat_session_list,
     rewind_session,
     steer_or_start_turn,
     turn_error,
@@ -1069,6 +1110,11 @@ def register_chat_routes(app, ui: str) -> None:
         # ADR 0130 S2: the session's rows are gone (a `retire=false` clear included — the
         # API answers 404 until a new turn lands), so every other device must refetch.
         note_session_deleted(session_id)
+        # ADR 0130 S6: drop the session's LIST row and publish ``session.deleted`` so every
+        # device removes the tab. On a `retire=false` clear the tab stays (the id is reusable),
+        # so leave the list row — only a real retirement removes the chat everywhere.
+        if retire:
+            await delete_chat_session_list(session_id)
         return {"deleted": True, "harvested": chunk_id is not None, "forgotten": forgotten}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
@@ -1129,6 +1175,8 @@ def register_chat_routes(app, ui: str) -> None:
             except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
                 log.warning("[chat] parked session index read failed: %s", exc)
                 return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
+        rows: list = []
+        reason: str | None = None
         try:
             from sqlalchemy import exists, select
 
@@ -1165,14 +1213,32 @@ def register_chat_routes(app, ui: str) -> None:
                 ).fetchall()
         except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
             log.warning("[chat] session index read failed: %s", exc)
-            return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
-        return {
-            "sessions": [
+            # Degrade, don't bail: a fresh instance with no task table yet (or a transient
+            # read error) must still return the server-held session LIST below — a registered
+            # turnless session has no task row to depend on (ADR 0130 S6, r1).
+            rows = []
+            reason = f"read failed: {type(exc).__name__}"
+        # ADR 0130 S6: fold in the server-held session LIST (title + open/closed). A row the
+        # registry marks CLOSED drops out of the open list (its tab is hidden everywhere, the
+        # chat kept); every open row carries its server title; and a registered session with no
+        # durable turn yet (a just-created tab from another device) is added even though the
+        # task-store window has nothing for it. ``closed`` names the closed sessions so a
+        # client reconciling on boot removes those tabs too.
+        registry = await read_chat_session_list()
+        sessions: list[dict] = []
+        seen: set[str] = set()
+        for r in rows:
+            meta = registry.get(r.context_id)
+            if meta and meta["closed"]:
+                continue
+            seen.add(r.context_id)
+            sessions.append(
                 {
                     "session_id": r.context_id,
                     "last_updated": _utc_iso(r.last_updated),
                     "turn_count": r.turn_count,
                     "last_task_id": r.task_id,
+                    "title": (meta or {}).get("title"),
                     # ADR 0130 D1 server-held state, from the same windowed row + the
                     # turn lock — no extra query per session.
                     **live_state_fields(
@@ -1182,9 +1248,66 @@ def register_chat_routes(app, ui: str) -> None:
                         newest_updated=r.last_updated,
                     ),
                 }
-                for r in rows
-            ]
-        }
+            )
+        # Registered-but-turnless open sessions, newest-created first (r1: a just-created
+        # session with no turns yet still appears, with its title).
+        turnless = sorted(
+            (
+                (sid, meta)
+                for sid, meta in registry.items()
+                if not meta["closed"] and sid not in seen
+            ),
+            key=lambda kv: kv[1]["created_at"] or "",
+            reverse=True,
+        )
+        for sid, meta in turnless:
+            sessions.append(
+                {
+                    "session_id": sid,
+                    "last_updated": meta["created_at"],
+                    "turn_count": 0,
+                    "last_task_id": None,
+                    "title": meta["title"],
+                    **live_state_fields(sid),
+                }
+            )
+        closed = [sid for sid, meta in registry.items() if meta["closed"]]
+        result = {"sessions": sessions, "closed": closed}
+        if reason is not None:
+            result["reason"] = reason
+        return result
+
+    @app.post("/api/chat/sessions")
+    async def _api_register_session(req: SessionRegisterRequest):
+        """Register a chat session in the server-held list (ADR 0130 S6): the console calls
+        this on a session's FIRST send so its title and open state become server-held and
+        every device sees the tab. Idempotent — create, or reopen a closed one, or rename on a
+        changed title (``server.session_registry.register_session``)."""
+        await register_chat_session_list(req.session_id, title=req.title, created_at=req.created_at)
+        return {"ok": True, "session_id": req.session_id}
+
+    @app.post("/api/chat/sessions/migrate")
+    async def _api_migrate_sessions(req: SessionMigrateRequest):
+        """One-time migration of a client's device-local open tabs + titles into the
+        server-held list (ADR 0130 S6, r4), so nobody loses a chat when the list becomes
+        server-authoritative. Only creates rows that don't already exist — the server copy
+        wins after the first migrate. Returns how many new sessions were registered."""
+        migrated = await migrate_chat_session_list([item.model_dump() for item in req.sessions])
+        return {"ok": True, "migrated": migrated}
+
+    @app.patch("/api/chat/sessions/{session_id}")
+    async def _api_update_session(session_id: SessionId, req: SessionUpdateRequest):
+        """Rename a session and/or close/reopen its tab (ADR 0130 S6). ``title`` renames it;
+        ``closed: true`` closes the tab everywhere (kept retrievable, not deleted);
+        ``closed: false`` reopens it. Each change publishes its change-log event so every
+        device converges."""
+        if req.title is not None:
+            await rename_chat_session_list(session_id, req.title)
+        if req.closed is True:
+            await close_chat_session_list(session_id)
+        elif req.closed is False:
+            await reopen_chat_session_list(session_id)
+        return {"ok": True, "session_id": session_id}
 
     @app.get("/api/chat/sessions/{session_id}")
     async def _api_chat_session(session_id: SessionId):
