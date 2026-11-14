@@ -1332,7 +1332,13 @@ def register_chat_routes(app, ui: str) -> None:
             key=lambda kv: kv[1]["created_at"] or "",
             reverse=True,
         )
-        for sid, meta in turnless:
+        # Honour ``limit`` across the WHOLE response (ADR 0130 S6, r6/r7): the windowed turn
+        # query is already capped, but the turnless fold must not append every open registry
+        # row on top of it, or ``?limit=N`` could return far more than N sessions once many
+        # chats are registered. ``turnless`` is newest-created-first, so the slice keeps the
+        # newest open tabs and drops the oldest beyond the budget the window left unfilled.
+        remaining = max(0, limit - len(sessions))
+        for sid, meta in turnless[:remaining]:
             turn = extra_turns.get(sid)
             if turn is not None:
                 sessions.append(

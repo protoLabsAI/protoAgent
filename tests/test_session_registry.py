@@ -350,12 +350,40 @@ def test_index_folds_in_titles_turnless_and_closed(tmp_path, monkeypatch):
     assert body["closed"] == ["chat-closed"]
 
 
-def test_index_reports_real_turns_for_a_registered_session_outside_the_window(tmp_path, monkeypatch):
-    engine = _engine(tmp_path, "outside-window")
+def test_index_caps_total_at_limit(tmp_path, monkeypatch):
+    # The whole response is bounded by ``limit`` (ADR 0130 S6, r7): the turnless fold must NOT
+    # append every open registry row on top of the windowed turns, or ``?limit=N`` could return
+    # far more than N sessions once many chats are registered. The newest-created open tabs fill
+    # the budget the window left unused; older ones drop.
+    engine = _engine(tmp_path, "cap-limit")
+    _seed_task_rows(engine, [])  # the task table exists but holds no turns yet
+    client = _client(monkeypatch)
+    for i in range(5):
+        client.post(
+            "/api/chat/sessions",
+            json={
+                "session_id": f"chat-{i}",
+                "title": f"Tab {i}",
+                "created_at": f"2026-11-0{i + 1}T00:00:00+00:00",
+            },
+        )
+
+    ids = [s["session_id"] for s in client.get("/api/chat/sessions?limit=2").json()["sessions"]]
+    assert len(ids) == 2  # capped at limit — not all five registry rows
+    assert set(ids) == {"chat-4", "chat-3"}  # the two newest-created tabs survive the cap
+
+
+def test_index_reports_real_turns_for_a_folded_session_when_the_window_read_degrades(tmp_path, monkeypatch):
+    # The whole response is now capped at ``limit`` (ADR 0130 S6, r7), so a registered,
+    # turn-bearing session only reaches the TURNLESS fold when the windowed turn query itself
+    # degrades (a transient read error). It must still carry its REAL turn_count from the fold's
+    # own read — hardcoding 0/None there would make the client record serverTurnCount 0 and
+    # believe a turn-bearing chat is empty (ADR 0130 S6, r1).
+    engine = _engine(tmp_path, "fold-real-turns")
     _seed_task_rows(
         engine,
         [
-            # The older session has TWO durable turns but falls outside a limit=1 window.
+            # The older session has TWO durable turns; the newer, ONE.
             {"id": "a1", "context_id": "chat-older", "state": "TASK_STATE_COMPLETED",
              "at": datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc)},
             {"id": "a2", "context_id": "chat-older", "state": "TASK_STATE_COMPLETED",
@@ -368,10 +396,24 @@ def test_index_reports_real_turns_for_a_registered_session_outside_the_window(tm
     client.post("/api/chat/sessions", json={"session_id": "chat-older", "title": "Older"})
     client.post("/api/chat/sessions", json={"session_id": "chat-newer", "title": "Newer"})
 
-    by_id = {s["session_id"]: s for s in client.get("/api/chat/sessions?limit=1").json()["sessions"]}
-    # The newest session fills the limit=1 turn window; the older registered session is folded in
-    # from the registry — and MUST carry its real turn_count/last_task_id, not a hardcoded 0/None
-    # (else the client records serverTurnCount 0 and believes a turn-bearing chat is empty).
+    import operator_api.chat_routes as cr
+
+    real_ensure = cr._ensure_chat_tombstones
+    calls = {"n": 0}
+
+    async def _fail_first(conn):
+        # Fail ONLY the windowed turn query's tombstone-ensure (its first use in the route) so
+        # it degrades to rows=[]; the later turnless-fold read then succeeds and reads real turns.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("window read down")
+        return await real_ensure(conn)
+
+    monkeypatch.setattr(cr, "_ensure_chat_tombstones", _fail_first)
+
+    by_id = {s["session_id"]: s for s in client.get("/api/chat/sessions").json()["sessions"]}
+    # Both registered sessions fold in from the registry (the window read degraded), each with
+    # its REAL turn_count read by the fold — not a hardcoded 0.
     assert by_id["chat-newer"]["turn_count"] == 1
     assert by_id["chat-older"]["turn_count"] == 2
     assert by_id["chat-older"]["last_task_id"] is not None
