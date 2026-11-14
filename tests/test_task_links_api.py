@@ -1,22 +1,19 @@
-"""The tasks API returns ``links`` as a list (v0.241.0 shipped the stored JSON string,
-and the console's task detail crashed on ``links.map``)."""
+"""``parse_links`` reads an issue's links whether they arrive as the stored JSON string or
+as an already-decoded list, so no reader can mistake one shape for "no links"."""
 
-from operator_api.routes import _issue_out
-
-
-def test_issue_out_decodes_the_stored_json_string():
-    issue = {"id": "task-1", "links": '[{"ref": "https://x/1", "kind": "pr"}, {"kind": "no-ref"}]'}
-    assert _issue_out(issue)["links"] == [{"ref": "https://x/1", "kind": "pr"}]
+from tasks.store import parse_links
 
 
-def test_issue_out_tolerates_empty_malformed_and_list_values():
-    assert _issue_out({"id": "t", "links": ""})["links"] == []
-    assert _issue_out({"id": "t", "links": "{bad"})["links"] == []
-    assert _issue_out({"id": "t", "links": '{"ref": "x"}'})["links"] == []
-    assert _issue_out({"id": "t"})["links"] == []
-    assert _issue_out({"id": "t", "links": [{"ref": "a"}, "junk"]})["links"] == [{"ref": "a"}]
+def test_parse_links_reads_the_stored_json_string():
+    assert parse_links({"links": '[{"ref": "bd-5a"}, {"kind": "no-ref"}]'}) == [{"ref": "bd-5a"}]
 
 
-def test_issue_out_leaves_other_fields_and_non_dicts_alone():
-    assert _issue_out({"id": "t", "title": "x", "links": ""})["title"] == "x"
-    assert _issue_out(None) is None
+def test_parse_links_accepts_an_already_decoded_list():
+    assert parse_links({"links": [{"ref": "bd-5a"}, {"x": 1}, "junk"]}) == [{"ref": "bd-5a"}]
+
+
+def test_parse_links_tolerates_empty_and_malformed_values():
+    assert parse_links({"links": ""}) == []
+    assert parse_links({"links": "{bad"}) == []
+    assert parse_links({"links": '{"ref": "x"}'}) == []
+    assert parse_links({}) == []
