@@ -19,8 +19,8 @@ import { chatStore } from "./chat-store";
 
 /** The kinds this section draws rows for — the rail (ChatStatusRail) counts EXACTLY this
  *  set, so "Needs you · N" can never claim a row the panel doesn't show. A `waiting` task
- *  (ADR 0129 Q1) now has a row of its own — "Waiting on you: <title>", opening the chat
- *  where the agent parked it — so it counts here exactly as it does in Work's group. */
+ *  (ADR 0129 D8) opens its Work detail to answer in place, even without a source chat
+ *  — so it counts here exactly as it does in Work's group. */
 export const NEEDS_YOU_SECTION_KINDS: ReadonlySet<GroupableWorkItem["kind"]> =
   new Set(["decision", "delivery", "goal", "task"]);
 
@@ -43,7 +43,7 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
   mobile: boolean;
   onNavigate: () => void;
   /** Deep-link to the Needs-you group in Work — UNFILTERED by design (never chat-scoped). */
-  openWork: () => void;
+  openWork: (itemId?: string) => void;
   /** Refetch the goals source after Keep going / Drop the goal. */
   goalsRetry: () => void;
 }) {
@@ -71,12 +71,6 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
 
   const openChat = async (row: DecisionRow, reply: boolean) => {
     if (await openSourceChat(row.session_id, reply)) onNavigate();
-    else setNote("Couldn't open that chat. Try again when the agent is connected.");
-  };
-  // A waiting job's row opens the chat where the agent parked it (the same move its Work
-  // row makes) — the conversation IS the pending ask, so there is nothing to answer here.
-  const openTaskChat = async (sessionId: string) => {
-    if (await openSourceChat(sessionId, false)) onNavigate();
     else setNote("Couldn't open that chat. Try again when the agent is connected.");
   };
   // "Open chat: {title}" when the source chat is already hydrated; the card falls back to
@@ -143,11 +137,12 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
               <span className="chat-status-details__title" title={item.title}>
                 Waiting on you: {item.title}
               </span>
-              {item.sessionId && (
-                <Button size={size} variant="ghost" onClick={() => void openTaskChat(item.sessionId!)}>
-                  Open chat
-                </Button>
-              )}
+              <Button size={size} variant="ghost" onClick={() => {
+                onNavigate();
+                openWork(`task:${item.id}`);
+              }}>
+                Open in Work
+              </Button>
             </li>
           ))}
           {deliveries.map((item) => (
