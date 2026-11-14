@@ -71,10 +71,13 @@ def parse_links(value: Any) -> list[dict]:
     raw = value.get("links", "") if isinstance(value, dict) else (value or "")
     if not raw:
         return []
-    try:
-        data = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
+    if isinstance(raw, list):  # an issue the API already decoded (operator_api._issue_out)
+        data = raw
+    else:
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
     if not isinstance(data, list):
         return []
     return [e for e in data if isinstance(e, dict) and e.get("ref")]

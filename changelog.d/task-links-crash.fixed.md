@@ -1,0 +1,1 @@
+- **Opening a task in Work no longer crashes the console (v0.241.0).** The tasks API sends a task's links as a JSON string, and the new task detail tried to list them as an array, so clicking a task with links crashed the view. The console now reads links in either shape.

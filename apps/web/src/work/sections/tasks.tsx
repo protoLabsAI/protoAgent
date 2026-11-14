@@ -203,7 +203,7 @@ function WaitingTaskDetail({ task, actions, openChat, refresh }: {
     actions={send.isPending ? [] : [...waitingActions, ...actions]}
     fields={[
       { label: "Ask", value: ask },
-      { label: "Links", value: task.links?.length ? <ul>{task.links.map(({ ref }) => <li key={ref}>
+      { label: "Links", value: Array.isArray(task.links) && task.links.length ? <ul>{task.links.map(({ ref }) => <li key={ref}>
         {/^(https?:)\/\//i.test(ref) ? <a href={ref} target="_blank" rel="noreferrer">{ref}</a> : ref}
       </li>)}</ul> : null },
       { label: "Waiting since", value: task.updated_at || task.created_at

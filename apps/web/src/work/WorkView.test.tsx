@@ -548,6 +548,22 @@ it.each([
   expect(detail.querySelector("a")?.href).toBe("https://example.com/pull/7");
 });
 
+it("opens a waiting detail whose links arrive as the server's JSON string (v0.241.0 crash)", async () => {
+  // The live server returned `links` as a JSON TEXT column, not an array: v0.241.0 called
+  // `.map` on that string and the whole view crashed. The detail must render either shape.
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  data.sources.tasks.items = [task("parked", "waiting", { status: "needs-you", sessionId: "a2a-session",
+    raw: { id: "parked", title: "Ship release", status: "waiting", session_id: "a2a-session", ask: "Can we ship?",
+      description: "Review the release", updated_at: "2026-11-14T10:00:00Z",
+      links: '[{"ref": "https://example.com/pull/7", "kind": "pr", "state": "open", "reason": ""}]' as never } })];
+  await render("modal");
+  await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  const detail = host.querySelector(".work-view__detail")!;
+  expect(detail).not.toBeNull();
+  expect(detail.querySelector("dd")?.textContent).toBe("Can we ship?");
+});
+
 it.each([false, true])("sends a reply with durable source=%s and resumes the task", async (durable) => {
   const turns = durable ? [{ task_id: "turn-1", state: "completed", last_updated: null, text: "Ready" }] : [];
   vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns });

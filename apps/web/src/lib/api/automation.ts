@@ -26,6 +26,24 @@ import type {
 import type { WatchCreateBody } from "../../chat/watchForm";
 import { request } from "./http";
 
+/** Normalize a task's `links` to an array. The server stored them as a JSON string and,
+ *  until v0.241.1, returned that string as-is; the task detail then crashed on
+ *  `links.map` (v0.241.0). Accept either shape so the console never trusts it blindly. */
+export function normalizeTaskLinks<T extends { links?: unknown }>(task: T): Omit<T, "links"> & { links: { ref: string; kind?: string; state?: string; reason?: string }[] } {
+  let links: unknown = task.links;
+  if (typeof links === "string") {
+    try {
+      links = links.trim() ? JSON.parse(links) : [];
+    } catch {
+      links = [];
+    }
+  }
+  const list = Array.isArray(links)
+    ? links.filter((e): e is { ref: string; kind?: string; state?: string; reason?: string } => Boolean(e) && typeof e === "object" && typeof (e as { ref?: unknown }).ref === "string")
+    : [];
+  return { ...task, links: list };
+}
+
 export const automationApi = {
   // Background subagent jobs (ADR 0050) — the focused agent's registry. Read-only;
   // the UtilityBar pill + jobs dialog hydrate from this, then track live via the
@@ -386,8 +404,9 @@ export const automationApi = {
     });
   },
 
-  tasks() {
-    return request<{ issues: Task[] }>("/api/tasks/issues");
+  async tasks(): Promise<{ issues: Task[] }> {
+    const res = await request<{ issues: Task[] }>("/api/tasks/issues");
+    return { ...res, issues: (res.issues ?? []).map((task) => normalizeTaskLinks(task) as Task) };
   },
 
   createTask(issue: {
