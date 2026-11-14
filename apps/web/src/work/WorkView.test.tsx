@@ -85,6 +85,8 @@ afterEach(async () => {
   await act(async () => { root.unmount(); });
   host.remove();
   endThisChatVisit();
+  vi.restoreAllMocks();
+  openChat.mockClear();
 });
 
 it("orders the four groups, hides empty ones down to the approved all-empty copy, and keeps help lines off the Overview", async () => {
@@ -510,16 +512,112 @@ it("announces group totals and newly arriving Needs you items", async () => {
   expect(host.querySelector('[role="status"]')?.textContent).toBe("Overview, 1 items. 1 new Needs you items.");
 });
 
-it("a waiting job reads 'Waiting on you: <title>' in Needs you, neutral, and its row opens the chat", async () => {
-  data.sources.tasks.items = [{ ...task("parked", "waiting"), status: "needs-you", sessionId: "chat-7" }];
+async function openWaiting(source = "a2a-session", ask: string | null = "Can we ship?") {
+  data.sources.tasks.items = [task("parked", "waiting", { status: "needs-you", sessionId: source,
+    raw: { id: "parked", title: "Ship release", status: "waiting", session_id: source, ask,
+      description: "Review the release\nFull context", updated_at: "2026-11-14T10:00:00Z",
+      links: [{ ref: "https://example.com/pull/7" }] } })];
   await render("modal");
-  const row = Array.from(host.querySelectorAll<HTMLElement>(".work-row")).find((node) => node.textContent?.includes("parked"))!;
+  const row = host.querySelector<HTMLButtonElement>(".work-row")!;
   expect(row.querySelector(".work-row__title")?.textContent).toBe("Waiting on you: parked");
-  expect(row.querySelector(".pl-badge")?.textContent).toBe("Job");
-  expect(row.querySelector(".pl-badge--warning")).toBeNull(); // neutral, never an alarm
   await act(async () => row.click());
-  expect(openChat).toHaveBeenCalledWith("chat-7", false);
-  expect(host.querySelector(".work-view__detail")).toBeNull(); // the chat, not the detail pane
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+async function fillInput(value: string) {
+  const input = host.querySelector<HTMLInputElement>("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+it.each([
+  ["a2a-session", "Started in an agent-to-agent conversation"],
+  ["job:daily", "Started by a background job"],
+  ["chat-deleted", "Its chat was deleted"],
+])("opens the waiting detail for %s, with provenance and no chat jump", async (source, provenance) => {
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  await openWaiting(source);
+  expect(openChat).not.toHaveBeenCalled();
+  const detail = host.querySelector(".work-view__detail")!;
+  expect(detail.textContent).toContain(provenance);
+  expect(detail.textContent).not.toContain("Open chat");
+  expect(Array.from(detail.querySelectorAll("dt")).slice(0, 4).map((node) => node.textContent))
+    .toEqual(["Ask", "Links", "Waiting since", "Description"]);
+  expect(detail.querySelector("dd")?.textContent).toBe("Can we ship?");
+  expect(detail.querySelector("a")?.href).toBe("https://example.com/pull/7");
+});
+
+it.each([false, true])("sends a reply with durable source=%s and resumes the task", async (durable) => {
+  const turns = durable ? [{ task_id: "turn-1", state: "completed", last_updated: null, text: "Ready" }] : [];
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns });
+  const register = vi.spyOn(api, "registerSession").mockResolvedValue({ ok: true, session_id: "new" });
+  const send = vi.spyOn(api, "steerChat").mockResolvedValue({ ok: true, id: "reply", pending: 0, started_turn: "turn-2" });
+  const update = vi.spyOn(api, "updateTask").mockResolvedValue({ issue: { id: "parked", title: "Ship release" } });
+  await openWaiting("chat-source");
+  await fillInput("Yes, ship it.");
+  await click("Send reply");
+  const destination = send.mock.calls[0][0];
+  if (durable) {
+    expect(destination).toBe("chat-source");
+    expect(register).not.toHaveBeenCalled();
+    expect(send.mock.calls[0][2]).toBe("Yes, ship it.");
+  } else {
+    expect(destination).toMatch(/^chat-/);
+    expect(destination).not.toBe("chat-source");
+    expect(register).toHaveBeenCalledWith(destination, { title: "Re: Ship release" });
+    expect(send.mock.calls[0][2]).toBe("> Ship release\n>\n> Can we ship?\n\nYes, ship it.");
+  }
+  expect(update).toHaveBeenCalledWith("parked", { session_id: destination, status: "open" });
+  expect(openChat).toHaveBeenCalledWith(destination, false);
+});
+
+it.each([["Done", "done"], ["Dismiss", "dismissed"]] as const)("%s closes with an optional reason and outcome", async (label, outcome) => {
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  const close = vi.spyOn(api, "closeTask").mockResolvedValue({ issue: { id: "parked", title: "Ship release", status: "closed" } });
+  await openWaiting("a2a-session", null);
+  expect(host.querySelector(".work-detail dd")?.textContent).toBe("Review the release");
+  await click(`${label}…`);
+  // The reply is the first input; the confirmation owns the last one.
+  const input = host.querySelector<HTMLInputElement>(".work-detail__confirm input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Handled elsewhere");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(label);
+  expect(close).toHaveBeenCalledWith("parked", "Handled elsewhere", outcome);
+});
+
+it("retries a failed task update without sending the reply twice", async () => {
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  vi.spyOn(api, "registerSession").mockResolvedValue({ ok: true, session_id: "new" });
+  const send = vi.spyOn(api, "steerChat").mockResolvedValue({ ok: true, id: "reply", pending: 0, started_turn: "turn" });
+  const update = vi.spyOn(api, "updateTask").mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({ issue: { id: "parked", title: "Ship release" } });
+  await openWaiting();
+  await fillInput("Go ahead");
+  await click("Send reply");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(openChat).not.toHaveBeenCalled();
+  await click("Retry reply");
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(update).toHaveBeenCalledTimes(2);
+});
+
+it.each(["rejected", "degraded"])("keeps %s source reads distinct from a missing chat and retries the check", async (failure) => {
+  const history = vi.spyOn(api, "chatSessionTurns");
+  if (failure === "rejected") history.mockRejectedValueOnce(new Error("offline"));
+  else history.mockResolvedValueOnce({ turns: [], reason: "read failed: OperationalError" });
+  history.mockResolvedValue({ turns: [{ task_id: "turn", state: "completed", last_updated: null, text: "Ready" }] });
+  await openWaiting();
+  expect(host.textContent).toContain("Couldn't check this chat");
+  expect(host.textContent).not.toContain("Started in");
+  await click("Retry");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(history).toHaveBeenCalledTimes(2);
+  openChat.mockResolvedValueOnce(false);
+  await click("Open chat");
+  expect(document.body.textContent).toContain("This chat isn't available");
 });
 
 // Importing WorkView alone must load the built-in detail renderers. Do not import

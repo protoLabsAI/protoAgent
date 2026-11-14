@@ -1431,6 +1431,8 @@ export type HitlPayload = {
 
 
 export type Task = {
+  ask?: string | null;
+  links?: { ref: string; kind?: string; state?: string; reason?: string }[];
   session_id?: string | null;
   id: string;
   title: string;

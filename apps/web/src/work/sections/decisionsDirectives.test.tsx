@@ -304,7 +304,7 @@ describe("Work decision actions", () => {
     expect(load).toHaveBeenCalledExactlyOnceWith(sourceId, 50);
     expect(chatStore.getSnapshot().currentSessionId).toBe(fails ? current.id : sourceId);
     expect(useKbIntents.getState().composerFocusNonce).toBe(nonce + Number(!fails));
-    if (fails) expect(document.body.textContent).toContain("Couldn't open source chat");
+    if (fails) expect(document.body.textContent).toContain("This chat isn't available");
     else expect(chatStore.getSnapshot().sessions.find((session) => session.id === sourceId)?.messages.some((message) => message.content === "Demo response")).toBe(true);
   });
 
