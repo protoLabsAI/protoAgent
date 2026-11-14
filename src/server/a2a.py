@@ -1535,6 +1535,21 @@ _NO_UPDATE = "NO_UPDATE"
 # one card.
 _SCHEDULED_CARD_HASHES: dict[str, tuple[str, str]] = {}
 
+# Consecutive unchanged runs per job (ADR 0129 S14, #5270): job id -> (generation,
+# count). A run is "unchanged" when a COMPLETED fire reports nothing the chat hasn't
+# already seen — empty, a NO_UPDATE quiet reply, or a repeat of the last delivered card
+# for the same generation (exactly the cases ``_scheduled_delivery_payload`` suppresses).
+# Resets the moment a run posts a card, fails or is canceled. Sits beside
+# ``_SCHEDULED_CARD_HASHES``; in-memory, so a restart resets it (and the backoff).
+_SCHEDULED_UNCHANGED_RUNS: dict[str, tuple[str, int]] = {}
+
+# A recurring follow-up whose chat is waiting on the operator backs off after this many
+# consecutive unchanged runs, to one fire per hour (ADR 0129 S14): a follow-up reported
+# the same parked work ~17 times in one afternoon before this.
+_FOLLOWUP_BACKOFF_AFTER = 2
+_FOLLOWUP_BACKOFF_SECONDS = 3600
+_FOLLOWUP_WAITING_SUMMARY = "Still waiting on you. Checking hourly until something changes."
+
 # Timestamps are volatile run-to-run — an "as of 09:10" line would defeat the repeat
 # guard — so they normalize to a placeholder before hashing: ISO dates/datetimes and
 # clock times (with optional seconds/offset/meridiem).
@@ -1680,6 +1695,147 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
         # then recorded so the NEXT fire's repeat guard sees this card as delivered.
         "card_fingerprint": {"job_id": job_id, "generation": generation, "digest": digest},
     }
+
+
+def _followup_job_info(outcome):
+    """``(job, origin, generation)`` for a scheduled fire that is a *backoff candidate* —
+    a RECURRING job that delivers a result card to a chat — else ``(None, "", "")``.
+
+    Mirrors the up-front guards of ``_scheduled_delivery_payload`` (origin ``scheduler``,
+    a non-``wait:`` job id, an origin chat that isn't Activity / another job session, and
+    a fire that didn't run in that chat) and additionally requires a cron schedule, so a
+    one-shot or a ``wait:`` resume is never a candidate (ADR 0129 S14). For a candidate,
+    ``_scheduled_delivery_payload`` returning ``None`` means exactly "a completed run with
+    nothing new" — every other reason it returns ``None`` fails a guard here too."""
+    from scheduler.interface import is_cron
+
+    if getattr(outcome, "origin", "") != "scheduler":
+        return None, "", ""
+    job_id = (getattr(outcome, "trigger", "") or "").strip()
+    if not job_id or job_id.startswith("wait:"):
+        return None, "", ""
+    scheduler = getattr(STATE, "scheduler", None)
+    getter = getattr(scheduler, "get_job", None)
+    job = None
+    if callable(getter):
+        try:
+            job = getter(job_id)
+        except Exception:  # noqa: BLE001 — a lookup failure just means no backoff
+            job = None
+    if job is None or not is_cron(str(getattr(job, "schedule", "") or "")):
+        return None, "", ""
+    origin = (getattr(job, "origin_session", "") or "").strip()
+    if not origin or origin == ACTIVITY_CONTEXT or origin.startswith(JOB_CONTEXT_PREFIX):
+        return None, "", ""
+    if str(getattr(outcome, "context_id", "") or "") == origin:
+        return None, "", ""
+    return job, origin, _job_generation(job)
+
+
+def _followup_waiting_on_operator(origin_session: str) -> bool:
+    """Whether the chat that created a follow-up is waiting on the operator (ADR 0129
+    S14): a task in status ``waiting`` for that session, or a pending decision for it.
+
+    Reads the in-process tasks / decision stores synchronously (both are sqlite). Fail
+    quiet — ANY read error means "not waiting", so an unreadable store never arms a
+    backoff; the delivery itself is unaffected."""
+    sid = (origin_session or "").strip()
+    if not sid:
+        return False
+    try:
+        store = getattr(STATE, "tasks_store", None)
+        if store is not None:
+            for task in store.list(session_id=sid):
+                if str(task.get("status") or "").strip().lower() == "waiting":
+                    return True
+    except Exception:  # noqa: BLE001 — a raising tasks store means no backoff
+        return False
+    try:
+        decisions = getattr(STATE, "decision_store", None)
+        if decisions is not None and decisions.list(state="pending", session_id=sid):
+            return True
+    except Exception:  # noqa: BLE001 — a raising decision store means no backoff
+        return False
+    return False
+
+
+def _bump_unchanged_run(job_id: str, generation: str) -> int:
+    """Increment this job generation's consecutive-unchanged count and return it. A
+    stored count from an earlier generation (cancel-and-recreate) restarts at 1."""
+    prev_gen, prev = _SCHEDULED_UNCHANGED_RUNS.get(job_id, ("", 0))
+    count = (prev + 1) if prev_gen == generation else 1
+    _SCHEDULED_UNCHANGED_RUNS[job_id] = (generation, count)
+    return count
+
+
+def _reset_followup(job_id: str, generation: str) -> None:
+    """Clear a job's unchanged-run count AND its backoff — the follow-up resumed its
+    normal cadence (a card posted / failed / canceled, or the chat stopped waiting)."""
+    from scheduler import followup_backoff
+
+    _SCHEDULED_UNCHANGED_RUNS.pop(job_id, None)
+    followup_backoff.clear(job_id, generation)
+
+
+def _followup_waiting_card(job, origin: str, generation: str, *, task_id: str) -> dict:
+    """The one-time "still waiting on you" card, shaped like a normal scheduled card so
+    the console renders it (ADR 0129 S14). No ``card_fingerprint`` — it must not feed the
+    content repeat guard, and its own text never needs suppressing."""
+    collapse = bool(_SCHEDULED_CARD_HASHES.get(job.id, (None,))[0] == generation)
+    return {
+        "job_id": job.id,
+        "origin_session": origin,
+        "fired_at": datetime.now(UTC).isoformat(),
+        "summary": _FOLLOWUP_WAITING_SUMMARY,
+        "status": "completed",
+        "collapse": collapse,
+        "schedule": str(getattr(job, "schedule", "") or ""),
+        "activity_context": ACTIVITY_CONTEXT,
+        "task_id": task_id or "",
+    }
+
+
+def _apply_followup_backoff(outcome, payload):
+    """Fold the follow-up backoff into the delivery decision (ADR 0129 S14, #5270).
+
+    Given the normal card ``payload`` (``None`` when there is nothing new to post),
+    returns the payload to actually deliver — the original, a substituted one-time
+    "still waiting" card, or ``None`` — and updates the per-job unchanged-run count and
+    the shared backoff registry as a side effect. A no-op (returns ``payload``) for any
+    turn that isn't a recurring scheduled fire delivering to a chat."""
+    from scheduler import followup_backoff
+
+    job, origin, generation = _followup_job_info(outcome)
+    if job is None:
+        return payload
+    if payload is not None:
+        # The run produced a card — new content, a failure or a cancellation. The chat
+        # got news, so the streak and any backoff clear (resume).
+        _reset_followup(job.id, generation)
+        return payload
+    # A candidate with no payload ⟺ a completed run with nothing new (bd-x66jt).
+    count = _bump_unchanged_run(job.id, generation)
+    if count < _FOLLOWUP_BACKOFF_AFTER:
+        return None
+    if not _followup_waiting_on_operator(origin):
+        # Quiet, but the chat isn't waiting on the operator — no backoff; clear a stale
+        # one and the streak (the waiting task was answered / the decision settled).
+        _reset_followup(job.id, generation)
+        return None
+    # Quiet AND waiting past the threshold: back off to hourly. Post the card only on the
+    # transition into backoff; a later hourly fire that is still quiet-and-waiting just
+    # extends the deadline with no new card. Register the waiting re-check so the scheduler
+    # can clear this backoff the moment the chat stops waiting (it owns neither store —
+    # import layering — so the server, which does, injects its waiting test here). Idempotent.
+    followup_backoff.set_waiting_check(_followup_waiting_on_operator)
+    already = followup_backoff.backoff_until(job.id, generation)
+    followup_backoff.set_backoff(
+        job.id, generation, (datetime.now(UTC) + timedelta(seconds=_FOLLOWUP_BACKOFF_SECONDS)).timestamp()
+    )
+    if already is not None:
+        return None
+    log.info("[scheduler] job %s is quiet and its chat is waiting on you — backing off to hourly", job.id)
+    return _followup_waiting_card(job, origin, generation, task_id=getattr(outcome, "task_id", "") or "")
 
 
 def _is_recent(last_updated, now, window_s: int) -> bool:
@@ -1838,6 +1994,11 @@ def _handle_scheduled_delivery(outcome) -> None:
     is unchanged, and the feed entry comes from the job-provenance append in
     ``_a2a_terminal``.)"""
     payload = _scheduled_delivery_payload(outcome)
+    # ADR 0129 S14 (#5270): count unchanged runs and, when a recurring follow-up whose
+    # chat is waiting on the operator has gone quiet twice, substitute a single "still
+    # waiting" card and arm the hourly backoff the scheduler honors. A no-op for every
+    # turn that isn't such a fire — the normal payload passes through untouched.
+    payload = _apply_followup_backoff(outcome, payload)
     if payload is None:
         return
     try:
