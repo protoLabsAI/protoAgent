@@ -383,3 +383,14 @@ def _reset_delegate_health_caches():
     clear()
     yield
     clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_primary_breakers():
+    """The fallback middleware's primary breaker is process-wide (#5257): a test whose primary
+    raises a timeout would otherwise route later tests' primaries straight to fallbacks."""
+    from graph.agent import reset_primary_breakers
+
+    reset_primary_breakers()
+    yield
+    reset_primary_breakers()
