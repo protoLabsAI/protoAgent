@@ -297,9 +297,11 @@ export const chatApi = {
     );
   },
 
-  /** One-time migration (ADR 0130 S6, r4): push this client's open tabs + titles so the
-   *  server-held list adopts anything only this device knew, before it becomes authoritative. */
-  migrateSessions(sessions: { session_id: string; title?: string; created_at?: string }[]) {
+  /** One-time migration (ADR 0130 S6, r4): push this client's open tabs + titles AND its
+   *  device-local dismissals (`closed: true`) so the server-held list adopts anything only this
+   *  device knew — open OR dismissed — before it becomes authoritative. Create-if-absent: an id
+   *  the server already holds keeps the server copy (the server wins after the first migrate). */
+  migrateSessions(sessions: { session_id: string; title?: string; created_at?: string; closed?: boolean }[]) {
     return request<{ ok: boolean; migrated: number }>("/api/chat/sessions/migrate", {
       method: "POST",
       body: { sessions },

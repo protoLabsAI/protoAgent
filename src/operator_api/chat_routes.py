@@ -84,6 +84,9 @@ class SessionMigrateItem(BaseModel):
     session_id: str
     title: str | None = None
     created_at: str | None = None
+    # A device-local dismissal (DISMISSED_STORAGE_KEY) being migrated as CLOSED so the dismissal
+    # is preserved server-side (ADR 0130 S6, r4), not silently re-opened on other devices.
+    closed: bool = False
 
 
 class SessionMigrateRequest(BaseModel):
@@ -1249,28 +1252,91 @@ def register_chat_routes(app, ui: str) -> None:
                     ),
                 }
             )
-        # Registered-but-turnless open sessions, newest-created first (r1: a just-created
-        # session with no turns yet still appears, with its title).
+        # Open registry rows the newest-N turn window didn't reach. Two corrections over a
+        # bare turnless fold:
+        #  * DELETED chats must not resurface (r1): a leftover list row from a stale
+        #    register/rename/migrate would otherwise reappear as an open, empty tab everywhere,
+        #    so drop any the operator has tombstoned.
+        #  * a registered chat can have DURABLE turns outside the window (an older but still-open
+        #    tab): reporting turn_count 0 / last_task_id None for it would make the client record
+        #    serverTurnCount 0 and believe the chat is empty, so read each survivor's real
+        #    newest-turn summary rather than hardcoding zero.
+        candidate_ids = [sid for sid, meta in registry.items() if not meta["closed"] and sid not in seen]
+        extra_turns: dict[str, Any] = {}
+        tombstoned: set[str] = set()
+        if candidate_ids:
+            try:
+                from sqlalchemy import select
+
+                from a2a.server.tasks.database_task_store import TaskModel
+
+                async with engine.begin() as conn:
+                    tombstones = await _ensure_chat_tombstones(conn)
+                    tombstoned = {
+                        r.context_id
+                        for r in (
+                            await conn.execute(
+                                select(tombstones.c.context_id).where(tombstones.c.context_id.in_(candidate_ids))
+                            )
+                        ).fetchall()
+                    }
+                    live_ids = [sid for sid in candidate_ids if sid not in tombstoned]
+                    if live_ids:
+                        newest = _newest_turn_ranked(
+                            TaskModel, conn.dialect.name, TaskModel.context_id.in_(live_ids)
+                        )
+                        for r in (
+                            await conn.execute(
+                                select(
+                                    newest.c.context_id,
+                                    newest.c.task_id,
+                                    newest.c.last_updated,
+                                    newest.c.turn_count,
+                                    newest.c.status,
+                                ).where(newest.c.rn == 1)
+                            )
+                        ).fetchall():
+                            extra_turns[r.context_id] = r
+            except Exception as exc:  # noqa: BLE001 — opportunistic, same as the window read
+                log.warning("[chat] turnless session fold read failed: %s", exc)
         turnless = sorted(
             (
                 (sid, meta)
                 for sid, meta in registry.items()
-                if not meta["closed"] and sid not in seen
+                if not meta["closed"] and sid not in seen and sid not in tombstoned
             ),
             key=lambda kv: kv[1]["created_at"] or "",
             reverse=True,
         )
         for sid, meta in turnless:
-            sessions.append(
-                {
-                    "session_id": sid,
-                    "last_updated": meta["created_at"],
-                    "turn_count": 0,
-                    "last_task_id": None,
-                    "title": meta["title"],
-                    **live_state_fields(sid),
-                }
-            )
+            turn = extra_turns.get(sid)
+            if turn is not None:
+                sessions.append(
+                    {
+                        "session_id": sid,
+                        "last_updated": _utc_iso(turn.last_updated),
+                        "turn_count": turn.turn_count,
+                        "last_task_id": turn.task_id,
+                        "title": meta["title"],
+                        **live_state_fields(
+                            sid,
+                            newest_state=_status_state(turn.status),
+                            newest_task_id=turn.task_id,
+                            newest_updated=turn.last_updated,
+                        ),
+                    }
+                )
+            else:
+                sessions.append(
+                    {
+                        "session_id": sid,
+                        "last_updated": meta["created_at"],
+                        "turn_count": 0,
+                        "last_task_id": None,
+                        "title": meta["title"],
+                        **live_state_fields(sid),
+                    }
+                )
         closed = [sid for sid, meta in registry.items() if meta["closed"]]
         result = {"sessions": sessions, "closed": closed}
         if reason is not None:

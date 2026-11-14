@@ -6,13 +6,26 @@
 // stays import-light (api + the store) so it can be called from the send path and the tab bar.
 
 import { api } from "../lib/api";
-import { chatStore, DEFAULT_SESSION_TITLE, SESSION_LIST_MIGRATED_KEY, sessionTitleFromText, type ChatSession } from "./chat-store";
+import {
+  chatStore,
+  DEFAULT_SESSION_TITLE,
+  dismissedSessionIds,
+  SESSION_LIST_MIGRATED_KEY,
+  sessionTitleFromText,
+  type ChatSession,
+} from "./chat-store";
 import { readKey, writeKey } from "../lib/storage";
 
 // Sessions this device has already registered server-side (ADR 0130 S6, r3: "stays local only
 // until its first send, then registers"). In-memory — a failed register drops back out so the
 // next send retries; the server dedupes a repeat regardless.
 const registered = new Set<string>();
+
+// Guards the one-time migration against a concurrent double-push (two resync triggers firing
+// close together) WITHOUT latching persistently until the push succeeds — so a failed push still
+// retries on the next boot. Cleared on both success and failure; the persistent latch is what
+// stops future boots once the server actually has the list.
+let migrating = false;
 
 /** Register a session server-side on its first send (r3). The title is the tab's own when the
  *  operator already named it, else derived from the send text exactly as the first-message
@@ -39,34 +52,50 @@ export function pushClose(sessionId: string): void {
   void api.updateSession(sessionId, { closed: true }).catch(() => {});
 }
 
-/** The one-time migration (r4): push this device's open tabs + titles so nothing only it knew is
- *  lost when the list becomes server-authoritative. Empty, never-named placeholder tabs are not
- *  chats to keep, so they are skipped. Latched so it runs exactly once per device; after it the
- *  server copy wins. Best-effort — a failed push just means those tabs register on their next
- *  send/rename instead. */
+/** The one-time migration (r4): push this device's open tabs + titles AND its local dismissals so
+ *  nothing only it knew is lost when the list becomes server-authoritative — an open tab becomes a
+ *  server-held OPEN row, a dismissal a CLOSED one, so the dismissal isn't silently re-opened on
+ *  other devices. Empty, never-named placeholder tabs are not chats to keep, so they are skipped.
+ *  Latched so it runs exactly once per device, but ONLY once the push succeeds: latching before the
+ *  network call would let one offline/5xx boot permanently drop this device's titles and tabs from
+ *  the server list. After a success the server copy wins. */
 export async function migrateLocalSessionsOnce(): Promise<void> {
-  if (typeof readKey !== "function" || readKey("local", SESSION_LIST_MIGRATED_KEY)) return;
-  // Latch before the await so a racing boot (or a second visible-window resync) never double-pushes.
-  writeKey("local", SESSION_LIST_MIGRATED_KEY, "1");
-  const sessions = chatStore
+  if (migrating || readKey("local", SESSION_LIST_MIGRATED_KEY)) return;
+  const open = chatStore
     .getSnapshot()
     .sessions.filter((session) => session.messages.length > 0 || session.title !== DEFAULT_SESSION_TITLE);
-  if (!sessions.length) return;
-  try {
-    await api.migrateSessions(
-      sessions.map((session) => ({
-        session_id: session.id,
-        ...(session.title && session.title !== DEFAULT_SESSION_TITLE ? { title: session.title } : {}),
-        created_at: new Date(session.createdAt).toISOString(),
-      })),
-    );
-    for (const session of sessions) registered.add(session.id);
-  } catch {
-    // Best-effort: the server adopts these tabs on their next send/rename instead.
+  // Dismissed ids are disjoint from open tabs (a dismissal removed the tab), and are migrated
+  // CLOSED so the close intent is preserved everywhere, not re-opened by the server-wins read.
+  const dismissed = dismissedSessionIds();
+  const items: { session_id: string; title?: string; created_at?: string; closed?: boolean }[] = [
+    ...open.map((session) => ({
+      session_id: session.id,
+      ...(session.title && session.title !== DEFAULT_SESSION_TITLE ? { title: session.title } : {}),
+      created_at: new Date(session.createdAt).toISOString(),
+    })),
+    ...dismissed.map((id) => ({ session_id: id, closed: true })),
+  ];
+  if (!items.length) {
+    // Nothing to migrate — latch so the (idempotent) check is skipped next boot.
+    writeKey("local", SESSION_LIST_MIGRATED_KEY, "1");
+    return;
   }
+  migrating = true;
+  try {
+    await api.migrateSessions(items);
+  } catch {
+    // Leave the latch UNSET so the next boot retries; a failed push must not drop these tabs.
+    return;
+  } finally {
+    migrating = false;
+  }
+  // Latch only after the server has the list: the migration has truly run exactly once.
+  writeKey("local", SESSION_LIST_MIGRATED_KEY, "1");
+  for (const session of open) registered.add(session.id);
 }
 
-/** Test seam: forget the in-memory "already registered" set. */
+/** Test seam: forget the in-memory "already registered" set and the migration in-flight guard. */
 export function resetSessionListSyncForTests(): void {
   registered.clear();
+  migrating = false;
 }

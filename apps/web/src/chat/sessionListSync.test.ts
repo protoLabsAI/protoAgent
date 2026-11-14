@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
-import { removeKey } from "../lib/storage";
+import { readKey, removeKey } from "../lib/storage";
 import type { ChatMessage } from "../lib/types";
 import { chatStore, DEFAULT_SESSION_TITLE, SESSION_LIST_MIGRATED_KEY } from "./chat-store";
 import {
@@ -77,6 +77,20 @@ describe("syncServerSessionList", () => {
     chatStore.syncServerSessionList({ summaries: [], closedIds: [] });
     expect(chatStore.getSnapshot().sessions.find((s) => s.id === local.id)?.title).toBe("Local only");
   });
+
+  it("re-shows a server-open session this device had dismissed, clearing the dismissal (server wins)", () => {
+    const id = "chat-reopened-elsewhere";
+    chatStore.syncServerSessionList({ summaries: [{ session_id: id, title: "Shared", turn_count: 0 }], closedIds: [] });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(true);
+    // Closed here (a local dismissal mirroring a server close) — the tab drops and is remembered.
+    chatStore.syncServerSessionList({ summaries: [], closedIds: [id] });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(false);
+    // Reopened on ANOTHER device → the server reports it OPEN again. This device missed the
+    // session.reopened event, but a full resync (boot/focus) must re-show it: the server copy wins,
+    // so the persisted dismissal is cleared rather than keeping the chat hidden here forever.
+    chatStore.syncServerSessionList({ summaries: [{ session_id: id, title: "Shared", turn_count: 0 }], closedIds: [] });
+    expect(chatStore.getSnapshot().sessions.some((s) => s.id === id)).toBe(true);
+  });
 });
 
 // ── the write side: register on send, rename/close push, migrate once ───────────
@@ -105,17 +119,53 @@ describe("session-list push", () => {
     expect(api.updateSession).toHaveBeenCalledWith("chat-c", { closed: true });
   });
 
-  it("migrates this device's non-empty open tabs exactly once", async () => {
+  it("migrates this device's non-empty open tabs exactly once, skipping empty placeholders", async () => {
     const chat = chatStore.createSession();
     chatStore.updateMessages(chat.id, [userMsg("Deploy status")]);
+    const placeholder = chatStore.createSession(); // empty, never named → not a chat to keep
     await migrateLocalSessionsOnce();
     expect(api.migrateSessions).toHaveBeenCalledTimes(1);
-    const sent = (api.migrateSessions as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as { session_id: string }[];
+    const sent = (api.migrateSessions as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      session_id: string;
+      closed?: boolean;
+    }[];
     expect(sent.some((s) => s.session_id === chat.id)).toBe(true);
-    // Empty, never-named placeholder tabs are not chats to keep — never migrated.
-    expect(sent.some((s) => s.session_id !== chat.id && !s.session_id)).toBe(false);
+    // The never-named empty placeholder is NOT in the payload (the rule this test actually proves).
+    expect(sent.some((s) => s.session_id === placeholder.id)).toBe(false);
     // Latched: a second boot does not push again.
     await migrateLocalSessionsOnce();
     expect(api.migrateSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("migrates a locally dismissed tab as CLOSED so the dismissal is preserved everywhere (r4)", async () => {
+    const keep = chatStore.createSession();
+    chatStore.updateMessages(keep.id, [userMsg("Keep this one open")]);
+    const detached = chatStore.createSession();
+    chatStore.renameSession(detached.id, "Detached goal");
+    chatStore.dismissSession(detached.id); // device-local dismissal, never pushed before S6
+    await migrateLocalSessionsOnce();
+    const sent = (api.migrateSessions as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      session_id: string;
+      closed?: boolean;
+    }[];
+    // The open tab goes up OPEN; the dismissal goes up CLOSED — not re-opened on other devices.
+    expect(sent.find((s) => s.session_id === keep.id)?.closed).toBeFalsy();
+    expect(sent.find((s) => s.session_id === detached.id)).toMatchObject({ closed: true });
+  });
+
+  it("does not latch when the migrate push fails, so a later boot retries and then latches (r5)", async () => {
+    const chat = chatStore.createSession();
+    chatStore.updateMessages(chat.id, [userMsg("Must reach the server")]);
+    (api.migrateSessions as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("offline at boot"));
+    await migrateLocalSessionsOnce();
+    expect(api.migrateSessions).toHaveBeenCalledTimes(1);
+    expect(readKey("local", SESSION_LIST_MIGRATED_KEY)).toBeFalsy(); // NOT latched — a failed push drops nothing
+    // A later boot retries and, on success, latches.
+    await migrateLocalSessionsOnce();
+    expect(api.migrateSessions).toHaveBeenCalledTimes(2);
+    expect(readKey("local", SESSION_LIST_MIGRATED_KEY)).toBe("1");
+    // Now latched — a third boot does not push again.
+    await migrateLocalSessionsOnce();
+    expect(api.migrateSessions).toHaveBeenCalledTimes(2);
   });
 });

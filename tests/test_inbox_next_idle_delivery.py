@@ -130,7 +130,10 @@ async def test_idle_delivery_is_priority_then_age_order(inbox, monkeypatch):
         return True
 
     monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _deliver, raising=False)
-    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    # Anchor the rows to the real clock: the retry-when-free pass claims against
+    # datetime.now(UTC), and the RECOVERY_MAX_AGE (24h) filter would drop a row fixed to a
+    # far-past date. Keep all three inside the window so this stays a pure ordering check.
+    t0 = datetime.now(UTC) - timedelta(hours=1)
     old_next = inbox.add("older next", priority="next", now=t0)
     new_next = inbox.add("newer next", priority="next", now=t0 + timedelta(minutes=5))
     page = inbox.add("now page", priority="now", now=t0 + timedelta(minutes=10))

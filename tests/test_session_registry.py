@@ -143,6 +143,58 @@ def test_migrate_creates_only_unknown_rows(tmp_path, bus_events):
     assert [e["data"]["session_id"] for e in bus_events if e["data"]["kind"] == "created"] == ["chat-known", "chat-new"]
 
 
+def _tombstone(engine, session_id):
+    """Record a chat tombstone exactly as the delete route does (operator_api owns the schema)."""
+    import operator_api.chat_routes as cr
+
+    async def _run():
+        async with engine.begin() as conn:
+            await cr._record_chat_tombstone(conn, session_id)
+
+    asyncio.run(_run())
+
+
+def test_register_rename_and_migrate_skip_a_tombstoned_session(tmp_path, bus_events):
+    engine = _engine(tmp_path, "tombstoned-writes")
+    _tombstone(engine, "chat-dead")
+
+    async def _run():
+        # A stale client's register/rename, or a pre-S6 migrate, must NOT resurrect a DELETED
+        # chat as an open, turnless tab on every device (ADR 0130 S6).
+        await sr.register_session("chat-dead", title="resurrect?")
+        await sr.rename_session("chat-dead", "still here?")
+        n = await sr.migrate_sessions([{"session_id": "chat-dead", "title": "nope"}])
+        assert n == 0
+        assert "chat-dead" not in await sr.read_session_list()
+
+    asyncio.run(_run())
+    assert bus_events == []  # nothing was created, so nothing is published
+
+
+def test_migrate_seeds_dismissals_closed_and_open_tabs_open(tmp_path, bus_events):
+    _engine(tmp_path, "migrate-dismissed")
+
+    async def _run():
+        # r4: the one-time migration carries BOTH open tabs and the device-local DISMISSED set —
+        # a dismissal rides as ``closed: true`` so it is preserved server-side, not re-opened.
+        n = await sr.migrate_sessions(
+            [
+                {"session_id": "chat-open", "title": "Open tab"},
+                {"session_id": "chat-dismissed", "title": "Dismissed", "closed": True},
+            ]
+        )
+        assert n == 2
+        listing = await sr.read_session_list()
+        assert listing["chat-open"]["closed"] is False
+        assert listing["chat-dismissed"]["closed"] is True
+
+    asyncio.run(_run())
+    assert {e["data"]["session_id"]: e["data"]["kind"] for e in bus_events} == {
+        "chat-open": "created",
+        "chat-dismissed": "closed",
+    }
+
+
 def test_job_contexts_are_never_registered(tmp_path, bus_events):
     _engine(tmp_path, "jobs")
 
@@ -249,6 +301,44 @@ def test_index_folds_in_titles_turnless_and_closed(tmp_path, monkeypatch):
     }
     assert "chat-closed" not in by_id  # closed tab hidden from the open list
     assert body["closed"] == ["chat-closed"]
+
+
+def test_index_reports_real_turns_for_a_registered_session_outside_the_window(tmp_path, monkeypatch):
+    engine = _engine(tmp_path, "outside-window")
+    _seed_task_rows(
+        engine,
+        [
+            # The older session has TWO durable turns but falls outside a limit=1 window.
+            {"id": "a1", "context_id": "chat-older", "state": "TASK_STATE_COMPLETED",
+             "at": datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc)},
+            {"id": "a2", "context_id": "chat-older", "state": "TASK_STATE_COMPLETED",
+             "at": datetime(2026, 11, 1, 10, 5, tzinfo=timezone.utc)},
+            {"id": "b1", "context_id": "chat-newer", "state": "TASK_STATE_COMPLETED",
+             "at": datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)},
+        ],
+    )
+    client = _client(monkeypatch)
+    client.post("/api/chat/sessions", json={"session_id": "chat-older", "title": "Older"})
+    client.post("/api/chat/sessions", json={"session_id": "chat-newer", "title": "Newer"})
+
+    by_id = {s["session_id"]: s for s in client.get("/api/chat/sessions?limit=1").json()["sessions"]}
+    # The newest session fills the limit=1 turn window; the older registered session is folded in
+    # from the registry — and MUST carry its real turn_count/last_task_id, not a hardcoded 0/None
+    # (else the client records serverTurnCount 0 and believes a turn-bearing chat is empty).
+    assert by_id["chat-newer"]["turn_count"] == 1
+    assert by_id["chat-older"]["turn_count"] == 2
+    assert by_id["chat-older"]["last_task_id"] is not None
+
+
+def test_index_hides_a_tombstoned_registry_row(tmp_path, monkeypatch):
+    engine = _engine(tmp_path, "tombstoned-row")
+    client = _client(monkeypatch)
+    client.post("/api/chat/sessions", json={"session_id": "chat-ghost", "title": "Was deleted"})
+    assert "chat-ghost" in {s["session_id"] for s in client.get("/api/chat/sessions").json()["sessions"]}
+    # The operator deleted it (a tombstone). A leftover list row (from a stale register) must not
+    # resurface the deleted chat as an open, empty tab on every device (ADR 0130 S6).
+    _tombstone(engine, "chat-ghost")
+    assert "chat-ghost" not in {s["session_id"] for s in client.get("/api/chat/sessions").json()["sessions"]}
 
 
 def test_patch_rename_and_reopen(tmp_path, monkeypatch):

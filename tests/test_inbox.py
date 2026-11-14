@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -503,6 +504,72 @@ def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
     assert [r["id"] for r in again] == [c["id"]]
 
 
+def test_claim_now_recovery_batch_skips_items_older_than_max_age(tmp_path):
+    """A pending now item older than max_age (24h) is NOT claimed to fire a turn of its
+    own; a younger one still is (#5256)."""
+    store = _store(tmp_path)
+    now = datetime.now(UTC)
+    old = store.add("stale page", priority="now", now=now - timedelta(hours=48))
+    recent = store.add("fresh page", priority="now", now=now - timedelta(hours=1))
+
+    claimed = store.claim_now_recovery_batch(limit=8, now=now)
+
+    assert [r["id"] for r in claimed] == [recent["id"]]  # the stale one is left behind
+    # The skipped stale row stays pending and unclaimed (not fired, not reserved).
+    [still_pending] = [r for r in store.list(priority_floor="now") if r["id"] == old["id"]]
+    assert still_pending["recovery_claimed_at"] is None
+    assert still_pending["delivered_at"] is None
+    # Boundary: an item exactly at the 24h edge is still inside the window and claimed.
+    # (recent is already claimed and old is stale, so this second pass returns only edge.)
+    edge = store.add("edge page", priority="now", now=now - timedelta(hours=24))
+    assert [r["id"] for r in store.claim_now_recovery_batch(limit=8, now=now)] == [edge["id"]]
+
+
+def test_claim_now_recovery_batch_claims_stale_accepted_completion(tmp_path):
+    """A stale item carrying a durable recovery_accepted_at is still claimed — the
+    completion path fires nothing and must never be stranded by the age filter."""
+    store = _store(tmp_path)
+    now = datetime.now(UTC)
+    item = store.add("accepted but unmarked", priority="now", now=now - timedelta(hours=48))
+    # Record accepted-but-unmarked delivery: this stamps recovery_accepted_at.
+    assert store.record_recovery_mark_delivered_failure(item["id"], "mark failed") == 1
+
+    claimed = store.claim_now_recovery_batch(limit=8, now=now)
+
+    assert [r["id"] for r in claimed] == [item["id"]]
+    assert claimed[0]["recovery_accepted_at"] is not None
+
+
+def test_stale_unclaimed_item_stays_visible_to_pull_fallback(tmp_path):
+    """A stale item the age filter skips stays pending and undelivered, so the
+    check_inbox pull (store.list) still returns it — in one call, no waking turn each."""
+    store = _store(tmp_path)
+    now = datetime.now(UTC)
+    old = store.add("stale page", priority="now", now=now - timedelta(hours=48))
+
+    claimed = store.claim_now_recovery_batch(limit=8, now=now)
+    assert claimed == []  # nothing fired
+
+    [pending] = store.list(priority_floor="now")
+    assert pending["id"] == old["id"]
+    assert pending["delivered_at"] is None
+    assert pending["recovery_claimed_at"] is None
+    assert store.count_stale_recovery_items(now=now) == 1
+
+
+def test_claim_now_recovery_batch_max_age_none_claims_stale(tmp_path):
+    """max_age=None restores the age-blind first-slice behaviour: a stale item is claimed."""
+    store = _store(tmp_path)
+    now = datetime.now(UTC)
+    old = store.add("stale page", priority="now", now=now - timedelta(hours=48))
+
+    claimed = store.claim_now_recovery_batch(limit=8, max_age=None, now=now)
+
+    assert [r["id"] for r in claimed] == [old["id"]]
+    # And nothing is "stale" when the ceiling is disabled.
+    assert store.count_stale_recovery_items(max_age=None, now=now) == 0
+
+
 def test_restore_recovery_failure_reopens_pending_with_evidence(tmp_path):
     """Restoring an unfired claim clears ``recovery_claimed_at`` (pull fallback works)
     while keeping ``recovery_attempted_at`` (restart backoff) and recording evidence."""
@@ -828,6 +895,41 @@ async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkey
     assert result == {"claimed": 1, "accepted": 1, "failed": 0}
     assert fired == [old_now["id"]]
     assert store.list(priority_floor="later") == []
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_leaves_stale_backlog_for_check_inbox_and_logs_once(tmp_path, monkeypatch, caplog):
+    """A pending now item older than 24h fires no self-A2A turn: it is left pending for
+    the check_inbox pull, and the pass logs the stale count once (#5256)."""
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    now = datetime.now(UTC)
+    stale = store.add("ancient pr-reviewer alarm", priority="now", now=now - timedelta(days=73))
+    fresh = store.add("recent page", priority="now", now=now - timedelta(hours=1))
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[int] = []
+
+    async def _fire_ok(item):
+        fired.append(item["id"])
+        return True
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
+
+    with caplog.at_level(logging.INFO, logger="protoagent.server"):
+        result = await recover_pending_now_inbox_items(limit=8, now=now)
+
+    # Only the fresh page fired a turn; the 73-day-old page was never delivered.
+    assert result == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert fired == [fresh["id"]]
+    # The stale page stays pending and is still returned by the pull fallback (store.list).
+    [pending] = store.list(priority_floor="now")
+    assert pending["id"] == stale["id"]
+    assert pending["delivered_at"] is None
+    # The stale count is logged exactly once this pass.
+    stale_logs = [r for r in caplog.records if "left 1 item(s) older than 24h for check_inbox" in r.getMessage()]
+    assert len(stale_logs) == 1
 
 
 @pytest.mark.asyncio

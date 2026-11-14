@@ -170,6 +170,13 @@ function persistDismissedIds(ids: Set<string>) {
 
 const locallyDismissedIds = loadDismissedIds();
 
+/** The ids this device has dismissed locally (DISMISSED_STORAGE_KEY). The one-time S6
+ *  migration reads this so a dismissal becomes server-held (migrated as CLOSED) and is not
+ *  silently re-opened on other devices (r4). A snapshot copy — callers never mutate the set. */
+export function dismissedSessionIds(): string[] {
+  return [...locallyDismissedIds];
+}
+
 // Sessions this tab deleted — a lightweight per-tab tombstone so the cross-tab merge
 // never resurrects a chat we just removed from another tab's stale on-disk copy.
 const locallyDeletedIds = new Set<string>(locallyDismissedIds);
@@ -1747,6 +1754,21 @@ export const chatStore = {
       }
     }
     if (dismissChanged) persistDismissedIds(locallyDismissedIds);
+
+    // The mirror of the close above: a session the server reports OPEN wins over any local
+    // dismissal/tombstone (r4 — after the first migrate the server copy wins). A device that
+    // missed `session.reopened`, or is recovering via full resync, must re-show a tab another
+    // device reopened, so clear its persisted dismissal AND the cross-tab tombstone here —
+    // otherwise the add loop and durable hydration (which also honor these sets) both keep it
+    // hidden while every other device shows it.
+    let reopenCleared = false;
+    for (const summary of summaries) {
+      const id = summary.session_id;
+      if (!id || closed.has(id)) continue;
+      if (locallyDismissedIds.delete(id)) reopenCleared = true;
+      locallyDeletedIds.delete(id);
+    }
+    if (reopenCleared) persistDismissedIds(locallyDismissedIds);
 
     setState((current) => {
       const byId = new Map(summaries.map((summary) => [summary.session_id, summary]));

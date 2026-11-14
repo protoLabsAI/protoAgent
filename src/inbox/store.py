@@ -41,6 +41,16 @@ _RANK = {"now": 0, "next": 1, "later": 2}
 #: when a page's budget is spent.
 RECOVERY_MAX_ATTEMPTS = 5
 
+#: Age ceiling for AUTOMATIC recovery delivery (:meth:`InboxStore.claim_now_recovery_batch`).
+#: A pending ``now``/``next`` item whose ``created_at`` is older than this is NOT claimed to
+#: fire a self-A2A turn of its own: a boot backlog of day-old pages would otherwise replay
+#: one turn each (#5256, a ~73-day pr-reviewer alarm backlog). The stale rows stay pending,
+#: so the ``check_inbox`` pull fallback still returns them in a single call with no waking
+#: turn apiece. An accepted-but-unmarked completion (``recovery_accepted_at`` set) fires
+#: nothing and is exempt from this bound — it is always claimed so a recorded mark-failure
+#: can never be stranded.
+RECOVERY_MAX_AGE = timedelta(hours=24)
+
 #: Producers whose priority-now pages are OPERATOR-CLASS by construction: the page asks a
 #: human to unblock something (a projectBoard block page about a stuck card), but the
 #: producer is an external plugin pinned against a host that predates ``needs_human`` and
@@ -729,6 +739,7 @@ class InboxStore:
         retry_after_s: int = 3600,
         max_attempts: int = RECOVERY_MAX_ATTEMPTS,
         priorities: tuple[str, ...] = ("now",),
+        max_age: timedelta | None = RECOVERY_MAX_AGE,
         now: datetime | None = None,
     ) -> list[dict]:
         """Atomically claim a bounded batch of pending items for the retry-when-free path,
@@ -775,6 +786,16 @@ class InboxStore:
         compatibility with callers from the first slice, but recovery no longer gates
         crash recoverability on wall-clock age.
 
+        ``max_age`` bounds AGE, not crash recoverability: a pending ``now``/``next`` item
+        whose ``created_at`` is older than ``now - max_age`` is NOT claimed to fire a turn
+        of its own (default :data:`RECOVERY_MAX_AGE`), so a stale boot backlog — e.g. a
+        ~73-day pr-reviewer alarm pile-up (#5256) — no longer replays one self-A2A turn
+        apiece. Those rows stay pending and unclaimed, so the ``check_inbox`` pull fallback
+        (:meth:`list`) still returns them, in a single call with no waking turn each. An
+        accepted-but-unmarked completion (``recovery_accepted_at`` set) fires nothing and is
+        exempt: it is always claimed so a recorded mark-failure can never be stranded.
+        ``max_age=None`` restores the age-blind first-slice behaviour.
+
         ``BEGIN IMMEDIATE`` takes the write lock before the candidate SELECT, so no other
         writer can deliver one of these rows between our read and our claim UPDATE.
         """
@@ -784,6 +805,16 @@ class InboxStore:
         batch_limit = max(1, int(limit))
         tiers = tuple(p for p in priorities if p in PRIORITIES) or ("now",)
         tier_placeholders = ",".join("?" for _ in tiers)
+        # Exclude a stale page from the fire-a-turn claim: created_at older than the cutoff
+        # is left pending for the check_inbox pull (#5256). An accepted-but-unmarked
+        # completion (recovery_accepted_at set) fires nothing, so it is never excluded by
+        # age. created_at is a UTC isoformat string, so a lexicographic >= is a time compare
+        # (same convention as the dedup window and prune below). max_age=None skips this.
+        age_clause = ""
+        age_params: tuple = ()
+        if max_age is not None:
+            age_clause = " AND (recovery_accepted_at IS NOT NULL OR created_at >= ?)"
+            age_params = ((now - max_age).isoformat(),)
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -794,11 +825,11 @@ class InboxStore:
                   AND delivered_at IS NULL
                   AND recovery_claimed_at IS NULL
                   AND delivery != ?
-                  AND (recovery_accepted_at IS NOT NULL OR recovery_attempts < ?)
+                  AND (recovery_accepted_at IS NOT NULL OR recovery_attempts < ?){age_clause}
                 ORDER BY CASE priority WHEN 'now' THEN 0 WHEN 'next' THEN 1 ELSE 2 END, created_at ASC
                 LIMIT ?
                 """,
-                (*tiers, DELIVERY_THREAD, max_attempts, batch_limit),
+                (*tiers, DELIVERY_THREAD, max_attempts, *age_params, batch_limit),
             ).fetchall()
             ids = [int(r["id"]) for r in rows]
             if ids:
@@ -827,6 +858,46 @@ class InboxStore:
         except Exception:
             db.rollback()
             raise
+        finally:
+            db.close()
+
+    def count_stale_recovery_items(
+        self,
+        *,
+        max_age: timedelta | None = RECOVERY_MAX_AGE,
+        priorities: tuple[str, ...] = ("now",),
+        now: datetime | None = None,
+    ) -> int:
+        """Count the fire-worthy ``now``/``next`` items that :meth:`claim_now_recovery_batch`
+        LEAVES behind for the ``check_inbox`` pull because they are older than ``max_age``.
+
+        Mirrors the claim candidate set (undelivered, unclaimed, non-thread) but keeps ONLY
+        the rows older than ``now - max_age`` — the ones the age filter excludes. An
+        accepted-but-unmarked completion (``recovery_accepted_at`` set) is always claimed
+        regardless of age, so it is never counted here. ``max_age=None`` means nothing is
+        stale and this returns 0. Diagnostic only: used to log the size of the backlog a
+        pass hands to the pull fallback (#5256)."""
+        if max_age is None:
+            return 0
+        now = now or datetime.now(UTC)
+        cutoff = (now - max_age).isoformat()
+        tiers = tuple(p for p in priorities if p in PRIORITIES) or ("now",)
+        tier_placeholders = ",".join("?" for _ in tiers)
+        db = self._connect()
+        try:
+            row = db.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM inbox
+                WHERE priority IN ({tier_placeholders})
+                  AND delivered_at IS NULL
+                  AND recovery_claimed_at IS NULL
+                  AND recovery_accepted_at IS NULL
+                  AND delivery != ?
+                  AND created_at < ?
+                """,
+                (*tiers, DELIVERY_THREAD, cutoff),
+            ).fetchone()
+            return int(row["n"]) if row is not None else 0
         finally:
             db.close()
 

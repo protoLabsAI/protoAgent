@@ -34,7 +34,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from a2a_impl.stores import CHAT_SESSION_LIST_TABLE
+from a2a_impl.stores import CHAT_SESSION_LIST_TABLE, CHAT_TOMBSTONE_TABLE
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
@@ -92,6 +92,27 @@ async def _ensure(conn) -> Any:
     table = _table()
     await conn.run_sync(table.metadata.create_all, tables=[table])
     return table
+
+
+async def _tombstoned(conn, sids: list[str]) -> set[str]:
+    """Which of ``sids`` the operator has DELETED — a chat tombstone beside the task store
+    (``operator_api.chat_routes`` owns that table's schema and every write). The registry must
+    never re-create a list row for a deleted chat: a stale client's register/rename, or a pre-S6
+    migrate, would otherwise resurrect it as an open, turnless tab on every device (ADR 0130 S6).
+    Empty when the tombstone table doesn't exist — no chat was ever deleted on this instance — so
+    the guard never *creates* that table (reflect-only, matching ``a2a_impl.stores``)."""
+    if not sids:
+        return set()
+    from sqlalchemy import Column, MetaData, String, Table, inspect, select
+
+    has_table = await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE))
+    if not has_table:
+        return set()
+    tombstones = Table(CHAT_TOMBSTONE_TABLE, MetaData(), Column("context_id", String(255)))
+    rows = (
+        await conn.execute(select(tombstones.c.context_id).where(tombstones.c.context_id.in_(sids)))
+    ).fetchall()
+    return {r.context_id for r in rows}
 
 
 def _clean_title(title: str | None) -> str | None:
@@ -159,6 +180,8 @@ async def register_session(session_id: str, *, title: str | None = None, created
     try:
         async with engine.begin() as conn:
             table = await _ensure(conn)
+            if await _tombstoned(conn, [sid]):
+                return  # a deleted chat must not be re-registered as an open tab
             row = (
                 await conn.execute(select(table.c.title, table.c.closed_at).where(table.c.context_id == sid))
             ).first()
@@ -203,6 +226,8 @@ async def rename_session(session_id: str, title: str) -> None:
     try:
         async with engine.begin() as conn:
             table = await _ensure(conn)
+            if await _tombstoned(conn, [sid]):
+                return  # a deleted chat must not reappear via a stale rename
             row = (await conn.execute(select(table.c.title).where(table.c.context_id == sid))).first()
             if row is None:
                 await conn.execute(insert(table).values(context_id=sid, created_at=now, title=clean, closed_at=None))
@@ -300,39 +325,49 @@ async def delete_session(session_id: str) -> None:
 
 
 async def migrate_sessions(items: list[dict]) -> int:
-    """Register the client's open tabs + titles ONCE on first sync (ADR 0130 S6, r4): the
-    device-local DISMISSED set and client-only titles become server-held so nobody loses a
-    chat. Only CREATES rows that don't exist — an already-registered session keeps the server
-    copy (the server wins after the first migrate). Returns the number of new rows.
-    ``items``: ``[{session_id, title?, created_at?}]``."""
+    """Register the client's open tabs + titles AND its device-local DISMISSALS ONCE on first
+    sync (ADR 0130 S6, r4): both the client-only titles and the DISMISSED set become server-held
+    so nobody loses a chat and a dismissal isn't silently re-opened elsewhere. An item with
+    ``closed: true`` is seeded CLOSED (the dismissal); the rest OPEN. Only CREATES rows that don't
+    exist — an already-registered session keeps the server copy (the server wins after the first
+    migrate), so one device's dismissal never clobbers another's open tab. Returns the number of
+    new rows. ``items``: ``[{session_id, title?, created_at?, closed?}]``."""
     engine = _engine()
     if engine is None or not items:
         return 0
     from sqlalchemy import insert, select
 
-    created: list[tuple[str, str | None]] = []
+    created: list[tuple[str, str, str | None]] = []  # (topic, sid, title)
     try:
         async with engine.begin() as conn:
             table = await _ensure(conn)
             existing = {
                 r.context_id for r in (await conn.execute(select(table.c.context_id))).fetchall()
             }
+            # A pre-S6 device's tabs may include chats the operator has since DELETED on another
+            # device; migrating them would resurrect those as tabs everywhere.
+            candidates = [str((item or {}).get("session_id") or "").strip() for item in items]
+            tombstoned = await _tombstoned(conn, [s for s in candidates if s])
+            now = datetime.now(timezone.utc)
             for item in items:
                 sid = str((item or {}).get("session_id") or "").strip()
-                if not sid or sid in existing or not _is_chat_session(sid):
+                if not sid or sid in existing or sid in tombstoned or not _is_chat_session(sid):
                     continue
                 existing.add(sid)
                 title = _clean_title((item or {}).get("title"))
-                created_at = _utc((item or {}).get("created_at")) or datetime.now(timezone.utc)
+                created_at = _utc((item or {}).get("created_at")) or now
+                is_closed = bool((item or {}).get("closed"))
                 await conn.execute(
-                    insert(table).values(context_id=sid, created_at=created_at, title=title, closed_at=None)
+                    insert(table).values(
+                        context_id=sid, created_at=created_at, title=title, closed_at=now if is_closed else None
+                    )
                 )
-                created.append((sid, title))
+                created.append((CLOSED if is_closed else CREATED, sid, title))
     except Exception:  # noqa: BLE001
         log.warning("[session-registry] migrate failed", exc_info=True)
         return 0
-    for sid, title in created:
-        _publish(CREATED, sid, title=title)
+    for topic, sid, title in created:
+        _publish(topic, sid, title=title)
     return len(created)
 
 
