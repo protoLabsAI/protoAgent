@@ -1,0 +1,1 @@
+- **Waiting tasks can carry an actionable ask.** The server supports updating the reply chat, requires an ask when the agent parks a task for the operator, and queues done/dismissed outcomes back to the agent when the console closes a waiting task.

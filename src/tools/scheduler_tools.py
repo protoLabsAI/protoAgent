@@ -385,12 +385,16 @@ def _build_task_tools(tasks_store) -> list:
         priority: int = -1,
         issue_type: str = "",
         links: list[str] | None = None,
+        ask: str = "",
     ) -> str:
         """Update an issue. ``status`` is open|in_progress|blocked|waiting|deferred|closed.
         Leave a field empty (``priority`` -1, ``links`` omitted) to keep it unchanged.
 
         Set ``waiting`` when the next step is the operator's call — don't leave a task
-        ``in_progress`` while you wait on them. ``links`` REPLACES the task's linked
+        ``in_progress`` while you wait on them. Supply ``ask``: a short, self-contained
+        question or action for the operator, shown on the Needs you card so they can
+        answer without opening the source chat. Required for ``waiting`` unless the
+        task already has an ask. ``links`` REPLACES the task's linked
         work items (board card ids ``bd-…``, scheduler job ids, a directive id, PR
         URLs): link the cards/jobs that do the work so the task closes itself when
         they all finish. A ref the task already resolved stays finished through a
@@ -409,7 +413,15 @@ def _build_task_tools(tasks_store) -> list:
             fields["issue_type"] = issue_type
         if links is not None:
             fields["links"] = links
+        if ask.strip():
+            fields["ask"] = ask.strip()
         try:
+            if status.strip().lower() == "waiting" and not ask.strip():
+                existing = tasks_store.get(issue_id)
+                if existing is None:
+                    raise KeyError(f"unknown issue {issue_id!r}")
+                if not (existing.get("ask") or "").strip():
+                    return "Error: provide an ask for the operator before setting status to waiting."
             i = tasks_store.update(issue_id, **fields)
         except (KeyError, ValueError) as exc:
             return f"Error: {exc}"

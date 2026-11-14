@@ -287,7 +287,7 @@ def test_waiting_roundtrips_store_and_tools(store):
     out = by_name["task_create"].invoke({"title": "needs a call", "links": ["bd-7q"]})
     assert "task-1" in out
     assert parse_links(store.get("task-1"))[0]["ref"] == "bd-7q"
-    by_name["task_update"].invoke({"issue_id": "task-1", "status": "waiting"})
+    by_name["task_update"].invoke({"issue_id": "task-1", "status": "waiting", "ask": "Approve the linked work?"})
     assert store.get("task-1")["status"] == "waiting"
     listing = by_name["task_list"].invoke({})
     assert "[waiting]" in listing and "links=bd-7q" in listing

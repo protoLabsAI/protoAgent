@@ -11,7 +11,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -211,6 +211,8 @@ class TaskCreateRequest(BaseModel):
 
 
 class TaskUpdateRequest(BaseModel):
+    ask: str | None = None
+    session_id: str | None = None
     project_path: str = ""  # ignored — the tasks store is agent-global
     title: str | None = None
     description: str | None = None
@@ -222,6 +224,7 @@ class TaskUpdateRequest(BaseModel):
 
 
 class TaskCloseRequest(BaseModel):
+    outcome: Literal["done", "dismissed"] = "done"
     project_path: str = ""  # ignored — the tasks store is agent-global
     reason: str | None = None
 
@@ -438,13 +441,19 @@ class _TaskStoreAdapter:
         fields = {
             k: v
             for k, v in update.items()
-            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee", "links")
+            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee", "links", "ask", "session_id")
             and v is not None
         }
         try:
             return self._s.update(issue_id, **fields)
         except KeyError as exc:  # TaskStore's "unknown issue" — a 404, not a 500 (#3973)
             raise NotFoundError(f"No task {issue_id!r}.") from exc
+
+    def get(self, issue_id: str) -> dict[str, Any]:
+        issue = self._s.get(issue_id)
+        if issue is None:
+            raise NotFoundError(f"No task {issue_id!r}.")
+        return issue
 
     def close(self, project_path: str, issue_id: str, reason: str | None = None) -> dict[str, Any]:
         try:
@@ -785,6 +794,21 @@ def register_operator_routes(
     async def _tasks_close(issue_id: str, req: TaskCloseRequest):
         _require_tasks()
         try:
+            if inbox_add is not None:
+                previous = await asyncio.to_thread(task_svc.get, issue_id)
+                if previous["status"] == "waiting":
+                    # Queue before closing: a failed inbox write leaves the task waiting
+                    # so the operator can retry. Dedup covers a retry after enqueue.
+                    await inbox_add({
+                        "text": (
+                            f"Operator closed waiting task {issue_id}: {previous['title']}\n"
+                            f"Outcome: {req.outcome}\nReason: {req.reason or '(none provided)'}"
+                        ),
+                        "priority": "next",
+                        "needs_human": False,
+                        "source": "task-outcome",
+                        "dedup_key": f"task-outcome:{issue_id}:{previous['updated_at']}",
+                    })
             issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, req.reason)
             try:
                 from graph.self_improvement import dispatch_task_review
