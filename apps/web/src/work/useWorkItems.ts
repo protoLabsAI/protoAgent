@@ -242,7 +242,15 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
             throw error;
           }
           await focused;
-          const ids = [...new Set([...(sessionId ? [sessionId] : []), ...inventory.sessions.map((s) => s.session_id)])];
+          // ADR 0130 S6: a session CLOSED on another device drops out of `inventory.sessions`
+          // (its tab is hidden everywhere) but it is not deleted — its directive ledger is
+          // unchanged — so include the server's `closed` ids too, or a chat closed anywhere would
+          // silently stop contributing its standing directives to Work.
+          const ids = [...new Set([
+            ...(sessionId ? [sessionId] : []),
+            ...inventory.sessions.map((s) => s.session_id),
+            ...(inventory.closed ?? []),
+          ])];
           // Bound fan-out and reuse each ledger's retained rows and failure state.
           // One failed ledger must not hide successes or skip subsequent batches.
           const remaining = ids.filter((id) => id !== sessionId);

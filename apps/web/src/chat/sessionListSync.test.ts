@@ -166,11 +166,22 @@ describe("session-list push", () => {
     expect(api.registerSession).toHaveBeenCalledWith("chat-named", expect.objectContaining({ title: "Sprint planning" }));
   });
 
+  it("never registers an INCOGNITO session (its title must not leak to other devices)", () => {
+    registerSessionOnSend({ id: "chat-incog", title: DEFAULT_SESSION_TITLE, createdAt: 0, incognito: true }, "private");
+    expect(api.registerSession).not.toHaveBeenCalled();
+  });
+
   it("pushes a rename and a close to the server", () => {
     pushRename("chat-r", "Renamed");
     expect(api.updateSession).toHaveBeenCalledWith("chat-r", { title: "Renamed" });
     pushClose("chat-c");
     expect(api.updateSession).toHaveBeenCalledWith("chat-c", { closed: true });
+  });
+
+  it("never pushes a rename for an INCOGNITO tab (renamed locally only, no server row)", () => {
+    const incog = chatStore.createSession({ incognito: true });
+    pushRename(incog.id, "Secret project");
+    expect(api.updateSession).not.toHaveBeenCalled();
   });
 
   it("pushReopen marks the session open and supersedes a pending close", () => {
@@ -212,6 +223,19 @@ describe("session-list push", () => {
     // Latched: a second boot does not push again.
     await migrateLocalSessionsOnce();
     expect(api.migrateSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("excludes an INCOGNITO tab from the one-time migration (no title leak)", async () => {
+    const normal = chatStore.createSession();
+    chatStore.updateMessages(normal.id, [userMsg("Normal chat")]);
+    const incog = chatStore.createSession({ incognito: true });
+    chatStore.updateMessages(incog.id, [userMsg("Private thoughts")]);
+    await migrateLocalSessionsOnce();
+    const sent = (api.migrateSessions as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      session_id: string;
+    }[];
+    expect(sent.some((s) => s.session_id === normal.id)).toBe(true);
+    expect(sent.some((s) => s.session_id === incog.id)).toBe(false);
   });
 
   it("migrates a locally dismissed tab as CLOSED so the dismissal is preserved everywhere (r4)", async () => {

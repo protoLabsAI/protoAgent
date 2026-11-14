@@ -42,9 +42,15 @@ let migrating = false;
 
 /** Register a session server-side on its first send (r3). The title is the tab's own when the
  *  operator already named it, else derived from the send text exactly as the first-message
- *  auto-title is — so the server and every other device title the tab identically. */
-export function registerSessionOnSend(session: Pick<ChatSession, "id" | "title" | "createdAt">, text: string): void {
-  if (registered.has(session.id)) return;
+ *  auto-title is — so the server and every other device title the tab identically. An INCOGNITO
+ *  session is never registered: its title (derived from the operator's first message) must not be
+ *  persisted server-side or published to other devices — incognito threads leave no trace
+ *  (ADR 0069 D3b). */
+export function registerSessionOnSend(
+  session: Pick<ChatSession, "id" | "title" | "createdAt" | "incognito">,
+  text: string,
+): void {
+  if (session.incognito || registered.has(session.id)) return;
   registered.add(session.id);
   const title = session.title && session.title !== DEFAULT_SESSION_TITLE ? session.title : sessionTitleFromText(text);
   void api
@@ -64,6 +70,10 @@ function pushListPatch(sessionId: string, patch: { title?: string; closed?: bool
  *  local one back — the same swallow-then-revert race a close has (review round 2) — and a failed
  *  push is retried on the next resync. */
 export function pushRename(sessionId: string, title: string): void {
+  // An INCOGNITO tab is renamed LOCALLY only: pushing it would CREATE a server-held row carrying
+  // the operator's title (rename_session registers an unknown session), leaking an incognito chat
+  // to every device — the same leak the send-time guard prevents (ADR 0069 D3b).
+  if (chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.incognito) return;
   registered.add(sessionId);
   const wanted = title.trim() || DEFAULT_SESSION_TITLE;
   pendingTitle.set(sessionId, wanted);
@@ -139,7 +149,12 @@ export async function migrateLocalSessionsOnce(): Promise<void> {
   if (migrating || readKey("local", SESSION_LIST_MIGRATED_KEY)) return;
   const open = chatStore
     .getSnapshot()
-    .sessions.filter((session) => session.messages.length > 0 || session.title !== DEFAULT_SESSION_TITLE);
+    .sessions.filter(
+      (session) =>
+        // INCOGNITO tabs are never migrated: their titles would otherwise be persisted server-side
+        // and published to every device, which incognito forbids (ADR 0069 D3b).
+        !session.incognito && (session.messages.length > 0 || session.title !== DEFAULT_SESSION_TITLE),
+    );
   // Dismissed ids are disjoint from open tabs (a dismissal removed the tab), and are migrated
   // CLOSED so the close intent is preserved everywhere, not re-opened by the server-wins read.
   const dismissed = dismissedSessionIds();

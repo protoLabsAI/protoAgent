@@ -331,41 +331,47 @@ async def migrate_sessions(items: list[dict]) -> int:
     ``closed: true`` is seeded CLOSED (the dismissal); the rest OPEN. Only CREATES rows that don't
     exist — an already-registered session keeps the server copy (the server wins after the first
     migrate), so one device's dismissal never clobbers another's open tab. Returns the number of
-    new rows. ``items``: ``[{session_id, title?, created_at?, closed?}]``."""
-    engine = _engine()
-    if engine is None or not items:
+    new rows. ``items``: ``[{session_id, title?, created_at?, closed?}]``.
+
+    RAISES on a store failure rather than swallowing it: this is the one-time client migration,
+    and the client latches it ONLY on a successful (non-throwing) call. If this returned 0 on an
+    absent engine or a DB error, the route would answer ``ok: true`` and the client would latch a
+    LOSS — this device's open tabs and dismissals would never reach the server list (ADR 0130 S6,
+    r4). A ``RuntimeError``/DB error propagates to the route, which answers non-2xx so the client
+    retries on a later boot. (The register/rename/close paths still swallow — they sit inside turn
+    and tab-bar paths where a store blip must not break the user's action; migrate does not.)"""
+    if not items:
         return 0
+    engine = _engine()
+    if engine is None:
+        raise RuntimeError("task store not initialized")
     from sqlalchemy import insert, select
 
     created: list[tuple[str, str, str | None]] = []  # (topic, sid, title)
-    try:
-        async with engine.begin() as conn:
-            table = await _ensure(conn)
-            existing = {
-                r.context_id for r in (await conn.execute(select(table.c.context_id))).fetchall()
-            }
-            # A pre-S6 device's tabs may include chats the operator has since DELETED on another
-            # device; migrating them would resurrect those as tabs everywhere.
-            candidates = [str((item or {}).get("session_id") or "").strip() for item in items]
-            tombstoned = await _tombstoned(conn, [s for s in candidates if s])
-            now = datetime.now(timezone.utc)
-            for item in items:
-                sid = str((item or {}).get("session_id") or "").strip()
-                if not sid or sid in existing or sid in tombstoned or not _is_chat_session(sid):
-                    continue
-                existing.add(sid)
-                title = _clean_title((item or {}).get("title"))
-                created_at = _utc((item or {}).get("created_at")) or now
-                is_closed = bool((item or {}).get("closed"))
-                await conn.execute(
-                    insert(table).values(
-                        context_id=sid, created_at=created_at, title=title, closed_at=now if is_closed else None
-                    )
+    async with engine.begin() as conn:
+        table = await _ensure(conn)
+        existing = {
+            r.context_id for r in (await conn.execute(select(table.c.context_id))).fetchall()
+        }
+        # A pre-S6 device's tabs may include chats the operator has since DELETED on another
+        # device; migrating them would resurrect those as tabs everywhere.
+        candidates = [str((item or {}).get("session_id") or "").strip() for item in items]
+        tombstoned = await _tombstoned(conn, [s for s in candidates if s])
+        now = datetime.now(timezone.utc)
+        for item in items:
+            sid = str((item or {}).get("session_id") or "").strip()
+            if not sid or sid in existing or sid in tombstoned or not _is_chat_session(sid):
+                continue
+            existing.add(sid)
+            title = _clean_title((item or {}).get("title"))
+            created_at = _utc((item or {}).get("created_at")) or now
+            is_closed = bool((item or {}).get("closed"))
+            await conn.execute(
+                insert(table).values(
+                    context_id=sid, created_at=created_at, title=title, closed_at=now if is_closed else None
                 )
-                created.append((CLOSED if is_closed else CREATED, sid, title))
-    except Exception:  # noqa: BLE001
-        log.warning("[session-registry] migrate failed", exc_info=True)
-        return 0
+            )
+            created.append((CLOSED if is_closed else CREATED, sid, title))
     for topic, sid, title in created:
         _publish(topic, sid, title=title)
     return len(created)

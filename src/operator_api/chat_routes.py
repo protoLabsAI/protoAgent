@@ -1178,6 +1178,13 @@ def register_chat_routes(app, ui: str) -> None:
             except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
                 log.warning("[chat] parked session index read failed: %s", exc)
                 return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
+        # ADR 0130 S6: read the server-held session LIST (title + open/closed) FIRST so the
+        # CLOSED ids can be excluded from the windowed task-store query below. If they stayed in
+        # the window, a closed chat would consume one of the ``limit`` slots and could push an
+        # open, turn-bearing chat that has no S6 registry row (a pre-S6 chat) out of the newest-N
+        # window before the Python closed-skip ever runs — the behaviour that worked before S6.
+        registry = await read_chat_session_list()
+        closed_ids = [sid for sid, meta in registry.items() if meta["closed"]]
         rows: list = []
         reason: str | None = None
         try:
@@ -1191,15 +1198,19 @@ def register_chat_routes(app, ui: str) -> None:
                 # turn: a client compares ``last_task_id`` against the turns it holds to
                 # tell it is behind even when it still remembers turns the store has
                 # already swept, which a bare count cannot (ADR 0104).
-                newest = _newest_turn_ranked(
-                    TaskModel,
-                    conn.dialect.name,
+                window_filter = (
                     # The task store also contains delegation, Activity,
                     # fleet-room, and API contexts. Only console-created
                     # chat tabs use the stable ``chat-`` id prefix.
                     TaskModel.context_id.like("chat-%")
-                    & ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)),
+                    & ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id))
                 )
+                if closed_ids:
+                    # Drop the server-CLOSED sessions BEFORE ``.limit(limit)`` so they never
+                    # occupy a window slot (the open list hides them anyway); their ids still
+                    # ride the top-level ``closed`` array below.
+                    window_filter = window_filter & ~TaskModel.context_id.in_(closed_ids)
+                newest = _newest_turn_ranked(TaskModel, conn.dialect.name, window_filter)
                 rows = (
                     await conn.execute(
                         select(
@@ -1221,13 +1232,13 @@ def register_chat_routes(app, ui: str) -> None:
             # turnless session has no task row to depend on (ADR 0130 S6, r1).
             rows = []
             reason = f"read failed: {type(exc).__name__}"
-        # ADR 0130 S6: fold in the server-held session LIST (title + open/closed). A row the
-        # registry marks CLOSED drops out of the open list (its tab is hidden everywhere, the
-        # chat kept); every open row carries its server title; and a registered session with no
-        # durable turn yet (a just-created tab from another device) is added even though the
-        # task-store window has nothing for it. ``closed`` names the closed sessions so a
-        # client reconciling on boot removes those tabs too.
-        registry = await read_chat_session_list()
+        # ADR 0130 S6: fold in the server-held session LIST (``registry``, read above). A row the
+        # registry marks CLOSED is already out of the window (excluded before ``.limit``) and out
+        # of the open list (its tab is hidden everywhere, the chat kept); every open row carries
+        # its server title; and a registered session with no durable turn yet (a just-created tab
+        # from another device) is added even though the task-store window has nothing for it.
+        # ``closed`` names the closed sessions so a client reconciling on boot removes those tabs
+        # too, and the Work surface keeps reading their directives (useWorkItems.ts).
         sessions: list[dict] = []
         seen: set[str] = set()
         for r in rows:
@@ -1357,8 +1368,22 @@ def register_chat_routes(app, ui: str) -> None:
         """One-time migration of a client's device-local open tabs + titles into the
         server-held list (ADR 0130 S6, r4), so nobody loses a chat when the list becomes
         server-authoritative. Only creates rows that don't already exist — the server copy
-        wins after the first migrate. Returns how many new sessions were registered."""
-        migrated = await migrate_chat_session_list([item.model_dump() for item in req.sessions])
+        wins after the first migrate. Returns how many new sessions were registered.
+
+        A store failure answers 503 (NOT a 200 ``ok: true``): the client latches this one-time
+        migration only on a successful call, so a swallowed failure would make it latch a LOSS —
+        this device's tabs + dismissals would never reach the server list. A non-2xx lets the
+        client retry on a later boot (ADR 0130 S6, r4)."""
+        from fastapi import HTTPException
+
+        try:
+            migrated = await migrate_chat_session_list([item.model_dump() for item in req.sessions])
+        except Exception as exc:  # noqa: BLE001 — translate a store failure into a retryable 503
+            log.warning("[chat] session-list migrate failed: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "migrate_failed", "reason": f"migrate failed: {type(exc).__name__}"},
+            ) from exc
         return {"ok": True, "migrated": migrated}
 
     @app.patch("/api/chat/sessions/{session_id}")

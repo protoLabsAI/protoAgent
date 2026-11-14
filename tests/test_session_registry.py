@@ -221,6 +221,26 @@ def test_no_engine_is_a_safe_noop(monkeypatch, bus_events):
     assert bus_events == []
 
 
+def test_migrate_raises_on_a_store_failure_so_the_client_never_latches_a_loss(monkeypatch, bus_events):
+    # The register/close paths swallow a store failure (they sit inside turn/tab paths); migrate
+    # must NOT — the client latches the one-time migration only on a successful call, so a swallowed
+    # failure that returned 0 would make it latch a LOSS (this device's tabs never reach the list).
+    # An absent engine, and a DB error, both RAISE so the route can answer non-2xx and the client
+    # retries on a later boot (ADR 0130 S6, r4).
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+
+    async def _run():
+        with pytest.raises(RuntimeError):
+            await sr.migrate_sessions([{"session_id": "chat-x", "title": "t"}])
+        # An empty payload is still a safe no-op success (nothing to persist), engine or not.
+        assert await sr.migrate_sessions([]) == 0
+
+    asyncio.run(_run())
+    assert bus_events == []
+
+
 # ── GET /api/chat/sessions merge + write routes ─────────────────────────────────
 
 
@@ -328,6 +348,47 @@ def test_index_reports_real_turns_for_a_registered_session_outside_the_window(tm
     assert by_id["chat-newer"]["turn_count"] == 1
     assert by_id["chat-older"]["turn_count"] == 2
     assert by_id["chat-older"]["last_task_id"] is not None
+
+
+def test_index_closed_rows_do_not_consume_window_slots(tmp_path, monkeypatch):
+    engine = _engine(tmp_path, "closed-window")
+    # The NEWEST chat is CLOSED; an older, OPEN, turn-bearing chat has NO registry row (a pre-S6
+    # chat). With limit=1, if the closed row consumed the single window slot the Python closed-skip
+    # would empty the list and the open chat — which the turnless fold can't rescue (it has no
+    # registry row) — would drop out of the index entirely. Closed ids are excluded from the window
+    # BEFORE the limit, so the open chat survives (ADR 0130 S6).
+    _seed_task_rows(
+        engine,
+        [
+            {"id": "c1", "context_id": "chat-closed", "state": "TASK_STATE_COMPLETED",
+             "at": datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)},
+            {"id": "o1", "context_id": "chat-open", "state": "TASK_STATE_COMPLETED",
+             "at": datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc)},
+        ],
+    )
+    client = _client(monkeypatch)
+    client.patch("/api/chat/sessions/chat-closed", json={"closed": True})
+
+    body = client.get("/api/chat/sessions?limit=1").json()
+    ids = {s["session_id"] for s in body["sessions"]}
+    assert "chat-open" in ids  # survived — the closed row did not eat the window slot
+    assert "chat-closed" not in ids
+    assert body["closed"] == ["chat-closed"]
+
+
+def test_migrate_route_answers_503_on_a_store_failure(tmp_path, monkeypatch):
+    # A store failure must answer non-2xx so the client's one-time migration retries rather than
+    # latching a loss (ADR 0130 S6, r4). ``ok: true`` here would strand this device's tabs.
+    _engine(tmp_path, "migrate-fail")
+    client = _client(monkeypatch)
+
+    async def _boom(_items):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("operator_api.chat_routes.migrate_chat_session_list", _boom)
+    res = client.post("/api/chat/sessions/migrate", json={"sessions": [{"session_id": "chat-x"}]})
+    assert res.status_code == 503
+    assert res.json()["detail"]["code"] == "migrate_failed"
 
 
 def test_index_hides_a_tombstoned_registry_row(tmp_path, monkeypatch):
