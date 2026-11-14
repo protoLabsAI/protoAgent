@@ -5,8 +5,27 @@ import { ARTIFACT_PLUGIN_STATUS } from "./artifactPanel";
 const scroller = (page: Page) => page.locator(".pl-convo-scroll:visible");
 const distance = (page: Page) => scroller(page).evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
 
-// Keep successful attempts too: a non-reproduction is not evidence of a repair.
-test.use({ deviceScaleFactor: 2, video: "on", trace: "on" });
+// The paint-oracle evidence a repair of #4421 is judged on is the per-step screenshot +
+// painted-pixel JSON that paintedParagraphs attaches UNCONDITIONALLY below — those stay on every
+// run, pass or fail. Playwright's own trace/video recording is only the failure diagnostic, and
+// recording a full DOM/screenshot trace snapshot on each of the ~32 scroll steps costs ~7 s per
+// run under contention (measured) — a tax that, on top of the per-step DPR-2 raster scan, is what
+// tipped the 192-block loop over budget on a loaded shard. Retain them on failure only.
+test.use({ deviceScaleFactor: 2, video: "retain-on-failure", trace: "retain-on-failure" });
+
+// Seed-and-scroll chats run inside a live-sync scope (ADR 0130 S0, as live-sync.spec.ts does),
+// set in seedAnswer below. The mock then answers `/api/events` with an OPEN but SILENT scoped
+// stream and the durable session index empty, instead of the default feed that pushes an
+// activity frame every 500 ms and 404s the index. Those defaults made the console's S4 sync
+// client (#5219) resync-and-refetch on every stream (re)connect and re-render the activity rail
+// four times a second — all on the page's main thread, the same thread the per-step paint oracle
+// drives createImageBitmap + a multi-million-pixel scan on. Under CI's 4-way shard contention
+// that competition pushed the 192-block scroll loop past its 60 s budget (it timed out in 3 of
+// 12 main runs after S4 landed). The seed-and-scroll chats are seeded wholly in localStorage and
+// never send a turn or seed server-side sync state, so a single shared scope stays empty and
+// silent — no cross-test coupling, just a quiet feed. (The #4298 tool-growth test below is NOT
+// scoped: it sends a live turn, which a scope would route through the canned handleSyncSend.)
+const SYNC_SCOPE = "chat-frame-scrollback";
 
 async function paintedParagraphs(page: Page, testInfo: TestInfo, name: string) {
   const blocks = await scroller(page).evaluate((el) => {
@@ -53,6 +72,9 @@ async function paintedParagraphs(page: Page, testInfo: TestInfo, name: string) {
 }
 
 async function seedAnswer(page: Page, paragraphsPerHalf = 24) {
+  // Stamp every request (the `/api/events` feed included) with the live-sync scope, so the mock
+  // serves a silent open stream and an empty durable index — see the note above SYNC_SCOPE.
+  await page.setExtraHTTPHeaders({ "x-e2e-sync": SYNC_SCOPE });
   await page.route("**/api/runtime/status", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
