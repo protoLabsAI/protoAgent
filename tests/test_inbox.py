@@ -515,11 +515,14 @@ def test_claim_now_recovery_batch_skips_items_older_than_max_age(tmp_path):
     claimed = store.claim_now_recovery_batch(limit=8, now=now)
 
     assert [r["id"] for r in claimed] == [recent["id"]]  # the stale one is left behind
+    # The skipped stale row stays pending and unclaimed (not fired, not reserved).
+    [still_pending] = [r for r in store.list(priority_floor="now") if r["id"] == old["id"]]
+    assert still_pending["recovery_claimed_at"] is None
+    assert still_pending["delivered_at"] is None
     # Boundary: an item exactly at the 24h edge is still inside the window and claimed.
-    _store_edge = _store(tmp_path / "edge")
-    edge = _store_edge.add("edge page", priority="now", now=now - timedelta(hours=24))
-    assert [r["id"] for r in _store_edge.claim_now_recovery_batch(limit=8, now=now)] == [edge["id"]]
-    assert old is not None  # (kept for the stale-visibility test below)
+    # (recent is already claimed and old is stale, so this second pass returns only edge.)
+    edge = store.add("edge page", priority="now", now=now - timedelta(hours=24))
+    assert [r["id"] for r in store.claim_now_recovery_batch(limit=8, now=now)] == [edge["id"]]
 
 
 def test_claim_now_recovery_batch_claims_stale_accepted_completion(tmp_path):
