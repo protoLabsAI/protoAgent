@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { WorkRow } from "./WorkRow";
 import type { WatchState } from "../lib/types";
-import { formatWatchDuration, watchLifetime, fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, relTime, staleTaskMeta, statusTone, statusWord, taskStaleDays, type WorkStatus } from "./tone";
+import { formatWatchDuration, watchLifetime, fromActivity, fromBackgroundJob, fromDecision, fromDirective, fromGoal, fromSchedule, fromTask, fromWatch, laneFor, nextTime, railCue, relTime, staleTaskMeta, statusTone, statusWord, taskStaleDays, type WorkStatus } from "./tone";
 import rowCss from "./work-row.css?raw";
 import { groupFor, type GroupableWorkItem, type WorkGroupId } from "./tone";
 
@@ -144,6 +144,23 @@ it("hides invalid timestamps and does not describe future times as ago", () => {
   expect(relTime(new Date(2026, 10, 9, 19, 14).toISOString(), new Date(2026, 10, 9, 18, 14).getTime()).text).toBe("today at 19:14");
 });
 
+describe("nextTime formats a future instant in the en-GB style", () => {
+  const now = new Date(2026, 10, 14, 10, 0).getTime();
+  it.each([
+    [new Date(2026, 10, 14, 21, 30), "at 21:30"],         // later today
+    [new Date(2026, 10, 15, 14, 0), "tomorrow at 14:00"], // tomorrow
+    [new Date(2026, 10, 18, 9, 0), "18 Nov at 09:00"],    // a later date
+  ])("formats %s identically from seconds and ISO with relTime's tooltip shape", (date, expected) => {
+    const result = nextTime(date.getTime() / 1000, now);
+    expect(result).toEqual(nextTime(date.toISOString(), now));
+    expect(result.text).toBe(expected);
+    expect(result.tooltip).toBe(date.toLocaleString("en-GB", { dateStyle: "full", timeStyle: "long" }));
+  });
+  it("hides an invalid timestamp", () => {
+    expect(nextTime("bad", now)).toEqual({ text: "", tooltip: "" });
+  });
+});
+
 describe("the 24h quiet rule for started jobs (ADR 0129)", () => {
   const now = new Date("2026-11-12T12:00:00Z").getTime();
   const ago = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
@@ -168,6 +185,67 @@ describe("the 24h quiet rule for started jobs (ADR 0129)", () => {
   it("reads as plain prose with days pluralized", () => {
     expect(staleTaskMeta(1)).toBe("No activity for 1 day");
     expect(staleTaskMeta(3)).toBe("No activity for 3 days");
+  });
+});
+
+describe("railCue: the one quiet line per kind (chat-status-rail-v2 §1 D2)", () => {
+  const now = new Date(2026, 10, 14, 18, 0).getTime();
+  const iso = (d: Date) => d.toISOString();
+  const cue = (kind: GroupableWorkItem["kind"], raw: unknown) =>
+    railCue({ kind, id: "x", title: "x", meta: "", status: "running", raw } as GroupableWorkItem, now);
+
+  it("directive: 'Set ' + relTime(created_at)", () => {
+    expect(cue("directive", { created_at: iso(new Date(2026, 10, 14, 14, 2)) })).toBe("Set today at 14:02");
+  });
+
+  it("background job: 'Started ' + relTime(created_at), '' without created_at", () => {
+    expect(cue("background", { created_at: iso(new Date(2026, 10, 14, 17, 48)) })).toBe("Started 12 min ago");
+    expect(cue("background", {})).toBe("");
+  });
+
+  it("active goal: 'Step N of M', or 'Step N' with no max", () => {
+    expect(cue("goal", { iteration: 3, max_iterations: 8 })).toBe("Step 3 of 8");
+    expect(cue("goal", { iteration: 3 })).toBe("Step 3");
+    expect(cue("goal", {})).toBe("");
+  });
+
+  it("in-progress or blocked task: 'Updated ' + age, created_at as fallback", () => {
+    expect(cue("task", { status: "in_progress", updated_at: iso(new Date(2026, 10, 14, 14, 30)) })).toBe("Updated today at 14:30");
+    expect(cue("task", { status: "blocked", updated_at: iso(new Date(2026, 10, 14, 17, 55)) })).toBe("Updated 5 min ago");
+    expect(cue("task", { status: "in_progress", created_at: iso(new Date(2026, 10, 14, 13, 0)) })).toBe("Updated today at 13:00");
+  });
+
+  it("a day-old in-progress task reads the staleTaskMeta line; blocked is not subject to it", () => {
+    const twoDays = iso(new Date(now - 2 * 24 * 3_600_000));
+    expect(cue("task", { status: "in_progress", updated_at: twoDays })).toBe("No activity for 2 days");
+    expect(cue("task", { status: "blocked", updated_at: twoDays })).toBe(`Updated ${relTime(twoDays, now).text}`);
+  });
+
+  it("schedule or wait: 'Next ' + nextTime(next_fire); a paused (disabled) job reads 'Paused'", () => {
+    expect(cue("schedule", { schedule: "30 21 * * *", next_fire: iso(new Date(2026, 10, 14, 21, 30)) })).toBe("Next at 21:30");
+    expect(cue("wait", { schedule: "wait:x", next_fire: iso(new Date(2026, 10, 15, 14, 0)) })).toBe("Next tomorrow at 14:00");
+    expect(cue("schedule", { schedule: "0 9 * * *", enabled: false, next_fire: iso(new Date(2026, 10, 18, 9, 0)) })).toBe("Paused");
+  });
+
+  it("watch: 'Since ' + relTime(created_at as epoch seconds)", () => {
+    expect(cue("watch", { created_at: Math.floor(new Date(2026, 10, 12, 9, 0).getTime() / 1000) })).toBe("Since 12 Nov at 09:00");
+  });
+
+  it("open or deferred task: 'Added ' + age; a status-less task counts as open", () => {
+    expect(cue("task", { status: "open", created_at: iso(new Date(2026, 10, 14, 11, 0)) })).toBe("Added today at 11:00");
+    expect(cue("task", { status: "deferred", created_at: iso(new Date(2026, 10, 10, 11, 0)) })).toBe("Added 10 Nov at 11:00");
+    expect(cue("task", { created_at: iso(new Date(2026, 10, 14, 11, 0)) })).toBe("Added today at 11:00");
+  });
+
+  it("returns '' when the source carries no usable timestamp or is out of scope", () => {
+    expect(cue("directive", {})).toBe("");
+    expect(cue("watch", {})).toBe("");
+    expect(cue("task", { status: "in_progress" })).toBe("");
+    expect(cue("schedule", { schedule: "x" })).toBe("");
+    expect(cue("task", { status: "open" })).toBe("");
+    // A waiting task and a decision are Needs-you kinds, handled in slice 3 — no cue here.
+    expect(cue("task", { status: "waiting", updated_at: iso(new Date(2026, 10, 14, 17, 0)) })).toBe("");
+    expect(cue("decision", { created_at: iso(new Date(2026, 10, 14, 17, 0)) })).toBe("");
   });
 });
 
