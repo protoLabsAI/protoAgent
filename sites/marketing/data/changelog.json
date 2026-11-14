@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.241.0",
+    "date": "2026-11-14",
+    "changes": [
+      "Answer waiting jobs in Work (#5273).",
+      "Answer waiting tasks from the chat rail (#5274).",
+      "Waiting tasks can carry an actionable ask (#5272)."
+    ]
+  },
+  {
     "version": "v0.240.0",
     "date": "2026-11-14",
     "changes": [

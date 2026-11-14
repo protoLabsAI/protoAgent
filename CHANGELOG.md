@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.241.0] - 2026-11-14
+
+### Fixed
+- **Answer waiting jobs in Work (#5273).** Show the ask, links, and source context in the detail, with inline replies and Done or Dismiss outcomes. Replies start a named chat when the source has no durable turns.
+
+- **Answer waiting tasks from the chat rail (#5274).** Needs you opens the shared Work detail with the ask, links, Reply, Done and Dismiss, including tasks whose source has no chat turns.
+
+- **Waiting tasks can carry an actionable ask (#5272).** The server supports updating the reply chat, requires an ask when the agent parks a task for the operator, and queues done/dismissed outcomes back to the agent when the console closes a waiting task.
+
 ## [0.240.0] - 2026-11-14
 
 ### Changed
