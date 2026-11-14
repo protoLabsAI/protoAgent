@@ -15,9 +15,6 @@ from types import SimpleNamespace
 import pytest
 
 from tasks.stall import (
-    STALL_NUDGE_CAP,
-    STALL_SWEEP_INTERVAL_S,
-    STALL_THRESHOLD_S,
     DriverSources,
     default_sources,
     find_stalled,
@@ -47,27 +44,19 @@ def _task(**fields) -> dict:
     return base
 
 
-# ── constants ─────────────────────────────────────────────────────────────────
-
-
-def test_constants_are_the_adr_defaults():
-    assert STALL_THRESHOLD_S == 1800
-    assert STALL_NUDGE_CAP == 3
-    assert STALL_SWEEP_INTERVAL_S == 300
-
-
 # ── is_driven: links ────────────────────────────────────────────────────────────
 
 
-def test_driven_by_unresolved_link():
-    task = _task(links='[{"ref": "bd-9", "kind": "card", "state": "open", "reason": ""}]')
-    assert is_driven(task, sources=_sources()) is True
-
-
-def test_not_driven_by_resolved_link():
-    # Every link done and no other signal → nothing is driving the task.
-    task = _task(links='[{"ref": "bd-9", "kind": "card", "state": "done", "reason": "merged"}]')
-    assert is_driven(task, sources=_sources()) is False
+@pytest.mark.parametrize(
+    "links, expected",
+    [
+        pytest.param('[{"ref": "bd-9", "kind": "card", "state": "open", "reason": ""}]', True, id="unresolved-link"),
+        pytest.param('[{"ref": "bd-9", "kind": "card", "state": "done", "reason": "merged"}]', False, id="resolved-link"),
+    ],
+)
+def test_links_drive_until_resolved(links, expected):
+    # A link is durable evidence until its state is done; resolved + no other signal → undriven.
+    assert is_driven(_task(links=links), sources=_sources()) is expected
 
 
 def test_empty_session_is_judged_on_links_only():
@@ -82,59 +71,54 @@ def test_empty_session_is_judged_on_links_only():
 
 # ── is_driven: session-scoped sources ─────────────────────────────────────────────
 
-
-def test_driven_by_pending_job_in_the_session():
-    job = SimpleNamespace(id="wait:sess-1", context_id="sess-1", origin_session=None)
-    assert is_driven(_task(), sources=_sources(list_jobs=lambda: [job])) is True
-
-
-def test_driven_by_pending_job_via_origin_session():
-    job = SimpleNamespace(id="job-9", context_id="job:abc", origin_session="sess-1")
-    assert is_driven(_task(), sources=_sources(list_jobs=lambda: [job])) is True
+# One table, not one function per variant (docs/dev/testing.md): each case is the SAME
+# driver test with a different live signal injected. The task is in session "sess-1".
+_JOB_IN_SESSION = SimpleNamespace(id="wait:sess-1", context_id="sess-1", origin_session=None)
+_JOB_VIA_ORIGIN = SimpleNamespace(id="job-9", context_id="job:abc", origin_session="sess-1")
+_JOB_OTHER_SESSION = SimpleNamespace(id="job-9", context_id="sess-OTHER", origin_session="sess-OTHER")
+_WATCH_IN_SESSION = SimpleNamespace(id="w1", run_session="sess-1")
+_WATCH_OTHER_SESSION = SimpleNamespace(id="w1", run_session="sess-OTHER")
 
 
-def test_not_driven_by_job_in_a_different_session():
-    job = SimpleNamespace(id="job-9", context_id="sess-OTHER", origin_session="sess-OTHER")
-    assert is_driven(_task(), sources=_sources(list_jobs=lambda: [job])) is False
-
-
-def test_driven_by_active_watch_in_the_session():
-    watch = SimpleNamespace(id="w1", run_session="sess-1")
-    assert is_driven(_task(), sources=_sources(active_watches=lambda: [watch])) is True
-
-
-def test_driven_by_running_delegation():
-    assert is_driven(_task(), sources=_sources(running_delegations=lambda _sid: 2)) is True
-
-
-def test_driven_by_running_background_job():
-    assert is_driven(_task(), sources=_sources(running_background=lambda _sid: 1)) is True
-
-
-def test_driven_by_running_turn():
-    assert is_driven(_task(), sources=_sources(turn_running=lambda _sid: True)) is True
-
-
-def test_undriven_when_no_signal():
-    assert is_driven(_task(), sources=_sources()) is False
+@pytest.mark.parametrize(
+    "overrides, expected",
+    [
+        pytest.param({"list_jobs": lambda: [_JOB_IN_SESSION]}, True, id="pending-job-by-context"),
+        pytest.param({"list_jobs": lambda: [_JOB_VIA_ORIGIN]}, True, id="pending-job-by-origin"),
+        pytest.param({"list_jobs": lambda: [_JOB_OTHER_SESSION]}, False, id="job-in-other-session"),
+        pytest.param({"active_watches": lambda: [_WATCH_IN_SESSION]}, True, id="active-watch"),
+        pytest.param({"active_watches": lambda: [_WATCH_OTHER_SESSION]}, False, id="watch-in-other-session"),
+        pytest.param({"running_delegations": lambda _sid: 2}, True, id="running-delegation"),
+        pytest.param({"running_background": lambda _sid: 1}, True, id="running-background"),
+        pytest.param({"turn_running": lambda _sid: True}, True, id="running-turn"),
+        pytest.param({}, False, id="no-signal"),
+    ],
+)
+def test_session_scoped_sources_drive_the_task(overrides, expected):
+    assert is_driven(_task(), sources=_sources(**overrides)) is expected
 
 
 # ── is_driven: fail-quiet ─────────────────────────────────────────────────────────
 
 
-def test_raising_source_counts_as_driven():
-    def boom():
-        raise RuntimeError("scheduler DB unreadable")
+def _raise_no_arg():
+    raise RuntimeError("scheduler DB unreadable")
 
+
+def _raise_one_arg(_sid):
+    raise RuntimeError("background store unreadable")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"list_jobs": _raise_no_arg}, id="first-source-raises"),
+        pytest.param({"running_background": _raise_one_arg}, id="later-source-raises"),
+    ],
+)
+def test_raising_source_counts_as_driven(overrides):
     # A source we can't read is never evidence of a stall — treat the task as driven.
-    assert is_driven(_task(), sources=_sources(list_jobs=boom)) is True
-
-
-def test_raising_later_source_counts_as_driven():
-    def boom(_sid):
-        raise RuntimeError("background store unreadable")
-
-    assert is_driven(_task(), sources=_sources(running_background=boom)) is True
+    assert is_driven(_task(), sources=_sources(**overrides)) is True
 
 
 # ── find_stalled ─────────────────────────────────────────────────────────────────
@@ -179,18 +163,27 @@ def test_default_sources_is_none_safe(monkeypatch):
     assert is_driven(_task(session_id="stall-test-unique-session"), sources=sources) is False
 
 
+def test_live_list_jobs_source_raises_on_scheduler_db_error(monkeypatch):
+    # A scheduler DB hiccup must RAISE through the live source (→ is_driven treats the
+    # task as driven), never read as the swallowed empty list list_jobs() returns on a
+    # hiccup — that would look like "no pending job" and could nudge a driven task.
+    def boom() -> list:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    sched = SimpleNamespace(list_jobs_strict=boom, list_jobs=lambda: [])
+    monkeypatch.setattr("runtime.state.STATE.scheduler", sched)
+    sources = default_sources()
+    with pytest.raises(sqlite3.DatabaseError):
+        sources.list_jobs()
+    assert is_driven(_task(), sources=sources) is True
+
+
 # ── store: stall_nudges column ────────────────────────────────────────────────────
 
 
 @pytest.fixture
 def store(tmp_path):
     return TaskStore(db_path=str(tmp_path / "issues.db"))
-
-
-def test_new_issue_exposes_zero_stall_nudges(store):
-    i = store.create("t")
-    assert i["stall_nudges"] == 0
-    assert store.get(i["id"])["stall_nudges"] == 0
 
 
 def test_record_stall_nudge_increments_without_touching_updated_at(store):

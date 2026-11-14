@@ -170,7 +170,15 @@ def default_sources() -> DriverSources:
 
     def list_jobs() -> Any:
         sched = STATE.scheduler
-        return sched.list_jobs() if sched is not None else []
+        if sched is None:
+            return []
+        # Read via the strict path so a scheduler DB read failure RAISES (→ is_driven
+        # treats the task as driven) instead of list_jobs()'s swallowed empty list,
+        # which would read as "no pending job" and could nudge a task that is in fact
+        # being driven (D9 fail-quiet — never nudge on missing evidence). A backend
+        # without a strict reader falls back to list_jobs().
+        reader = getattr(sched, "list_jobs_strict", None) or sched.list_jobs
+        return reader()
 
     def active_watches() -> Any:
         wc = STATE.watch_controller
