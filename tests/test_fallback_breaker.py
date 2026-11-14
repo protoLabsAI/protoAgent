@@ -78,7 +78,7 @@ def test_quota_or_4xx_does_not_trip():
 def test_tripped_but_fallbacks_fail_tries_primary_and_success_closes():
     mw = ObservableModelFallbackMiddleware(_Model("cloud"))
     order: list[str] = []
-    mw.wrap_model_call(_Req(_Model("primary")), _handler(order, primary_exc=TimeoutError()))
+    mw.wrap_model_call(_Req(_Model("primary")), _handler(order, primary_exc=StreamStallTimeout("silent")))
     order.clear()
     # fallback now down, primary recovered: still served, by the primary
     assert mw.wrap_model_call(_Req(_Model("primary")), _handler(order, fail=("cloud",))) == "primary"
@@ -112,7 +112,7 @@ def test_cooloff_expires_into_a_probe_and_doubles_on_repeat(monkeypatch):
     assert order == ["primary", "cloud"]
     assert agent._breaker["primary"][1] == 2 * agent._BREAKER_BASE_S
     for _ in range(10):
-        agent._breaker_trip("primary", TimeoutError())
+        agent._breaker_trip("primary", StreamStallTimeout("silent"))
     assert agent._breaker["primary"][1] == agent._BREAKER_MAX_S
 
 
@@ -120,9 +120,9 @@ def test_no_fallbacks_never_trips():
     mw = ObservableModelFallbackMiddleware(_Model("cloud"))
     mw.models = []  # routing.fallback_models empty
     order: list[str] = []
-    h = _handler(order, primary_exc=TimeoutError())
+    h = _handler(order, primary_exc=StreamStallTimeout("silent"))
     for _ in range(2):
-        with pytest.raises(TimeoutError):
+        with pytest.raises(StreamStallTimeout):
             mw.wrap_model_call(_Req(_Model("primary")), h)
     assert order == ["primary", "primary"]
     assert agent._breaker == {}
@@ -133,7 +133,7 @@ def test_string_models_key_by_name_not_type():
 
     def handler(req):
         if req.model == "primary-a":
-            raise TimeoutError()
+            raise StreamStallTimeout("silent")
         return "ok"
 
     assert mw.wrap_model_call(_Req("primary-a"), handler) == "ok"
@@ -153,3 +153,27 @@ async def test_async_path_trips_and_skips():
     order.clear()
     assert await mw.awrap_model_call(_Req(_Model("primary")), h) == "cloud"
     assert order == ["cloud"]
+
+
+def test_local_queue_timeout_does_not_trip():
+    """GatewayQueueTimeout is a TimeoutError, but it means our own in-flight queue is
+    congested, not that the primary is unavailable (review on #5258)."""
+    from graph.llm_limiter import GatewayQueueTimeout
+
+    mw = ObservableModelFallbackMiddleware(_Model("cloud"))
+    order: list[str] = []
+    h = _handler(order, primary_exc=GatewayQueueTimeout("protolabs/smart", 300.0, 4))
+    mw.wrap_model_call(_Req(_Model("primary")), h)
+    mw.wrap_model_call(_Req(_Model("primary")), h)
+    assert order == ["primary", "cloud", "primary", "cloud"]
+    assert agent._breaker == {}
+
+
+def test_sdk_timeout_trips():
+    import httpx
+    import openai
+
+    exc = openai.APITimeoutError(request=httpx.Request("POST", "http://gateway/v1/chat/completions"))
+    mw = ObservableModelFallbackMiddleware(_Model("cloud"))
+    mw.wrap_model_call(_Req(_Model("primary")), _handler([], primary_exc=exc))
+    assert "primary" in agent._breaker

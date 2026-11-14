@@ -117,7 +117,10 @@ _breaker: dict[str, tuple[float, float, BaseException]] = {}  # name -> (open_un
 
 
 def _unavailable_errors() -> tuple[type[BaseException], ...]:
-    errors: tuple[type[BaseException], ...] = (*RETRYABLE_STREAM_ERRORS, TimeoutError)
+    # NOT bare TimeoutError: GatewayQueueTimeout subclasses it and means OUR in-flight
+    # queue is congested, not that the primary is down (review on #5258). The stall and
+    # SDK timeouts that do mean "unreachable" are named here explicitly.
+    errors: tuple[type[BaseException], ...] = tuple(RETRYABLE_STREAM_ERRORS)
     try:  # pragma: no cover - trivial import guard
         import openai
 
@@ -133,7 +136,9 @@ _UNAVAILABLE_ERRORS = _unavailable_errors()
 def _is_unavailable(exc: BaseException) -> bool:
     """The primary could not be REACHED or went silent, as opposed to refusing the request
     (4xx, quota 429, context overflow), which another call to it may well pass."""
-    return isinstance(exc, _UNAVAILABLE_ERRORS)
+    from graph.llm_limiter import GatewayQueueTimeout
+
+    return isinstance(exc, _UNAVAILABLE_ERRORS) and not isinstance(exc, GatewayQueueTimeout)
 
 
 def _breaker_key(model) -> str:
