@@ -891,6 +891,72 @@ def test_conversations_lists_non_chat_and_excludes_reserved_and_private(monkeypa
     assert [r["session_id"] for r in body["conversations"]] == ["conv-keep"]
 
 
+def test_conversations_rows_list_open_tasks_once_per_request(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    import runtime.state as rs
+    from tasks.store import TaskStore
+
+    engine = _seeded_conversations_engine(tmp_path, "bound-tasks", [
+        {"id": str(i), "context_id": sid, "state": "TASK_STATE_COMPLETED", "at": _recent(i)}
+        for i, sid in enumerate(("conv-work", "conv-empty", "conv-other"), start=1)
+    ])
+    store = TaskStore(str(tmp_path / "issues.db"))
+    first = store.create("First", session_id="conv-work")
+    second = store.create("Second", session_id="conv-work")
+    second = store.update(second["id"], status="in_progress")
+    closed = store.create("Finished", session_id="conv-work")
+    store.close(closed["id"])
+    other = store.create("Other thread", session_id="conv-other")
+    store.create("Unbound")
+    read = Mock(wraps=store.list)
+    monkeypatch.setattr(store, "list", read)
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine)
+    monkeypatch.setattr(rs.STATE, "tasks_store", store)
+
+    def rows():
+        response = client.get("/api/conversations")
+        assert response.status_code == 200
+        return {row["session_id"]: row for row in response.json()["conversations"]}
+
+    result = rows()
+    assert result["conv-work"]["tasks"] == [
+        {key: task[key] for key in ("id", "title", "status")} for task in (first, second)
+    ]
+    assert result["conv-other"]["tasks"] == [
+        {key: other[key] for key in ("id", "title", "status")}
+    ]
+    assert "tasks" not in result["conv-empty"]
+    read.assert_called_once_with(include_closed=False)
+
+    store.close(first["id"])
+    store.close(second["id"])
+    read.reset_mock()
+    assert "tasks" not in rows()["conv-work"]
+    read.assert_called_once_with(include_closed=False)
+
+
+@pytest.mark.parametrize("unavailable", ["missing", "failed"])
+def test_conversations_preserved_when_tasks_unavailable(monkeypatch, tmp_path, unavailable):
+    from unittest.mock import Mock
+
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(tmp_path, "unavailable-tasks", [
+        {"id": "1", "context_id": "conv-keep", "state": "TASK_STATE_COMPLETED", "at": _recent(1)}
+    ])
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine)
+    store = None if unavailable == "missing" else SimpleNamespace(list=Mock(side_effect=RuntimeError("offline")))
+    monkeypatch.setattr(rs.STATE, "tasks_store", store)
+    response = client.get("/api/conversations")
+    assert response.status_code == 200
+    (row,) = response.json()["conversations"]
+    assert row["session_id"] == "conv-keep"
+    assert "tasks" not in row
+
+
 def test_conversations_row_fields_group_and_origin_labels(monkeypatch, tmp_path):
     """r2 + r4: every row carries the documented fields; ``for_you`` follows
     caller_kind/on_behalf_of; a no-metadata thread is automated "From another agent"; the origin

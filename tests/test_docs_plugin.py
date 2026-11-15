@@ -199,9 +199,10 @@ def test_approved_work_consolidation_spec_and_navigation() -> None:
     import json
 
     spec = ROOT / "docs/design/work-consolidation.md"
-    # Approved base with the three authorized edits and verbatim v8 §10.
+    # Approved base with the three authorized edits, verbatim v8 §10,
+    # and the bd-35uwc instruction chip rename from "Told it" to "Instructions".
     assert hashlib.sha256(spec.read_bytes()).hexdigest() == (
-        "3aa4630830649e6a133fe9e91156610568d5dd324478c10a11f04959b038c93a"
+        "3b1a6c0c54df489e1261e3a0a91c56a95c8accafce06885b9a5531610474c62a"
     )
     previous = (ROOT / "docs/design/work-view.md").read_text(encoding="utf-8")
     assert previous.splitlines()[2] == (
