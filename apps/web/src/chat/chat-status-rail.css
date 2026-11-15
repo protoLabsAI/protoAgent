@@ -306,7 +306,9 @@
   color: var(--pl-color-fg-muted);
 }
 
-/* ── Needs you (S7): decision cards, one-line rows, neutral delivery/goal rows ───────── */
+/* ── Needs you (S7, S3a quiet frame): decision cards + the shared quiet rows (.chat-status-row)
+      for collapsed decisions, waiting tasks and undelivered pages; the stopped goal keeps its
+      own controls in the same frame ───────────────────────────────────────────────────────── */
 
 .chat-needs-you__card {
   display: flex;
@@ -314,37 +316,20 @@
   gap: var(--pl-space-1);
   padding: var(--pl-space-1) 0;
 }
-/* A collapsed decision: one full-width line — agent · question, then the age. */
-.chat-needs-you__row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--pl-space-2);
-  width: 100%;
-  min-width: 0;
-  padding: var(--pl-space-1) 0;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-  background: none;
-  border: 0;
-  border-bottom: 1px solid var(--pl-color-border);
-  cursor: pointer;
-}
-.chat-needs-you__row:hover .chat-status-details__title,
-.chat-needs-you__row:focus-visible .chat-status-details__title {
-  color: var(--pl-color-fg);
-}
 /* The ≥30-minute hint: muted information, never a warning callout. */
 .chat-needs-you__stale {
   margin: 0;
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
+/* A stopped goal keeps its Keep going / Drop the goal controls, so it is a quiet-framed row
+   (the goal title over the "Goal stopped" cue, then the actions), not a navigable button. Its
+   padding matches the .chat-status-row quiet rows so the list reads as one column. */
 .chat-needs-you__goal {
-  flex-wrap: wrap;
-}
-.chat-needs-you__task {
-  flex-wrap: wrap;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-0_5);
+  padding: var(--pl-space-1) var(--pl-space-1_5);
 }
 .chat-needs-you__goal-actions {
   display: flex;
@@ -379,11 +364,11 @@
   .chat-status-details__actions .pl-btn {
     width: 100%;
   }
-  /* Needs you on the phone: collapsed decision rows keep the 48px floor, and the goal's
-     md actions stack full width like every other action row in the sheet. */
-  .chat-needs-you__row {
+  /* Needs you on the phone: the quiet decision/task/page rows take the 48px floor from
+     .chat-status-row above; the stopped goal keeps it too, and its md actions stack full
+     width like every other action row in the sheet. */
+  .chat-needs-you__goal {
     min-height: 48px;
-    align-items: center;
   }
   .chat-needs-you__goal-actions {
     flex-direction: column;
@@ -391,10 +376,6 @@
     width: 100%;
   }
   .chat-needs-you__goal-actions .pl-btn {
-    width: 100%;
-  }
-  /* A waiting job's Open chat stacks full width too, meeting the touch floor. */
-  .chat-needs-you__task .pl-btn {
     width: 100%;
   }
 }

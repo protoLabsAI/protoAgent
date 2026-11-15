@@ -1,12 +1,14 @@
-import { act } from "react";
-import { createRoot } from "react-dom/client";
+import { act, type ReactElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NeedsYouSection } from "./NeedsYouSection";
 import { openWorkGroup } from "./ChatStatusRail";
 import { WorkView } from "../work/WorkView";
 import type { WorkItem, WorkItems, WorkSource } from "../work/useWorkItems";
+import type { GroupableWorkItem } from "../work/tone";
+import type { DecisionRow } from "../lib/api/decisions";
 import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
 import { useUI } from "../state/uiStore";
 import { api } from "../lib/api";
@@ -21,6 +23,7 @@ afterEach(() => {
   endThisChatVisit();
   useUI.setState({ surfaceStates: {}, surfaceModal: null });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   openChat.mockClear();
 });
 
@@ -52,7 +55,7 @@ it.each(["agent-handoff", undefined])("opens the shared answer detail for source
         <WorkView frame="rail" sessionId="unrelated-chat" />
       </ToastProvider></QueryClientProvider>,
     ));
-    await act(async () => host.querySelector<HTMLButtonElement>(".chat-needs-you__task button")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>(".chat-needs-you .chat-status-row")!.click());
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(onNavigate).toHaveBeenCalledOnce();
     const detail = host.querySelector(".work-detail")!;
@@ -71,4 +74,147 @@ it.each(["agent-handoff", undefined])("opens the shared answer detail for source
     client.clear();
     host.remove();
   }
+});
+
+// ── S3a: the body restyled into the §1 quiet frame ────────────────────────────────────────────
+describe("the quiet-frame rows (S3a)", () => {
+  // Only the fields NeedsYouSection / DecisionCard read; the rest read as absent.
+  const decisionRow = (id: string, extra: Partial<DecisionRow> = {}): DecisionRow => ({
+    id, session_id: `chat-${id}`, agent: "designSystem", question: `Decide ${id}`, state: "pending",
+    options: [{ id: "a", label: "Go", recommended: true }, { id: "b", label: "Wait" }],
+    created_at: new Date().toISOString(), default_action_text: "carry on without this step", ...extra,
+  } as DecisionRow);
+  const decisionItem = (r: DecisionRow): GroupableWorkItem => ({
+    kind: "decision", id: r.id, status: "needs-you", title: r.question, meta: "", sessionId: r.session_id, raw: r,
+  });
+  const deliveryItem = (id: number): GroupableWorkItem => ({
+    kind: "delivery", id: String(id), status: "needs-you", title: `Page ${id}`, meta: "mail",
+    raw: { id, text: `Page ${id}`, source: "slack", priority: "now", delivered_at: null, needs_human: true } as never,
+  });
+  const goalItem = (id: string): GroupableWorkItem => ({
+    kind: "goal", id, status: "failed", title: `Goal ${id}`, meta: "", sessionId: id,
+    raw: { session_id: id, status: "exhausted" } as never,
+  });
+  const waitingTask = (id: string, agoMin: number): GroupableWorkItem => ({
+    kind: "task", id, status: "needs-you", title: "Ship the release", meta: "", sessionId: "other-chat",
+    raw: { id, title: "Ship the release", status: "waiting",
+      updated_at: new Date(Date.now() - agoMin * 60_000).toISOString() } as never,
+  });
+
+  const findButton = (scope: ParentNode, match: (text: string) => boolean) =>
+    [...scope.querySelectorAll("button")].find((b) => match(b.textContent ?? ""));
+  const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  type SectionProps = Parameters<typeof NeedsYouSection>[0];
+  async function renderSection(overrides: Partial<SectionProps> & { items: GroupableWorkItem[] }) {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root: Root = createRoot(host);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const props: SectionProps = {
+      held: new Map<string, DecisionRow>(), onHold: vi.fn(), records: {}, answer: vi.fn(),
+      mobile: false, onNavigate: vi.fn(), openWork: vi.fn(), goalsRetry: vi.fn(), ...overrides,
+    };
+    await act(async () => root.render(
+      <QueryClientProvider client={client}><ToastProvider>
+        <NeedsYouSection {...props} />
+      </ToastProvider></QueryClientProvider>,
+    ));
+    return {
+      host,
+      section: () => host.querySelector<HTMLElement>(".chat-needs-you")!,
+      cleanup: async () => { await act(async () => root.unmount()); client.clear(); host.remove(); },
+    };
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    Element.prototype.hasPointerCapture = Element.prototype.hasPointerCapture ?? (() => false);
+    Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
+  });
+
+  // r1
+  it("renders the first pending decision as a DecisionCard whose answer routes through the store", async () => {
+    const answer = vi.fn().mockResolvedValue({ answered_elsewhere: false, resumed: true,
+      decision: decisionRow("q1", { state: "answered", answer: "a", answer_label: "Go" }) });
+    const { section, cleanup } = await renderSection({ items: [decisionItem(decisionRow("q1"))], answer });
+    try {
+      expect(section().querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(1);
+      expect(section().querySelector(".chat-status-row")).toBeNull(); // the sole decision is the expanded card
+      await act(async () => findButton(section(), (t) => t.startsWith("Go"))!.click());
+      await flush();
+      expect(answer).toHaveBeenCalledWith("q1", "a"); // the shared store's answer, not a fork
+    } finally { await cleanup(); }
+  });
+
+  // r2
+  it("renders a second decision as a quiet '<agent> · asked <age>' row that expands into a card", async () => {
+    const items = [decisionItem(decisionRow("q1")), decisionItem(decisionRow("q2"))];
+    const { section, cleanup } = await renderSection({ items });
+    try {
+      expect(section().querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(1);
+      const row = section().querySelector<HTMLButtonElement>(".chat-status-row[aria-expanded]")!;
+      expect(row.getAttribute("aria-expanded")).toBe("false");
+      expect(row.querySelector(".chat-status-row__text")!.textContent).toBe("Decide q2");
+      expect(row.querySelector(".chat-status-row__cue")!.textContent).toContain("designSystem · asked");
+      await act(async () => row.click());
+      expect(section().querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(2);
+    } finally { await cleanup(); }
+  });
+
+  // r3
+  it("renders a waiting task as a quiet row that opens its Work detail + closes the panel, with no per-row button", async () => {
+    const onNavigate = vi.fn();
+    const openWork = vi.fn();
+    const { section, cleanup } = await renderSection({ items: [waitingTask("t1", 5)], onNavigate, openWork });
+    try {
+      const li = section().querySelector("li")!;
+      const row = li.querySelector<HTMLButtonElement>(".chat-status-row")!;
+      expect(li.querySelectorAll("button")).toHaveLength(1); // the row IS the control — no "Open in Work" per row
+      expect(row.querySelector(".chat-status-row__text")!.textContent).toBe("Ship the release");
+      expect(row.querySelector(".chat-status-row__cue")!.textContent).toBe("Waiting on you · 5 min ago");
+      await act(async () => row.click());
+      expect(onNavigate).toHaveBeenCalledOnce(); // closes the panel
+      expect(openWork).toHaveBeenCalledWith("task:t1");
+    } finally { await cleanup(); }
+  });
+
+  // r4
+  it("renders an undelivered page as a quiet row that opens the Needs you group", async () => {
+    const onNavigate = vi.fn();
+    const openWork = vi.fn();
+    const { section, cleanup } = await renderSection({ items: [deliveryItem(71)], onNavigate, openWork });
+    try {
+      const row = section().querySelector<HTMLButtonElement>(".chat-status-row")!;
+      expect(row.querySelector(".chat-status-row__text")!.textContent).toBe("Page 71");
+      expect(row.querySelector(".chat-status-row__cue")!.textContent).toBe("slack couldn't be delivered");
+      await act(async () => row.click());
+      expect(onNavigate).toHaveBeenCalledOnce();
+      expect(openWork).toHaveBeenCalledWith(); // no itemId → the Needs you group
+    } finally { await cleanup(); }
+  });
+
+  // r4
+  it("keeps the stopped goal's Keep going / Drop the goal controls with the inline confirm", async () => {
+    const goalsRetry = vi.fn();
+    vi.spyOn(api, "rearmGoal").mockResolvedValue({ message: "ok" } as never);
+    vi.spyOn(api, "clearGoal").mockResolvedValue({} as never);
+    const { section, cleanup } = await renderSection({ items: [goalItem("g1")], goalsRetry });
+    try {
+      const goal = section().querySelector<HTMLElement>(".chat-needs-you__goal")!;
+      expect(goal.querySelector(".chat-status-row__text")!.textContent).toBe("Goal g1");
+      expect(goal.querySelector(".chat-status-row__cue")!.textContent).toBe("Goal stopped");
+      await act(async () => findButton(goal, (t) => t === "Keep going")!.click());
+      await flush();
+      expect(api.rearmGoal).toHaveBeenCalledWith("g1", {});
+      expect(goalsRetry).toHaveBeenCalledTimes(1);
+      await act(async () => findButton(goal, (t) => t === "Drop the goal")!.click());
+      expect(api.clearGoal).not.toHaveBeenCalled(); // the first click only arms the confirm
+      expect(goal.textContent).toContain("Drop this goal?");
+      await act(async () => findButton(goal, (t) => t === "Drop the goal")!.click());
+      await flush();
+      expect(api.clearGoal).toHaveBeenCalledWith("g1", false);
+      expect(goalsRetry).toHaveBeenCalledTimes(2);
+    } finally { await cleanup(); }
+  });
 });

@@ -1,16 +1,18 @@
-/** The "Needs you · N" section (work consolidation v2 S7) — ALWAYS the grouped details
- *  panel's first section (ChatStatusRail hosts it). Decisions reuse the shared DecisionCard +
- *  decisions store (no forked answer logic): the first one expanded, the rest one-line
- *  agent/question/age rows that expand on select. A card whose interaction settled it is HELD
- *  by the host until the panel closes (the lifted `held` map), while the heading count stays
- *  pending-only. Undelivered human-needed pages and stopped goals are neutral rows — never
- *  forced into DecisionCards — the goals with their existing Keep going / Drop the goal
- *  controls (work/sections/goals). */
+/** The "Needs you · N" section (work consolidation v2 S7, restyled into the §1 quiet frame by
+ *  S3a) — ALWAYS the grouped details panel's first section (ChatStatusRail hosts it). Decisions
+ *  reuse the shared DecisionCard + decisions store (no forked answer logic): the first one
+ *  expanded, the rest quiet rows (the question over a "<agent> · asked <age>" line) that expand
+ *  into a card on select. A card whose interaction settled it is HELD by the host until the
+ *  panel closes (the lifted `held` map), while the heading count stays pending-only. Waiting
+ *  tasks, undelivered human-needed pages and stopped goals are quiet rows too, reusing the S2b
+ *  quiet-row button/styles: a waiting task opens its Work detail, a page opens the Needs you
+ *  group, and a stopped goal keeps its Keep going / Drop the goal controls (work/sections/goals).
+ *  No status dots, chevrons or dividers on any row. */
 import { useState } from "react";
 import { Button } from "@protolabsai/ui/primitives";
 
 import { api } from "../lib/api";
-import type { GoalState, InboxItem } from "../lib/types";
+import type { GoalState, InboxItem, Task } from "../lib/types";
 import type { AnswerResult, DecisionRow } from "../lib/api/decisions";
 import { DecisionCard } from "../decisions/DecisionCard";
 import { openSourceChat } from "../work/openSourceChat";
@@ -98,68 +100,100 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
         Needs you{count > 0 && <span aria-hidden="true"> · {count}</span>}
       </h2>
       {note && <p className="chat-status-details__problem" role="presentation">{note}</p>}
-      {rows.map((row, index) =>
-        index === 0 || expanded.has(row.id) || held.has(row.id) ? (
-          <div key={row.id} className="chat-needs-you__card">
-            <DecisionCard
-              decision={row}
-              actionSize={size}
-              onAnswer={(optionId) => answer(row.id, optionId)}
-              onHold={onHold}
-              onOpenChat={(d) => void openChat(d, false)}
-              onReplyInChat={(d) => void openChat(d, true)}
-              chatTitle={chatTitle(row)}
-            />
-            {row.state === "pending" && decisionStale(row.created_at) && (
-              <p className="chat-needs-you__stale">Still waiting — asked over 30 minutes ago.</p>
-            )}
-          </div>
-        ) : (
+      {rows.map((row, index) => {
+        // The first pending decision stays the expanded DecisionCard; so does any the operator
+        // has opened (expanded) or interacted with (held, §5.5). The rest are quiet rows.
+        if (index === 0 || expanded.has(row.id) || held.has(row.id)) {
+          return (
+            <div key={row.id} className="chat-needs-you__card">
+              <DecisionCard
+                decision={row}
+                actionSize={size}
+                onAnswer={(optionId) => answer(row.id, optionId)}
+                onHold={onHold}
+                onOpenChat={(d) => void openChat(d, false)}
+                onReplyInChat={(d) => void openChat(d, true)}
+                chatTitle={chatTitle(row)}
+              />
+              {row.state === "pending" && decisionStale(row.created_at) && (
+                <p className="chat-needs-you__stale">Still waiting — asked over 30 minutes ago.</p>
+              )}
+            </div>
+          );
+        }
+        // A collapsed decision (D4): the question over a quiet "<agent> · asked <age>" line.
+        // Selecting it expands this same row into a DecisionCard in place — it never navigates.
+        const asked = relTime(row.created_at).text;
+        const cue = [row.agent || "An agent", asked && `asked ${asked}`].filter(Boolean).join(" · ");
+        return (
           <button
             key={row.id}
             type="button"
-            className="chat-needs-you__row"
+            className="chat-status-row"
             aria-expanded={false}
+            title={row.question}
+            aria-label={[row.question, cue].filter(Boolean).join(". ")}
             onClick={() => setExpanded((prev) => new Set(prev).add(row.id))}
           >
-            <span className="chat-status-details__title" title={row.question}>
-              <strong>{row.agent || "An agent"}</strong> · {row.question}
-            </span>
-            <span className="chat-status-details__meta" title={relTime(row.created_at).tooltip}>
-              {relTime(row.created_at).text}
-            </span>
+            <span className="chat-status-row__text">{row.question}</span>
+            {cue ? <span className="chat-status-row__cue">{cue}</span> : null}
           </button>
-        ))}
-      {(deliveries.length > 0 || goals.length > 0 || tasks.length > 0) && (
-        <ul className="chat-status-details__rows">
-          {tasks.map((item) => (
-            <li key={`task:${item.id}`} className="chat-status-details__row chat-needs-you__task">
-              <span className="chat-status-details__title" title={item.title}>
-                Waiting on you: {item.title}
-              </span>
-              <Button size={size} variant="ghost" onClick={() => {
-                onNavigate();
-                openWork(`task:${item.id}`);
-              }}>
-                Open in Work
-              </Button>
-            </li>
-          ))}
-          {deliveries.map((item) => (
-            <li key={`delivery:${item.id}`} className="chat-status-details__row">
-              <span className="chat-status-details__title" title={item.title}>{item.title}</span>
-              <span className="chat-status-details__meta">
-                {[(item.raw as InboxItem).source, "couldn't be delivered"].filter(Boolean).join(" · ")}
-              </span>
-            </li>
-          ))}
+        );
+      })}
+      {(tasks.length > 0 || deliveries.length > 0 || goals.length > 0) && (
+        <ul className="chat-status-details__rows chat-status-group__rows">
+          {tasks.map((item) => {
+            // A `waiting` task (ADR 0129 Q1): its row closes the panel and opens the task's Work
+            // detail (openWork("task:<id>")) to answer in place — no per-row action button.
+            const age = relTime((item.raw as Task).updated_at ?? "").text;
+            const cue = ["Waiting on you", age].filter(Boolean).join(" · ");
+            return (
+              <li key={`task:${item.id}`}>
+                <button
+                  type="button"
+                  className="chat-status-row"
+                  title={item.title}
+                  aria-label={[item.title, cue, "Open in Work"].filter(Boolean).join(". ")}
+                  onClick={() => {
+                    onNavigate();
+                    openWork(`task:${item.id}`);
+                  }}
+                >
+                  <span className="chat-status-row__text">{item.title}</span>
+                  <span className="chat-status-row__cue">{cue}</span>
+                </button>
+              </li>
+            );
+          })}
+          {deliveries.map((item) => {
+            // An undelivered human-needed page: its row opens the Needs you group in Work.
+            const cue = [(item.raw as InboxItem).source, "couldn't be delivered"].filter(Boolean).join(" ");
+            return (
+              <li key={`delivery:${item.id}`}>
+                <button
+                  type="button"
+                  className="chat-status-row"
+                  title={item.title}
+                  aria-label={[item.title, cue, "Open in Work"].filter(Boolean).join(". ")}
+                  onClick={() => {
+                    onNavigate();
+                    openWork();
+                  }}
+                >
+                  <span className="chat-status-row__text">{item.title}</span>
+                  <span className="chat-status-row__cue">{cue}</span>
+                </button>
+              </li>
+            );
+          })}
           {goals.map((item) => {
+            // A stopped goal keeps its own Keep going / Drop the goal controls (with the inline
+            // confirm), so it is a quiet-framed row, not a navigable button.
             const goal = item.raw as GoalState;
             return (
-              <li key={`goal:${item.id}`} className="chat-status-details__row chat-needs-you__goal">
-                <span className="chat-status-details__title" title={item.title}>
-                  <strong>Goal stopped</strong> · {item.title}
-                </span>
+              <li key={`goal:${item.id}`} className="chat-needs-you__goal">
+                <span className="chat-status-row__text">{item.title}</span>
+                <span className="chat-status-row__cue">Goal stopped</span>
                 <span className="chat-needs-you__goal-actions">
                   {confirmDrop === item.id ? (
                     <>
