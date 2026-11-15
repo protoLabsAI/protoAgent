@@ -351,12 +351,17 @@ def _build_delegate_to(registry: DelegateRegistry):
             )
         from graph.delegate_progress import progress_sink
 
+        from . import conversations
+
         try:
             # A coding delegate reports its live progress into this delegation's ask row
             # (#3979) — a LangChain custom event under THIS tool's run, which the turn
             # stream keys to the row by run id. Foreground only: the background branch
             # above returned already, and reports through its job instead.
-            with progress_sink(_tool_progress_sink()):
+            # The ask summary → a2a thread title (#5283) rides a ContextVar read by
+            # `registry.dispatch`, like the origin session and project scope, so it reaches
+            # the send path through host-free `graph/mention_op` too.
+            with progress_sink(_tool_progress_sink()), conversations.delegate_summary(summary):
                 return await _dispatch_into_room(
                     registry,
                     target,
@@ -700,10 +705,15 @@ async def _spawn_background_delegation(
     # Only ACP consumes this policy; explicit task resumes retain their identity.
     if registry.get(target).type == "acp" and not resume_task_id:
         extra["fresh_session"] = True if fresh_session is None else fresh_session
+    # The ask summary → a2a thread title (#5283) rides a ContextVar read by
+    # `registry.dispatch`, the same seam the origin session and project scope use.
+    from . import conversations
+
     if mgr is None:
-        return await registry.dispatch(
-            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
-        )
+        with conversations.delegate_summary(summary):
+            return await registry.dispatch(
+                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
+            )
 
     # In-flight duplicate guard (protoAgent#4832). A managed-git coding job keeps its own
     # claim-based dedup in ``registry.dispatch`` (so ``item_id`` is exempt here), and a
@@ -745,10 +755,13 @@ async def _spawn_background_delegation(
             # one event loop). timeout rides down the same way so a per-call override
             # holds for a detached long-running coding job too. The resolved project scope is
             # captured HERE, at spawn — the job runs in the project it was started for even if
-            # the registry changes before it finishes.
-            return await registry.dispatch(
-                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
-            )
+            # the registry changes before it finishes. The ask summary → a2a title rides the
+            # ContextVar set inside THIS detached task (#5283), so it survives the context copy.
+            with conversations.delegate_summary(summary):
+                return await registry.dispatch(
+                    target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout,
+                    **extra
+                )
         finally:
             # Finished, failed or stopped (a cancel surfaces as CancelledError through here)
             # ⇒ free the in-flight key promptly so an identical re-send is accepted again.

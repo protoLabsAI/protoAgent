@@ -85,6 +85,7 @@ class DelegateRegistry:
         timeout: float | None = None,
         project=None,
         fresh_session: bool = False,
+        summary: str = "",
     ) -> str:
         """Dispatch ``query`` to the named delegate.
 
@@ -123,6 +124,9 @@ class DelegateRegistry:
         # Explicit wins; otherwise the room's ``recording_session`` block bound one on a
         # ContextVar because it reaches here through host-free code that can't carry it.
         origin_session_id = str(origin_session_id or "").strip() or conversations.current_origin_session()
+        # Same seam for ``delegate_to``'s ask summary → the a2a thread title (#5283): explicit
+        # arg wins, else the ``delegate_summary`` block the room path bound on a ContextVar.
+        summary = str(summary or "").strip() or conversations.current_summary()
         permissions = str(permissions or "").strip().lower()
         if conversation_key and d.type not in _CONVERSATIONAL_TYPES:
             raise DelegateError(
@@ -206,6 +210,9 @@ class DelegateRegistry:
                 reply = await ADAPTERS[d.type].dispatch(
                     d, query, timeout=timeout, item_id=item_id, resume_task_id=resume_task_id,
                     **({"fresh_session": True} if fresh_session and d.type == "acp" else {}),
+                    # Only the a2a adapter builds outgoing provenance; the summary rides it as
+                    # the thread title. Other adapter signatures don't take it.
+                    **({"summary": summary} if summary and d.type == "a2a" else {}),
                 )
             except asyncio.CancelledError:
                 raise
