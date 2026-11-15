@@ -23,6 +23,8 @@ import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./
 import { openTranscriptStore, withinMs, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
+import { saveDraft } from "./scratchState";
+import { setStage as setConversationsStage } from "./conversations-store";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
@@ -375,6 +377,19 @@ function titleFromMessages(messages: ChatMessage[]) {
   const first = messages.find((message) => message.role === "user");
   const text = first?.content.trim() || attachmentDisplay("", first?.attachments?.map((a) => a.name) ?? []);
   return sessionTitleFromText(text);
+}
+
+/** The composer draft "Continue in a new chat" pre-fills (other-conversations §4.5): a human lead
+ *  the operator finishes, then a HIDDEN reference to the source context id so the agent can pull
+ *  the original thread with `recall_session`. The reference rides in the draft text itself as an
+ *  HTML comment — the same machine-note shape the memory digest header uses, and the only place to
+ *  carry it: the composer draft is a plain string with no separate hidden-context wire, so this is
+ *  how the id reaches the agent when the operator sends. Lead-first so the draft reads as the
+ *  prompt it is, with the id tucked below. */
+export function continueConversationDraft(opts: { title: string; origin: string; contextId: string }): string {
+  const lead = `About the conversation "${opts.title}" (${opts.origin}): `;
+  const ref = `\n\n<!-- Continuing session "${opts.contextId}"; read its full transcript with recall_session(session_id="${opts.contextId}"). -->`;
+  return lead + ref;
 }
 
 function createSession(opts: { incognito?: boolean } = {}): ChatSession {
@@ -1589,6 +1604,39 @@ export const chatStore = {
         ),
       };
     });
+    return session;
+  },
+
+  /** "Continue in a new chat" from the read-only Conversations reader (other-conversations §4.5).
+   *  Opens and selects a FRESH `chat-` tab (never reusing a blank — each continue is about a
+   *  specific thread, and a fresh tab also avoids racing a draft into an already-mounted slot),
+   *  pre-fills its composer with a human lead plus a hidden `recall_session` reference to
+   *  `contextId`, and switches the Conversations stage back to `chat` so the new tab is actually
+   *  shown (the stage store doesn't watch session changes — the same reason
+   *  ChatSurface.createChatSession leaves the stage first). Nothing is sent and no toast fires
+   *  (§3.8): the opened, selected, pre-filled tab IS the feedback — the operator edits and sends.
+   *  The reserved Conversations stage id is never a session id: `createSession` mints a `chat-` id.
+   *  Returns the new session. */
+  continueConversation({ contextId, title, origin }: { contextId: string; title: string; origin: string }): ChatSession {
+    const session = createSession();
+    // Seed the draft BEFORE the slot mounts: ChatSessionSlot reads loadDraft(sessionId) into its
+    // composer state on mount, so writing scratch state here is what the new tab opens showing.
+    saveDraft(session.id, continueConversationDraft({ title, origin, contextId }));
+    setState((current) => {
+      // New tabs append to the RIGHT; cap at MAX_SESSIONS by dropping the oldest (left).
+      const sessions = [...current.sessions, session].slice(-MAX_SESSIONS);
+      return {
+        ...current,
+        sessions,
+        currentSessionId: session.id,
+        activeSessions: ensureActiveSessions(
+          { ...current, sessions, currentSessionId: session.id },
+          session.id,
+        ),
+      };
+    });
+    // Leave the Conversations tab for the new chat (the stage lives in a separate store, §4.7).
+    setConversationsStage("chat");
     return session;
   },
 

@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
     chatSessionTurns: vi.fn(),
     listConversations: vi.fn(),
     openWorkGroup: vi.fn(),
+    continueConversation: vi.fn(),
     listeners: {} as Record<string, (d: Record<string, unknown>) => void>,
   };
 });
@@ -54,6 +55,9 @@ vi.mock("../lib/events", () => ({
 }));
 // Keep the "Answer in Needs you" navigation a seam and the prose synchronous.
 vi.mock("./ChatStatusRail", () => ({ openWorkGroup: mocks.openWorkGroup }));
+// ConversationsPane wires Continue → chatStore.continueConversation; stub it so the pane test
+// asserts the call without pulling the whole chat-store module graph into this suite.
+vi.mock("./chat-store", () => ({ chatStore: { continueConversation: mocks.continueConversation } }));
 vi.mock("./Markdown", () => ({ Markdown: ({ children }: { children: string }) => h("p", null, children) }));
 vi.mock("../work/tone", () => ({ relTime: () => ({ text: "2 min ago", tooltip: "12 Nov at 22:54" }) }));
 
@@ -142,12 +146,13 @@ describe("ConversationReader header, turns and footer", () => {
     expect(buttons.some((t) => t.includes("Copy link"))).toBe(true);
   });
 
-  it("Continue in a new chat calls the onContinue seam (C4 wires it) (r2)", async () => {
+  it("Continue in a new chat hands the thread's id, title and origin to onContinue (C4, r2)", async () => {
     const onContinue = vi.fn();
-    await renderReader({ onContinue });
+    await renderReader({ onContinue, threadId: "ctx-1", row: row({ title: "A delegation", origin_label: "From Claude Code" }) });
     const cont = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Continue in a new chat"))!;
     await act(async () => cont.click());
     expect(onContinue).toHaveBeenCalledTimes(1);
+    expect(onContinue).toHaveBeenCalledWith({ contextId: "ctx-1", title: "A delegation", origin: "From Claude Code" });
   });
 
   it("Copy link copies the thread's hash route (r2)", async () => {
@@ -248,5 +253,23 @@ describe("ConversationsPane opening, remembering and returning to a thread (r4)"
     await flush();
     expect(host.querySelector(".conversations-list")).toBeNull();
     expect(host.querySelector(".conversation-reader__title")?.textContent).toBe("A delegation");
+  });
+
+  it("Continue in a new chat drives chatStore.continueConversation with the open thread (r3)", async () => {
+    mocks.listConversations.mockResolvedValue({
+      conversations: [row({ session_id: "ctx-1", title: "A delegation", origin_label: "From Claude Code" })],
+    });
+    await renderPane();
+
+    await act(async () => host.querySelector<HTMLButtonElement>('.conversations-row__btn[data-row-id="ctx-1"]')!.click());
+    await flush();
+    const cont = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Continue in a new chat"))!;
+    await act(async () => cont.click());
+
+    expect(mocks.continueConversation).toHaveBeenCalledWith({
+      contextId: "ctx-1",
+      title: "A delegation",
+      origin: "From Claude Code",
+    });
   });
 });

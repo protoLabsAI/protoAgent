@@ -5,6 +5,7 @@ import { Badge, Button, Eyebrow, type Status } from "@protolabsai/ui/primitives"
 import { Tooltip } from "@protolabsai/ui/overlays";
 
 import { relTime } from "../work/tone";
+import { chatStore } from "./chat-store";
 import { ConversationReader } from "./ConversationReader";
 import type { ConversationRow } from "./conversations-store";
 import { openThread, retry, useConversations } from "./conversations-store";
@@ -103,9 +104,17 @@ export function ConversationsPane({ agentName }: { agentName: string }) {
   }, [openThreadId]);
 
   // An open thread shows the read-only reader in the same pane (§3.4); the tab stays selected.
+  // Continue in a new chat (§4.5) opens a pre-filled chat tab and leaves the Conversations stage.
   if (openThreadId) {
     const openRow = conv.rows.find((r) => r.session_id === openThreadId);
-    return <ConversationReader threadId={openThreadId} row={openRow} agentName={agentName} />;
+    return (
+      <ConversationReader
+        threadId={openThreadId}
+        row={openRow}
+        agentName={agentName}
+        onContinue={(args) => chatStore.continueConversation(args)}
+      />
+    );
   }
 
   return (

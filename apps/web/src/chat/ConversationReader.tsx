@@ -87,8 +87,9 @@ export function ConversationReader({
    *  it — which it does whenever a row was clicked to open the reader. */
   row?: ConversationRow;
   agentName: string;
-  /** Continue in a new chat (§4.5) — wired in slice C4; a no-op until then. */
-  onContinue?: () => void;
+  /** Continue in a new chat (§4.5): hands the open thread's id, title and origin to the caller,
+   *  which opens a pre-filled `chat-` tab via `chatStore.continueConversation`. */
+  onContinue?: (args: { contextId: string; title: string; origin: string }) => void;
 }) {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -228,7 +229,11 @@ export function ConversationReader({
             You can&rsquo;t type here. Replies go to a new chat, so {caller} isn&rsquo;t interrupted.
           </p>
           <div className="conversation-reader__footer-actions">
-            <Button variant="primary" size="sm" onClick={() => onContinue?.()}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => onContinue?.({ contextId: threadId, title, origin: row?.origin_label ?? caller })}
+            >
               Continue in a new chat
             </Button>
             <Button variant="ghost" size="sm" onClick={copyLink}>
