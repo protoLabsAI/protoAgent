@@ -58,6 +58,9 @@ _FRAGMENT_RE = re.compile(r"^(?P<stem>.+)\.(?P<kind>[a-z]+)\.md$")
 _STEM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # A reference in a lead: an issue or PR number, in any spelling (`(#3285)`, `(v0.2.0, #3286)`).
 _REF_RE = re.compile(r"#\d+")
+# The parenthetical that CARRIES a ref in a lead — `(#3285)`, `(v0.2.0, #3286)`. `restamp_pr_ref`
+# strips these before re-stamping the adding PR, so a guessed/issue number is replaced, not doubled.
+_REF_GROUP_RE = re.compile(r"\s*\([^()]*#\d+[^()]*\)")
 # What people type while the PR number doesn't exist yet. Left in, the release would stamp
 # the real number NEXT to it (`(#NNNN) (#4880)`), so the gate rejects it.
 _PLACEHOLDER_RE = re.compile(r"#(?:N+|X+|TBD|PR|\?+)(?!\w)", re.IGNORECASE)
@@ -317,6 +320,18 @@ def lead_needs_ref(body: str) -> bool:
     return any(not _REF_RE.search(m.group(2)) for m in _BULLET_LEAD_RE.finditer(body))
 
 
+def _lead_with_ref(prefix: str, text: str, suffix: str, pr: int) -> str:
+    """Rebuild a bold lead with ``(#pr)`` before its closing punctuation.
+
+    ``**Fix the thing.**`` → ``**Fix the thing (#42).**`` — the same place the old
+    hand-written rule put it. Shared by :func:`stamp_pr_ref` and :func:`restamp_pr_ref`.
+    """
+    core, trail = text.rstrip(), ""
+    if core and core[-1] in ".!?:;":
+        core, trail = core[:-1].rstrip(), core[-1]
+    return f"{prefix}{core} (#{pr}){trail}{suffix}"
+
+
 def stamp_pr_ref(body: str, pr: int) -> str:
     """Put ``(#pr)`` inside every top-level bold lead that names no ``#N`` yet (#4874).
 
@@ -330,12 +345,41 @@ def stamp_pr_ref(body: str, pr: int) -> str:
         lead = m.group(2)
         if _REF_RE.search(lead):
             return m.group(0)
-        core, trail = lead.rstrip(), ""
-        if core and core[-1] in ".!?:;":
-            core, trail = core[:-1].rstrip(), core[-1]
-        return f"{m.group(1)}{core} (#{pr}){trail}{m.group(3)}"
+        return _lead_with_ref(m.group(1), lead, m.group(3), pr)
 
     return _BULLET_LEAD_RE.sub(sub, body)
+
+
+def restamp_pr_ref(body: str, pr: int) -> tuple[str, list[str]]:
+    """Make every top-level bold lead cite exactly ``(#pr)``, the PR that ADDED the fragment.
+
+    Unlike :func:`stamp_pr_ref`, which only fills an empty lead, this also corrects a WRONG
+    one — the v0.242.0 slip (#5295), where a fragment's lead carried a guessed next-PR number
+    or its source issue and that number shipped because ``collate`` left any already-cited ref
+    alone. Per lead:
+
+    - names ``#pr`` already (possibly among other numbers): left untouched;
+    - names no ``#N``: ``(#pr)`` is stamped in, exactly like :func:`stamp_pr_ref`;
+    - names other numbers but not ``#pr``: its parenthetical ref group(s) are dropped and
+      ``(#pr)`` stamped in their canonical place.
+
+    Returns ``(new_body, dropped)`` where ``dropped`` lists every ``#N`` it replaced, so the
+    caller can warn about the numbers that were thrown away.
+    """
+    dropped: list[str] = []
+
+    def sub(m: re.Match[str]) -> str:
+        prefix, lead, suffix = m.group(1), m.group(2), m.group(3)
+        refs = _REF_RE.findall(lead)
+        if f"#{pr}" in refs:
+            return m.group(0)  # already cites the adding PR — leave the author's lead alone
+        if not refs:
+            return _lead_with_ref(prefix, lead, suffix, pr)  # empty lead: plain stamp
+        dropped.extend(refs)
+        cleaned = re.sub(r"\s{2,}", " ", _REF_GROUP_RE.sub("", lead)).strip()
+        return _lead_with_ref(prefix, cleaned, suffix, pr)
+
+    return _BULLET_LEAD_RE.sub(sub, body), list(dict.fromkeys(dropped))
 
 
 def pr_for_fragment(path: Path) -> int | None:
@@ -379,9 +423,12 @@ def read_fragments(
     hard error, not a silent drop: a fragment quietly filed under the wrong heading — or
     not filed at all — is exactly the release-notes-lie this whole gate exists to stop.
 
-    With ``resolve_pr`` (``collate`` passes :func:`pr_for_fragment`), a fragment whose bold
-    lead names no ``#N`` gets its PR number stamped in (:func:`stamp_pr_ref`). One it can't
-    resolve is kept as written, with a warning, rather than failing the release.
+    With ``resolve_pr`` (``collate`` passes :func:`pr_for_fragment`), the PR that ADDED each
+    fragment is resolved and :func:`restamp_pr_ref` makes its bold lead cite that PR: an empty
+    lead is stamped, and a lead citing the WRONG number (a guessed next-PR, or the source
+    issue — the v0.242.0 slip, #5295) has it replaced, with a ``::warning::`` naming the dropped
+    numbers. A fragment whose PR can't be resolved is kept as written (with a warning only when
+    its lead names no ``#N`` to fall back on), rather than failing the release.
     """
     directory = directory or FRAGMENTS_DIR
     buckets: dict[str, list[str]] = {}
@@ -402,16 +449,25 @@ def read_fragments(
             continue
         body = path.read_text(encoding="utf-8").strip("\n")
         if body.strip():
-            if resolve_pr is not None and lead_needs_ref(body):
+            if resolve_pr is not None:
                 pr = resolve_pr(path)
                 if pr is None:
-                    print(
-                        f"::warning::{path.name}: no PR number found in git history for a bold "
-                        f"lead with no '#N'; it is collated as written",
-                        file=sys.stderr,
-                    )
+                    # Can't resolve the adding PR — keep the fragment as written. Warn only when
+                    # the lead has no '#N' of its own to fall back on (unchanged behaviour).
+                    if lead_needs_ref(body):
+                        print(
+                            f"::warning::{path.name}: no PR number found in git history for a bold "
+                            f"lead with no '#N'; it is collated as written",
+                            file=sys.stderr,
+                        )
                 else:
-                    body = stamp_pr_ref(body, pr)
+                    body, dropped = restamp_pr_ref(body, pr)
+                    if dropped:
+                        print(
+                            f"::warning::{path.name}: bold lead cited {', '.join(dropped)} but the "
+                            f"fragment was added by #{pr}; stamped (#{pr}) into the lead instead",
+                            file=sys.stderr,
+                        )
             buckets.setdefault(kind, []).append(body)
             used.append(path)
     if bad:
@@ -438,10 +494,11 @@ def lint_fragments(paths: list[Path]) -> list[str]:
     a ref trailing the paragraph is dropped from ``/changelog``. It used to be met by making
     the author write ``(#N)`` into the lead, which a PR's first commit can't do — the number
     doesn't exist until the PR does, so every PR without an issue pushed a second commit
-    just for it (#4874). Now ``collate`` stamps the PR number into any lead that names none,
-    so the rule is: every top-level bullet either has a ``**bold lead**`` (the stamp's
-    target) or already cites a ``#N`` in its title. A placeholder like ``#NNNN`` is rejected,
-    because the stamp would land beside it rather than replace it.
+    just for it (#4874). Now ``collate`` stamps the MERGING PR into the lead, so the rule is:
+    every top-level bullet has a ``**bold lead**`` (the stamp's target) with NO number in it.
+    A placeholder like ``#NNNN`` is rejected (the stamp would land beside it), and so is any
+    real ``#N`` in the lead — a guessed one ships wrong (the v0.242.0 slip, #5295); point at an
+    issue from the body text instead.
     """
     problems: list[str] = []
     for path in paths:
@@ -477,6 +534,21 @@ def lint_fragments(paths: list[Path]) -> list[str]:
             problems.append(
                 f"{path.name}: the bold lead-in has a placeholder PR number. Remove it: the "
                 f"release stamps the real PR number into the lead (see changelog.d/README.md)."
+            )
+            continue
+        # A number in the bold lead can't be right: the PR doesn't exist at the PR's first
+        # commit, so it's a guess, and a guessed `(#N)` is exactly the v0.242.0 slip (#5295) —
+        # it shipped because `collate` left any already-cited ref alone. Leave the lead number-
+        # free; `collate` stamps the PR that actually MERGED the fragment. (A ref in the BODY
+        # text, outside the `**…**` lead, is fine and left here.)
+        lead_with_ref = next(
+            (m.group(2) for m in _BULLET_LEAD_RE.finditer(body) if _REF_RE.search(m.group(2))), None
+        )
+        if lead_with_ref is not None:
+            problems.append(
+                f"{path.name}: the bold lead-in '{_strip_md(lead_with_ref)[:60]}' names a #N. "
+                f"Leave the number out; collate stamps the merging PR into the lead "
+                f"(see changelog.d/README.md). To point at an issue, mention it in the body text."
             )
             continue
         # One title per top-level bullet, in order (see `_titles`), so the two zip up.
