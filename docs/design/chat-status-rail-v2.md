@@ -32,7 +32,7 @@ Each chip opens a panel with only its own group:
 | Needs you marker | Needs you only |
 | Doing now chip | Doing now only |
 | Coming up chip | Coming up only |
-| Told it chip | Your instructions only |
+| Instructions chip | Your instructions only |
 | `+K` chip | The people picker ("In this chat · N"), unchanged |
 
 Today `DetailsPanel` renders every group, plus the Needs you section and (while names are hidden) the People section, in every panel. v2 removes both riders: the Needs you marker is always on the rail, and `+K` is always on the rail when names are hidden, so neither needs to repeat inside another group's panel.
@@ -45,7 +45,7 @@ One line: **"Your instructions · 1"**.
 - The " · 1": weight 400, `--pl-color-fg-muted`, `aria-hidden`.
 - The `h2`'s accessible name: "Your instructions, 1". The section's `aria-label` matches.
 - No count badge and no scope label.
-- The heading uses Work's group name (`WORK_GROUP_LABELS`). The rail chip still says "Told it".
+- The heading uses Work's group name (`WORK_GROUP_LABELS`). The rail chip says "Instructions".
 - When the count is unknown (the ledger never loaded), the heading is the name alone. Never claim "0".
 
 ### Rows
