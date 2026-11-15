@@ -64,7 +64,9 @@ def test_update_replacement_keeps_resolved_links_and_closes_when_all_done(store,
     # again, so the task could otherwise never close itself.
     grown = store.update(linked["id"], links=["bd-1x", "job-2", "bd-3z"])
     assert {e["ref"]: (e["state"], e["reason"]) for e in parse_links(grown)} == {
-        "bd-1x": ("done", "merged (#1)"), "job-2": ("open", ""), "bd-3z": ("open", ""),
+        "bd-1x": ("done", "merged (#1)"),
+        "job-2": ("open", ""),
+        "bd-3z": ("open", ""),
     }
     assert grown["status"] == "open"  # two refs still open — not closed by the replace
 
@@ -169,22 +171,27 @@ async def test_real_fire_settlement_closes_linked_tasks(store, bus, tmp_path, mo
 
         async def post(self, _url, headers=None, json=None):
             return SimpleNamespace(
-                status_code=200, text="",
+                status_code=200,
+                text="",
                 json=lambda: {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}},
             )
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Client())
     s = LocalScheduler(
-        agent_name="autoclose-fire", invoke_url="http://127.0.0.1:7870",
-        db_dir=tmp_path, event_publish=bus.publish,
+        agent_name="autoclose-fire",
+        invoke_url="http://127.0.0.1:7870",
+        db_dir=tmp_path,
+        event_publish=bus.publish,
     )
     wire_task_autoclose(bus.subscribe_handler, store, get_job=s.get_job)
     live_at_finish: list[bool] = []
-    bus.subscribe_handler(
-        "turn.finished", lambda p: live_at_finish.append(s.get_job(p["data"]["trigger"]) is not None)
+    bus.subscribe_handler("turn.finished", lambda p: live_at_finish.append(s.get_job(p["data"]["trigger"]) is not None))
+    once = s.add_job(
+        "ship the digest",
+        (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        job_id="agent-once",
+        context_id="chat-1",
     )
-    once = s.add_job("ship the digest", (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-                     job_id="agent-once", context_id="chat-1")
     cron = s.add_job("hourly sweep", "0 * * * *", job_id="agent-cron", max_fires=1, context_id="chat-2")
     one_shot_task = store.create("one-shot delivery", links=["agent-once"])
     cron_task = store.create("bounded cron", links=["agent-cron"])
@@ -277,6 +284,101 @@ async def test_pr_sweep_closes_merged_and_leaves_open(store):
     assert seen == [still_open]
 
 
+# ── an auto-close gets the same post-close review as a hand close ──────────────
+
+
+def test_auto_close_runs_the_post_close_step_once_per_closed_task(store, bus):
+    closed: list[dict] = []
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=closed.append)
+    single = store.create("one card", links=["bd-a"])
+    pair = store.create("two cards", links=["bd-a", "bd-b"])
+
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#1)"})
+    # Only the task that actually closed; the pair still has bd-b open.
+    assert [row["id"] for row in closed] == [single["id"]]
+    assert closed[0]["close_reason"] == "bd-a merged (#1)"
+
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-b", "reason": "merged (#2)"})
+    assert [row["id"] for row in closed] == [single["id"], pair["id"]]
+    # A repeat event closes nothing new, so nothing is reviewed twice.
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#1)"})
+    assert len(closed) == 2
+
+
+def test_a_failing_post_close_step_never_breaks_the_auto_close(store, bus):
+    def boom(row):
+        raise RuntimeError("scheduler down")
+
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=boom)
+    linked = store.create("one card", links=["bd-a"])
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#1)"})
+    assert store.get(linked["id"])["status"] == "closed"
+
+
+async def test_pr_sweep_runs_the_post_close_step(store):
+    url = "https://github.com/acme/widgets/pull/1"
+    linked = store.create("merged pr", links=[url])
+    closed: list[dict] = []
+
+    async def pr_state(_url):
+        return "merged"
+
+    assert await sweep_task_links(store, pr_state=pr_state, on_closed=closed.append) == 1
+    assert [row["id"] for row in closed] == [linked["id"]]
+
+
+def test_default_post_close_step_queues_the_same_review_as_a_hand_close(store, bus, monkeypatch):
+    """End to end over the real default: an auto-closed task queues the self-improvement
+    review in its own session, under the same per-task job id a hand close uses, so a
+    later hand close of the same task can't queue a second one."""
+    from graph.config import LangGraphConfig
+    from graph.self_improvement import dispatch_task_review
+    from runtime.state import STATE
+
+    class Scheduler:
+        def __init__(self):
+            self.jobs = {}
+
+        def cancel_job(self, job_id):
+            return self.jobs.pop(job_id, None) is not None
+
+        def add_job(self, prompt, schedule, *, job_id=None, context_id=None):
+            self.jobs[job_id] = {"prompt": prompt, "context_id": context_id}
+
+    scheduler = Scheduler()
+    monkeypatch.setattr(
+        STATE, "graph_config", LangGraphConfig(self_improvement_enabled=True, self_improvement_distillation="propose")
+    )
+    monkeypatch.setattr(STATE, "scheduler", scheduler)
+    wire_task_autoclose(bus.subscribe_handler, store)
+    linked = store.create("ship it", links=["bd-a"], session_id="chat-1")
+
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#7)"})
+
+    assert list(scheduler.jobs) == [f"self-improvement-chat-1-task-{linked['id']}"]
+    job = scheduler.jobs[f"self-improvement-chat-1-task-{linked['id']}"]
+    assert job["context_id"] == "chat-1"
+    assert f"Completed task {linked['id']}: ship it" in job["prompt"]
+    assert "bd-a merged (#7)" in job["prompt"]
+    dispatch_task_review(store.get(linked["id"]))  # the hand-close path, for the same task
+    assert len(scheduler.jobs) == 1
+
+
+def test_auto_close_queues_nothing_when_self_improvement_is_off(store, bus, monkeypatch):
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
+
+    added = []
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig())  # off by default
+    monkeypatch.setattr(
+        STATE, "scheduler", type("S", (), {"cancel_job": lambda *a: None, "add_job": lambda *a, **k: added.append(a)})()
+    )
+    wire_task_autoclose(bus.subscribe_handler, store)
+    store.create("ship it", links=["bd-a"], session_id="chat-1")
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#7)"})
+    assert added == []
+
+
 # ── waiting status + tool/route round-trips ────────────────────────────────────
 
 
@@ -303,8 +405,12 @@ async def test_waiting_and_links_roundtrip_operator_routes(store):
 
     app = FastAPI()
     register_operator_routes(
-        app, runtime_status=lambda: {}, subagent_list=lambda: [],
-        subagent_run=lambda r: None, subagent_batch=lambda r: None, tasks_store=store,
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        tasks_store=store,
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         created = await client.post("/api/tasks/issues", json={"title": "from console", "links": ["bd-5a", "job-9"]})
@@ -316,7 +422,10 @@ async def test_waiting_and_links_roundtrip_operator_routes(store):
         store.resolve_link("bd-5a", "merged (#2)")
         replaced = await client.patch(f"/api/tasks/issues/{issue['id']}", json={"links": ["bd-5a", "job-9"]})
         assert replaced.status_code == 200, replaced.text
-        assert {e["ref"]: e["state"] for e in parse_links(replaced.json()["issue"])} == {"bd-5a": "done", "job-9": "open"}
+        assert {e["ref"]: e["state"] for e in parse_links(replaced.json()["issue"])} == {
+            "bd-5a": "done",
+            "job-9": "open",
+        }
 
         patched = await client.patch(f"/api/tasks/issues/{issue['id']}", json={"status": "waiting"})
         assert patched.status_code == 200, patched.text

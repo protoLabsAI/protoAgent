@@ -24,7 +24,9 @@ Post-work dispatch uses the existing scheduler for durable, same-session turns.
 Runtime status warns when the policy is enabled but that prerequisite is unavailable.
 
 1. An achieved goal or a closed task enqueues `/self-improve` in the same
-   session. The lifecycle callback never performs an LLM call or artifact write
+   session. A task counts however it closed: the agent's `task_close`, the
+   operator's close in the console, or the link auto-close when the work it links
+   finishes (ADR 0129 Q1). Each task is reviewed at most once. The lifecycle callback never performs an LLM call or artifact write
    inline, so goal/task completion remains non-blocking.
 2. `self-improve` is a bounded built-in subagent. Its tool map is intersected
    with a mode-derived allowlist at dispatch: proposal runs receive reads plus
