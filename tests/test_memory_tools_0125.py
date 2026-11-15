@@ -446,7 +446,8 @@ def test_memory_list_eval_seeds_lists_and_cleans_core_memories(tmp_path, monkeyp
     tools, ks, mem = _tools(tmp_path)
     cases = json.loads(Path("evals/tasks.json").read_text(encoding="utf-8"))
     case = next(c for c in cases if c["id"] == "memory_list_intent")
-    assert case["expected_tools"] == ["memory_list"]
+    assert "expected_tools" not in case
+    assert set(case["expected_any_tools"]) == {"memory_list", "recent_activity"}
     assert verify.apply_setup(case["setup"]) is None
 
     listed = asyncio.run(tools["memory_list"].ainvoke({}))

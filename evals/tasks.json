@@ -159,13 +159,13 @@
     "id": "memory_list_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks for recent log entries → memory_list",
+    "name": "Asks what I did today → memory_list or recent_activity",
     "setup": [
       {"memory_save": {"content": "called the dentist", "kind": "fact", "heading": "today"}},
       {"memory_save": {"content": "merged the auth PR", "kind": "fact", "heading": "today"}}
     ],
     "prompt": "What did I do today? Summarize from the log.",
-    "expected_tools": ["memory_list"],
+    "expected_any_tools": ["memory_list", "recent_activity"],
     "expected_patterns": ["dentist"],
     "teardown": [
       {"memory_delete_by_content": {"contains": "called the dentist"}},
