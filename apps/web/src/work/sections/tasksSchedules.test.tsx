@@ -128,6 +128,7 @@ type TaskRaw = {
   id: string; title: string; status: string; type: string; priority: number;
   assignee: string; description: string; created_at: string; updated_at: string; closed_at: string | null;
   session_id?: string;
+  activity?: "driven" | "idle" | "stalled";
 };
 
 async function mount(node: ReactNode) {
@@ -491,6 +492,37 @@ describe("Jobs in the list (§2, r1)", () => {
     expect(metas).toEqual(["No activity for 3 days · Bug · high", "Bug · high"]);
     // No warning paint anywhere — the stale row keeps the neutral Job badge (operator copy).
     expect(host!.querySelector(".pl-badge--warning")).toBeNull();
+  });
+
+  it("an undriven in_progress job reads 'in progress · idle Nm', switching to hours at 60 min (S12b)", async () => {
+    const idle45 = taskItem({ id: "idle45", title: "idle45", activity: "idle", updated_at: new Date(Date.now() - 45 * 60_000).toISOString() });
+    const idle90 = taskItem({ id: "idle90", title: "idle90", activity: "idle", updated_at: new Date(Date.now() - 90 * 60_000).toISOString() });
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([idle45, idle90]) }) })));
+    const metas = Array.from(host!.querySelectorAll(".work-row__meta")).map((n) => n.textContent);
+    expect(metas).toEqual(["in progress · idle 45m · Bug · high", "in progress · idle 1h · Bug · high"]);
+    // Muted copy, never a warning badge (operator-copy rule).
+    expect(host!.querySelector(".pl-badge--warning")).toBeNull();
+  });
+
+  it("a stalled in_progress job leads with 'stalled', not its type (S12b)", async () => {
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([taskItem({ activity: "stalled" })]) }) })));
+    expect(host!.querySelector(".work-row__meta")?.textContent).toBe("stalled · Bug · high");
+    expect(host!.querySelector(".pl-badge--warning")).toBeNull();
+  });
+
+  it("a driven or field-less in_progress job keeps its plain type · priority, never 'idle' (S12b)", async () => {
+    const driven = taskItem({ id: "driven", title: "driven", activity: "driven" });
+    const legacy = taskItem({ id: "legacy", title: "legacy" }); // older server: no activity field
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([driven, legacy]) }) })));
+    const metas = Array.from(host!.querySelectorAll(".work-row__meta")).map((n) => n.textContent);
+    expect(metas).toEqual(["Bug · high", "Bug · high"]);
+    expect(allText()).not.toContain("idle");
+  });
+
+  it("the 24h stale line still wins over an idle flag (S12b)", async () => {
+    const stale = taskItem({ activity: "idle", updated_at: new Date(Date.now() - 2 * 86_400_000).toISOString() });
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([stale]) }) })));
+    expect(host!.querySelector(".work-row__meta")?.textContent).toBe("No activity for 2 days · Bug · high");
   });
 
   it("a closed job leaves the list — finished work leaves Work", async () => {
