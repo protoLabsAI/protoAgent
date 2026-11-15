@@ -496,6 +496,26 @@ def _origin_fields_of(task_metadata) -> dict[str, str]:
     return {k: v for k, v in origin.items() if isinstance(v, str) and v}
 
 
+def _origin_row_fields(origin: dict) -> dict[str, str]:
+    """The display-only caller fields a conversation row carries (spec §8): ``caller``,
+    ``caller_kind`` (only the two recognised kinds) and ``on_behalf_of``, each present ONLY when the
+    thread's opening turn stored it. Display-only — NEVER an authorization input (the transport
+    settled who may call before the turn ran); an absent field, and an unrecognised ``caller_kind``,
+    is OMITTED rather than emitted as a null string, exactly as ``conversation_origin.origin_fields``
+    drops them at write time."""
+    out: dict[str, str] = {}
+    caller = origin.get("caller")
+    if caller:
+        out["caller"] = caller
+    kind = origin.get("caller_kind")
+    if kind in conversation_origin.KINDS:
+        out["caller_kind"] = kind
+    on_behalf_of = origin.get("on_behalf_of")
+    if on_behalf_of:
+        out["on_behalf_of"] = on_behalf_of
+    return out
+
+
 def _conversation_group(origin: dict) -> str:
     """``for_you`` when a PERSON started the thread or an agent acted on a person's behalf
     (``caller_kind == "person"`` or ``on_behalf_of`` set); ``automated`` otherwise, including a
@@ -1661,6 +1681,9 @@ def register_chat_routes(app, ui: str) -> None:
                     "turn_count": int(row.turn_count or 0),
                     "active": active,
                     "last_state": last_state,
+                    # Display-only who-started-it fields (spec §8), omitted when the opening turn
+                    # stored none — never an authorization input, never emitted as null strings.
+                    **_origin_row_fields(origin),
                     "_rank": _conversation_rank(active, last_state),
                 }
             )

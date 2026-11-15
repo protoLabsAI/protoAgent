@@ -90,6 +90,42 @@ describe("list + page older via GET /api/conversations", () => {
     expect(store.automatedRows(s).map((r) => r.session_id)).toEqual(["ctx-2"]);
   });
 
+  it("carries the display-only origin fields (caller/caller_kind/on_behalf_of) through hydration and a live update", async () => {
+    // Spec §8 / C9a: the three who-started-it fields ride the row from the server through the
+    // store unchanged, and a live turn event (which rewrites active/last_state) must not drop them.
+    listConversations = () =>
+      Promise.resolve({
+        conversations: [
+          row({ session_id: "ctx-1", caller: "Claude Code", caller_kind: "agent", on_behalf_of: "Josh" }),
+        ],
+      });
+    store.subscribeForTest(() => {});
+    await flush();
+
+    let r0 = store.snapshotForTest().rows[0];
+    expect(r0.caller).toBe("Claude Code");
+    expect(r0.caller_kind).toBe("agent");
+    expect(r0.on_behalf_of).toBe("Josh");
+
+    // A live turn.finished rewrites active/last_state — the origin fields must survive it.
+    listeners["turn.finished"]({ origin: "a2a", session_id: "ctx-1", state: "completed" });
+    r0 = store.snapshotForTest().rows[0];
+    expect(r0.last_state).toBe("completed");
+    expect(r0.caller).toBe("Claude Code");
+    expect(r0.caller_kind).toBe("agent");
+    expect(r0.on_behalf_of).toBe("Josh");
+  });
+
+  it("omits the origin fields for a thread that stored none", async () => {
+    listConversations = () => Promise.resolve({ conversations: [row({ session_id: "ctx-bare" })] });
+    store.subscribeForTest(() => {});
+    await flush();
+    const r0 = store.snapshotForTest().rows[0];
+    expect(r0.caller).toBeUndefined();
+    expect(r0.caller_kind).toBeUndefined();
+    expect(r0.on_behalf_of).toBeUndefined();
+  });
+
   it("loadOlder pages back with before=<oldest last_updated> and appends", async () => {
     const recent = row({ session_id: "ctx-1", last_updated: daysAgo(1) });
     listConversations = () => Promise.resolve({ conversations: [recent] });
