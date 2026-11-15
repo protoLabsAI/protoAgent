@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from inbox.store import InboxStore
 from server.maintenance_loops import run_task_stall_pass
 from tasks.stall import STALL_NUDGE_CAP, DriverSources
 from tasks.store import TaskStore
@@ -51,6 +52,7 @@ class _FakeInbox:
         delivery="",
         target_session="",
         needs_human=False,
+        origin_session=None,
         now=None,
     ):
         if self.dedup_all:
@@ -124,6 +126,24 @@ async def test_driven_task_is_not_nudged(store):
     assert res == {"nudged": 0, "parked": 0}
     assert inbox.added == []
     assert store.get(tid)["stall_nudges"] == 0
+
+
+@pytest.mark.parametrize(
+    ("session_id", "expected_origin"),
+    [("chat-a", "chat-a"), ("", None), ("job:abc", None), ("background:abc", None)],
+)
+async def test_nudge_preserves_only_conversation_origin(store, tmp_path, session_id, expected_origin):
+    tid = _stalled_task(store, session_id=session_id)
+    inbox = InboxStore(db_path=str(tmp_path / "inbox.db"))
+
+    res = await run_task_stall_pass(
+        store, inbox, now=_now_past(store, tid, 31), sources=_sources()
+    )
+
+    assert res == {"nudged": 1, "parked": 0}
+    items = inbox.list()
+    assert len(items) == 1
+    assert items[0]["origin_session"] == expected_origin
 
 
 async def test_deduped_add_does_not_increment(store):

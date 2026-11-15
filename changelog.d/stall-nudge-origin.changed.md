@@ -1,0 +1,1 @@
+- **Stall reminders retain their conversation origin.** Nudges carry the stalled task's conversation session so follow-up work can recover its origin; empty and job/background execution sessions are excluded.
