@@ -5,7 +5,7 @@ const QUOTE = "Cut the release once both PRs merge";
 const APPROVAL_QUOTE = "Approve the dependency bumps";
 const NOTE = 'You withdrew: "Pause deploys" — freeze lifted';
 
-test("a fresh chat loads an empty directive ledger: no Told it chip, Work rail clean", async ({ page }) => {
+test("a fresh chat loads an empty directive ledger: no Instructions chip, Work rail clean", async ({ page }) => {
   const directives = page.waitForResponse((response) =>
     /\/api\/chat\/sessions\/[^/]+\/directives$/.test(new URL(response.url()).pathname));
   await page.goto("/app/");
@@ -87,15 +87,15 @@ for (const width of [1440, 390]) {
       }));
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
-      // The Told it chip (S6a): the full name on desktop, the number alone on the phone —
+      // The Instructions chip (S6a): the full name on desktop, the number alone on the phone —
       // the complete label is spoken either way. Two in force: the instruction AND the §3.1
       // approval ride the same shared-selector count the Work rows show.
       const chip = page.getByTestId("chat-status-chip-instructions");
       // useInnerText: the phone hides the wordy span with CSS; textContent would still see it.
-      await expect(chip).toHaveText(width === 390 ? "2" : "Told it 2", { useInnerText: true });
+      await expect(chip).toHaveText(width === 390 ? "2" : "Instructions 2", { useInnerText: true });
       await expect(chip).toHaveAttribute(
         "aria-label",
-        "Told it: 2 instructions in force in this chat. Show details",
+        "Instructions: 2 instructions in force in this chat. Show details",
       );
       await expect(page.locator(".pl-message--system").filter({ hasText: NOTE })).toBeVisible();
       await expect(page.locator(".pl-message--user").filter({ hasText: NOTE })).toHaveCount(0);
@@ -154,7 +154,7 @@ for (const width of [1440, 390]) {
 
       if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
       // The withdrawn instruction leaves the count; the still-in-force approval keeps the chip up.
-      await expect(chip).toHaveText(width === 390 ? "1" : "Told it 1", { useInnerText: true });
+      await expect(chip).toHaveText(width === 390 ? "1" : "Instructions 1", { useInnerText: true });
       await expect(page.locator(".pl-message--system").filter({ hasText: 'You withdrew: "' + QUOTE + '" — Hold until Monday' })).toBeVisible();
       const composer = page.getByPlaceholder(/Message protoAgent/i);
       await composer.fill("/directives ");

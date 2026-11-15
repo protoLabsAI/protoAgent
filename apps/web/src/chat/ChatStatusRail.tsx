@@ -1,5 +1,5 @@
 /** The chat status rail (work consolidation v2 §5, S6a) — the shared-count strip above the
- *  composer. One chip per non-empty Work group (Doing now · Coming up · Told it), counted by
+ *  composer. One chip per non-empty Work group (Doing now · Coming up · Instructions), counted by
  *  the SAME `workGroups` selector the Work view reads, with `thisChat` applied, so the chip
  *  numbers and the Work group rows cannot drift. Each chip opens one grouped details panel —
  *  a DS Popover on desktop, a DS bottom-sheet Drawer on the phone — with one section per Work
@@ -48,7 +48,7 @@ import "./chat-status-rail.css";
 
 export type RailChip = {
   id: Exclude<WorkGroupId, "needs-you">;
-  /** The chip wording (§5): the group name, except "Told it" for Your instructions. */
+  /** The chip wording (§5): the group name, except "Instructions" for Your instructions. */
   label: string;
   count: number;
   /** The active goal's progress, shown inside the Doing now chip ("goal 3/8"). */
@@ -68,7 +68,7 @@ export function railChips(groups: WorkGroup[]): RailChip[] {
     if (group.id === "needs-you" || group.count === 0) continue;
     const chip: RailChip = {
       id: group.id,
-      label: group.id === "instructions" ? "Told it" : group.label,
+      label: group.id === "instructions" ? "Instructions" : group.label,
       count: group.count,
     };
     if (group.id === "doing-now") {
@@ -85,12 +85,12 @@ export function railChips(groups: WorkGroup[]): RailChip[] {
 
 /** The complete spoken label (§5) — the phone chip shows the number only, this says it all. */
 export function spokenLabel(chip: RailChip): string {
-  if (chip.problem) return "Told it: couldn't check instructions in this chat. Show details";
+  if (chip.problem) return "Instructions: couldn't check instructions in this chat. Show details";
   if (chip.emptied) {
     switch (chip.id) {
       case "doing-now": return "Doing now: nothing running in this chat. Show details";
       case "coming-up": return "Coming up: nothing coming up in this chat. Show details";
-      case "instructions": return "Told it: no instructions in force in this chat. Show details";
+      case "instructions": return "Instructions: no instructions in force in this chat. Show details";
     }
   }
   switch (chip.id) {
@@ -103,7 +103,7 @@ export function spokenLabel(chip: RailChip): string {
     case "coming-up":
       return `Coming up: ${chip.count} not started in this chat. Show details`;
     case "instructions":
-      return `Told it: ${chip.count} instruction${chip.count === 1 ? "" : "s"} in force in this chat. Show details`;
+      return `Instructions: ${chip.count} instruction${chip.count === 1 ? "" : "s"} in force in this chat. Show details`;
   }
 }
 
@@ -401,7 +401,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   // The failed-instructions chip: THIS chat's ledger never loaded, so the count is unknowable —
   // it renders without one and the details panel carries the preserved "Load again" path.
   if (ledgerStatus === "error" && !chips.some((chip) => chip.id === "instructions")) {
-    chips.push({ id: "instructions", label: "Told it", count: 0, problem: true });
+    chips.push({ id: "instructions", label: "Instructions", count: 0, problem: true });
   }
 
   // ── People fit (S6b, the v7 behavior): one row, measured, `+K` for the rest ─────────
@@ -544,7 +544,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   const chipsToRender: RailChip[] = emptiedChipId !== null
     ? [...chips, {
       id: emptiedChipId,
-      label: emptiedChipId === "instructions" ? "Told it" : WORK_GROUP_LABELS[emptiedChipId],
+      label: emptiedChipId === "instructions" ? "Instructions" : WORK_GROUP_LABELS[emptiedChipId],
       count: 0,
       emptied: true,
     }]
