@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import sys
 from collections import deque
 from unittest.mock import MagicMock
@@ -91,6 +92,23 @@ def _tool_call(n: int) -> str:
 # Two tool calls (work happened) and then a silent, normal end — the "did work but said
 # nothing" shape the tool-call count exists to distinguish from "never started".
 _EMPTY_END_TURN_AFTER_TOOLS = "\n        ".join([_tool_call(1), _tool_call(2), _EMPTY_END_TURN])
+
+# #5317: nudges end silently too; the initial message and command id must survive.
+_BACKGROUND_NOTICE = 'send(' + repr({
+    "jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": "__SESSION__", "update": {
+            "sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed",
+            "rawOutput": "Command running in background with ID: bash_5317.",
+        },
+    },
+}) + ')'
+_EMPTY_AFTER_BACKGROUND = "\n        ".join([
+    "if msg['params']['prompt'][0]['text'] == 'write the proof under /tmp':",
+    "    " + _CHUNK.replace("wrote the patch", "Starting the long command"),
+    "    " + _tool_call(2),
+    "    " + _BACKGROUND_NOTICE,
+    _EMPTY_END_TURN,
+])
 
 
 def _agent(tmp_path, name: str, body: str, session: str = "sess-acp-1") -> list[str]:
@@ -184,6 +202,8 @@ async def test_dispatch_fails_on_empty_end_turn_with_a_named_diagnostic(tmp_path
     assert _EMPTY_REPLY_SIGNAL in msg and "end_turn" in msg
     assert "2 tool call(s)" in msg  # names the current-turn tool-call count
     assert "stderr" in msg  # the stderr-tail label is present even when the tail is empty
+    assert "[incomplete reply — ended with no final reply]" in msg
+    assert '"toolCallId": "t2"' in msg and "Read(file2.py)" in msg
 
 
 async def test_dispatch_fails_when_the_stop_reason_is_absent(tmp_path, monkeypatch):
@@ -234,16 +254,17 @@ async def _settle(store, job_id, tries: int = 400):
     raise AssertionError(f"job {job_id} never settled")
 
 
-async def test_background_delegation_drains_ok_false_not_replied_with_nothing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("body, failed", [(_EMPTY_END_TURN_AFTER_TOOLS, True), (_EMPTY_AFTER_BACKGROUND, False)])
+async def test_background_delegation_delivers_incomplete_transcript(tmp_path, monkeypatch, body, failed):
     from background.manager import BackgroundManager
     from background.store import BackgroundStore
     import runtime.state as rs
 
     chat = importlib.import_module("server.chat")
 
-    client = _client(tmp_path, "coder", _EMPTY_END_TURN)
+    client = _client(tmp_path, "coder", body)
     _wire_pool(monkeypatch, client)
-    d = _delegate(tmp_path, _EMPTY_END_TURN)
+    d = _delegate(tmp_path, body)
 
     mgr = BackgroundManager(
         agent_name="a", invoke_url="http://127.0.0.1:0", store=BackgroundStore(str(tmp_path / "bg.db"))
@@ -260,7 +281,7 @@ async def test_background_delegation_drains_ok_false_not_replied_with_nothing(tm
             origin_session=session, kind="delegate", description="delegate → coder", work=_work, result_author="coder"
         )
         job = await _settle(mgr.store, job_id)
-        assert job.status == "failed", "an empty normal-ended reply must fail the background job"
+        assert job.status == ("failed" if failed else "completed")
 
         _msgs, room_replies = chat._drain_background(session)
     finally:
@@ -268,11 +289,47 @@ async def test_background_delegation_drains_ok_false_not_replied_with_nothing(tm
 
     assert len(room_replies) == 1
     reply = room_replies[0]
-    assert reply["ok"] is False
+    assert reply["ok"] is (not failed)
     text = reply["text"]
     assert "(replied with nothing)" not in text
-    assert "(failed" in text  # the drain's failure note
-    assert _EMPTY_REPLY_SIGNAL in text and "end_turn" in text  # the diagnostic rode through
+    assert "[incomplete reply — ended with no final reply]" in text
+    assert '"toolCallId": "t2"' in text
+    if failed:
+        assert "(failed" in text
+        assert _EMPTY_REPLY_SIGNAL in text and "end_turn" in text
+    else:
+        assert "bash_5317" in text and "Starting the long command" in text
+        assert "follow-up nudges" in text
+
+
+async def test_transcript_is_bounded_redacted_and_reset_between_dispatches(tmp_path, monkeypatch):
+    updates = []
+    for n in range(20):
+        event = {"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "__SESSION__", "update": {
+                "sessionUpdate": "tool_call", "toolCallId": f"tool-{n}", "title": "Bash",
+                "rawInput": {"api_key": "private-value", "command": "x" * 4000},
+            },
+        }}
+        updates.append(f"send(json.loads({json.dumps(json.dumps(event))}))")
+    body = "\n        ".join(updates + [_EMPTY_END_TURN])
+    client = _client(tmp_path, "coder", body)
+    _wire_pool(monkeypatch, client)
+    try:
+        with pytest.raises(DelegateError) as first:
+            await AcpAdapter().dispatch(_delegate(tmp_path, body), "work")
+        text = str(first.value)
+        assert "private-value" not in text
+        assert '"tool-19"' in text and '"tool-0"' not in text
+        assert len(text) < 26000
+        await client.close()
+        client.args = _agent(tmp_path, "empty-next", _EMPTY_END_TURN)
+        with pytest.raises(DelegateError) as second:
+            await AcpAdapter().dispatch(_delegate(tmp_path, _EMPTY_END_TURN), "next")
+        assert "tool-19" not in str(second.value)
+        assert "no messages or tool calls received" in str(second.value)
+    finally:
+        await client.close()
 
 
 # ── telemetry + trace classify the run as failed (the #3015 lesson) ──────────────────
