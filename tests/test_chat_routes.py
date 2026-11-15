@@ -918,12 +918,16 @@ def test_conversations_row_fields_group_and_origin_labels(monkeypatch, tmp_path)
     rows = {r["session_id"]: r for r in client.get("/api/conversations").json()["conversations"]}
 
     josh = rows["conv-josh"]
+    # conv-josh stored a person caller on a person's behalf, so its row carries all three
+    # display-only origin fields (spec §8) alongside the base fields.
     assert set(josh) == {
         "session_id", "title", "origin_label", "group", "last_updated", "turn_count", "active", "last_state",
+        "caller", "caller_kind", "on_behalf_of",
     }
     assert josh["origin_label"] == "From Claude Code for Josh"
     assert josh["group"] == "for_you"
     assert josh["title"] == "Friction triage"
+    assert (josh["caller"], josh["caller_kind"], josh["on_behalf_of"]) == ("Claude Code", "person", "Josh")
     assert josh["turn_count"] == 1
     assert josh["active"] is False
     assert josh["last_state"] == "TASK_STATE_INPUT_REQUIRED"
@@ -935,6 +939,70 @@ def test_conversations_row_fields_group_and_origin_labels(monkeypatch, tmp_path)
     assert rows["api-42-abc"]["origin_label"] == "From the API"
     bare = rows["conv-bare"]
     assert bare["origin_label"] == "From another agent" and bare["group"] == "automated"
+
+
+def test_conversations_row_carries_caller_caller_kind_on_behalf_of(monkeypatch, tmp_path):
+    """C9a / spec §8: a thread whose opening turn stored ``caller``/``caller_kind``/``on_behalf_of``
+    lists with those three display-only fields on its row (fails on main, which emits none of them)."""
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "origin-fields",
+        [
+            {"id": "1", "context_id": "conv-cc", "state": "TASK_STATE_COMPLETED", "at": _recent(1),
+             "metadata": _origin(caller="Claude Code", kind="agent", on_behalf_of="Josh")},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    (row,) = client.get("/api/conversations").json()["conversations"]
+    assert row["caller"] == "Claude Code"
+    assert row["caller_kind"] == "agent"
+    assert row["on_behalf_of"] == "Josh"
+
+
+def test_conversations_row_omits_origin_fields_when_none_stored(monkeypatch, tmp_path):
+    """r2: a thread with NO stored origin lists WITHOUT the three fields (absent keys, never null
+    strings), and its ``origin_label`` is unchanged."""
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "no-origin",
+        [
+            {"id": "1", "context_id": "conv-bare", "state": "TASK_STATE_COMPLETED", "at": _recent(1),
+             "history": [_user_msg("hello there")]},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    (row,) = client.get("/api/conversations").json()["conversations"]
+    assert "caller" not in row and "caller_kind" not in row and "on_behalf_of" not in row
+    assert row["origin_label"] == "From another agent"
+
+
+def test_conversations_row_drops_unrecognised_caller_kind(monkeypatch, tmp_path):
+    """r3: an unrecognised stored ``caller_kind`` is NOT emitted — the server never guesses a
+    person — while a recognised sibling field on the same row still rides through."""
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "bad-kind",
+        [
+            {"id": "1", "context_id": "conv-weird", "state": "TASK_STATE_COMPLETED", "at": _recent(1),
+             "metadata": _origin(caller="mystery", kind="robot")},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    (row,) = client.get("/api/conversations").json()["conversations"]
+    assert row["caller"] == "mystery"
+    assert "caller_kind" not in row
 
 
 def test_conversations_title_fallbacks(monkeypatch, tmp_path):

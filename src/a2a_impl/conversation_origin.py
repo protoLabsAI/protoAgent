@@ -23,7 +23,9 @@ _CALLER_MAX = 64
 _TITLE_MAX = 80
 #: ``caller_kind`` is one short token; only the two recognised values are kept.
 _KIND_MAX = 16
-_KINDS = ("person", "agent")
+#: The recognised ``caller_kind`` values — the server never guesses a person, so an unrecognised
+#: kind is dropped both at write time (``origin_fields``) and on read (``chat_routes`` row emit).
+KINDS = ("person", "agent")
 
 
 def _one_line(text: object, limit: int) -> str:
@@ -47,7 +49,7 @@ def origin_fields(md: dict | None) -> dict[str, str]:
     if caller:
         out["caller"] = caller
     kind = _one_line(md.get("caller_kind"), _KIND_MAX)
-    if kind in _KINDS:
+    if kind in KINDS:
         out["caller_kind"] = kind
     on_behalf_of = _one_line(md.get("on_behalf_of"), _CALLER_MAX)
     if on_behalf_of:
