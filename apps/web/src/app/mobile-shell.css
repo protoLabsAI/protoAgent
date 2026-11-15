@@ -133,7 +133,7 @@
   min-height: 0;
 }
 /* The shell header already carries ← List on a thread (§3.7), so the reader's own in-band
-   Back to list button is redundant here — drop it, keeping the eyebrow / title / badge band. */
+   ← Back button is redundant here — drop it, keeping the title / badge / meta band. */
 .mshell-conversations .conversation-reader__back {
   display: none;
 }

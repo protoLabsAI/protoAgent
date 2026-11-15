@@ -112,13 +112,18 @@ async function renderReader(props: Partial<Parameters<typeof ConversationReader>
 }
 
 describe("ConversationReader header, turns and footer", () => {
-  it("shows Back to list, the read-only eyebrow, the focused title, the status badge, the origin line, and labels each message with its speaker (r1)", async () => {
+  it("shows ← Back, the focused title, the status badge, a slim meta line, no eyebrow, and labels each message with its speaker (r1, r3)", async () => {
     mocks.chatSessionTurns.mockResolvedValue({ turns: [turn()] });
     await renderReader({ row: row({ active: true, last_state: "working", title: "Release triage" }) });
 
-    const buttons = [...host.querySelectorAll("button")].map((b) => b.textContent ?? "");
-    expect(buttons.some((t) => t.includes("Back to list"))).toBe(true);
-    expect(host.textContent).toContain("Conversation · read-only");
+    // The reader names itself read-only in its accessible name; the eyebrow band is gone (C9c).
+    expect(host.querySelector(".conversation-reader")?.getAttribute("aria-label")).toBe(
+      "Conversation, read-only",
+    );
+    expect(host.textContent).not.toContain("Conversation · read-only");
+
+    const back = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "← Back");
+    expect(back).toBeTruthy();
 
     const title = host.querySelector(".conversation-reader__title")!;
     expect(title.textContent).toBe("Release triage");
@@ -126,13 +131,55 @@ describe("ConversationReader header, turns and footer", () => {
     expect(document.activeElement).toBe(title);
 
     expect(host.querySelector(".pl-badge")?.textContent).toBe("Running");
-    expect(host.textContent).toContain("From Claude Code");
+    // The meta line shows the origin WITHOUT the leading "From " and the count (turn_count 2).
+    const metaEl = host.querySelector(".conversation-reader__origin")!;
+    expect(metaEl.textContent).toContain("Claude Code");
+    expect(metaEl.textContent).toContain("2 messages");
+    expect(metaEl.textContent?.startsWith("From")).toBe(false);
 
     const speakers = [...host.querySelectorAll(".pl-message__origin-label")].map((e) => e.textContent);
     expect(speakers).toContain("Claude Code"); // the origin caller
     expect(speakers).toContain("designSystem"); // the agent
     expect(host.textContent).toContain("The caller question.");
     expect(host.textContent).toContain("The agent reply.");
+  });
+
+  it("Back shows '← Back' but reads and hovers as 'Back to From others' (r2)", async () => {
+    await renderReader();
+    const back = [...host.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "← Back",
+    ) as HTMLButtonElement;
+    expect(back.getAttribute("aria-label")).toBe("Back to From others");
+    expect(back.getAttribute("title")).toBe("Back to From others");
+  });
+
+  it("the h2 shows displayTitle() while onContinue keeps the full stored title (r4)", async () => {
+    const onContinue = vi.fn();
+    await renderReader({
+      onContinue,
+      row: row({
+        title: "From Claude Code (Josh's session): Ship the release",
+        origin_label: "From Claude Code for Josh",
+        caller: "Claude Code",
+        on_behalf_of: "Josh",
+      }),
+    });
+    // The visible h2 is the stripped, capitalised remainder…
+    expect(host.querySelector(".conversation-reader__title")?.textContent).toBe("Ship the release");
+    // …but Continue in a new chat still forwards the FULL stored title (and raw origin).
+    const cont = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Continue in a new chat"))!;
+    await act(async () => cont.click());
+    expect(onContinue).toHaveBeenCalledWith({
+      contextId: "ctx-1",
+      title: "From Claude Code (Josh's session): Ship the release",
+      origin: "From Claude Code for Josh",
+    });
+  });
+
+  it("meta line drops the leading 'From ' and hides the count at a single message (r5)", async () => {
+    // A null timestamp keeps this timezone-independent (no date part to format).
+    await renderReader({ row: row({ origin_label: "From another agent", last_updated: null, turn_count: 1 }) });
+    expect(host.querySelector(".conversation-reader__origin")?.textContent).toBe("another agent");
   });
 
   it("has no composer; its slot carries the read-only note and the two chat-forwarding actions (r2)", async () => {
@@ -227,7 +274,7 @@ describe("ConversationsPane opening, remembering and returning to a thread (r4)"
     await flush();
     expect(host.querySelector(".conversation-reader")).not.toBeNull();
 
-    const back = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Back to list"))!;
+    const back = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "← Back")!;
     await act(async () => back.click());
     await flush();
 
