@@ -106,11 +106,29 @@ function jobShowsInWork(item: WorkItem): boolean {
   return groupFor(item as GroupableWorkItem) !== null;
 }
 
+// The muted "not actually running" lead for an `in_progress` job the task API (ADR 0129
+// D9/S12b, bd-2grd8) reports as undriven: "in progress · idle 45m" (whole minutes since
+// `updated_at`, switching to "idle 2h" at 60 min or more) when nothing drove it recently, or
+// "stalled" once the stall loop has parked it. `driven` or a missing field (an older server
+// that doesn't report activity) returns null — today's label, never guessing it's stuck. Plain
+// muted text, no warning colour (the operator-copy rule in tone.ts).
+function activityLead(task: Task, now: number = Date.now()): string | null {
+  if (task.activity === "stalled") return "stalled";
+  if (task.activity !== "idle") return null;
+  const last = new Date(task.updated_at || task.created_at || "").getTime();
+  if (!Number.isFinite(last)) return "in progress · idle";
+  const minutes = Math.max(0, Math.floor((now - last) / 60_000));
+  const span = minutes >= 60 ? `idle ${Math.floor(minutes / 60)}h` : `idle ${minutes}m`;
+  return `in progress · ${span}`;
+}
+
 // Row meta (§2): a not-started job says "not started · added <when>"; a blocked (started)
 // job says "blocked"; one parked on the operator (`waiting`, ADR 0129 Q1) says so; an
 // `in_progress` one quiet for a day leads with the muted stale line (ADR 0129 — the work
-// may have finished elsewhere without a task_close); any other started job keeps its type
-// and priority.
+// may have finished elsewhere without a task_close). Short of a full day, an `in_progress`
+// job the task API flags as not being driven (S12b) leads with "in progress · idle Nm/Nh" or
+// "stalled" instead of implying it is running; any other started job keeps its type and
+// priority. The 24h stale line still wins where it applies.
 function jobMeta(item: WorkItem): string {
   const task = item.raw as Task;
   if (jobNotStarted(item)) {
@@ -121,6 +139,8 @@ function jobMeta(item: WorkItem): string {
   if (issueStatus(task) === "waiting") return "waiting on you";
   const staleDays = taskStaleDays(task);
   if (staleDays != null) return `${staleTaskMeta(staleDays)} · ${typeAndPriority(task)}`;
+  const activity = activityLead(task);
+  if (activity) return `${activity} · ${typeAndPriority(task)}`;
   return typeAndPriority(task);
 }
 

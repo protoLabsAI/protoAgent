@@ -1,0 +1,1 @@
+- **Work view labels an undriven in-progress job (#5288).** An `in_progress` task the agent isn't actively working now reads "in progress · idle Nm/Nh" or "stalled" in the Work view instead of implying it is running; a driven task, or one from an older server, is unchanged, and the 24-hour quiet line still wins where it applies.
