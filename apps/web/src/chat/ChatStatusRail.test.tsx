@@ -218,7 +218,7 @@ describe("chips", () => {
 });
 
 describe("details panel", () => {
-  it("groups by the Work names with counts, deep links each group with thisChat", async () => {
+  it("D1: a work chip's panel holds ONLY its own group — no Needs you or People rider — and deep links it with thisChat", async () => {
     await render(rail(MIXED));
     await click(chip("instructions"));
     const panel = dialog();
@@ -226,21 +226,24 @@ describe("details panel", () => {
     expect(chip("instructions")!.getAttribute("aria-haspopup")).toBe("dialog");
     expect(chip("instructions")!.getAttribute("aria-expanded")).toBe("true");
 
-    // Work's own names — "Your instructions · N", never "Told it" — count in the accessible
-    // name. Needs you (S7) is the FIRST section whichever chip opened the panel.
+    // Exactly one section — "Your instructions · N", Work's own name (never "Told it"), the
+    // count in the h2's accessible name. No Needs you, no other group, no People picker.
+    expect(panel!.querySelectorAll("section")).toHaveLength(1);
     expect([...panel!.querySelectorAll("h2")].map((h) => [h.textContent, h.getAttribute("aria-label")])).toEqual([
-      ["Needs you · 1", "Needs you, 1"],
-      ["Doing now · 2", "Doing now, 2"], ["Coming up · 3", "Coming up, 3"],
       ["Your instructions · 1", "Your instructions, 1"],
     ]);
-    // Rows carry the shared title/meta projection; other chats' rows never appear — except
-    // Needs you, which is never chat-scoped (q1 is another chat's decision).
-    for (const text of ["Goal s1", "Quote d1", "scope d1", "Decide q1"]) expect(panel!.textContent).toContain(text);
-    expect(panel!.textContent).not.toContain("Quote d-elsewhere");
+    expect(panel!.querySelector(".chat-needs-you")).toBeNull();
+    expect(panel!.querySelector(".chat-people")).toBeNull();
+    // This chat's directive row only; the quiet frame drops the old `meta` ("scope d1"), and
+    // no other group's or chat's rows appear.
+    expect(panel!.textContent).toContain("Quote d1");
+    for (const absent of ["scope d1", "Quote d-elsewhere", "Goal s1", "Decide q1"]) {
+      expect(panel!.textContent).not.toContain(absent);
+    }
 
     const open = [...panel!.querySelectorAll("button")].filter((b) => b.textContent === "Open in Work");
-    expect(open).toHaveLength(4);
-    await click(open[3]); // Your instructions
+    expect(open).toHaveLength(1);
+    await click(open[0]); // "Open in Work" opens the group with no item
     const ui = useUI.getState();
     // The thisChat scope rides the VISIT: the saved surface state keeps the user's own
     // filters untouched, so every other Work entry still restores what they left behind.
@@ -252,6 +255,49 @@ describe("details panel", () => {
     expect(ui.rightCollapsed).toBe(false);
     expect(ui.mobileActive).toBe("work");
     expect(dialog()).toBeNull(); // navigation closes the panel
+  });
+
+  it("a row carries the full item text + its railCue line, and clicking it closes the panel and deep links kind:id", async () => {
+    const longTitle = "Draft and circulate the Q3 board deck before the Friday review window closes";
+    const longGoal: GroupableWorkItem = {
+      kind: "goal", id: "g-long", status: "running", title: longTitle, meta: "",
+      sessionId: SESSION, raw: { session_id: SESSION, status: "active", iteration: 3, max_iterations: 8 },
+    };
+    await render(rail([longGoal]));
+    await click(chip("doing-now"));
+    const panel = dialog()!;
+    const rowBtn = panel.querySelector<HTMLButtonElement>("button.chat-status-row")!;
+    // The full text is in the DOM, the title, and the accessible name (CSS does the clamping);
+    // the railCue line ("Step 3 of 8") sits beneath it.
+    expect(rowBtn.querySelector(".chat-status-row__text")!.textContent).toBe(longTitle);
+    expect(rowBtn.getAttribute("title")).toBe(longTitle);
+    expect(rowBtn.getAttribute("aria-label")).toBe(`${longTitle}. Step 3 of 8. Open in Work`);
+    expect(rowBtn.querySelector(".chat-status-row__cue")!.textContent).toBe("Step 3 of 8");
+    // D3: the click closes the panel and opens this item's Work detail under the thisChat visit.
+    await click(rowBtn);
+    expect(dialog()).toBeNull();
+    const ui = useUI.getState();
+    expect(ui.surfaceStates.work).toMatchObject({ section: "overview", itemId: "goal:g-long" });
+    expect(isThisChatVisit()).toBe(true);
+  });
+
+  it("deep links a Coming up `wait` row the way Work keys it (schedule:<id>, not wait:<id>)", async () => {
+    // A `wait` job rides the schedules source, so Work keys its row `schedule:<id>`
+    // (WorkOverview.itemKey). The rail must emit the SAME key or Work opens a blank detail
+    // pane instead of the scheduled item. The id itself already carries the `wait:` prefix.
+    const waiting: GroupableWorkItem = {
+      kind: "wait", id: "wait:w1", status: "scheduled", title: "Wait on the webhook",
+      meta: "", sessionId: SESSION, raw: { state: "pending" },
+    };
+    await render(rail([waiting]));
+    await click(chip("coming-up"));
+    const rowBtn = dialog()!.querySelector<HTMLButtonElement>("button.chat-status-row")!;
+    expect(rowBtn.querySelector(".chat-status-row__text")!.textContent).toBe("Wait on the webhook");
+    await click(rowBtn);
+    expect(dialog()).toBeNull();
+    const ui = useUI.getState();
+    expect(ui.surfaceStates.work).toMatchObject({ section: "overview", itemId: "schedule:wait:w1" });
+    expect(isThisChatVisit()).toBe(true);
   });
 
   it("the Needs you deep link (S7) never scopes — it even ends a live visit scope", async () => {
@@ -276,19 +322,28 @@ describe("details panel", () => {
     }
   });
 
-  it("does not reopen by itself when the open chip leaves and later returns", async () => {
+  it("keeps an emptied work-chip panel open with a role=status line until dismissed (never under the cursor)", async () => {
     await render(rail([bg("bg-1", "running", SESSION)]));
     await click(chip("doing-now"));
     expect(dialog()).toBeTruthy();
-    // The job ends under the reader: chip and panel both go.
+    // The job ends under the reader: the chip stays as the open panel's anchor and the panel
+    // stays open with the §1 status line — it does NOT auto-close under the cursor.
+    await render(rail([bg("bg-1", "completed", SESSION)]));
+    const panel = dialog();
+    expect(panel).toBeTruthy();
+    expect(panel!.querySelector('[role="status"]')!.textContent).toBe("Nothing running in this chat now.");
+    expect(chip("doing-now")).toBeTruthy();
+    expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("true");
+    // Still exactly one polite live region ON THE RAIL: the panel's status line lives inside
+    // the open dialog, not on the rail itself.
+    const railRegions = [...host.querySelectorAll("[aria-live], [role='status']")]
+      .filter((node) => !node.closest("[aria-hidden='true']") && !node.closest('[role="dialog"]'));
+    expect(railRegions).toHaveLength(1);
+    // The operator dismisses it: the empty anchor chip and its panel both go.
+    await act(async () => panel!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(dialog()).toBeNull();
     await render(rail([bg("bg-1", "completed", SESSION)]));
     expect(chip("doing-now")).toBeNull();
-    expect(dialog()).toBeNull();
-    // A new job starts: the chip is back, the panel stays closed until asked for.
-    await render(rail([bg("bg-2", "running", SESSION)]));
-    expect(chip("doing-now")).toBeTruthy();
-    expect(dialog()).toBeNull();
-    expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("traps Tab inside the panel and returns focus to the chip on Escape", async () => {
@@ -322,7 +377,13 @@ it("phone: opens a bottom-sheet Drawer, stacks md actions, and restores focus on
   const sheet = document.querySelector<HTMLElement>(".pl-drawer--bottom");
   expect(sheet).toBeTruthy();
   expect(sheet!.getAttribute("role")).toBe("dialog");
-  expect(sheet!.textContent).toContain("Chat status");
+  // D1: the sheet shows ONLY the opened group, titled with its heading text (so the DS close
+  // button renders) — not the generic "Chat status", and no other group or Needs you.
+  expect(sheet!.querySelectorAll("section")).toHaveLength(1);
+  expect(sheet!.textContent).toContain("Doing now");
+  for (const absent of ["Chat status", "Coming up", "Your instructions", "Needs you"]) {
+    expect(sheet!.textContent).not.toContain(absent);
+  }
   // Phone actions are the md size (the DS default class set, not the sm modifier).
   const open = [...sheet!.querySelectorAll<HTMLButtonElement>("button")]
     .filter((b) => b.textContent === "Open in Work");
@@ -345,7 +406,9 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
     expect(told.querySelector(".chat-status-chip__count")).toBeNull();
     await click(told);
     const panel = dialog()!;
-    expect(panel.textContent).toContain("Couldn't check your instructions.");
+    expect(panel.textContent).toContain("Couldn't check your instructions in this chat.");
+    // Couldn't-load claims no count, in the heading or on the chip.
+    expect(panel.querySelector(".chat-status-details__count")).toBeNull();
     // A never-loaded ledger has no knowable count: the heading names the group alone — it
     // never claims "Your instructions · 0" while the chip calls the count unknown.
     const heading = [...panel.querySelectorAll(".chat-status-details__heading")]
@@ -367,7 +430,9 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
       await click(chip("instructions"));
       const panel = dialog()!;
       expect(panel.textContent).not.toContain("may be out of date");
-      expect(panel.textContent).not.toContain("Couldn't check your instructions.");
+      // The exact failure copy the panel would show — with the trailing "in this chat." — so
+      // the guard actually covers the couldn't-load sentence instead of passing vacuously.
+      expect(panel.textContent).not.toContain("Couldn't check your instructions in this chat.");
       expect([...panel.querySelectorAll("button")].some((b) => b.textContent === "Load again")).toBe(false);
       await act(async () => panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     }
@@ -384,6 +449,19 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
     expect(panel.textContent).toContain("Your instructions may be out of date.");
     await click([...panel.querySelectorAll("button")].find((b) => b.textContent === "Load again"));
     expect(state.ledger.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("loading: the heading drops its count and a busy skeleton stands in for the rows", async () => {
+    state.ledger = { state: "loading", loadedAt: null, refresh: vi.fn() };
+    await render(rail([directive("d1", SESSION)]));
+    await click(chip("instructions"));
+    const panel = dialog()!;
+    const heading = panel.querySelector(".chat-status-details__heading")!;
+    expect(heading.textContent).toBe("Your instructions"); // no count while loading
+    expect(panel.querySelector(".chat-status-details__count")).toBeNull();
+    expect(panel.querySelector('[aria-busy="true"]')).toBeTruthy();
+    expect(panel.querySelector(".pl-skel-lines")).toBeTruthy();
+    expect(panel.querySelector(".chat-status-row")).toBeNull(); // rows wait for the skeleton
   });
 });
 

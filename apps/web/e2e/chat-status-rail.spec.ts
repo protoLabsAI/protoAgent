@@ -113,26 +113,30 @@ for (const width of [1440, 390]) {
       expect(overflow.doc).toBeLessThanOrEqual(overflow.vw);
       await page.screenshot({ path: info.outputPath("rail-chips.png"), fullPage: true, animations: "disabled" });
 
-      // Grouped details: popover on desktop, the bottom sheet on the phone; Work's names.
+      // Grouped details (§1 D1): popover on desktop, the bottom sheet on the phone — holding
+      // ONLY the opened chip's own group, with Work's name.
       await doing.click();
       const details = page.locator(".chat-status-details");
       await expect(details).toContainText("Doing now · 2");
-      await expect(details).toContainText("Coming up · 1");
-      await expect(details).toContainText("Your instructions · 2");
       await expect(details).toContainText("Land PR #13");
-      await expect(details).toContainText("Collect the weekly numbers");
-      await expect(details).toContainText("Don't merge anything into main until I say so");
+      // No other group, and no other group's rows, ride along.
+      await expect(details).not.toContainText("Coming up ·");
+      await expect(details).not.toContainText("Your instructions ·");
+      await expect(details).not.toContainText("Collect the weekly numbers");
+      await expect(details).not.toContainText("Don't merge anything into main until I say so");
       if (width === 390) {
         await expect(page.locator(".pl-drawer--bottom")).toBeVisible();
         // Phone ergonomics measured for real, not pinned to the stylesheet's source text:
         // rows at the 48px floor, actions spanning the sheet's full column.
-        const row = details.locator(".chat-status-details__row").first();
+        const row = details.locator(".chat-status-row").first();
         expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(48);
         const actions = details.locator(".chat-status-details__actions").first();
         const action = actions.locator(".pl-btn").first();
         expect((await action.boundingBox())!.width).toBeGreaterThanOrEqual((await actions.boundingBox())!.width - 1);
       }
-      await expect(details.getByRole("button", { name: "Open in Work" })).toHaveCount(3);
+      // One group, so exactly one "Open in Work" action. `exact`: each row's accessible name
+      // ends with ". Open in Work" (§1 Rows), which a substring match would also count.
+      await expect(details.getByRole("button", { name: "Open in Work", exact: true })).toHaveCount(1);
       await page.screenshot({ path: info.outputPath("rail-details.png"), fullPage: true, animations: "disabled" });
 
       await page.keyboard.press("Escape");
@@ -177,7 +181,7 @@ for (const width of [1440, 390]) {
       // Load again is one click away, inside the grouped details.
       await told.click();
       const details = page.locator(".chat-status-details");
-      await expect(details).toContainText("Couldn't check your instructions.");
+      await expect(details).toContainText("Couldn't check your instructions in this chat.");
       await expect(details.getByRole("button", { name: "Load again" })).toBeVisible();
       if (width === 390) {
         // Two actions here (Load again + Open in Work): stacked on the phone, never side by side.

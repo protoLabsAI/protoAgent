@@ -107,7 +107,9 @@ for (const width of [1440, 390]) {
       await expect(details).toContainText(QUOTE);
       if (width === 390) await expect(page.locator(".pl-drawer--bottom")).toBeVisible();
       await page.screenshot({ path: info.outputPath("details.png"), fullPage: true, animations: "disabled" });
-      await details.getByRole("button", { name: "Open in Work" }).click();
+      // `exact`: each instruction row's accessible name ends with ". Open in Work" (§1 Rows),
+      // so a substring match would also catch the rows — target the lone action button.
+      await details.getByRole("button", { name: "Open in Work", exact: true }).click();
       const rail = page.locator('.work-view[data-frame="rail"]');
       await expect(page.getByRole("dialog", { name: "Standing instructions" })).toHaveCount(0);
       // Work has no This chat / All toggle (Josh 2026-11-11): the toggle is gone from the rail.
