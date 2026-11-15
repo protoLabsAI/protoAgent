@@ -845,13 +845,9 @@ def register_operator_routes(
                         "source": "task-outcome",
                         "dedup_key": f"task-outcome:{issue_id}:{previous['updated_at']}",
                     })
+            # The self-improvement review is queued from the store's ``task.changed`` close
+            # event (``tasks.autoclose``), the one path every close takes.
             issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, req.reason)
-            try:
-                from graph.self_improvement import dispatch_task_review
-
-                dispatch_task_review(issue, reason=req.reason or "")
-            except Exception:  # noqa: BLE001 — curation must never turn a successful close into a 500
-                log.exception("[self-improvement] task-close review scheduling failed")
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc

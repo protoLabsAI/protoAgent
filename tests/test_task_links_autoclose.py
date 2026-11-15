@@ -277,6 +277,142 @@ async def test_pr_sweep_closes_merged_and_leaves_open(store):
     assert seen == [still_open]
 
 
+# ── an auto-close gets the same post-close review as a hand close ──────────────
+
+
+def test_auto_close_runs_the_post_close_step_once_per_closed_task(store, bus):
+    closed: list[dict] = []
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=closed.append)
+    single = store.create("one card", links=["bd-a"])
+    pair = store.create("two cards", links=["bd-a", "bd-b"])
+
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#1)"})
+    # Only the task that actually closed; the pair still has bd-b open.
+    assert [row["id"] for row in closed] == [single["id"]]
+    assert closed[0]["close_reason"] == "bd-a merged (#1)"
+
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-b", "reason": "merged (#2)"})
+    assert [row["id"] for row in closed] == [single["id"], pair["id"]]
+    # A repeat event closes nothing new, so nothing is reviewed twice.
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#1)"})
+    assert len(closed) == 2
+
+
+def test_a_failing_post_close_step_never_breaks_the_auto_close(store, bus):
+    def boom(row):
+        raise RuntimeError("scheduler down")
+
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=boom)
+    linked = store.create("one card", links=["bd-a"])
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#1)"})
+    assert store.get(linked["id"])["status"] == "closed"
+
+
+async def test_pr_sweep_runs_the_post_close_step(store, bus):
+    url = "https://github.com/acme/widgets/pull/1"
+    linked = store.create("merged pr", links=[url])
+    closed: list[dict] = []
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=closed.append)
+
+    async def pr_state(_url):
+        return "merged"
+
+    assert await sweep_task_links(store, pr_state=pr_state) == 1
+    assert [row["id"] for row in closed] == [linked["id"]]
+
+
+@pytest.mark.parametrize(
+    "close",
+    [
+        lambda store, tid: store.close(tid, reason="done"),  # task_close tool / console close
+        lambda store, tid: store.update(tid, status="closed"),  # task_update status
+        lambda store, tid: store.update(tid, links=[]) and store.update(tid, status="closed"),
+    ],
+    ids=["close", "update-status", "update-then-close"],
+)
+def test_every_close_path_runs_the_post_close_step_once(store, bus, close):
+    closed: list[dict] = []
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=closed.append)
+    task = store.create("ship it")
+    close(store, task["id"])
+    assert [row["id"] for row in closed] == [task["id"]]
+    # A re-close of an already-closed task is not a new completion: no second review.
+    store.close(task["id"], reason="again")
+    store.update(task["id"], status="closed")
+    assert len(closed) == 1
+
+
+def test_update_replacing_links_that_are_all_done_runs_the_post_close_step(store, bus):
+    closed: list[dict] = []
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=closed.append)
+    task = store.create("two cards", links=["bd-a", "bd-b"])
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#1)"})
+    assert closed == []
+    store.update(task["id"], links=["bd-a"])  # keep only the finished link → closes now
+    assert [row["id"] for row in closed] == [task["id"]]
+
+
+def test_reopened_then_closed_task_is_a_new_completion(store, bus):
+    closed: list[dict] = []
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=closed.append)
+    task = store.create("ship it")
+    store.close(task["id"])
+    store.update(task["id"], status="open")
+    store.close(task["id"])
+    assert len(closed) == 2
+
+
+def test_default_post_close_step_queues_the_same_review_as_a_hand_close(store, bus, monkeypatch):
+    """End to end over the real default: an auto-closed task queues the self-improvement
+    review in its own session, under the per-task job id, and a later hand close of the
+    already-closed task queues nothing more."""
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
+
+    class Scheduler:
+        def __init__(self):
+            self.jobs = {}
+
+        def cancel_job(self, job_id):
+            return self.jobs.pop(job_id, None) is not None
+
+        def add_job(self, prompt, schedule, *, job_id=None, context_id=None):
+            self.jobs[job_id] = {"prompt": prompt, "context_id": context_id}
+
+    scheduler = Scheduler()
+    monkeypatch.setattr(
+        STATE, "graph_config", LangGraphConfig(self_improvement_enabled=True, self_improvement_distillation="propose")
+    )
+    monkeypatch.setattr(STATE, "scheduler", scheduler)
+    wire_task_autoclose(bus.subscribe_handler, store)
+    linked = store.create("ship it", links=["bd-a"], session_id="chat-1")
+
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#7)"})
+
+    assert list(scheduler.jobs) == [f"self-improvement-chat-1-task-{linked['id']}"]
+    job = scheduler.jobs[f"self-improvement-chat-1-task-{linked['id']}"]
+    assert job["context_id"] == "chat-1"
+    assert f"Completed task {linked['id']}: ship it" in job["prompt"]
+    assert "bd-a merged (#7)" in job["prompt"]
+    store.close(linked["id"], reason="by hand too")  # a re-close is not a new completion
+    assert len(scheduler.jobs) == 1
+
+
+def test_auto_close_queues_nothing_when_self_improvement_is_off(store, bus, monkeypatch):
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
+
+    added = []
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig())  # off by default
+    monkeypatch.setattr(
+        STATE, "scheduler", type("S", (), {"cancel_job": lambda *a: None, "add_job": lambda *a, **k: added.append(a)})()
+    )
+    wire_task_autoclose(bus.subscribe_handler, store)
+    store.create("ship it", links=["bd-a"], session_id="chat-1")
+    bus.publish(TASK_LINK_CLOSED_TOPIC, {"ref": "bd-a", "reason": "merged (#7)"})
+    assert added == []
+
+
 # ── waiting status + tool/route round-trips ────────────────────────────────────
 
 

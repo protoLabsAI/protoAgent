@@ -117,26 +117,59 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
     assert client.delete("/api/tasks/issues/task-1").json() == {"deleted": True}
 
 
-def test_task_close_dispatches_self_improvement_review(monkeypatch) -> None:
-    captured = []
+def test_task_close_route_queues_the_review_through_the_store_close_event(tmp_path, monkeypatch) -> None:
+    """The console close reaches the self-improvement review the way every close does:
+    the store's ``task.changed`` close event, not a direct call from the route."""
+    from events.bus import EventBus
+    from graph.plugins import host
+    from tasks.autoclose import wire_task_autoclose
+    from tasks.store import TaskStore
 
-    def _capture(task, *, session_id="", reason=""):
-        captured.append((task, session_id, reason))
-        return True
+    bus = EventBus()
+    monkeypatch.setattr(host.HOST, "publish", bus.publish)
+    store = TaskStore(db_path=str(tmp_path / "issues.db"))
+    reviewed: list[dict] = []
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=reviewed.append)
+    task = store.create("ship it")
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        tasks_store=store,
+    )
+    response = TestClient(app).post(f"/api/tasks/issues/{task['id']}/close", json={"reason": "verified"})
 
-    monkeypatch.setattr("graph.self_improvement.dispatch_task_review", _capture)
-    response = _client().post("/api/tasks/issues/task-1/close", json={"reason": "verified"})
-
-    assert response.status_code == 200
-    assert captured == [({"id": "task-1", "status": "closed", "close_reason": "verified"}, "", "verified")]
+    assert response.status_code == 200 and response.json()["issue"]["status"] == "closed"
+    assert [(row["id"], row["close_reason"]) for row in reviewed] == [(task["id"], "verified")]
 
 
-def test_task_close_succeeds_when_review_dispatch_fails(monkeypatch) -> None:
-    def _fail(*_args, **_kwargs):
+def test_task_close_succeeds_when_the_review_step_fails(tmp_path, monkeypatch) -> None:
+    from events.bus import EventBus
+    from graph.plugins import host
+    from tasks.autoclose import wire_task_autoclose
+    from tasks.store import TaskStore
+
+    def _fail(_row):
         raise RuntimeError("scheduler unavailable")
 
-    monkeypatch.setattr("graph.self_improvement.dispatch_task_review", _fail)
-    response = _client().post("/api/tasks/issues/task-1/close", json={"reason": "done"})
+    bus = EventBus()
+    monkeypatch.setattr(host.HOST, "publish", bus.publish)
+    store = TaskStore(db_path=str(tmp_path / "issues.db"))
+    wire_task_autoclose(bus.subscribe_handler, store, on_closed=_fail)
+    task = store.create("ship it")
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        tasks_store=store,
+    )
+    response = TestClient(app).post(f"/api/tasks/issues/{task['id']}/close", json={"reason": "done"})
 
     assert response.status_code == 200
     assert response.json()["issue"]["status"] == "closed"

@@ -39,6 +39,27 @@ from runtime.state import STATE
 log = logging.getLogger(__name__)
 
 
+def _wire_task_close_events() -> None:
+    """Give the sidecar the task-close path the server has.
+
+    A task's post-close step (the self-improvement review) is queued from the task
+    store's ``task.changed`` close event by ``tasks.autoclose``, which the server wires on
+    its bus. This process has no server bus, so ``HOST.publish`` is unset, the store's
+    close event goes nowhere, and a task closed through the sidecar would skip the review.
+    When nothing else has set ``HOST.publish``, a local bus takes its place and the same
+    subscribers are wired on it. With no SSE clients the other publishes are dropped."""
+    from graph.plugins.host import HOST
+
+    if HOST.publish is not None:
+        return
+    from events.bus import EventBus
+    from tasks.autoclose import wire_task_autoclose
+
+    bus = EventBus()
+    HOST.publish = bus.publish
+    wire_task_autoclose(bus.subscribe_handler, lambda: STATE.tasks_store)
+
+
 def _boot_stores_only(config):
     """Wire just the stores + plugins the tools need — no graph, no background loops.
 
@@ -56,6 +77,7 @@ def _boot_stores_only(config):
         from tasks import TaskStore
 
         STATE.tasks_store = TaskStore()
+    _wire_task_close_events()
 
     plugins = ai._build_plugins(
         config,

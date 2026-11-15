@@ -25,6 +25,11 @@ def _bare_state(monkeypatch):
     for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store"):
         monkeypatch.setattr(STATE, attr, None, raising=False)
     monkeypatch.setattr(STATE, "plugin_tools", [], raising=False)
+    # _boot_stores_only installs a local bus as HOST.publish when none is set; restore it
+    # after every test so a boot here can't leak a publisher into the rest of the suite.
+    from graph.plugins import host
+
+    monkeypatch.setattr(host.HOST, "publish", None)
 
 
 def test_resolver_lives_in_runtime_and_is_reexported():
@@ -409,3 +414,50 @@ def test_registryless_sidecar_serves_no_verifier_gated_tools(monkeypatch):
     assert host == served
     for gated in ("set_goal", "update_goal_plan", "abandon_goal", "create_watch", "list_watches"):
         assert gated not in host
+
+
+def test_sidecar_task_close_queues_the_review_like_the_server(tmp_path, monkeypatch):
+    """The sidecar has no server bus; its boot wires a local one so a task closed here
+    still reaches the post-close review (tasks.autoclose), the path every close takes."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import host
+    from server.operator_mcp import _wire_task_close_events
+    from tasks.store import TaskStore
+
+    class Scheduler:
+        def __init__(self):
+            self.jobs = {}
+
+        def cancel_job(self, job_id):
+            return self.jobs.pop(job_id, None) is not None
+
+        def add_job(self, prompt, schedule, *, job_id=None, context_id=None):
+            self.jobs[job_id] = context_id
+
+    scheduler = Scheduler()
+    monkeypatch.setattr(host.HOST, "publish", None)
+    monkeypatch.setattr(STATE, "tasks_store", TaskStore(db_path=str(tmp_path / "issues.db")), raising=False)
+    monkeypatch.setattr(STATE, "scheduler", scheduler, raising=False)
+    monkeypatch.setattr(
+        STATE,
+        "graph_config",
+        LangGraphConfig(self_improvement_enabled=True, self_improvement_distillation="propose"),
+        raising=False,
+    )
+    _wire_task_close_events()
+    assert host.HOST.publish is not None
+    task = STATE.tasks_store.create("ship it", session_id="chat-1")
+    STATE.tasks_store.close(task["id"], reason="done")
+    assert scheduler.jobs == {f"self-improvement-chat-1-task-{task['id']}": "chat-1"}
+
+
+def test_sidecar_keeps_a_host_publish_it_did_not_set(monkeypatch):
+    from graph.plugins import host
+    from server.operator_mcp import _wire_task_close_events
+
+    def existing(topic, data):
+        return None
+
+    monkeypatch.setattr(host.HOST, "publish", existing)
+    _wire_task_close_events()
+    assert host.HOST.publish is existing

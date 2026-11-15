@@ -469,23 +469,14 @@ def _build_task_tools(tasks_store) -> list:
         return result
 
     @tool
-    def task_close(
-        issue_id: str,
-        reason: str = "",
-        state: Annotated[Any, InjectedState] = None,
-    ) -> str:
+    def task_close(issue_id: str, reason: str = "") -> str:
         """Close an issue (done, or won't-do). Optional ``reason``."""
         try:
             i = tasks_store.close(issue_id, reason=reason or None)
         except (KeyError, ValueError) as exc:
             return f"Error: {exc}"
-        session_id = _session_id_from(state)
-        try:
-            from graph.self_improvement import dispatch_task_review
-
-            dispatch_task_review(i, session_id=session_id, reason=reason)
-        except Exception:  # noqa: BLE001 — curation must never break task closure
-            log.exception("[self-improvement] task-close review scheduling failed")
+        # The self-improvement review is queued from the store's ``task.changed`` close
+        # event (``tasks.autoclose``), the one path every close takes.
         return f"Closed {i['id']}: {i['title']}"
 
     return [task_create, task_list, task_update, task_close]

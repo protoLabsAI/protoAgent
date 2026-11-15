@@ -24,7 +24,15 @@ system already learns that work finished:
   the state of each PR URL an open task still links, and resolves merged/closed ones.
 
 Everything funnels into ``TaskStore.resolve_link``, which owns the all-links-done
-auto-close and the ``task.changed`` publish. Handlers are best-effort: a lookup or
+auto-close and the ``task.changed`` publish.
+
+**Every close gets the same post-close step.** The store marks a write that moved an
+open task to closed (``closed_now`` on ``task.changed``) however it happened: the
+``task_close`` tool, the console's close button, ``task_update`` setting the status or
+replacing links that are all done, or ``resolve_link`` here. One subscriber
+(:func:`wire_task_autoclose`'s ``on_task_changed``) runs ``on_closed`` for exactly those
+events, by default ``graph.self_improvement.dispatch_task_review``: one review per
+completion, never for a re-close of an already-closed task. Handlers are best-effort: a lookup or
 store failure is logged and never breaks the publisher (EventBus isolates handler
 errors too). Tasks without links never match a ref, so they are untouched.
 """
@@ -72,18 +80,30 @@ def _default_get_directive(session_id: str, directive_id: str):
     return directive_store().get(session_id, directive_id)
 
 
+def _default_on_closed(task: dict) -> None:
+    """The post-close step every task close shares: queue the opt-in self-improvement
+    review in the task's own session. A no-op when self-improvement is off."""
+    from graph.self_improvement import dispatch_task_review
+
+    dispatch_task_review(task, reason=str(task.get("close_reason") or ""))
+
+
 def wire_task_autoclose(
     subscribe: Callable[[str, Callable[[dict], Any]], Callable[[], None]],
     tasks_store: Any,
     *,
     get_job: Callable[[str], Any] | None = None,
     get_directive: Callable[[str, str], Any] | None = None,
+    on_closed: Callable[[dict], Any] | None = None,
 ) -> list[Callable[[], None]]:
     """Subscribe the auto-close handlers on the event bus (``EventBus.subscribe_handler``
     shape). Returns the unsubscribe callables. ``tasks_store`` may be the store or a
     zero-arg getter; ``get_job`` / ``get_directive`` default to the live scheduler and
-    directive ledger and exist as seams for tests."""
+    directive ledger and exist as seams for tests; ``on_closed`` (default: the
+    self-improvement review, :func:`_default_on_closed`) runs once for each task a
+    write moves from open to closed, whichever path closed it."""
     get_job = get_job or _default_get_job
+    on_closed = on_closed or _default_on_closed
     get_directive = get_directive or _default_get_directive
 
     def _resolve(ref: str, reason: str) -> None:
@@ -145,8 +165,24 @@ def wire_task_autoclose(
             return  # recurring job still live — this fire settled, the job didn't
         _resolve(job_id, "failed" if data.get("ok") is False else "finished")
 
+    def on_task_changed(payload: dict) -> None:
+        data = payload.get("data") or {}
+        if not data.get("closed_now"):
+            return  # not a completion (an edit, a create, or a re-close of a closed task)
+        store = _store_of(tasks_store)
+        issue_id = str(data.get("id") or "").strip()
+        if store is None or not issue_id:
+            return
+        try:
+            row = store.get(issue_id)
+            if row and row.get("status") == "closed":
+                on_closed(row)
+        except Exception:  # noqa: BLE001 — curation must never break the publisher
+            log.exception("[tasks] post-close step failed for %r", issue_id)
+
     return [
         subscribe(TASK_LINK_CLOSED_TOPIC, on_link_closed),
+        subscribe("task.changed", on_task_changed),
         subscribe("directive.changed", on_directive_changed),
         subscribe("scheduler.changed", on_scheduler_changed),
         subscribe("turn.finished", on_turn_finished),
@@ -174,7 +210,8 @@ async def sweep_task_links(tasks_store: Any, *, pr_state: Callable[[str], Any] |
     """One pass of the periodic PR sweep (ADR 0129 Q1): resolve the PR links open
     tasks still hold whose PR has merged or closed. Returns how many issues were
     touched. Cheap when idle: no open task holds an unresolved PR link → returns
-    before any ``gh`` call. ``pr_state`` is the fetch seam (defaults to ``gh``)."""
+    before any ``gh`` call. ``pr_state`` is the fetch seam (defaults to ``gh``). A task
+    it closes gets the post-close review through ``task.changed`` (see the module doc)."""
     store = _store_of(tasks_store)
     if store is None:
         return 0

@@ -42,6 +42,16 @@ def _publish(topic: str, data: dict) -> None:
         pass
 
 
+def _changed(issue_id: str, action: str, *, closed_now: bool = False) -> dict:
+    """The ``task.changed`` payload. ``closed_now`` is set only when this write moved an
+    OPEN task to closed (a re-close of a closed task doesn't set it), so a consumer that
+    acts once per completion, like the self-improvement review, can key on it."""
+    data: dict = {"id": issue_id, "action": action}
+    if closed_now:
+        data["closed_now"] = True
+    return data
+
+
 # Open lifecycle states (closed is terminal). Mirrors the console's
 # issueStatusOrder; `tombstone` is intentionally absent (we hard-delete).
 # `waiting` (ADR 0129 Q1) = the next step is the operator's call — the agent parks the
@@ -347,6 +357,7 @@ class TaskStore:
             row = self._row(issue_id)
             if row is None:
                 raise KeyError(f"unknown issue {issue_id!r}")
+            was_closed = row["status"] == "closed"
             merged: list[dict] = []
             if links is not None:
                 merged = self._merge_links(row["links"], links)
@@ -368,9 +379,12 @@ class TaskStore:
                     "UPDATE issues SET status='closed', closed_at=?, close_reason=?, updated_at=? WHERE id=?",
                     (now, _close_reason(merged), now, issue_id),
                 )
-                action = "closed"
             result = dict(self._row(issue_id))
-        _publish("task.changed", {"id": issue_id, "action": action})
+            # This update closed an open task (a ``status`` of closed, or the links
+            # auto-close above): announce it as a close, like ``close`` does.
+            if result["status"] == "closed" and not was_closed:
+                action = "closed"
+        _publish("task.changed", _changed(issue_id, action, closed_now=action == "closed"))
         return result
 
     def close(self, issue_id: str, reason: str | None = None) -> dict[str, Any]:
@@ -378,14 +392,15 @@ class TaskStore:
             raise ValueError("issue_id is required")
         now = _now()
         with self._write():
-            if self._row(issue_id) is None:
+            prior = self._row(issue_id)
+            if prior is None:
                 raise KeyError(f"unknown issue {issue_id!r}")
             self._conn.execute(
                 "UPDATE issues SET status='closed', closed_at=?, close_reason=?, updated_at=? WHERE id=?",
                 (now, reason or "", now, issue_id),
             )
             result = dict(self._row(issue_id))
-        _publish("task.changed", {"id": issue_id, "action": "closed"})
+        _publish("task.changed", _changed(issue_id, "closed", closed_now=prior["status"] != "closed"))
         return result
 
     def resolve_link(self, ref: str, reason: str = "") -> list[dict[str, Any]]:
@@ -434,7 +449,8 @@ class TaskStore:
                     affected.append((row["id"], "updated"))
             results = [dict(self._row(issue_id)) for issue_id, _action in affected]
         for issue_id, action in affected:
-            _publish("task.changed", {"id": issue_id, "action": action})
+            # resolve_link only reads open rows, so every "closed" here is a transition.
+            _publish("task.changed", _changed(issue_id, action, closed_now=action == "closed"))
         return results
 
     def record_stall_nudge(self, issue_id: str) -> int:
