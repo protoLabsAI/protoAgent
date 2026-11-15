@@ -165,6 +165,14 @@ export type ConversationRow = {
   /** The newest turn's A2A state spelling (`working`, `completed`, `failed`, `input-required`,
    *  `TASK_STATE_INPUT_REQUIRED`, `auth-required`, …), or null. */
   last_state: string | null;
+  /** Who started the thread (docs/design/other-conversations.md §8) — read from the origin the
+   *  first turn stored (`a2a_impl.conversation_origin`). DISPLAY-ONLY, never an authorization
+   *  input. Each is present ONLY when stored; an absent field (and an unrecognised `caller_kind`)
+   *  is omitted by the server rather than sent null. Snake_case to mirror the wire row exactly,
+   *  like the other fields. No UI reads them yet (this slice carries them through). */
+  caller?: string;
+  caller_kind?: "person" | "agent";
+  on_behalf_of?: string;
 };
 
 /** One session's summary + busy signal, from `GET /api/chat/sessions/{id}` (`chatApi.chatSession`).
