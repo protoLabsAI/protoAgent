@@ -44,7 +44,7 @@ Josh, 2026-11-15: "yes extend vs new storage." The binding from work to the conv
 
 When a task or card is created inside a `job:`, `background:`, inbox or scheduler turn, its origin is **inherited from what caused that turn**: the inbox item's originating session or context, the scheduled job's `origin_session`, or the delegation's caller context. It is never the `job:` id itself. Origin stays display and routing data only, never an authorization input (as in `conversation_origin`). A task with no recoverable origin keeps an empty origin, and D8's answer-in-place still works.
 
-To make this possible, inbox items gain a structured origin: an originating context id plus the existing display origin fields. Producers that know it (scheduler fires, delegation results, board block pages, D9 nudges) set it.
+**How (amended 2026-11-15 after mapping the code).** The origin is **resolved from the durable stores that already record the cause**, at the moment work is created. It is not threaded through graph state. Scheduler fires and background delegations never pass through the inbox. They run directly on `job:` / `background:` contexts whose cause is already stored: `jobs.origin_session` joined through `job_sessions` (context id to job), and `BackgroundJob.origin_session`. Inbox-fired turns get the same from a new inbox `origin_session` column joined through `inbox_executions`. A resolver (`tools/session.py`) maps a `job:` / `background:` context to its originating session, recursing a few hops while the answer is still a server context. With no match it returns empty, never the `job:` id. The resolved origin is written into the task's existing `session_id`, so D8's reply routing and the C6a provenance link work unchanged. Tasks get no new column. Board cards gain an origin field through the plugin, which calls the host resolver.
 
 ### D3 — Outside conversations live for the window the console shows
 
@@ -78,10 +78,13 @@ Each phase is boarded as small or medium cards (four files or fewer each, per th
   - The follow-up backoff registry persisted, so a restart doesn't re-fire quiet follow-ups (new card).
   - #5317 and #5318.
 - **P2 — Work knows its conversation (D2):**
-  - P2a. Inbox items carry a structured origin (column and producer API). Scheduler, delegation and board block-page producers set it.
-  - P2b. A task or card created in a `job:` / inbox / scheduler turn inherits that origin instead of the `job:` session. Tested at the tool seam, and it must fail on main.
-  - P2c. The Work view and From others show the binding both ways: a task's "Started in a conversation from …" link (exists since C6a), and a thread row's "about bd-xxx / task-nn" when a task carries that thread as its origin.
-  - P2d. **Discord** (placed here because it reuses P2b once A2A works): rebuild the thread to conversation map from `discord_turns` on restart and on conversation expiry, so a Discord thread keeps one origin across both.
+  - P2a-1. Inbox items carry `origin_session` and the display origin fields. `InboxStore.add(origin_session=, origin=)`, `origin_for_context(context_id)` through `inbox_executions`, and `POST /api/inbox` accepts them.
+  - P2a-2. D9 stall nudges pass the stalled task's `session_id` as the inbox item's origin.
+  - P2b-1. Origin resolver: `job:` goes to the inbox, then the scheduler (`job_sessions` joined with `jobs.origin_session`). `background:` goes to the background store. Bounded recursion, empty when unknown.
+  - P2b-2. `task_create` and `schedule_task.origin_session` (not its `context_id` or `wait`, which decide where a fire runs) use the resolver, so a task created in a cron or inbox turn binds to the chat that caused it.
+  - P2b-3 (projectBoard). Cards record an origin through the host resolver, and board block pages pass it to the inbox. Needs a core floor bump once P2b-1 ships.
+  - P2c. Show the binding both ways. API: `GET /api/conversations` rows gain the open tasks whose `session_id` is that thread. UI: a designSystem spec and preview first, then cards.
+  - P2d (Discord). After a restart or conversation expiry, a known thread is restored from `discord_turns` (same `conversation_id`, origin channel recovered), and the gateway's thread gate checks the turn log on a miss, so the thread doesn't fall back to a plain channel that needs an @-mention.
 - **P3 — Progress view (D4):** a read-only join of board `/status`, D9 and Work, plus D9's driven test extended with the board's progress evidence. No new store.
 - **P4 — Instrumentation (D6):** the counters above, recorded for a week.
 - **P5 — Observe-only pilot (D5):** alerts for the real cases first: a preflight hold past N passes (pb#768 pages, measure it), waiting on a verdict that can't change at the current head, and a card claimed with no commit past its budget. Each alert links its evidence and resolves with one recovery notification.
@@ -95,7 +98,7 @@ Each phase is boarded as small or medium cards (four files or fewer each, per th
 
 ## Acceptance scenarios (named tests at slice time)
 
-- A task created in a scheduled job's turn links back to the chat that scheduled it, and survives a restart (P2b).
+- A task created in a scheduled job's turn, an inbox-fired turn or a background delegation turn gets the session that caused it, never the `job:` id, and keeps it across a restart (P2b).
 - A From others thread stays listed and readable for 7 days, and is gone after 8 (P1, bd-0txnt).
 - A Discord thread keeps one origin across a restart and across a conversation expiry (P2d).
 - A restart doesn't re-fire a backed-off quiet follow-up (P1).
