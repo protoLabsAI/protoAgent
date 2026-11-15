@@ -483,7 +483,7 @@ Independent fixes in flight that this ADR keeps: #5099 (a decision answer return
 ## Decisions taken (Josh, 2026-11-11)
 
 - **Interrupted turns (D7, 2026-11-12):** resume what's safe, ask about the rest. Josh chose the hybrid after weighing at-most-once, at-least-once, checkpoint resume and asking in Needs you.
-- **Group names:** Needs you · Doing now · Coming up · Your instructions. The rail chip for instructions reads "Told it N".
+- **Group names:** Needs you · Doing now · Coming up · Your instructions. The rail chip for instructions reads "Instructions N".
 - **Not-started jobs** don't count in Doing now. They show under Coming up.
 - **Interim decision link:** until D4's server-recorded approvals land, an instruction links to a decision when that decision was answered within the 2 minutes before the instruction was recorded.
 - **The design** is the designSystem spec (docs/design/work-consolidation.md), approved 2026-11-11.

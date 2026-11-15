@@ -1,0 +1,1 @@
+- **Align instruction chip wording in the design docs.** ADR 0129 and the chat status rail design docs now use “Instructions” for the chip and spoken labels, while the Work group remains “Your instructions”.

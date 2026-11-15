@@ -73,14 +73,14 @@ Rail, window and phone sheet keep the approved third-pass layout: the list is th
 | Needs you (primary `Button xs`, first) | Needs you 2 | 2 | **fleet-wide** |
 | Doing now | Doing now · goal 3/8 · 3 | 3 | this chat, running only |
 | Coming up | Coming up 3 | 3 | this chat |
-| Your instructions | **Told it 3** | 3 | this chat |
+| Your instructions | **Instructions 3** | 3 | this chat |
 | People | unchanged | unchanged | — |
 
 - **Count rule:** a chip's count equals the rows the matching Work group shows with `thisChat` applied. Needs you is never filtered. One shared selector (`workGroups`) computes both, so they can't drift. Not-started jobs are in Coming up, so they never reach the Doing now chip.
 - The goal stays visible inside the Doing now chip ("goal 3/8"). With no goal, the chip uses the spinner icon.
 - Zero-count chips don't render. The empty-rail rule, the `+K` people overflow and the decision marker's room rules are unchanged.
-- **Details panel:** one section per group, using the Work group names ("Your instructions · 3", not "Told it"), each with **Open in Work** (deep link to that group, `thisChat`). The Needs you section keeps the approved decision card behaviour (full card, answer states, stale hint).
-- **Spoken labels:** "Doing now, 3 running in this chat, including the goal at step 3 of 8. Show details"; "Told it: 3 instructions in force in this chat. Show details"; "2 things need you. Show them".
+- **Details panel:** one section per group, using the Work group names ("Your instructions · 3", not "Instructions"), each with **Open in Work** (deep link to that group, `thisChat`). The Needs you section keeps the approved decision card behaviour (full card, answer states, stale hint).
+- **Spoken labels:** "Doing now, 3 running in this chat, including the goal at step 3 of 8. Show details"; "Instructions: 3 instructions in force in this chat. Show details"; "2 things need you. Show them".
 
 ## 6. Accessibility
 
@@ -105,7 +105,7 @@ None new for §1–§9. §10 uses `Dialog` (rail, window), bottom `Drawer` (phon
 ## 9. Changes from v1
 
 1. Headings use "you" wording: Needs you · Doing now · Coming up · Your instructions.
-2. Rail chip for instructions reads "Told it N".
+2. Rail chip for instructions reads "Instructions N".
 3. Not-started jobs move from Doing now to Coming up and don't count in either Doing now.
 4. Decision link: answer within 2 minutes before the directive was recorded (interim, until ADR 0129 D4).
 
