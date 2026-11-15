@@ -81,6 +81,25 @@ def _mark_incomplete(reply: str, stop_reason: str | None) -> str:
     return f"{reply}\n\n[incomplete reply — {note}]" if reply.strip() else f"[no reply — {note}]"
 
 
+def _with_branch_note(text: str, switch, root: str) -> str:
+    """Fold a ``change_summary.BranchSwitch`` outcome into the delegate's reply+summary.
+
+    A dispatch that stayed on its branch returns ``text`` unchanged (no new wording — the
+    summary is identical to before). A safe switch-back is a one-line trailer on the
+    summary; a refused one is a warning the lead must see first, so it LEADS the whole
+    reply (bd-nfaen)."""
+    if not switch.changed:
+        return text
+    left = switch.left_on or "(detached)"
+    if switch.switched:
+        return f"{text}\nThe coder left the checkout on `{left}`; switched it back to `{switch.original}`."
+    warning = (
+        f"Warning: the coder left `{root}` on `{left}`, not `{switch.original}`, "
+        f"and it was not switched back: {switch.reason}."
+    )
+    return f"{warning}\n\n{text}"
+
+
 class AcpAdapter(Adapter):
     type = "acp"
     label = "Coding agent (ACP)"
@@ -290,12 +309,25 @@ class AcpAdapter(Adapter):
         finally:
             overlapped = cs.end(root, token)
         try:
+            after = await asyncio.to_thread(cs.after, before)
+        except (cs.ChangeCaptureError, OSError) as exc:
+            # No post-dispatch snapshot means no known after-branch, so the branch restore
+            # can't run and can't name what to warn about — degrade to the note alone.
+            return f"{reply}\n\n[no change summary — post-dispatch snapshot failed: {exc}]"
+        try:
             summary = await asyncio.to_thread(
-                lambda: cs.render(before, cs.after(before), project=d.project_name, overlapped=overlapped)
+                lambda: cs.render(before, after, project=d.project_name, overlapped=overlapped)
             )
         except (cs.ChangeCaptureError, OSError) as exc:
-            summary = f"[no change summary — post-dispatch snapshot failed: {exc}]"
-        return f"{reply}\n\n{summary}"
+            # Rendering the diff failed, but we still hold ``after`` — so the branch restore
+            # below still runs (the card requires its warning even on a git failure).
+            summary = f"[no change summary — rendering the diff failed: {exc}]"
+        # A bare project dispatch shares the board's base checkout, so a coder that checks
+        # out another branch there (a release changelog fix, say) strands the board on it.
+        # Put it back when it's safe; otherwise warn loudly and leave it untouched (bd-nfaen).
+        # ``overlapped`` blocks the switch when a concurrent coder may still hold this checkout.
+        switch = await asyncio.to_thread(cs.restore_branch, before, after, overlapped=overlapped)
+        return _with_branch_note(f"{reply}\n\n{summary}", switch, root)
 
     async def _prompt(
         self, d: Delegate, query: str, *, timeout: float | None = None, fresh_session: bool = False

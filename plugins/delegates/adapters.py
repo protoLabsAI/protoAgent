@@ -51,7 +51,12 @@ from .a2a import (  # noqa: F401 — re-exported
     _writes_are_local,
     mark_delegation_detached,
 )
-from .acp_adapter import _INCOMPLETE_STOP_REASONS, AcpAdapter, _mark_incomplete  # noqa: F401 — re-exported
+from .acp_adapter import (  # noqa: F401 — re-exported
+    _INCOMPLETE_STOP_REASONS,
+    AcpAdapter,
+    _mark_incomplete,
+    _with_branch_note,
+)
 from .base import (  # noqa: F401 — re-exported
     _SECRETISH,
     _TOKEN_SPLIT,
