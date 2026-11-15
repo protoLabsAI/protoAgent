@@ -514,6 +514,16 @@ test("mobile: Conversations pins above the chats, and its list and a thread fill
   // Copy link is icon-only here and the long clause is dropped — both hidden by the phone CSS.
   await expect(footer.locator(".conversation-reader__footer-copy-label")).toBeHidden();
   await expect(footer.locator(".conversation-reader__footer-note-rest")).toBeHidden();
+  // Every phone footer target clears the 44px touch floor — Copy link included, even though its
+  // Tooltip wraps it in a span.pl-tip-wrap that a direct-child CSS rule would have missed.
+  const copyBtn = footer.getByRole("button", { name: "Copy link" });
+  const continueBtn = footer.getByRole("button", { name: "Continue in a new chat" });
+  const lock = footer.locator(".conversation-reader__footer-lock");
+  for (const target of [copyBtn, continueBtn, lock]) {
+    const box = (await target.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  expect((await copyBtn.boundingBox())!.width).toBeGreaterThanOrEqual(44);
   await back.click();
   await expect(page.locator(".mshell-conversations .conversations-pane")).toBeVisible();
   await expect(page.locator(".mshell-conversations .conversation-reader")).toHaveCount(0);

@@ -148,7 +148,10 @@
   min-width: 44px;
   min-height: 44px;
 }
-.mshell-conversations .conversation-reader__footer-actions > .pl-btn {
+/* A descendant combinator (not `>`): Copy link is wrapped in its Tooltip's `span.pl-tip-wrap`, so
+   it is a grandchild of the actions row — a direct-child rule would miss it and only size Continue.
+   This floors BOTH action buttons to the 44px touch target. */
+.mshell-conversations .conversation-reader__footer-actions .pl-btn {
   min-height: 44px;
 }
 .mshell-conversations .conversation-reader__footer-copy {
