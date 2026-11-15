@@ -40,7 +40,7 @@ import {
   useConversations,
   hide as hideConversationsTab,
   show as showConversationsTab,
-  openConversations,
+  setStage as setConversationsStage,
   openChat as leaveConversationsForChat,
 } from "./conversations-store";
 
@@ -539,9 +539,11 @@ export function ChatSurface({
           ]}
           onSelect={(id) => {
             // Selecting the Conversations tab only switches the stage (§4.7) — it never touches
-            // `currentSessionId`. Selecting any chat tab returns to that chat.
+            // `currentSessionId`, and it preserves the remembered open thread so returning to the
+            // tab reopens it (§3.4), rather than resetting to the list. Selecting any chat tab
+            // returns to that chat.
             if (isConversationsStage(id)) {
-              openConversations();
+              setConversationsStage("conversations");
               return;
             }
             leaveConversationsForChat();

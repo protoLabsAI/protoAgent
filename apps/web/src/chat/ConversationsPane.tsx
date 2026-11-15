@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Alert, Skeleton, SkeletonGroup, StatusDot } from "@protolabsai/ui/data";
 import { Badge, Button, Eyebrow, type Status } from "@protolabsai/ui/primitives";
 import { Tooltip } from "@protolabsai/ui/overlays";
 
 import { relTime } from "../work/tone";
+import { ConversationReader } from "./ConversationReader";
 import type { ConversationRow } from "./conversations-store";
 import { openThread, retry, useConversations } from "./conversations-store";
 
@@ -43,6 +44,7 @@ function ConversationRowButton({ row }: { row: ConversationRow }) {
       <button
         type="button"
         className="conversations-row__btn"
+        data-row-id={row.session_id}
         aria-label={name}
         onClick={() => openThread(row.session_id)}
       >
@@ -73,6 +75,7 @@ function ConversationRowButton({ row }: { row: ConversationRow }) {
 
 export function ConversationsPane({ agentName }: { agentName: string }) {
   const conv = useConversations();
+  const openThreadId = conv.openThreadId;
   // Automated opens by default only in the automated-only state (§5); otherwise it is collapsed
   // and the operator toggles it. Controlled so the "opens by default" case can't be collapsed
   // shut onto an empty For-you group.
@@ -80,8 +83,33 @@ export function ConversationsPane({ agentName }: { agentName: string }) {
   const [automatedOpen, setAutomatedOpen] = useState(false);
   const showAutomated = automatedOpen || automatedOnly;
 
+  // Back to list returns focus to the row the thread was opened from (§3.4/§7). The list unmounts
+  // while the reader shows and remounts on return, so capture the id on open and refocus the
+  // matching row button after the list is back in the DOM (not the stale element, which is gone).
+  const listRef = useRef<HTMLElement>(null);
+  const lastOpenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (openThreadId) {
+      lastOpenRef.current = openThreadId;
+      return;
+    }
+    const id = lastOpenRef.current;
+    if (!id) return;
+    lastOpenRef.current = null;
+    const rows = listRef.current?.querySelectorAll<HTMLButtonElement>(".conversations-row__btn");
+    rows?.forEach((btn) => {
+      if (btn.dataset.rowId === id) btn.focus();
+    });
+  }, [openThreadId]);
+
+  // An open thread shows the read-only reader in the same pane (§3.4); the tab stays selected.
+  if (openThreadId) {
+    const openRow = conv.rows.find((r) => r.session_id === openThreadId);
+    return <ConversationReader threadId={openThreadId} row={openRow} agentName={agentName} />;
+  }
+
   return (
-    <section className="conversations-pane" aria-label="Conversations">
+    <section className="conversations-pane" aria-label="Conversations" ref={listRef}>
       <header className="conversations-pane__head">
         <Eyebrow>Read-only</Eyebrow>
         <h2 className="conversations-pane__title">Conversations</h2>

@@ -1495,3 +1495,102 @@
   display: flex;
   padding: var(--pl-space-1) var(--pl-space-2);
 }
+
+/* ── Conversation reader (slice C3, §3.4/§3.5/§5) ────────────────────────────────────────────
+   The read-only thread view that replaces the list in the same pane when a row is opened. Same
+   fill behaviour as the list pane (it takes its slot in the chat stage). Tokens only; no status
+   token as a text colour (Work §2.2). */
+.conversation-reader {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.conversation-reader__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-3) var(--pl-space-4);
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
+}
+.conversation-reader__back {
+  align-self: flex-start;
+  margin-bottom: var(--pl-space-1);
+}
+.conversation-reader__titlerow {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.conversation-reader__title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--pl-font-size-lg);
+  font-weight: 600;
+  color: var(--pl-color-fg);
+}
+/* Focus moves here on open (§7) — a programmatic cue for screen readers, not a keyboard stop, so
+   it needs no visible ring. */
+.conversation-reader__title:focus {
+  outline: none;
+}
+.conversation-reader__titlerow .pl-badge {
+  flex: none;
+}
+.conversation-reader__origin {
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
+}
+.conversation-reader__body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-3);
+  padding: var(--pl-space-3) var(--pl-space-4);
+  overflow: hidden;
+}
+.conversation-reader__loading {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--pl-space-5);
+}
+/* The warning callout's one row: the note and "Answer in Needs you", wrapping on a narrow pane. */
+.conversation-reader__needs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-2);
+}
+/* The turns scroll inside the DS Conversation; the callout above stays pinned. */
+.conversation-reader__turns {
+  flex: 1 1 0;
+  min-height: 0;
+}
+/* The composer's slot: a read-only note + the two chat-forwarding actions, never an input (§3.5). */
+.conversation-reader__footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-3) var(--pl-space-4);
+  border-top: var(--pl-border-width) solid var(--pl-color-border);
+}
+.conversation-reader__footer-note {
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
+}
+.conversation-reader__footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+}

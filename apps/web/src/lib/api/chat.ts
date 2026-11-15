@@ -167,6 +167,19 @@ export type ConversationRow = {
   last_state: string | null;
 };
 
+/** One session's summary + busy signal, from `GET /api/chat/sessions/{id}` (`chatApi.chatSession`).
+ *  `active` is true while a turn is running on the session (any surface); `last_state` is the
+ *  newest turn's A2A state spelling. The Conversations reader uses it to confirm a thread still
+ *  exists (a 404 is the "gone" state) and, absent a live list row, for its status. */
+export type ChatSessionSummary = {
+  session_id: string;
+  active: boolean;
+  turn_count: number | null;
+  last_updated: string | null;
+  last_state: string | null;
+  reason?: string;
+};
+
 export const chatApi = {
   /** The agent's OTHER conversations (docs/design/other-conversations.md S2): every outside A2A
    *  thread, newest-active first, `for_you` before `automated`. `before=<iso>` pages older, 50 at
@@ -351,6 +364,16 @@ export const chatApi = {
     return request<{ turns: DurableChatTurn[]; live_task_id?: string | null; reason?: string }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/turns?limit=${Math.max(1, Math.min(limit, 200))}`,
     );
+  },
+
+  /** One session's summary + busy signal (`GET /api/chat/sessions/{id}`): `{session_id,
+   *  active, turn_count, last_updated, last_state}` — the same `active`/`last_state` the
+   *  Conversations list reads (§4.2). An unknown or swept context throws an `ApiError` with
+   *  `status: 404`, which the Conversations reader shows as the "no longer stored" gone state
+   *  (§5). Pairs with `chatSessionTurns` for the thread body — this read is what tells the
+   *  reader whether the thread still exists. */
+  chatSession(sessionId: string) {
+    return request<ChatSessionSummary>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
   },
 
   // Compact a chat session server-side (#1527): archive the raw history into
