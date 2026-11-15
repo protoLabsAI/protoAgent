@@ -258,13 +258,18 @@ registerContextMenu({
     // tab's only right-click action is Hide; the tab-bar background gains Show while it's hidden.
     onHideConversations?: () => void;
     onShowConversations?: () => void;
+    // The desktop tab labels these "From others" (§9 C7a); the phone session sheet shares this
+    // menu but keeps the "Conversations" wording until C7b renames it — so each caller supplies
+    // its own label and the default preserves the phone text.
+    hideConversationsLabel?: string;
+    showConversationsLabel?: string;
   }): MenuEntry[] => {
     // The Conversations tab is not a chat — its menu is a single Hide entry, nothing else.
     if (ctx?.onHideConversations) {
       return [
         {
           id: "hide-conversations",
-          label: "Hide Conversations tab",
+          label: ctx.hideConversationsLabel ?? "Hide Conversations tab",
           icon: <EyeOff size={14} />,
           run: () => ctx.onHideConversations?.(),
         },
@@ -329,7 +334,7 @@ registerContextMenu({
     if (ctx?.onShowConversations) {
       out.push({
         id: "show-conversations",
-        label: "Show Conversations tab",
+        label: ctx.showConversationsLabel ?? "Show Conversations tab",
         icon: <Eye size={14} />,
         run: () => ctx.onShowConversations?.(),
       });
