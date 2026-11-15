@@ -1514,15 +1514,22 @@
   padding: var(--pl-space-3) var(--pl-space-4);
   border-bottom: var(--pl-border-width) solid var(--pl-color-border);
 }
+/* ← Back is now the first item on the title line (C9c), not a row of its own. */
 .conversation-reader__back {
-  align-self: flex-start;
-  margin-bottom: var(--pl-space-1);
+  flex: none;
 }
 .conversation-reader__titlerow {
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
   min-width: 0;
+}
+/* The title's Tooltip wrapper (`.pl-tip-wrap`, inline-flex) is the flex item that grows and
+   clips, so the h2 inside keeps ellipsising between ← Back and the Badge. */
+.conversation-reader__titlerow .pl-tip-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 .conversation-reader__title {
   margin: 0;

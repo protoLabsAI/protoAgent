@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Spinner } from "@protolabsai/ui/data";
-import { Badge, Button, Callout, Empty, Eyebrow, type Status } from "@protolabsai/ui/primitives";
+import { Badge, Button, Callout, Empty, type Status } from "@protolabsai/ui/primitives";
+import { Tooltip } from "@protolabsai/ui/overlays";
 import { Conversation, Message, TypingIndicator } from "@protolabsai/ui/ai";
 
 import { api, ApiError } from "../lib/api";
 import { textFromParts, type DurableChatTurn } from "../lib/api/a2aStream";
-import { relTime } from "../work/tone";
 import { openWorkGroup } from "./ChatStatusRail";
 import { Markdown } from "./Markdown";
+import { conversationMeta, displayTitle } from "./conversation-title";
 import { backToList, type ConversationRow } from "./conversations-store";
 
 // The read-only thread view inside the Conversations tab (docs/design/other-conversations.md,
 // slice C3, §3.4/§3.5/§5). ConversationsPane renders it in place of the list while the store
-// holds an open thread id; the Conversations tab stays selected. A header band (Back to list,
-// "Conversation · read-only", the focused title, status Badge, origin line), the thread's turns
+// holds an open thread id; the Conversations tab stays selected. A slim two-line header band
+// (← Back + the focused displayTitle() + status Badge on one line, the meta line below — C9c),
+// the thread's turns
 // (`Conversation`/`Message`/`Markdown`, each labelled with its speaker), and — where a composer
 // would sit — a footer bar explaining why there's no composer (§3.5). There is NO composer here.
 //
@@ -99,7 +101,11 @@ export function ConversationReader({
   const lastState = row?.last_state ?? null;
   const tone = threadTone(active, lastState);
   const parked = PARKED.test(lastState ?? "");
+  // The FULL stored title stays the Tooltip label and the Continue pre-fill (§3.4 item 2d); the
+  // h2 shows displayTitle(), which drops a redundant "From <caller>:" prefix using the row's
+  // caller / on_behalf_of (C9a/C9b).
   const title = row?.title || "Conversation";
+  const shownTitle = displayTitle(title, { caller: row?.caller, onBehalfOf: row?.on_behalf_of });
   const caller = callerName(row?.origin_label);
 
   // Opening a thread moves focus to its title (§7, tabindex -1), on open and on switch.
@@ -138,32 +144,45 @@ export function ConversationReader({
     [load, caller, agentName],
   );
 
-  const time = row?.last_updated ? relTime(row.last_updated) : null;
-  const count = row?.turn_count ?? 0;
-  const originLine = [row?.origin_label, time?.text, count > 1 ? `${count} messages` : ""]
-    .filter(Boolean)
-    .join(" · ");
+  // The meta line: "<origin without 'From'> · <d Mon>, <HH:mm> · N messages" (count only above 1),
+  // the long form "From … · <d Mon> at <HH:mm> · N messages" hung on its Tooltip (§3.4 item 2 / §9).
+  const meta = conversationMeta(row?.origin_label, row?.last_updated, row?.turn_count);
 
   const copyLink = () => {
     void navigator.clipboard?.writeText(`#/conversations/${threadId}`);
   };
 
   return (
-    <section className="conversation-reader" aria-label="Conversation">
+    <section className="conversation-reader" aria-label="Conversation, read-only">
       <header className="conversation-reader__head">
-        <div className="conversation-reader__back">
-          <Button variant="ghost" size="sm" onClick={() => backToList()}>
-            ← Back to list
-          </Button>
-        </div>
-        <Eyebrow>Conversation · read-only</Eyebrow>
+        {/* ← Back, the title and the status Badge share one line; the meta line sits below (§3.4
+            item 2, §3.7). On the phone the app header owns ← List, so mobile-shell.css hides this
+            in-band Back (keyed on `conversation-reader__back`). */}
         <div className="conversation-reader__titlerow">
-          <h2 className="conversation-reader__title" tabIndex={-1} ref={titleRef}>
-            {title}
-          </h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="conversation-reader__back"
+            aria-label="Back to From others"
+            title="Back to From others"
+            onClick={() => backToList()}
+          >
+            ← Back
+          </Button>
+          <Tooltip label={title}>
+            <h2 className="conversation-reader__title" tabIndex={-1} ref={titleRef}>
+              {shownTitle}
+            </h2>
+          </Tooltip>
           {load.kind === "ready" && tone.badge && <Badge status={tone.tone}>{tone.badge}</Badge>}
         </div>
-        {originLine && <p className="conversation-reader__origin">{originLine}</p>}
+        {meta.text && (
+          <p className="conversation-reader__origin">
+            <Tooltip label={meta.tooltip}>
+              <span>{meta.text}</span>
+            </Tooltip>
+          </p>
+        )}
       </header>
 
       <div className="conversation-reader__body">
