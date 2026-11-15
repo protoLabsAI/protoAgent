@@ -1,13 +1,8 @@
 """A ``delegate_to(project=…)`` coder shares the board's base checkout, so when it leaves
-that checkout on another branch (a release changelog fix pushed on
-``prepare-release/…``, bd-nfaen) the board is stranded until a human notices.
-
-These tests put a REAL temporary git repository behind a REAL bare origin remote — no git
-mocks — and drive both the low-level ``change_summary.restore_branch`` seam and the full
-``AcpAdapter`` dispatch (a tiny fake ACP agent that actually runs git in its cwd). A
-passing dispatch test therefore proves the project root really reached the child AND that
-the checkout was put back (or deliberately left, with a warning) afterwards.
-"""
+that checkout on another branch (a release changelog fix on ``prepare-release/…``, bd-nfaen)
+the board is stranded. These tests use a REAL temporary git repo behind a REAL bare origin —
+no git mocks — driving both the ``change_summary.restore_branch`` seam and the full
+``AcpAdapter`` dispatch (a fake ACP agent that runs git in its cwd)."""
 
 from __future__ import annotations
 
