@@ -502,11 +502,15 @@ async def run_task_stall_pass(store: Any, inbox: Any, *, now: Any, sources: Any)
         # The dedup key carries ``updated_at`` and the current count: a real update (which
         # bumps updated_at and zeroes the count) mints a fresh key, and a re-run of the
         # same pass hits the same key and dedupes — so one nudge lands per stall step.
+        origin_session = (task.get("session_id") or "").strip()
+        if origin_session.startswith(("job:", "background:")):
+            origin_session = ""
         item = await asyncio.to_thread(
             inbox.add,
             text,
             priority="next",
             source="task-stall",
+            origin_session=origin_session or None,
             dedup_key=f"task-stall:{task_id}:{task.get('updated_at')}:{count}",
             needs_human=False,
         )
