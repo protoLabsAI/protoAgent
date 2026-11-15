@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { seedCurrentChat } from "./chat-helpers";
 import { withArtifactPanel } from "./artifactPanel";
@@ -432,6 +432,118 @@ test("mobile shell: a paired phone whose home stops answering is shown its other
   await expect(notice).toContainText("Opening one means pairing this phone again there.");
 });
 
+
+// ── Phone Conversations tab (other conversations C5, docs/design/other-conversations.md §3.7) ──
+// The pinned Conversations tab becomes an item at the top of the session sheet; its read-only list
+// and thread fill the screen. Backed by the C1 store (GET /api/conversations) and the C2/C3
+// pane/reader — both stubbed here on the mock backend, which has no outside A2A threads of its own.
+// Titles deliberately avoid the words "session sheet" so these stay on the chromium `mobile`
+// project and are not also pulled into the `mobile-webkit` grep.
+const recentIso = () => new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+function phoneConversationRows() {
+  return [
+    // A running "For you" thread → the item shows an info dot (no pulse on the tab itself).
+    { session_id: "ctx-phone-1", title: "Weekly digest request", origin_label: "From Claude Code for Josh", group: "for_you", last_updated: recentIso(), turn_count: 2, active: true, last_state: "working" },
+    { session_id: "ctx-phone-2", title: "Nightly summary", origin_label: "From the API", group: "automated", last_updated: recentIso(), turn_count: 1, active: false, last_state: "completed" },
+  ];
+}
+
+async function stubPhoneConversations(page: Page, rows = phoneConversationRows()) {
+  await page.route("**/api/conversations*", (route) => route.fulfill({ json: { conversations: rows } }));
+  // The thread the reader opens: its summary (200 = still stored) and its turns body.
+  await page.route("**/api/chat/sessions/ctx-phone-1", (route) =>
+    route.fulfill({ json: { session_id: "ctx-phone-1", active: true, turn_count: 2, last_updated: recentIso(), last_state: "working" } }),
+  );
+  await page.route("**/api/chat/sessions/ctx-phone-1/turns*", (route) =>
+    route.fulfill({
+      json: {
+        turns: [
+          { task_id: "t1", state: "working", last_updated: recentIso(), text: "Here is your weekly digest.", history: [{ role: "user", parts: [{ text: "Can you put together the weekly digest?" }] }] },
+        ],
+      },
+    }),
+  );
+}
+
+test("mobile: Conversations pins above the chats, and its list and a thread fill the screen", async ({ page }) => {
+  await stubPhoneConversations(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.locator(".mshell")).toBeVisible();
+
+  // The Conversations item appears after Chats/New, with the count, a status dot and "Read-only",
+  // and no delete control.
+  await page.locator(".mshell-title").click();
+  const sheet = page.getByRole("dialog", { name: "Chats" });
+  await expect(sheet).toBeVisible();
+  const item = page.locator(".session-sheet-convo");
+  await expect(item).toBeVisible();
+  await expect(item).toContainText("Conversations");
+  await expect(item).toContainText("2"); // the 7-day count
+  await expect(item).toContainText("Read-only");
+  await expect(item.locator(".pl-dot")).toHaveCount(1);
+  await expect(item.locator(".pl-dot--info")).toHaveCount(1);
+  await expect(item.locator(".pl-dot--pulse")).toHaveCount(0);
+  await expect(item.locator('[aria-label^="Delete"]')).toHaveCount(0);
+
+  // Sheet order: New → the item → a divider → the chat rows.
+  const topOf = async (sel: string) => (await page.locator(sel).first().boundingBox())!.y;
+  expect(await topOf(".session-sheet-new")).toBeLessThan(await topOf(".session-sheet-convo"));
+  expect(await topOf(".session-sheet-convo")).toBeLessThan(await topOf(".session-sheet-divider"));
+  expect(await topOf(".session-sheet-divider")).toBeLessThan(await topOf(".session-sheet-row"));
+
+  // Tapping it closes the sheet and shows the list full screen under a "Conversations" header.
+  await item.click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator(".mshell-title-text")).toHaveText("Conversations");
+  const pane = page.locator(".mshell-conversations .conversations-pane");
+  await expect(pane).toBeVisible();
+
+  // Tapping a thread opens it full screen; the header gets ← List, which returns to the list.
+  await pane.locator(".conversations-row__btn").first().click();
+  await expect(page.locator(".mshell-conversations .conversation-reader")).toBeVisible();
+  const back = page.locator(".mshell-back-list");
+  await expect(back).toBeVisible();
+  await expect(back).toContainText("List");
+  // The footer stacks note + the two full-width actions (the reader's own in-band back is hidden).
+  await expect(page.locator(".mshell-conversations .conversation-reader__footer-actions")).toBeVisible();
+  await back.click();
+  await expect(page.locator(".mshell-conversations .conversations-pane")).toBeVisible();
+  await expect(page.locator(".mshell-conversations .conversation-reader")).toHaveCount(0);
+});
+
+test("mobile: no Conversations item when there are no conversations", async ({ page }) => {
+  await stubPhoneConversations(page, []);
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".mshell-title").click();
+  await expect(page.getByRole("dialog", { name: "Chats" })).toBeVisible();
+  await expect(page.locator(".session-sheet-row")).not.toHaveCount(0); // the chats are still listed
+  await expect(page.locator(".session-sheet-convo")).toHaveCount(0);
+  await expect(page.locator(".session-sheet-divider")).toHaveCount(0);
+});
+
+test("mobile: a long-press on the Conversations item offers Hide", async ({ page }) => {
+  await stubPhoneConversations(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".mshell-title").click();
+  const item = page.locator(".session-sheet-convo");
+  await expect(item).toBeVisible();
+  // A long-press is modelled as a contextmenu (the handler treats them the same, matching the
+  // desktop tab's right-click); it opens the single Hide entry.
+  await item.dispatchEvent("contextmenu", { clientX: 40, clientY: 400, bubbles: true });
+  await expect(page.getByRole("menuitem", { name: "Hide Conversations tab" })).toBeVisible();
+});
+
+test("mobile: a device that hid the tab shows no Conversations item", async ({ page }) => {
+  await stubPhoneConversations(page);
+  // The per-device hide preference the long-press menu writes (lib/storage.ts registry key).
+  await page.addInitScript(() => window.localStorage.setItem("protoagent.conversations.hidden", "1"));
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".mshell-title").click();
+  await expect(page.getByRole("dialog", { name: "Chats" })).toBeVisible();
+  await expect(page.locator(".session-sheet-row")).not.toHaveCount(0);
+  await expect(page.locator(".session-sheet-convo")).toHaveCount(0);
+});
 
 test("mobile: Work opens from the palette as a full-height sheet and restores focus", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
