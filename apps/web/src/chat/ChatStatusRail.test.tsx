@@ -281,6 +281,25 @@ describe("details panel", () => {
     expect(isThisChatVisit()).toBe(true);
   });
 
+  it("deep links a Coming up `wait` row the way Work keys it (schedule:<id>, not wait:<id>)", async () => {
+    // A `wait` job rides the schedules source, so Work keys its row `schedule:<id>`
+    // (WorkOverview.itemKey). The rail must emit the SAME key or Work opens a blank detail
+    // pane instead of the scheduled item. The id itself already carries the `wait:` prefix.
+    const waiting: GroupableWorkItem = {
+      kind: "wait", id: "wait:w1", status: "scheduled", title: "Wait on the webhook",
+      meta: "", sessionId: SESSION, raw: { state: "pending" },
+    };
+    await render(rail([waiting]));
+    await click(chip("coming-up"));
+    const rowBtn = dialog()!.querySelector<HTMLButtonElement>("button.chat-status-row")!;
+    expect(rowBtn.querySelector(".chat-status-row__text")!.textContent).toBe("Wait on the webhook");
+    await click(rowBtn);
+    expect(dialog()).toBeNull();
+    const ui = useUI.getState();
+    expect(ui.surfaceStates.work).toMatchObject({ section: "overview", itemId: "schedule:wait:w1" });
+    expect(isThisChatVisit()).toBe(true);
+  });
+
   it("the Needs you deep link (S7) never scopes — it even ends a live visit scope", async () => {
     beginThisChatVisit();
     openWorkGroup("needs-you");
@@ -411,7 +430,9 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
       await click(chip("instructions"));
       const panel = dialog()!;
       expect(panel.textContent).not.toContain("may be out of date");
-      expect(panel.textContent).not.toContain("Couldn't check your instructions.");
+      // The exact failure copy the panel would show — with the trailing "in this chat." — so
+      // the guard actually covers the couldn't-load sentence instead of passing vacuously.
+      expect(panel.textContent).not.toContain("Couldn't check your instructions in this chat.");
       expect([...panel.querySelectorAll("button")].some((b) => b.textContent === "Load again")).toBe(false);
       await act(async () => panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     }

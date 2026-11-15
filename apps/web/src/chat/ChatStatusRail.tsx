@@ -35,6 +35,7 @@ import type { GoalState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
 import { useDecisions } from "../decisions/useDecisions";
 import { sections } from "../work/sectionRegistry";
+import { itemKey } from "../work/WorkOverview";
 import { useWorkItems, type WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, inWorkScope, jobEnded, jobKey, withSharedDecisions, workGroups, type WorkGroup } from "../work/workGroups";
 import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
@@ -243,7 +244,11 @@ function GroupSection({ group, directives, mobile, onNavigate, single = false }:
                   className="chat-status-row"
                   title={item.title}
                   aria-label={[item.title, cue, "Open in Work"].filter(Boolean).join(". ")}
-                  onClick={() => navigate(`${item.kind}:${item.id}`)}
+                  // The deep-link id MUST match Work's own row key (WorkOverview.itemKey) so
+                  // Work opens the detail pane: a `wait` row rides the schedules source and
+                  // keys as `schedule:<id>`, not `wait:<id>`. Reusing itemKey keeps them from
+                  // drifting apart.
+                  onClick={() => navigate(itemKey(item))}
                 >
                   <span className="chat-status-row__text">{item.title}</span>
                   {cue ? <span className="chat-status-row__cue">{cue}</span> : null}
