@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -1350,6 +1352,95 @@ async def test_failed_now_fire_publishes_inbox_item(tmp_path, monkeypatch):
     assert "inbox.item" in published
 
 
+# ── display-only origin provenance (ADR 0131 D2/P2a) ─────────────────────────
+
+
+def test_add_stores_origin_session_and_origin_for_context_maps_the_job_context(tmp_path):
+    """add(origin_session=…) is stored, and origin_for_context resolves the isolated
+    ``job:`` execution context an item fires under back to that session (r1)."""
+    s = _store(tmp_path)
+    item = s.add("do the thing", priority="now", origin_session="chat-a")
+    assert item["origin_session"] == "chat-a"
+    # execution_identity assigns the job: context the item runs its own turn on.
+    ctx = s.execution_identity(item["id"])["context_id"]
+    assert ctx.startswith("job:")
+    assert s.origin_for_context(ctx) == "chat-a"
+    # An item added without an origin maps to "".
+    plain = s.add("no origin", priority="now")
+    assert plain["origin_session"] is None
+    assert s.origin_for_context(s.execution_identity(plain["id"])["context_id"]) == ""
+    # An unknown or empty context is "" too, never a guess.
+    assert s.origin_for_context("job:nonexistent") == ""
+    assert s.origin_for_context("") == ""
+
+
+def test_old_inbox_db_without_origin_columns_opens_and_migrates(tmp_path):
+    """A DB written before the origin columns opens, migrates, keeps its legacy rows, and
+    takes new origin-bearing items (r2)."""
+    db_path = str(tmp_path / "inbox.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE inbox ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " created_at TEXT NOT NULL,"
+        " priority TEXT NOT NULL,"
+        " source TEXT,"
+        " text TEXT NOT NULL,"
+        " dedup_key TEXT,"
+        " delivered_at TEXT,"
+        " needs_human INTEGER NOT NULL DEFAULT 0)"
+    )
+    conn.execute(
+        "INSERT INTO inbox (created_at, priority, text) VALUES (?, ?, ?)",
+        (datetime.now(UTC).isoformat(), "next", "legacy row"),
+    )
+    conn.commit()
+    conn.close()
+
+    s = InboxStore(db_path)  # the guarded migration runs on open
+    # PRAGMA table_info rows are (cid, name, type, …) — name is column index 1.
+    cols = {r[1] for r in sqlite3.connect(db_path).execute("PRAGMA table_info(inbox)").fetchall()}
+    assert {"origin_session", "origin_meta"} <= cols
+    legacy = s.get(1)
+    assert legacy["text"] == "legacy row"
+    assert legacy["origin_session"] is None and legacy["origin_meta"] is None
+    # A fresh origin-bearing add works on the migrated DB.
+    item = s.add("new", origin_session="chat-z", origin={"caller": "Josh", "caller_kind": "person"})
+    assert item["origin_session"] == "chat-z"
+    assert s.origin_for_context(s.execution_identity(item["id"])["context_id"]) == "chat-z"
+
+
+def test_origin_meta_keeps_only_caller_caller_kind_on_behalf_of(tmp_path):
+    """origin_meta stores only the three display fields; anything else (title, arbitrary
+    keys) and an unrecognised caller_kind are dropped (r3)."""
+    s = _store(tmp_path)
+    item = s.add(
+        "x",
+        origin_session="chat-a",
+        origin={
+            "caller": "Claude Code",
+            "caller_kind": "agent",
+            "on_behalf_of": "Josh",
+            "title": "dropped — not an inbox origin field",
+            "secret": "dropped — arbitrary key",
+        },
+    )
+    assert json.loads(item["origin_meta"]) == {
+        "caller": "Claude Code",
+        "caller_kind": "agent",
+        "on_behalf_of": "Josh",
+    }
+    # An unrecognised caller_kind is dropped (the server never guesses a person).
+    bad_kind = s.add("y", origin={"caller": "x", "caller_kind": "robot"})
+    assert json.loads(bad_kind["origin_meta"]) == {"caller": "x"}
+    # No recognised field → stored NULL, not an empty-object string.
+    empty = s.add("z", origin={"title": "only a title"})
+    assert empty["origin_meta"] is None
+    # origin omitted entirely → NULL.
+    none = s.add("w")
+    assert none["origin_meta"] is None
+
+
 # ── POST /api/inbox route ────────────────────────────────────────────────────
 
 
@@ -1429,6 +1520,59 @@ def test_inbox_route_accepts_with_token():
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert seen[0]["text"] == "deploy done" and seen[0]["priority"] == "now"
+
+
+def test_inbox_route_round_trips_origin_fields(tmp_path, monkeypatch):
+    """POST /api/inbox accepts origin_session/origin and the returned row surfaces them —
+    origin_session as given, origin filtered to the three display fields, durable through
+    origin_for_context (r4)."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    store = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    _capture_inbox_events(monkeypatch)
+    client = _app_with_inbox(ch._operator_inbox_add)
+
+    r = client.post(
+        "/api/inbox",
+        json={
+            "text": "card bd-x is blocked",
+            "priority": "next",
+            "origin_session": "chat-a",
+            "origin": {"caller": "projectBoard", "caller_kind": "agent", "on_behalf_of": "Josh", "title": "x"},
+        },
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert r.status_code == 200
+    item = r.json()["item"]
+    assert item["origin_session"] == "chat-a"
+    assert item["origin"] == {"caller": "projectBoard", "caller_kind": "agent", "on_behalf_of": "Josh"}
+    # Durable: the fired item's execution context resolves back to its origin session.
+    assert store.origin_for_context(store.execution_identity(item["id"])["context_id"]) == "chat-a"
+
+
+def test_inbox_route_omitting_origin_behaves_as_today(tmp_path, monkeypatch):
+    """Omitting the origin fields leaves the row with an empty origin_session and {} origin —
+    the pre-origin behaviour is unchanged (r4)."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    store = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    _capture_inbox_events(monkeypatch)
+    client = _app_with_inbox(ch._operator_inbox_add)
+
+    r = client.post(
+        "/api/inbox",
+        json={"text": "plain page", "priority": "next"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert r.status_code == 200
+    item = r.json()["item"]
+    assert item["text"] == "plain page"
+    assert item["origin_session"] == ""
+    assert item["origin"] == {}
 
 
 async def _unused(*_a, **_k):  # pragma: no cover - placeholder callable
