@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, Lock } from "lucide-react";
 import { Alert, Spinner } from "@protolabsai/ui/data";
 import { Badge, Button, Callout, Empty, type Status } from "@protolabsai/ui/primitives";
 import { Tooltip } from "@protolabsai/ui/overlays";
@@ -152,6 +153,11 @@ export function ConversationReader({
     void navigator.clipboard?.writeText(`#/conversations/${threadId}`);
   };
 
+  // The full read-only explanation (§3.4 item 1 / §7): it hangs on the lock's Tooltip and is the
+  // lock's accessible name, so keyboard and screen-reader users reach it. The visible clause beside
+  // the lock only says "Read-only. Replies start a new chat.".
+  const lockHint = `You can’t type here. Replies go to a new chat, so ${caller} isn’t interrupted.`;
+
   return (
     <section className="conversation-reader" aria-label="Conversation, read-only">
       <header className="conversation-reader__head">
@@ -240,23 +246,46 @@ export function ConversationReader({
         )}
       </div>
 
-      {/* The composer's slot — a read-only note, never an input (§3.5). Hidden on the gone/failed
-          dead ends, where Back to list / Try again are the only moves. */}
+      {/* The composer's slot — one read-only row, never an input (§3.4 item 1, §3.5). Lock + the
+          short clause on the left; Copy link and Continue on the right. Hidden on the gone/failed
+          dead ends, where Back to list / Try again are the only moves. On the phone the lock keeps
+          its clause as "Read-only", Copy link goes icon-only, each a 44px target (mobile-shell.css). */}
       {load.kind !== "gone" && load.kind !== "failed" && (
         <div className="conversation-reader__footer">
-          <p className="conversation-reader__footer-note">
-            You can&rsquo;t type here. Replies go to a new chat, so {caller} isn&rsquo;t interrupted.
-          </p>
+          <div className="conversation-reader__footer-lede">
+            <Tooltip label={lockHint}>
+              <span
+                className="conversation-reader__footer-lock"
+                role="img"
+                tabIndex={0}
+                aria-label={lockHint}
+              >
+                <Lock size={14} aria-hidden />
+              </span>
+            </Tooltip>
+            <span className="conversation-reader__footer-note">
+              Read-only<span className="conversation-reader__footer-note-rest">. Replies start a new chat.</span>
+            </span>
+          </div>
           <div className="conversation-reader__footer-actions">
+            <Tooltip label="Copy link">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="conversation-reader__footer-copy"
+                aria-label="Copy link"
+                onClick={copyLink}
+              >
+                <Link size={14} aria-hidden />
+                <span className="conversation-reader__footer-copy-label">Copy link</span>
+              </Button>
+            </Tooltip>
             <Button
               variant="primary"
               size="sm"
               onClick={() => onContinue?.({ contextId: threadId, title, origin: row?.origin_label ?? caller })}
             >
               Continue in a new chat
-            </Button>
-            <Button variant="ghost" size="sm" onClick={copyLink}>
-              Copy link
             </Button>
           </div>
         </div>

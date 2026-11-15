@@ -1583,21 +1583,50 @@
   flex: 1 1 0;
   min-height: 0;
 }
-/* The composer's slot: a read-only note + the two chat-forwarding actions, never an input (§3.5). */
+/* The composer's slot: one compact row (§3.4 item 1) — lock + the read-only clause on the left,
+   the two chat-forwarding actions on the right — never an input (§3.5). Vertical padding is the
+   space-2 step so the row stays at the ~48px target (≤56px, §3.4). */
 .conversation-reader__footer {
   display: flex;
-  flex-direction: column;
-  gap: var(--pl-space-2);
-  padding: var(--pl-space-3) var(--pl-space-4);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-3);
+  padding: var(--pl-space-2) var(--pl-space-4);
   border-top: var(--pl-border-width) solid var(--pl-color-border);
+}
+/* The left clause: the lock then the muted read-only note, kept together. */
+.conversation-reader__footer-lede {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+/* The lock is a focusable Tooltip trigger (its accessible name is the full sentence), not an
+   action — a muted glyph that lines up with the note. */
+.conversation-reader__footer-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--pl-color-fg-muted);
+}
+.conversation-reader__footer-lock:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: 2px;
+  border-radius: var(--pl-radius);
 }
 .conversation-reader__footer-note {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
 .conversation-reader__footer-actions {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  flex: none;
   gap: var(--pl-space-2);
 }
