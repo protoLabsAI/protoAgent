@@ -145,7 +145,44 @@ export type WorkInterpretation = {
   problem: string | null;
 };
 
+/** One "other conversation" row — an A2A thread that is NOT one of the operator's own console
+ *  chats (docs/design/other-conversations.md, slice S2; served by `GET /api/conversations`).
+ *  One row per context id. `active` + `last_state` carry the same meaning as
+ *  `GET /api/chat/sessions/{id}` (Running, Needs you, Failed, idle/done). `last_updated` is a
+ *  UTC ISO string, or null when the store has no timestamp. */
+export type ConversationRow = {
+  /** The A2A context id. Never a reserved stage id — see `CONVERSATIONS_STAGE_ID`. */
+  session_id: string;
+  title: string;
+  /** "From Claude Code for Josh", "Delegation from protoEngineer", "From another agent", … */
+  origin_label: string;
+  /** `for_you` = a person or on-behalf-of thread; `automated` = everything else (spec §4.1). */
+  group: "for_you" | "automated";
+  last_updated: string | null;
+  turn_count: number;
+  /** A turn is running on the thread right now. */
+  active: boolean;
+  /** The newest turn's A2A state spelling (`working`, `completed`, `failed`, `input-required`,
+   *  `TASK_STATE_INPUT_REQUIRED`, `auth-required`, …), or null. */
+  last_state: string | null;
+};
+
 export const chatApi = {
+  /** The agent's OTHER conversations (docs/design/other-conversations.md S2): every outside A2A
+   *  thread, newest-active first, `for_you` before `automated`. `before=<iso>` pages older, 50 at
+   *  a time (the server caps `limit` at 50); `group` filters to one group. Degrades to an empty
+   *  list with a `reason` rather than erroring, exactly like the session index. */
+  listConversations(opts: { group?: "for_you" | "automated"; before?: string; limit?: number } = {}) {
+    const params = new URLSearchParams();
+    if (opts.group) params.set("group", opts.group);
+    if (opts.before) params.set("before", opts.before);
+    if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return request<{ conversations: ConversationRow[]; reason?: string }>(
+      `/api/conversations${qs ? `?${qs}` : ""}`,
+    );
+  },
+
   listDirectives(sessionId: string) {
     return request<DirectiveList>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/directives`);
   },
