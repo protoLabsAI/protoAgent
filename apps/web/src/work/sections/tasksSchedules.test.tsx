@@ -504,6 +504,15 @@ describe("Jobs in the list (§2, r1)", () => {
     expect(host!.querySelector(".pl-badge--warning")).toBeNull();
   });
 
+  it("an idle in_progress job with no usable timestamp still reads 'in progress · idle', no guessed span (S12b)", async () => {
+    // Defensive: bd-2grd8 always stamps updated_at on in_progress tasks, but if a row arrives
+    // without one, lead with the idle flag we DO have rather than inventing a duration.
+    const noStamp = taskItem({ id: "nostamp", title: "nostamp", activity: "idle", updated_at: "", created_at: "" });
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([noStamp]) }) })));
+    expect(host!.querySelector(".work-row__meta")?.textContent).toBe("in progress · idle · Bug · high");
+    expect(host!.querySelector(".pl-badge--warning")).toBeNull();
+  });
+
   it("a stalled in_progress job leads with 'stalled', not its type (S12b)", async () => {
     await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([taskItem({ activity: "stalled" })]) }) })));
     expect(host!.querySelector(".work-row__meta")?.textContent).toBe("stalled · Bug · high");
