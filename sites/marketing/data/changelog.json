@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.242.0",
+    "date": "2026-11-15",
+    "changes": [
+      "Task list reports whether in-progress work is moving (#5286).",
+      "Task stall detection groundwork: a shared \"is this task driven?\" test (#5280).",
+      "Stalled tasks get nudged, then parked for you (#5285).",
+      "The chat status rail's quiet line gains its text helpers (#5282).",
+      "A recurring follow-up backs off to hourly while its chat waits on you and nothing changes (#5281).",
+      "The chat status rail's Needs you marker opens a panel that holds the Needs you section alone (Refs docs/design/chat-status-rail-v2.md) (#5294).",
+      "The chat status rail's Needs you section now reads in the same quiet frame as the work-chip rows (Refs docs/design/chat-status-rail-v2.md) (#5293).",
+      "People move to the right edge of the chat status rail (#5287).",
+      "A quieter work-chip popover on the chat status rail (Refs docs/design/chat-status-rail-v2.md) (#5290).",
+      "task_update warns when a task is set in progress with nothing driving it (#5284).",
+      "Work view labels an undriven in-progress job (#5288).",
+      "Groundwork for the Conversations tab (#5289, #5291, #5292).",
+      "ADR 0129 D9 records the design for waking a task nobody is driving (#5278)."
+    ]
+  },
+  {
     "version": "v0.241.1",
     "date": "2026-11-14",
     "changes": [
