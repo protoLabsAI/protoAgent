@@ -105,6 +105,22 @@ describe("chat-tab bulk-close menu", () => {
     expect(got).toEqual(["new", "new-incognito"]);
   });
 
+  // "Other conversations" (docs/design/other-conversations.md §3.2): the pinned Conversations tab
+  // is not a chat — its right-click is a single Hide; the tab-bar background gains Show while hidden.
+  it("gives the Conversations tab a Hide-only menu and adds Show to the background only when passed", () => {
+    let hid = 0, shown = 0;
+    const hide = resolveMenu("chat-tab", { onHideConversations: () => hid++ }) as (Item & { run: () => void })[];
+    expect(ids(hide)).toEqual(["hide-conversations"]);
+    expect(hide[0].label).toBe("Hide Conversations tab");
+    hide[0].run();
+    const bg = resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop, onShowConversations: () => shown++ }) as (Item & { run: () => void })[];
+    expect(ids(bg)).toEqual(["new", "new-incognito", "show-conversations"]);
+    bg.find((i) => i.id === "show-conversations")!.run();
+    expect([hid, shown]).toEqual([1, 1]);
+    // Absent without the closure (the common case — tab visible or no rows).
+    expect(ids(resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop }))).not.toContain("show-conversations");
+  });
+
   it("marks the bulk closers destructive", () => {
     const items = resolveMenu("chat-tab", {
       sessionId: "s2",

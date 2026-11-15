@@ -5,6 +5,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import { chatStore } from "./chat-store";
+import { openChat as leaveConversationsForChat } from "./conversations-store";
 import { endThisChatVisit } from "../work/visitScope";
 import { useDirectives } from "./useDirectives";
 
@@ -27,7 +28,9 @@ export function DirectiveWorkRequest({ sessionId }: { sessionId: string }) {
   const request = useUI((s) => s.directivesRequest);
   useEffect(() => {
     if (request?.sessionId !== sessionId) return;
-    // Inactive session slots stay mounted; Work reads the selected chat.
+    // Inactive session slots stay mounted; Work reads the selected chat. Leave the read-only
+    // Conversations stage (§3.3/§4.7) too, so returning to chat shows this session, not the pane.
+    leaveConversationsForChat();
     chatStore.switchSession(sessionId);
     openWorkDirectives();
     useUI.setState({ directivesRequest: null });

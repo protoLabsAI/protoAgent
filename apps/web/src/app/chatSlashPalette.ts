@@ -121,6 +121,7 @@
 // so a chat slot that never produces a session (a fork surface holding the slot) cannot
 // leave a timer looping.
 import { chatStore, unusedSession } from "../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
 import type { ChatSession } from "../chat/chat-store";
 import { prefillChatDraft, runSlashFromOutside, slashDispatchTarget } from "../chat/slashDispatch";
 import type { PaletteCommand } from "../ext/paletteRegistry";
@@ -310,7 +311,10 @@ export function onChatReady(act: () => void, navigate: Navigate, onGiveUp?: () =
   // The STORE, not the seam, is the authority on whether a thread exists: with the dock
   // collapsed there is no seam to ask, and the remounted slot will adopt whatever the store
   // says is current. `createSession` reuses a pristine blank when there is one.
-  if (!chatStore.getSnapshot().currentSessionId) chatStore.createSession();
+  if (!chatStore.getSnapshot().currentSessionId) {
+    leaveConversationsForChat();
+    chatStore.createSession();
+  }
   whenSlotSettles(act, onGiveUp);
 }
 

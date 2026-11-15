@@ -10,6 +10,11 @@
 // plain browser tab swallows them. Because every binding is rebindable, browser users can
 // remap to non-reserved combos in Settings ▸ Keyboard.
 import { chatStore } from "../chat/chat-store";
+// Every chat switch/create gesture must also leave the read-only Conversations stage (§3.3/§4.7):
+// the stage lives in the SEPARATE conversations store, which doesn't watch chat-store session
+// changes, so without this a new/switched chat would be created but stay hidden behind the
+// Conversations list pane (the chat pool sits at display:none while that stage is selected).
+import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
 import { runChatEscape } from "../chat/escapeStop";
 import { toggleLatestToolBlock } from "../chat/toolCollapse";
 import { useUI } from "../state/uiStore";
@@ -22,12 +27,18 @@ function switchByOffset(delta: number): void {
   const cur = sessions.findIndex((s) => s.id === currentSessionId);
   const base = cur < 0 ? 0 : cur;
   const next = sessions[(base + delta + sessions.length) % sessions.length];
-  if (next) chatStore.switchSession(next.id);
+  if (next) {
+    leaveConversationsForChat();
+    chatStore.switchSession(next.id);
+  }
 }
 
 function switchToIndex(i: number): void {
   const target = chatStore.getSnapshot().sessions[i];
-  if (target) chatStore.switchSession(target.id);
+  if (target) {
+    leaveConversationsForChat();
+    chatStore.switchSession(target.id);
+  }
 }
 
 // ── Global ────────────────────────────────────────────────────────────────────────
@@ -70,6 +81,7 @@ registerKeybinding({
   scope: "chat",
   allowInInput: true,
   run: () => {
+    leaveConversationsForChat();
     chatStore.createSession();
     useKbIntents.getState().focusComposer();
   },

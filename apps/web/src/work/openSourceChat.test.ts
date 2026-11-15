@@ -21,6 +21,11 @@ vi.mock("../chat/sessionHydration", () => ({
 import { api } from "../lib/api";
 import { chatStore } from "../chat/chat-store";
 import { pushReopen } from "../chat/sessionListSync";
+import {
+  setStage as setConversationsStage,
+  snapshotForTest as conversationsSnapshot,
+  __resetForTest as resetConversations,
+} from "../chat/conversations-store";
 import { openSourceChat } from "./openSourceChat";
 
 beforeEach(() => {
@@ -44,5 +49,17 @@ describe("openSourceChat (ADR 0130 S6)", () => {
     const id = "chat-never-seen";
     await openSourceChat(id);
     expect(pushReopen).not.toHaveBeenCalled();
+  });
+
+  it("leaves the read-only Conversations stage so the opened chat is shown, not the list pane", async () => {
+    // The conversations store's stage is independent of chat-store's currentSessionId (§4.7), so
+    // opening a decision's source chat must reset it — otherwise the chat is switched to but stays
+    // hidden behind the Conversations list pane (the chat pool sits at display:none on that stage).
+    resetConversations();
+    setConversationsStage("conversations");
+    expect(conversationsSnapshot().stage).toBe("conversations");
+    const ok = await openSourceChat("chat-source-for-stage");
+    expect(ok).toBe(true);
+    expect(conversationsSnapshot().stage).toBe("chat");
   });
 });

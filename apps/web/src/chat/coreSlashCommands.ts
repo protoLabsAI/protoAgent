@@ -13,6 +13,7 @@ import { queryClient } from "../lib/queryClient";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS, registerGoalKickoff } from "./chat-store";
+import { openChat as leaveConversationsForChat } from "./conversations-store";
 import { exportChatToFile } from "./exportChat";
 import { buildGoalSetBody, goalFormPayload, goalSetDetail } from "./goalForm";
 import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
@@ -36,6 +37,8 @@ registerSlashCommand({
   name: "new",
   description: "Open a new chat tab",
   run: (ctx) => {
+    // Leave the read-only Conversations stage (§3.3/§4.7) so the new chat is shown.
+    leaveConversationsForChat();
     chatStore.createSession();
     ctx.focusComposer();
     return true;

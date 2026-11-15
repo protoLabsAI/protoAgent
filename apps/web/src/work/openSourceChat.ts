@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import { sessionFromDurableTurns, SESSION_TURN_LIMIT } from "../chat/sessionHydration";
 import { openView } from "../app/palette/nav";
 import { chatStore, dismissedSessionIds } from "../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
 import { pushReopen } from "../chat/sessionListSync";
 import { useKbIntents } from "../keybindings/intents";
 import { useUI } from "../state/uiStore";
@@ -34,6 +35,10 @@ export async function openSourceChat(sourceSessionId: string, reply = false): Pr
   } catch {
     return false;
   }
+  // Leave the read-only Conversations stage (§3.3/§4.7) before showing the chat — the stage
+  // lives in the separate conversations store, so without this the requested chat is switched to
+  // but stays hidden behind the Conversations list pane (the chat pool sits at display:none).
+  leaveConversationsForChat();
   chatStore.switchSession(sourceSessionId);
   useUI.getState().closeSurfaceModal();
   openView("chat");

@@ -28,6 +28,7 @@ import {
   sessionCast,
   type SessionStatus,
 } from "./chat-store";
+import { openChat as leaveConversationsForChat } from "./conversations-store";
 import { registerSessionOnSend } from "./sessionListSync";
 import { findSlashCommand } from "../ext/slashRegistry";
 import { continueRun, leadingRun, toggleMention } from "./mentionRun";
@@ -1004,6 +1005,7 @@ export function ChatSessionSlot({
       // a forked-from message is settled history in the new branch
       status: m.status === "streaming" ? "done" : m.status,
     }));
+    leaveConversationsForChat(); // the fork becomes the current + active tab — show it (§3.3/§4.7)
     const created = chatStore.createSession(); // becomes the current + active tab
     chatStore.updateMessages(created.id, seed);
     const baseTitle = source.title && source.title !== "New chat" ? source.title : "Chat";

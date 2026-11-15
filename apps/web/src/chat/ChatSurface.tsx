@@ -1,8 +1,9 @@
 import "./chat.css";
+import { StatusDot } from "@protolabsai/ui/data";
 import { Switch } from "@protolabsai/ui/forms";
-import { TabBar } from "@protolabsai/ui/navigation";
-import { EyeOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { TabBar, type TabBarItem } from "@protolabsai/ui/navigation";
+import { EyeOff, MessagesSquare } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -32,6 +33,16 @@ import { isEmptyChatSession, resolveGoalCloseDisposition, sessionsToClose } from
 import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSession, type ChatMemoryChoice } from "./sessionRetirement";
 import { pushClose, pushRename } from "./sessionListSync";
 import { ChatSessionSlot } from "./ChatSessionSlot";
+import { ConversationsPane } from "./ConversationsPane";
+import {
+  CONVERSATIONS_STAGE_ID,
+  isConversationsStage,
+  useConversations,
+  hide as hideConversationsTab,
+  show as showConversationsTab,
+  openConversations,
+  openChat as leaveConversationsForChat,
+} from "./conversations-store";
 
 // The composer predicates moved with ChatSessionSlot (#3841); re-exported so existing
 // importers (ChatSurface.test.tsx) keep importing them from here.
@@ -63,6 +74,11 @@ export function ChatSurface({
   // …and sessions whose background jobs (a delegation, a spawned subagent) are still running:
   // detached work the chat is waiting on, which the tab must not read as idle either.
   const backgroundSessions = useSessionsWithBackgroundWork();
+  // "Other conversations" (docs/design/other-conversations.md, slice C2): the agent's outside
+  // A2A threads, fed by C1's client-only store. Drives the pinned Conversations tab (shown only
+  // once the list has loaded rows) and, while that tab is selected, the read-only list pane that
+  // replaces the chat in the main pane — `currentSessionId` is never touched (§4.7).
+  const conv = useConversations();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   // Bulk close (others/left/right): GOAL tabs still waiting for their Stop/Detach confirm AFTER
@@ -99,6 +115,80 @@ export function ChatSurface({
   const { data: runtimeInfo } = useQuery(runtimeStatusQuery());
   const agentDisplayName = brandName(runtimeInfo?.identity?.name);
 
+  // One shared polite live region for the Conversations tab (§7). It carries two narrow notices:
+  // the tab's FIRST appearance (once ever, §3.8), and running-count changes — the latter only
+  // while the tab is selected and at most once every 10s. Nothing is announced about running
+  // threads while a chat is selected; the tab's accessible name carries the status instead.
+  const [convAnnounce, setConvAnnounce] = useState("");
+  const announcedAppearRef = useRef(false);
+  const lastRunningRef = useRef<number | null>(null);
+  const lastRunningAnnounceRef = useRef(0);
+  useEffect(() => {
+    if (announcedAppearRef.current) return;
+    if (!conv.tabVisible || conv.count <= 0) return;
+    announcedAppearRef.current = true;
+    const origin = conv.rows[0]?.origin_label.replace(/^From /i, "") || "another agent";
+    setConvAnnounce(
+      `Conversations tab added: ${conv.count} conversation${conv.count === 1 ? "" : "s"} from ${origin}.`,
+    );
+  }, [conv.tabVisible, conv.count, conv.rows]);
+  useEffect(() => {
+    // Baseline (no announce) on entry; reset when a chat is selected so re-entering never
+    // announces a stale delta.
+    if (conv.stage !== "conversations") {
+      lastRunningRef.current = null;
+      return;
+    }
+    if (lastRunningRef.current === null) {
+      lastRunningRef.current = conv.running;
+      return;
+    }
+    if (lastRunningRef.current === conv.running) return;
+    lastRunningRef.current = conv.running;
+    const now = Date.now();
+    if (now - lastRunningAnnounceRef.current < 10_000) return;
+    lastRunningAnnounceRef.current = now;
+    setConvAnnounce(`${conv.running} running.`);
+  }, [conv.stage, conv.running]);
+
+  // Desktop only: the pinned tab lives in the tab strip (suppressed on phones — C5 puts a
+  // Conversations item in the session sheet instead). While it is the selected stage, the list
+  // pane replaces the chat session pool in the main pane.
+  const onConversationsStage = !mobile && conv.tabVisible && conv.stage === "conversations";
+
+  // The pinned first tab (§3.1). It is drawn only once the list has loaded rows (the store's
+  // `tabVisible` owns that rule — not while loading, with zero rows, or after Hide unless a
+  // thread needs you). No ✕ / rename / drag (DS `pinned`), an icon not a status dot so it reads
+  // as a place, and a non-pulsing StatusDot: `warning` when anything needs you, else `info` when
+  // anything is running. The badge pill shows the count; the accessible name spells out the count,
+  // the status in words and "read-only" via a visually-hidden suffix (the icon slot is aria-hidden,
+  // so the dot can't carry it). The visible number is aria-hidden so it isn't read twice.
+  const conversationsTabItem: TabBarItem | null = conv.tabVisible
+    ? {
+        id: CONVERSATIONS_STAGE_ID,
+        pinned: true,
+        label: "Conversations",
+        icon: (
+          <span className="conversations-tab__icon">
+            <MessagesSquare size={14} aria-hidden />
+            {(conv.running > 0 || conv.needsYou > 0) && (
+              <StatusDot status={conv.needsYou > 0 ? "warning" : "info"} />
+            )}
+          </span>
+        ),
+        badge: (
+          <>
+            <span aria-hidden="true">{conv.count}</span>
+            <span className="conversations-tab__sr">
+              {`, ${conv.count} conversation${conv.count === 1 ? "" : "s"}, ${conv.running} running${
+                conv.needsYou > 0 ? `, ${conv.needsYou} needs you` : ""
+              }, read-only`}
+            </span>
+          </>
+        ),
+      }
+    : null;
+
   function handOffToZed(id: string) {
     const session = chat.sessions.find((s) => s.id === id);
     void continueInZed(
@@ -124,6 +214,17 @@ export function ChatSurface({
         toast,
       },
     );
+  }
+
+  // Every "new chat" gesture routes through here (§3.3/§4.7). `createSession` only moves the chat
+  // store's `currentSessionId`; the Conversations stage lives in the SEPARATE conversations store,
+  // which doesn't watch chat-store session changes — so creating a chat while the Conversations tab
+  // is selected would switch `currentSessionId` but leave the stage on `conversations`, keeping the
+  // new chat hidden behind the read-only list pane (the pool stays display:none). Leaving the stage
+  // first means the chat the operator just asked for is actually shown.
+  function createChatSession(opts?: { incognito?: boolean }) {
+    leaveConversationsForChat();
+    chatStore.createSession(opts);
   }
 
   useEffect(() => {
@@ -289,15 +390,19 @@ export function ChatSurface({
     if (isIncognitoAddClick(e.target, e.shiftKey)) {
       e.preventDefault();
       e.stopPropagation();
-      chatStore.createSession({ incognito: true });
+      createChatSession({ incognito: true });
       return;
     }
     const closeBtn = (e.target as HTMLElement).closest(".pl-tabbar__close");
     if (!closeBtn) return;
     const tabEl = closeBtn.closest(".pl-tabbar__tab") as HTMLElement | null;
     if (!tabEl) return;
+    // The pinned Conversations tab renders first in the strip but is NOT a chat session, so the
+    // DOM tab order is offset by one from `chat.sessions` while it is shown. (It has no ✕, so a
+    // close click never lands on it — only the index map needs the offset.)
     const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll(".pl-tabbar__tab"));
-    const session = chat.sessions[tabs.indexOf(tabEl)];
+    const pinnedOffset = conv.tabVisible ? 1 : 0;
+    const session = chat.sessions[tabs.indexOf(tabEl) - pinnedOffset];
     if (!session) return;
     e.preventDefault();
     e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
@@ -315,7 +420,7 @@ export function ChatSurface({
     e.preventDefault();
     e.stopPropagation();
     if (e.repeat) return; // held key auto-repeats keydown — only the first press creates a session
-    chatStore.createSession({ incognito: true });
+    createChatSession({ incognito: true });
   }
 
   // Right-click a chat tab → context menu (ADR 0036). The DS TabBar's `onTabContextMenu`
@@ -324,6 +429,17 @@ export function ChatSurface({
   // exposes no start-rename API); we grab that element off the event, not to recover WHICH tab
   // (the hook gives us the id) but only to fire the editor.
   function onTabContextMenu(id: string, e: ReactMouseEvent) {
+    // The pinned Conversations tab is not a chat: its only right-click action is Hide (§3.2),
+    // which also returns to the chat the operator was reading.
+    if (isConversationsStage(id)) {
+      openContextMenu("chat-tab", e, {
+        onHideConversations: () => {
+          hideConversationsTab();
+          leaveConversationsForChat();
+        },
+      });
+      return;
+    }
     const tabEl = (e.target as HTMLElement).closest(".pl-tabbar__tab") as HTMLElement | null;
     const target = chat.sessions.find((s) => s.id === id);
     // Resolve each bulk-close target set up front (index math, anchor excluded). An empty set
@@ -335,8 +451,8 @@ export function ChatSurface({
     openContextMenu("chat-tab", e, {
       sessionId: id,
       incognito: !!target?.incognito,
-      onNew: () => chatStore.createSession(),
-      onNewIncognito: () => chatStore.createSession({ incognito: true }),
+      onNew: () => createChatSession(),
+      onNewIncognito: () => createChatSession({ incognito: true }),
       onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
       onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
       onExport: () => void exportChatToFile(id),
@@ -355,8 +471,12 @@ export function ChatSurface({
   function onTabBarBackgroundContextMenu(e: ReactMouseEvent) {
     if ((e.target as HTMLElement).closest(".pl-tabbar__tab")) return; // a tab — onTabContextMenu owns it
     openContextMenu("chat-tab", e, {
-      onNew: () => chatStore.createSession(),
-      onNewIncognito: () => chatStore.createSession({ incognito: true }),
+      onNew: () => createChatSession(),
+      onNewIncognito: () => createChatSession({ incognito: true }),
+      // "Show Conversations tab" (§3.2) — offered only while the tab is hidden AND has rows to
+      // show but isn't already drawn (needs-you would already force it back on its own).
+      onShowConversations:
+        conv.hidden && conv.count > 0 && !conv.tabVisible ? () => showConversationsTab() : undefined,
     });
   }
 
@@ -383,8 +503,12 @@ export function ChatSurface({
         <TabBar
           ariaLabel="Chat sessions"
           responsive
-          activeId={chat.currentSessionId ?? ""}
-          items={chat.sessions.map((session) => {
+          // When the Conversations tab is the selected stage it reads as the active tab; the
+          // chat tabs read unselected. `currentSessionId` still points at the last chat (§4.7).
+          activeId={onConversationsStage ? CONVERSATIONS_STAGE_ID : (chat.currentSessionId ?? "")}
+          items={[
+            ...(conversationsTabItem ? [conversationsTabItem] : []),
+            ...chat.sessions.map((session) => {
             const fg = chat.sessionStatusMap[session.id] || "idle";
             // Foreground streaming already lights the dot; also surface a background
             // server-turn as a pulsing "processing" dot so an unfocused tab doing work
@@ -411,16 +535,30 @@ export function ChatSurface({
                 <span className={`session-dot ${status}`} title={status} />
               ),
             };
-          })}
-          onSelect={(id) => chatStore.switchSession(id)}
+            }),
+          ]}
+          onSelect={(id) => {
+            // Selecting the Conversations tab only switches the stage (§4.7) — it never touches
+            // `currentSessionId`. Selecting any chat tab returns to that chat.
+            if (isConversationsStage(id)) {
+              openConversations();
+              return;
+            }
+            leaveConversationsForChat();
+            chatStore.switchSession(id);
+          }}
           onClose={requestClose}
           onRename={(id, label) => {
             chatStore.renameSession(id, label);
             // ADR 0130 S6: push the rename so the title shows on every device (r3).
             pushRename(id, label);
           }}
-          onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
-          onAdd={() => chatStore.createSession()}
+          // `next` keeps the pinned Conversations tab first (DS reorderUnpinned); drop its
+          // reserved id before persisting so it's never written into the chat session order.
+          onReorder={(next) =>
+            chatStore.reorderSessions(next.filter((t) => !isConversationsStage(t.id)).map((t) => t.id))
+          }
+          onAdd={() => createChatSession()}
           onTabContextMenu={onTabContextMenu}
           // The DS TabBar renders this as the + button's native title/aria-label — the
           // hover hint for the Shift+click incognito gesture (#1697). Shift+Enter is the
@@ -438,7 +576,10 @@ export function ChatSurface({
       </div>
       )}
 
-      <div className="chat-session-pool">
+      {/* The chat session pool stays MOUNTED while the Conversations tab is selected (its
+          in-flight turns keep streaming, mount contract) — just hidden behind the read-only
+          list pane, which takes the main pane's content row in its place. */}
+      <div className="chat-session-pool" style={onConversationsStage ? { display: "none" } : undefined}>
         {chat.activeSessions.map((sessionId) => (
           <ChatSessionSlot
             key={sessionId}
@@ -449,6 +590,16 @@ export function ChatSurface({
           />
         ))}
       </div>
+
+      {/* The Conversations list pane (§3.3) — read-only, no composer. Nothing new renders inside
+          a chat pane (§3.8); this replaces the chat entirely while its tab is selected. */}
+      {onConversationsStage && <ConversationsPane agentName={agentDisplayName} />}
+
+      {/* One shared polite live region for the tab's narrow screen-reader notices (§7). Kept
+          always mounted and visually hidden so an inserted message is announced, not silent. */}
+      <span className="conversations-announce" role="status" aria-live="polite" aria-atomic="true">
+        {convAnnounce}
+      </span>
 
       <ConfirmDialog
         open={pendingClose !== null}

@@ -4,6 +4,7 @@ import { ChevronDown, ChevronLeft, Menu, Plus, Search } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 
 import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
 import { useKbIntents } from "../keybindings/intents";
 import { SessionSheet } from "./SessionSheet";
 
@@ -226,7 +227,7 @@ export function MobileShell({
               aria-label="New chat"
               disabled={newChatIsNoop}
               title={newChatIsNoop ? "This chat is already empty" : "New chat"}
-              onClick={() => chatStore.createSession()}
+              onClick={() => { leaveConversationsForChat(); chatStore.createSession(); }}
             >
               <Plus size={20} aria-hidden />
             </Button>
