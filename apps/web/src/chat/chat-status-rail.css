@@ -175,12 +175,24 @@
   width: auto;
   max-height: none;
 }
+/* A work chip's single-group panel (§1): the ROW LIST is the only scroller, so the heading
+   and "Open in Work" stay pinned outside it and the link is always reachable in a long group. */
+.chat-status-details--group {
+  max-height: none;
+  overflow: visible;
+}
 
 .chat-status-details__heading {
   margin: 0;
   font-size: var(--pl-font-size-sm);
   font-weight: 600;
   color: var(--pl-color-fg);
+}
+/* The heading's " · N": quieter than the name, and decorative (the h2 carries the count in
+   its accessible name). */
+.chat-status-details__count {
+  font-weight: 400;
+  color: var(--pl-color-fg-muted);
 }
 .chat-status-details__rows {
   list-style: none;
@@ -226,6 +238,72 @@
 .chat-status-details__actions {
   display: flex;
   gap: var(--pl-space-2);
+}
+
+/* ── The quiet work-chip rows (§1) ───────────────────────────────────────────────────── */
+
+/* The row list is the panel's scroller (heading + "Open in Work" sit outside it); rows are
+   separated by spacing, never a divider. */
+.chat-status-group__rows {
+  gap: var(--pl-space-0_5);
+  max-height: min(60vh, 360px);
+  overflow-y: auto;
+}
+/* In the phone sheet the sheet body scrolls; the list just flows. */
+.chat-status-sheet .chat-status-group__rows {
+  max-height: none;
+  overflow: visible;
+}
+/* One composite button per row (protoContent#551): the item text over the quiet railCue line,
+   with no dot, chevron, divider or per-row action. */
+.chat-status-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-0_5);
+  width: 100%;
+  min-width: 0;
+  padding: var(--pl-space-1) var(--pl-space-1_5);
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--pl-radius-md);
+  cursor: pointer;
+}
+.chat-status-row:hover {
+  background: var(--pl-color-bg-hover);
+}
+/* The DS base :where(button):focus-visible rule supplies the ring; pull it inside so the
+   scroller's clip can't crop it. */
+.chat-status-row:focus-visible {
+  outline-offset: calc(-1 * var(--pl-border-width));
+}
+/* The item text: wraps, clamps to two lines, then ellipsizes; the full text is in the row's
+   accessible name and title. */
+.chat-status-row__text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg);
+}
+/* The one quiet line (D2): the item's age or next time, one line, ellipsized, never a warning
+   colour — supplementary to the item text above. */
+.chat-status-row__cue {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-subtle);
+}
+/* The "emptied while open" line (§1): a quiet status sentence, never a warning. */
+.chat-status-details__status {
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
 }
 
 /* ── Needs you (S7): decision cards, one-line rows, neutral delivery/goal rows ───────── */
@@ -288,6 +366,11 @@
   .chat-status-details__row {
     min-height: 48px;
     align-items: center;
+  }
+  /* The quiet work-chip rows meet the 48px touch floor; the text/cue stay centred. */
+  .chat-status-row {
+    min-height: 48px;
+    justify-content: center;
   }
   .chat-status-details__actions {
     flex-direction: column;

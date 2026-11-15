@@ -195,15 +195,26 @@ describe("the +K picker", () => {
     expect([document.activeElement, more()!.getAttribute("aria-expanded")]).toEqual([more(), "false"]);
   });
 
-  it("adds a People section to the grouped details ONLY while names are hidden", async () => {
+  it("a work chip's panel carries NO People rider (chat-status-rail-v2 §1 D1) — the picker lives on +K", async () => {
     state.sources = mkSources(1);
     await render(<Harness cast={CAST} />);
+    // Opening a work chip shows ONLY its own group; the People picker never rides along.
     await click(host.querySelector('[data-testid="chat-status-chip-doing-now"]'));
-    expect(document.querySelector('[role="dialog"] .chat-people h2')!.textContent).toBe("In this chat · 6");
-    // Everyone becomes visible under the open panel: the section leaves, the panel stays.
-    await render(<Harness cast={CAST.slice(0, 2)} />);
     expect(document.querySelector('[role="dialog"]')).toBeTruthy();
     expect(document.querySelector('[role="dialog"] .chat-people')).toBeNull();
+    // The picker stays reachable through +K while names are hidden.
+    expect(more()).toBeTruthy();
+  });
+
+  it("the +K picker still closes when a resize lets everyone fit (unlike an emptied work chip)", async () => {
+    state.sources = mkSources(1);
+    await render(<Harness cast={CAST} />);
+    await click(more());
+    expect(document.querySelector('[role="dialog"] .chat-people')).toBeTruthy();
+    // Fewer names now fit without overflow: +K goes, and its open picker closes with it.
+    await render(<Harness cast={CAST.slice(0, 2)} />);
+    expect(more()).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("phone: a pick takes the ONE visible slot, and close returns focus to +K", async () => {

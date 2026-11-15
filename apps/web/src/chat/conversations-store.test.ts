@@ -34,7 +34,11 @@ vi.mock("../lib/events", () => ({
   },
   onConnectionChange: (fn: (c: boolean) => void) => {
     connListener = fn;
-    fn(true); // subscribe-time state — the store skips it so startup is one request
+    // The real bus reports the connection state AT SUBSCRIBE TIME, which the store drops (its
+    // first-callback skip). `true` models a warm start (the stream was already open); a cold
+    // start reports `false` here and fires `connListener(true)` later on `onopen`. Tests drive
+    // `connListener` directly to model a drop → reconnect.
+    fn(true);
     return () => {
       connListener = null;
     };
@@ -69,7 +73,7 @@ beforeEach(() => {
   listConversations = () => Promise.resolve({ conversations: [] });
 });
 
-describe("r1: list + page older via GET /api/conversations", () => {
+describe("list + page older via GET /api/conversations", () => {
   it("requests the window with the capped limit and returns typed grouped rows", async () => {
     listConversations = () =>
       Promise.resolve({
@@ -116,7 +120,7 @@ describe("r1: list + page older via GET /api/conversations", () => {
   });
 });
 
-describe("r2: live a2a turn events, no polling", () => {
+describe("live a2a turn events, no polling", () => {
   it("turn.started sets active and turn.finished sets active+last_state for a known row", async () => {
     listConversations = () => Promise.resolve({ conversations: [row({ session_id: "ctx-1", active: false, last_state: "working" })] });
     store.subscribeForTest(() => {});
@@ -130,6 +134,34 @@ describe("r2: live a2a turn events, no polling", () => {
     const r0 = store.snapshotForTest().rows[0];
     expect(r0.active).toBe(false);
     expect(r0.last_state).toBe("completed");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("turn.resumed flips an answered park back to Running and off Needs you (no refetch)", async () => {
+    listConversations = () =>
+      Promise.resolve({ conversations: [row({ session_id: "ctx-1", active: true, last_state: "working" })] });
+    store.subscribeForTest(() => {});
+    await flush();
+
+    // The thread parks on the operator — Needs you, and (per a2a.py) NO turn.finished follows.
+    listeners["turn.input_required"]({ context_id: "ctx-1" });
+    let s = store.snapshotForTest();
+    expect(s.rows[0].last_state).toBe("input-required");
+    expect(store.needsYouCount(s)).toBe(1);
+
+    // The operator answers: a2a.py publishes turn.resumed (carrying context_id) and suppresses
+    // turn.started for the resumed leg, so the row must return to Running and clear Needs you
+    // here — without this it keeps last_state "input-required" until the terminal frame lands.
+    listeners["turn.resumed"]({ task_id: "t-1", context_id: "ctx-1" });
+    s = store.snapshotForTest();
+    expect(s.rows[0].active).toBe(true);
+    expect(s.rows[0].last_state).toBe("working");
+    expect(store.needsYouCount(s)).toBe(0);
+    expect(store.runningCount(s)).toBe(1);
+    expect(calls).toHaveLength(1); // a known row never refetches on resume
+
+    // A resume for a context we don't list is ignored (no refetch, no throw).
+    listeners["turn.resumed"]({ task_id: "t-9", context_id: "ctx-unknown" });
     expect(calls).toHaveLength(1);
   });
 
@@ -173,7 +205,7 @@ describe("r2: live a2a turn events, no polling", () => {
   });
 });
 
-describe("r3: tabVisible + per-device hidden state", () => {
+describe("tabVisible + per-device hidden state", () => {
   it("is false while loading and once rows load it is true", async () => {
     let resolve: (v: { conversations: ConversationRow[] }) => void = () => {};
     listConversations = () => new Promise((r) => (resolve = r));
@@ -196,7 +228,7 @@ describe("r3: tabVisible + per-device hidden state", () => {
     expect(store.isTabVisible(store.snapshotForTest())).toBe(false);
   });
 
-  it("goes false after hide(), then true again when a row needs you", async () => {
+  it("goes false after hide(), true again when a row needs you, then hidden once it is answered", async () => {
     listConversations = () => Promise.resolve({ conversations: [row({ session_id: "ctx-1", last_state: "completed" })] });
     store.subscribeForTest(() => {});
     await flush();
@@ -209,9 +241,16 @@ describe("r3: tabVisible + per-device hidden state", () => {
     // A park publishes turn.input_required (never turn.finished), flipping the row to Needs you —
     // a hidden tab must return on its own (§3.2).
     listeners["turn.input_required"]({ context_id: "ctx-1" });
-    const s = store.snapshotForTest();
+    let s = store.snapshotForTest();
     expect(store.needsYouCount(s)).toBe(1);
     expect(store.isTabVisible(s)).toBe(true);
+
+    // When the operator answers, turn.resumed clears Needs you, so the hidden tab hides again —
+    // it must not stay stranded open on already-answered work.
+    listeners["turn.resumed"]({ task_id: "t-1", context_id: "ctx-1" });
+    s = store.snapshotForTest();
+    expect(store.needsYouCount(s)).toBe(0);
+    expect(store.isTabVisible(s)).toBe(false);
   });
 
   it("a deep link shows the tab even when hidden and empty (and while loading)", async () => {
@@ -249,7 +288,7 @@ describe("r3: tabVisible + per-device hidden state", () => {
   });
 });
 
-describe("r4: the stage is separate from the session, and the reserved id never ships", () => {
+describe("the stage is separate from the session, and the reserved id never ships", () => {
   it("switches chat ↔ conversations and remembers the open thread, with no server call", async () => {
     listConversations = () => Promise.resolve({ conversations: [row({ session_id: "ctx-1" })] });
     store.subscribeForTest(() => {});

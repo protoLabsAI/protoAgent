@@ -24,7 +24,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefAttributes } from "react";
 import { Button, type ButtonProps } from "@protolabsai/ui/primitives";
-import { Spinner, StatusDot } from "@protolabsai/ui/data";
+import { Skeleton, Spinner, StatusDot } from "@protolabsai/ui/data";
 import { Drawer, Popover } from "@protolabsai/ui/overlays";
 import { Clock, Target, Users } from "lucide-react";
 
@@ -35,10 +35,11 @@ import type { GoalState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
 import { useDecisions } from "../decisions/useDecisions";
 import { sections } from "../work/sectionRegistry";
+import { itemKey } from "../work/WorkOverview";
 import { useWorkItems, type WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, inWorkScope, jobEnded, jobKey, withSharedDecisions, workGroups, type WorkGroup } from "../work/workGroups";
 import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
-import type { WorkGroupId } from "../work/tone";
+import { railCue, WORK_GROUP_LABELS, type WorkGroupId } from "../work/tone";
 import { NEEDS_YOU_SECTION_KINDS, NeedsYouSection } from "./NeedsYouSection";
 import { useDirectives } from "./useDirectives";
 import { runHas } from "./mentionRun";
@@ -54,6 +55,9 @@ export type RailChip = {
   goal?: { step: number; of: number | null };
   /** The instructions ledger never loaded: no count to show, details carry "Load again". */
   problem?: boolean;
+  /** This chip's group emptied while its panel was open (§1 "emptied while open"): it stays
+   *  on the rail as the open panel's anchor, label alone, until the operator dismisses it. */
+  emptied?: boolean;
 };
 
 /** The §5 chips from the shared selector's groups: zero counts hide. Needs you is not a
@@ -82,6 +86,13 @@ export function railChips(groups: WorkGroup[]): RailChip[] {
 /** The complete spoken label (§5) — the phone chip shows the number only, this says it all. */
 export function spokenLabel(chip: RailChip): string {
   if (chip.problem) return "Told it: couldn't check instructions in this chat. Show details";
+  if (chip.emptied) {
+    switch (chip.id) {
+      case "doing-now": return "Doing now: nothing running in this chat. Show details";
+      case "coming-up": return "Coming up: nothing coming up in this chat. Show details";
+      case "instructions": return "Told it: no instructions in force in this chat. Show details";
+    }
+  }
   switch (chip.id) {
     case "doing-now": {
       const goal = chip.goal
@@ -170,56 +181,107 @@ function chipIcon(chip: RailChip): ReactNode {
   }
 }
 
-function GroupSection({ group, directives, mobile, onNavigate }: {
+/** The §1 "emptied while open" line for a work group: the panel stays open with this one
+ *  `role="status"` sentence when its last row leaves under the reader, until dismissed. */
+function emptiedLine(id: WorkGroupId): string {
+  switch (id) {
+    case "doing-now": return "Nothing running in this chat now.";
+    case "coming-up": return "Nothing coming up in this chat.";
+    case "instructions": return "No instructions in force in this chat.";
+    default: return "";
+  }
+}
+
+/** One Work group's section in a details panel (chat-status-rail-v2 §1). A work chip opens it
+ *  as the panel's only section (`single`): the quiet frame of a heading, the two-line rows with
+ *  their `railCue` line, and one "Open in Work". `single` also turns on the loading skeleton and
+ *  the "emptied while open" status line; the generic (Needs-you panel) use keeps skipping an
+ *  empty, non-failed group as before. */
+function GroupSection({ group, directives, mobile, onNavigate, single = false }: {
   group: WorkGroup;
   /** THIS chat's instructions source, for its preserved error / stale "Load again" states. */
   directives: WorkSource | null;
   mobile: boolean;
   onNavigate: () => void;
+  single?: boolean;
 }) {
   const failed = directives?.status === "error";
   const stale = directives?.status === "stale";
-  if (!group.count && !failed) return null;
-  // THIS chat's ledger never loaded: the count is unknowable, so the heading carries the
-  // name alone — never a claimed "0" (the chip hides its count the same way).
-  const unknownCount = failed && group.count === 0;
-  const name = unknownCount ? group.label : `${group.label}, ${group.count}`;
+  const loading = single && directives?.status === "loading";
+  // Generic use (the Needs-you panel) skips an empty, non-failed group entirely, as before.
+  if (!single && !group.count && !failed) return null;
+  // No claimed count while loading, or when THIS chat's ledger never loaded (unknowable), or
+  // once the group has emptied — the chip hides its count the same way.
+  const hideCount = loading || group.count === 0;
+  const name = hideCount ? group.label : `${group.label}, ${group.count}`;
   const size = mobile ? "md" : "sm";
+  const navigate = (itemId?: string) => {
+    onNavigate();
+    openWorkGroup(group.id, itemId);
+  };
   return (
     <section className="chat-status-details__section" aria-label={name}>
       <h2 className="chat-status-details__heading" aria-label={name}>
         {group.label}
-        {!unknownCount && <span aria-hidden="true"> · {group.count}</span>}
+        {!hideCount && <span className="chat-status-details__count" aria-hidden="true"> · {group.count}</span>}
       </h2>
-      {failed ? (
-        <p className="chat-status-details__problem">Couldn&apos;t check your instructions.</p>
+      {loading ? (
+        <div className="chat-status-details__loading" aria-busy="true">
+          <Skeleton lines={2} />
+        </div>
+      ) : failed ? (
+        <p className="chat-status-details__problem">Couldn&apos;t check your instructions in this chat.</p>
+      ) : group.count === 0 ? (
+        <p className="chat-status-details__status" role="status">{emptiedLine(group.id)}</p>
       ) : (
-        <ul className="chat-status-details__rows">
-          {group.items.map((item) => (
-            <li key={`${item.kind}:${item.id}`} className="chat-status-details__row">
-              <span className="chat-status-details__title" title={item.title}>{item.title}</span>
-              {item.meta ? <span className="chat-status-details__meta">{item.meta}</span> : null}
-            </li>
-          ))}
+        <ul className="chat-status-details__rows chat-status-group__rows">
+          {group.items.map((item) => {
+            const cue = railCue(item);
+            return (
+              <li key={`${item.kind}:${item.id}`}>
+                <button
+                  type="button"
+                  className="chat-status-row"
+                  title={item.title}
+                  aria-label={[item.title, cue, "Open in Work"].filter(Boolean).join(". ")}
+                  // The deep-link id MUST match Work's own row key (WorkOverview.itemKey) so
+                  // Work opens the detail pane: a `wait` row rides the schedules source and
+                  // keys as `schedule:<id>`, not `wait:<id>`. Reusing itemKey keeps them from
+                  // drifting apart.
+                  onClick={() => navigate(itemKey(item))}
+                >
+                  <span className="chat-status-row__text">{item.title}</span>
+                  {cue ? <span className="chat-status-row__cue">{cue}</span> : null}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
-      {stale && <p className="chat-status-details__problem">Your instructions may be out of date.</p>}
+      {stale && group.count > 0 && (
+        <p className="chat-status-details__problem">Your instructions may be out of date.</p>
+      )}
       <div className="chat-status-details__actions">
         {(failed || stale) && (
           <Button size={size} variant="ghost" onClick={() => directives?.retry()}>Load again</Button>
         )}
-        <Button
-          size={size}
-          variant="ghost"
-          onClick={() => {
-            onNavigate();
-            openWorkGroup(group.id);
-          }}
-        >
-          Open in Work
-        </Button>
+        <Button size={size} variant="ghost" onClick={() => navigate()}>Open in Work</Button>
       </div>
     </section>
+  );
+}
+
+/** A work chip's details panel: ONLY its own group (§1 D1) — no Needs you or People riders. */
+function WorkChipPanel({ group, directives, mobile, onNavigate }: {
+  group: WorkGroup;
+  directives: WorkSource | null;
+  mobile: boolean;
+  onNavigate: () => void;
+}) {
+  return (
+    <div className="chat-status-details chat-status-details--group" onKeyDown={trapTab}>
+      <GroupSection group={group} directives={directives} mobile={mobile} onNavigate={onNavigate} single />
+    </div>
   );
 }
 
@@ -422,14 +484,18 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   const moreRef = useRef<HTMLButtonElement | null>(null);
   const lastOpen = useRef<OpenId>(null);
   if (open !== null) lastOpen.current = open;
-  // The open chip can leave the rail under the reader (its last job ends, its count hits
-  // zero; for the picker, a resize lets everyone fit and `+K` goes). Clear the state too,
-  // or the panel would reopen by itself when the chip returns. The Needs-you marker with
-  // results HELD stays open at zero — the hold is the §5.5 contract — until the panel closes.
+  // The open opener can leave the rail under the reader. The picker's `+K` goes when a resize
+  // lets everyone fit; the Needs-you marker with results HELD survives at zero (the §5.5 hold).
+  // A WORK chip whose group empties does NOT auto-close (§1 "emptied while open"): the panel
+  // stays open with a role="status" line until dismissed, so it stays rendered as its anchor.
+  const emptiedChipId: RailChip["id"] | null =
+    open !== null && open !== "people" && open !== "needs-you" && !chips.some((chip) => chip.id === open)
+      ? open
+      : null;
   const openGone = open !== null
     && (open === "people" ? hiddenCount === 0
       : open === "needs-you" ? needsYou.count === 0 && held.size === 0
-        : !chips.some((chip) => chip.id === open));
+        : false);
   useEffect(() => {
     if (openGone) setOpen(null);
   }, [openGone]);
@@ -487,7 +553,17 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   };
 
   const hasContent = chips.length > 0 || cast.length > 0 || needsYou.count > 0
-    || (open === "needs-you" && held.size > 0);
+    || (open === "needs-you" && held.size > 0) || emptiedChipId !== null;
+  // The chips actually rendered: the live set, plus — when a work chip emptied while open —
+  // a label-only placeholder so its popover/sheet stays mounted as the open panel's anchor.
+  const chipsToRender: RailChip[] = emptiedChipId !== null
+    ? [...chips, {
+      id: emptiedChipId,
+      label: emptiedChipId === "instructions" ? "Told it" : WORK_GROUP_LABELS[emptiedChipId],
+      count: 0,
+      emptied: true,
+    }]
+    : chips;
   // The ONE polite live region (§6) — mounted for the component's whole life, OUTSIDE the
   // conditional rail, at a fixed child position so React never recreates the node. A screen
   // reader announces text that CHANGES inside a region that already existed; a region that
@@ -609,9 +685,9 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
         {chipIcon(chip)}
         <span className="chat-status-chip__text">
           {chip.label}
-          {chip.goal ? ` · goal ${chip.goal.step}/${chip.goal.of ?? "∞"} · ` : chip.problem ? "" : " "}
+          {chip.goal ? ` · goal ${chip.goal.step}/${chip.goal.of ?? "∞"} · ` : chip.problem || chip.emptied ? "" : " "}
         </span>
-        {!chip.problem && <span className="chat-status-chip__count">{chip.count}</span>}
+        {!chip.problem && !chip.emptied && <span className="chat-status-chip__count">{chip.count}</span>}
       </button>
     );
     if (mobile) return <Fragment key={chip.id}>{button}</Fragment>;
@@ -630,13 +706,11 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
         }}
         trigger={button}
       >
-        <DetailsPanel
-          groups={groups}
-          directives={instructionsSource}
+        <WorkChipPanel
+          group={groups.find((group) => group.id === chip.id)!}
+          directives={chip.id === "instructions" ? instructionsSource : null}
           mobile={false}
           onNavigate={close}
-          people={peopleWhenHidden}
-          needsYou={needsYouSectionFor(close)}
         />
       </Popover>
     );
@@ -648,7 +722,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
       {hasContent && (
         <div className="chat-status-rail" role="group" aria-label="Chat status" data-testid="chat-status-rail">
           {needsYouMarker}
-          {chips.map(renderChip)}
+          {chipsToRender.map(renderChip)}
           {cast.length ? (
             <div className="chat-roster" aria-label="In this chat" ref={rosterRef}>
               <Users size={13} aria-hidden />
@@ -702,13 +776,18 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
               open={open !== null}
               onClose={closeAndRestore}
               side="bottom"
-              title="Chat status"
+              // A work chip's sheet is titled with its group name (§1 "title set to the heading
+              // text"), so the DS close button renders; Needs you and the picker keep the
+              // generic title.
+              title={open === "doing-now" || open === "coming-up" || open === "instructions"
+                ? WORK_GROUP_LABELS[open]
+                : "Chat status"}
               className="chat-status-sheet"
             >
               {open === "people" ? (
                 // The picker sheet opens AT "In this chat · N" — the People section alone.
                 <div className="chat-status-details" onKeyDown={trapTab}>{peopleSection}</div>
-              ) : open !== null ? (
+              ) : open === "needs-you" ? (
                 <DetailsPanel
                   groups={groups}
                   directives={instructionsSource}
@@ -716,6 +795,14 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
                   onNavigate={closeAndRestore}
                   people={peopleWhenHidden}
                   needsYou={needsYouSectionFor(closeAndRestore)}
+                />
+              ) : open !== null ? (
+                // A work chip's sheet (§1 D1): ONLY its own group.
+                <WorkChipPanel
+                  group={groups.find((group) => group.id === open)!}
+                  directives={open === "instructions" ? instructionsSource : null}
+                  mobile
+                  onNavigate={closeAndRestore}
                 />
               ) : null}
             </Drawer>

@@ -178,7 +178,10 @@ function loadOlder() {
 // a2a `turn.started` / `turn.finished` (src/server/a2a.py) update a known row's `active` /
 // `last_state`; an unknown context STARTING triggers a windowed refetch — that is how a thread's
 // tab first appears. `turn.input_required` flips a known row to Needs you (no `turn.finished` is
-// published for a park, so without it a hidden tab could never return on its own, §3.2). No polling.
+// published for a park, so without it a hidden tab could never return on its own, §3.2).
+// `turn.resumed` is the park's counterpart: when the operator answers, the server publishes it
+// (and suppresses `turn.started` for that leg), so the known row goes back to Running and clears
+// Needs you WITHOUT waiting for the resumed turn's terminal frame. No polling.
 
 function onStarted(d: Record<string, unknown>) {
   if (d.origin !== "a2a") return;
@@ -219,6 +222,23 @@ function onInputRequired(d: Record<string, unknown>) {
   set({ rows });
 }
 
+function onResumed(d: Record<string, unknown>) {
+  // The operator answered a parked thread: the server publishes `turn.resumed` (carrying
+  // `context_id`, like `turn.input_required`) and does NOT publish a fresh `turn.started` for the
+  // resumed leg. So flip the KNOWN row back to Running and off Needs you here — otherwise the row
+  // keeps `last_state: "input-required"` (and `active` whatever the first leg left) until the
+  // resumed turn's terminal `turn.finished` lands, stranding a hidden tab open on answered work.
+  // The turn is running again, so `last_state` is `working`. Unknown contexts are ignored (a
+  // resume implies an earlier park/start already put the row here).
+  const id = String(d.context_id || "");
+  const i = id ? indexOf(id) : -1;
+  if (i < 0) return;
+  liveAt.set(id, Date.now());
+  const rows = state.rows.slice();
+  rows[i] = { ...rows[i], active: true, last_state: "working" };
+  set({ rows });
+}
+
 function start() {
   if (started) return;
   started = true;
@@ -238,12 +258,14 @@ function start() {
   const offStart = onTopic("turn.started", onStarted);
   const offFinish = onTopic("turn.finished", onFinished);
   const offPark = onTopic("turn.input_required", onInputRequired);
+  const offResume = onTopic("turn.resumed", onResumed);
   stop = () => {
     offConn();
     offResync();
     offStart();
     offFinish();
     offPark();
+    offResume();
   };
 }
 
