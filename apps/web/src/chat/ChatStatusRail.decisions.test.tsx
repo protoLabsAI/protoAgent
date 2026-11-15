@@ -14,6 +14,7 @@ import { flattenWorkItems, withSharedDecisions, workGroups } from "../work/workG
 import type { GroupableWorkItem } from "../work/tone";
 import { ChatStatusRail, needsYouSpokenLabel } from "./ChatStatusRail";
 import { useUI } from "../state/uiStore";
+import { beginThisChatVisit, isThisChatVisit } from "../work/visitScope";
 import { fallbackCap } from "./peopleFit";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -118,6 +119,33 @@ const expectedCount = () => workGroups(
 ).find((g) => g.id === "needs-you")!.count;
 
 describe("the fleet-wide marker", () => {
+  it("the panel holds ONLY the Needs you section — no work groups, no People rider — ending in one unscoped Open in Work (S3b)", async () => {
+    // A doing-now task in THIS chat (so a work chip rides the rail) and a cast big enough to hide
+    // names behind +K — proof that neither the work group nor the People picker rides the panel.
+    const running: GroupableWorkItem = {
+      kind: "task", id: "t-run", status: "running", title: "Running task", meta: "",
+      sessionId: SESSION, raw: { status: "in_progress" },
+    };
+    state.sources = mkSources([decision(row("q1")), running]);
+    beginThisChatVisit();
+    await render(<ChatStatusRail sessionId={SESSION} cast={["ana", "bo", "cy"]} draft="" onToggleMention={() => {}} />);
+    await click(marker());
+    // Exactly one section — the Needs you section under its "Needs you · N" heading. No
+    // work-group section, no People picker, not even the doing-now row's title.
+    expect([...panel()!.querySelectorAll("section")]).toHaveLength(1);
+    expect(panel()!.querySelector(".chat-needs-you")).toBeTruthy();
+    expect(panel()!.querySelector(".chat-people")).toBeNull();
+    expect([...panel()!.querySelectorAll("h2")].map((h) => h.textContent)).toEqual(["Needs you · 1"]);
+    expect(panel()!.textContent).not.toContain("Running task");
+    // One "Open in Work", and it is UNSCOPED (Needs you is never chat-scoped): clicking it ends a
+    // live thisChat visit and targets the Needs-you section with no item.
+    const open = [...panel()!.querySelectorAll("button")].filter((b) => b.textContent === "Open in Work");
+    expect(open).toHaveLength(1);
+    await click(open[0]);
+    expect(isThisChatVisit()).toBe(false);
+    expect(useUI.getState().surfaceStates.work).toMatchObject({ section: "decisions", itemId: undefined });
+  });
+
   it("counts exactly the shared Needs-you rows; the panel leads with the section, rows expand on select", async () => {
     const stale = row("q1", { created_at: new Date(Date.now() - 31 * 60_000).toISOString() });
     const items = [decision(stale), decision(row("q2")), delivery(71), stoppedGoal("g1")];
@@ -193,6 +221,9 @@ describe("the fleet-wide marker", () => {
     expect([...host.querySelectorAll("button.chat-roster-chip:not([data-testid])")]).toHaveLength(0);
     expect(host.querySelector('[data-testid="chat-roster-more"]')!.textContent).toBe("+2");
     await click(marker());
+    // The bottom sheet is titled with the heading (so the DS close button renders), and holds
+    // only the Needs you section.
+    expect(document.querySelector(".pl-drawer--bottom .pl-drawer__title")!.textContent).toBe("Needs you");
     expect(document.querySelector(".pl-drawer--bottom .chat-needs-you h2")!.textContent).toBe("Needs you · 1");
     await click(document.querySelector('.pl-drawer--bottom [aria-label="Close"]'));
     expect(document.activeElement).toBe(marker());

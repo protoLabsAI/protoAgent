@@ -509,6 +509,35 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     expect(chatStore.getSnapshot().currentSessionId).toBe("chat-1");
   });
 
+  it("creating a chat while the Conversations tab is selected leaves the stage so the new chat shows (r3)", async () => {
+    setConv({ tabVisible: true, stage: "conversations", count: 1, rows: [row()], forYou: [row()] });
+    // The stage lives in the conversations store, which doesn't watch chat-store session changes —
+    // so every "new chat" gesture must also leave the Conversations stage (openChat), or the new
+    // chat is created but stays hidden behind the read-only list pane (the pool at display:none).
+    const createSpy = vi.spyOn(chatStore, "createSession").mockImplementation(() => ({
+      id: "new", title: "New chat", messages: [], createdAt: 2, updatedAt: 2,
+    }));
+    await mount();
+
+    // The "+" add button.
+    await act(async () => {
+      container.querySelector(".pl-tabbar__add")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(conversationsStore.openChat).toHaveBeenCalledTimes(1);
+
+    // The tab-bar background "New chat" menu entry does the same.
+    createSpy.mockClear();
+    vi.mocked(conversationsStore.openChat).mockClear();
+    await act(async () => {
+      container.querySelector(".pl-tabbar")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    const bg = vi.mocked(openContextMenu).mock.calls.slice(-1)[0]![2] as { onNew?: () => void };
+    bg.onNew!();
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(conversationsStore.openChat).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the read-only list pane (no composer) with For you, a collapsed Automated disclosure and Show older (r3)", async () => {
     setConv({
       tabVisible: true, stage: "conversations", count: 3, hasOlder: true, forYou: [row()],

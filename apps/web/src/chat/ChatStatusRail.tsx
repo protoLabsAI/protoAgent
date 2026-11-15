@@ -285,6 +285,19 @@ function WorkChipPanel({ group, directives, mobile, onNavigate }: {
   );
 }
 
+/** The Needs-you marker's details panel (§1 D4, S3b): ONLY the Needs you section — no work
+ *  groups and no People rider — framed exactly like the S2b work-chip panels, so its "Needs
+ *  you · N" heading and single "Open in Work" stay pinned outside the scrolling rows. The
+ *  section's own heading names the dialog; the section carries the one unscoped "Open in Work"
+ *  (NeedsYouSection), so the panel adds nothing around it. */
+function NeedsYouPanel({ children }: { children: ReactNode }) {
+  return (
+    <div className="chat-status-details chat-status-details--group" onKeyDown={trapTab}>
+      {children}
+    </div>
+  );
+}
+
 /** The picker (§ the v7 people behavior): EVERY cast member as a toggle chip, the dynamic
  *  recipients line, and the "In this chat · N" heading. One component serves both hosts —
  *  the `+K` chip's own panel, and the People section the grouped details gain while names
@@ -327,34 +340,6 @@ function PeopleSection({ cast, draft, onToggleMention }: {
       </div>
       {line && <p className="chat-people__line">{line}</p>}
     </section>
-  );
-}
-
-function DetailsPanel({ groups, directives, mobile, onNavigate, people, needsYou }: {
-  groups: WorkGroup[];
-  /** THIS chat's instructions source — status and retry scoped to its own ledger. */
-  directives: WorkSource;
-  mobile: boolean;
-  onNavigate: () => void;
-  /** The People section — present ONLY while the rail hides names behind `+K`. */
-  people?: ReactNode;
-  /** The Needs-you section (S7) — the FIRST section whenever something needs the operator. */
-  needsYou?: ReactNode;
-}) {
-  return (
-    <div className="chat-status-details" onKeyDown={trapTab}>
-      {needsYou}
-      {groups.filter((group) => group.id !== "needs-you").map((group) => (
-        <GroupSection
-          key={group.id}
-          group={group}
-          directives={group.id === "instructions" ? directives : null}
-          mobile={mobile}
-          onNavigate={onNavigate}
-        />
-      ))}
-      {people}
-    </div>
   );
 }
 
@@ -580,9 +565,6 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   const peopleSection = (
     <PeopleSection cast={cast} draft={draft} onToggleMention={toggleMentionTracked} />
   );
-  // The grouped details gain the People section ONLY while the rail hides names — with
-  // everyone visible on the row there is nothing the panel would add.
-  const peopleWhenHidden = hiddenCount > 0 ? peopleSection : undefined;
 
   // `+K` — the overflow chip. Visible text is the count alone; the spoken label says it
   // all. One keyed node, so focus return still works after a picker visit reorders the row.
@@ -655,14 +637,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
         }}
         trigger={needsYouButton}
       >
-        <DetailsPanel
-          groups={groups}
-          directives={instructionsSource}
-          mobile={false}
-          onNavigate={close}
-          people={peopleWhenHidden}
-          needsYou={needsYouSectionFor(close)}
-        />
+        <NeedsYouPanel>{needsYouSectionFor(close)}</NeedsYouPanel>
       </Popover>
     );
 
@@ -776,10 +751,10 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
               open={open !== null}
               onClose={closeAndRestore}
               side="bottom"
-              // A work chip's sheet is titled with its group name (§1 "title set to the heading
-              // text"), so the DS close button renders; Needs you and the picker keep the
-              // generic title.
-              title={open === "doing-now" || open === "coming-up" || open === "instructions"
+              // A work chip's sheet — and the Needs-you sheet (S3b) — is titled with its group
+              // name (§1 "title set to the heading text"), so the DS close button renders; only
+              // the picker keeps the generic title.
+              title={open === "doing-now" || open === "coming-up" || open === "instructions" || open === "needs-you"
                 ? WORK_GROUP_LABELS[open]
                 : "Chat status"}
               className="chat-status-sheet"
@@ -788,14 +763,8 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
                 // The picker sheet opens AT "In this chat · N" — the People section alone.
                 <div className="chat-status-details" onKeyDown={trapTab}>{peopleSection}</div>
               ) : open === "needs-you" ? (
-                <DetailsPanel
-                  groups={groups}
-                  directives={instructionsSource}
-                  mobile
-                  onNavigate={closeAndRestore}
-                  people={peopleWhenHidden}
-                  needsYou={needsYouSectionFor(closeAndRestore)}
-                />
+                // The Needs-you sheet (§1 D4, S3b): ONLY the Needs you section.
+                <NeedsYouPanel>{needsYouSectionFor(closeAndRestore)}</NeedsYouPanel>
               ) : open !== null ? (
                 // A work chip's sheet (§1 D1): ONLY its own group.
                 <WorkChipPanel

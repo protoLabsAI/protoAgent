@@ -216,6 +216,17 @@ export function ChatSurface({
     );
   }
 
+  // Every "new chat" gesture routes through here (§3.3/§4.7). `createSession` only moves the chat
+  // store's `currentSessionId`; the Conversations stage lives in the SEPARATE conversations store,
+  // which doesn't watch chat-store session changes — so creating a chat while the Conversations tab
+  // is selected would switch `currentSessionId` but leave the stage on `conversations`, keeping the
+  // new chat hidden behind the read-only list pane (the pool stays display:none). Leaving the stage
+  // first means the chat the operator just asked for is actually shown.
+  function createChatSession(opts?: { incognito?: boolean }) {
+    leaveConversationsForChat();
+    chatStore.createSession(opts);
+  }
+
   useEffect(() => {
     if (!chat.currentSessionId && chat.sessions.length === 0) {
       chatStore.createSession();
@@ -379,7 +390,7 @@ export function ChatSurface({
     if (isIncognitoAddClick(e.target, e.shiftKey)) {
       e.preventDefault();
       e.stopPropagation();
-      chatStore.createSession({ incognito: true });
+      createChatSession({ incognito: true });
       return;
     }
     const closeBtn = (e.target as HTMLElement).closest(".pl-tabbar__close");
@@ -409,7 +420,7 @@ export function ChatSurface({
     e.preventDefault();
     e.stopPropagation();
     if (e.repeat) return; // held key auto-repeats keydown — only the first press creates a session
-    chatStore.createSession({ incognito: true });
+    createChatSession({ incognito: true });
   }
 
   // Right-click a chat tab → context menu (ADR 0036). The DS TabBar's `onTabContextMenu`
@@ -440,8 +451,8 @@ export function ChatSurface({
     openContextMenu("chat-tab", e, {
       sessionId: id,
       incognito: !!target?.incognito,
-      onNew: () => chatStore.createSession(),
-      onNewIncognito: () => chatStore.createSession({ incognito: true }),
+      onNew: () => createChatSession(),
+      onNewIncognito: () => createChatSession({ incognito: true }),
       onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
       onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
       onExport: () => void exportChatToFile(id),
@@ -460,8 +471,8 @@ export function ChatSurface({
   function onTabBarBackgroundContextMenu(e: ReactMouseEvent) {
     if ((e.target as HTMLElement).closest(".pl-tabbar__tab")) return; // a tab — onTabContextMenu owns it
     openContextMenu("chat-tab", e, {
-      onNew: () => chatStore.createSession(),
-      onNewIncognito: () => chatStore.createSession({ incognito: true }),
+      onNew: () => createChatSession(),
+      onNewIncognito: () => createChatSession({ incognito: true }),
       // "Show Conversations tab" (§3.2) — offered only while the tab is hidden AND has rows to
       // show but isn't already drawn (needs-you would already force it back on its own).
       onShowConversations:
@@ -547,7 +558,7 @@ export function ChatSurface({
           onReorder={(next) =>
             chatStore.reorderSessions(next.filter((t) => !isConversationsStage(t.id)).map((t) => t.id))
           }
-          onAdd={() => chatStore.createSession()}
+          onAdd={() => createChatSession()}
           onTabContextMenu={onTabContextMenu}
           // The DS TabBar renders this as the + button's native title/aria-label — the
           // hover hint for the Shift+click incognito gesture (#1697). Shift+Enter is the
