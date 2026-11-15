@@ -153,7 +153,8 @@ def test_two_prs_adding_fragments_do_not_touch_the_same_file(tmp_path):
 
 # ── the lint gate: what a fragment must have to still say something at release ─
 def test_lint_accepts_a_well_formed_fragment(tmp_path):
-    p = _frag(tmp_path, "3291.added.md", "- **Every Settings section is a ⌘K deep-link (#3291).** Details…")
+    # The lead carries NO number (#5295): collate stamps the merging PR at release.
+    p = _frag(tmp_path, "3291.added.md", "- **Every Settings section is a ⌘K deep-link.** Details…")
 
     assert cl.lint_fragments([p]) == []
 
@@ -245,19 +246,16 @@ def test_stamp_leaves_nested_bullets_and_issue_refs_alone():
     assert not cl.lead_needs_ref(body)
 
 
-def test_read_fragments_stamps_only_leads_without_a_ref(tmp_path):
+def test_read_fragments_stamps_from_the_resolver_for_every_fragment(tmp_path):
+    """#5295: collate resolves the adding PR for EVERY fragment — a no-ref lead is stamped,
+    and a lead already citing its adding PR is kept untouched."""
     _frag(tmp_path, "fix-a.fixed.md", "- **A.** body")
     _frag(tmp_path, "2286.fixed.md", "- **B (#2286).** body")
-    asked: list[str] = []
+    prs = {"fix-a.fixed.md": 77, "2286.fixed.md": 2286}
 
-    def resolve(path):
-        asked.append(path.name)
-        return 77
-
-    buckets, _ = cl.read_fragments(tmp_path, resolve_pr=resolve)
+    buckets, _ = cl.read_fragments(tmp_path, resolve_pr=lambda path: prs[path.name])
 
     assert buckets["fixed"] == ["- **B (#2286).** body", "- **A (#77).** body"]
-    assert asked == ["fix-a.fixed.md"]  # no git lookup for a fragment that needs none
 
 
 def test_read_fragments_keeps_an_unresolvable_fragment_and_warns(tmp_path, capsys):
@@ -357,12 +355,14 @@ def test_pr_for_fragment_is_none_for_a_direct_push_or_uncommitted_file(tmp_path)
 
 @_needs_git
 @pytest.mark.platform_sensitive  # shells out to git; the Windows lane must run it
-def test_collate_cli_stamps_from_git_history(tmp_path, monkeypatch):
-    """End to end through `changelog.py collate`, the step prepare-release.yml runs."""
+def test_collate_cli_stamps_and_restamps_from_git_history(tmp_path, monkeypatch):
+    """End to end through `changelog.py collate`, the step prepare-release.yml runs: a no-ref
+    lead is stamped with its merging PR, and a lead that guessed a WRONG number (the v0.242.0
+    slip, #5295) is corrected to the PR that actually merged the fragment."""
     repo = _repo(tmp_path)
     _commit_fragment(repo, "fix-a.fixed.md", "- **Fleet stop tells the truth.** Details.\n", "fix: fleet stop (#4880)")
     _commit_fragment(
-        repo, "4874.changed.md", "- **Fragments are named by slug (#4874).** Details.\n", "chore: x (#4882)"
+        repo, "guessed.changed.md", "- **Fragments are named by slug (#4874).** Details.\n", "chore: x (#4882)"
     )
     monkeypatch.setattr(cl, "CHANGELOG", repo / "CHANGELOG.md")
     monkeypatch.setattr(cl, "FRAGMENTS_DIR", repo / "changelog.d")
@@ -371,16 +371,22 @@ def test_collate_cli_stamps_from_git_history(tmp_path, monkeypatch):
     cl.main()
 
     text = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert "- **Fleet stop tells the truth (#4880).** Details." in text
-    assert "- **Fragments are named by slug (#4874).** Details." in text  # an explicit ref is kept
+    assert "- **Fleet stop tells the truth (#4880).** Details." in text  # no-ref lead stamped
+    assert "- **Fragments are named by slug (#4882).** Details." in text  # wrong ref → merging PR
+    assert "#4874" not in text  # the guessed number is gone
     assert not list((repo / "changelog.d").glob("*.md"))
 
 
-def test_lint_accepts_a_ref_spelled_alongside_other_parenthetical_text(tmp_path):
-    """`(v0.2.0, #3286)` is a real, fine spelling — the rule is "names a number", not one form."""
-    p = _frag(tmp_path, "3286.changed.md", "- **orgChart rebuilt as a plugin (v0.2.0, #3286).** Details…")
+def test_lint_rejects_any_ref_in_the_bold_lead(tmp_path):
+    """#5295: a number in the lead can only be a guess (the PR doesn't exist at the first
+    commit), and a guessed one ships wrong — collate stamps the merging PR, so the lead must
+    carry none. A ref in the BODY text (outside `**…**`) is still fine."""
+    p = _frag(tmp_path, "3286.changed.md", "- **orgChart rebuilt as a plugin (#3286).** Details…")
 
-    assert cl.lint_fragments([p]) == []
+    (problem,) = cl.lint_fragments([p])
+
+    assert "3286.changed.md" in problem
+    assert "number out" in problem.lower()
 
 
 def test_lint_still_rejects_a_fragment_with_no_top_level_bullet(tmp_path):
