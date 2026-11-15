@@ -111,7 +111,7 @@ describe("chat-tab bulk-close menu", () => {
     let hid = 0, shown = 0;
     const hide = resolveMenu("chat-tab", { onHideConversations: () => hid++ }) as (Item & { run: () => void })[];
     expect(ids(hide)).toEqual(["hide-conversations"]);
-    expect(hide[0].label).toBe("Hide Conversations tab");
+    expect(hide[0].label).toBe("Hide “From others”");
     hide[0].run();
     const bg = resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop, onShowConversations: () => shown++ }) as (Item & { run: () => void })[];
     expect(ids(bg)).toEqual(["new", "new-incognito", "show-conversations"]);

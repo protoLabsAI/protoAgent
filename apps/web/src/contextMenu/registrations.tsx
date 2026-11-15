@@ -264,7 +264,7 @@ registerContextMenu({
       return [
         {
           id: "hide-conversations",
-          label: "Hide Conversations tab",
+          label: "Hide “From others”",
           icon: <EyeOff size={14} />,
           run: () => ctx.onHideConversations?.(),
         },
