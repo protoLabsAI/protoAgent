@@ -474,6 +474,7 @@ from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the e
     _retire_thread,
     _secrets_refresh_loop,
     _task_link_sweep_loop,
+    _task_stall_loop,
     _watch_loop,
 )
 
@@ -897,6 +898,10 @@ def _main():
         # Task PR-link sweep (ADR 0129 Q1). Started unconditionally like the loops
         # above; idles when no open task links an unresolved PR.
         STATE.task_link_sweep_task = asyncio.create_task(_task_link_sweep_loop())
+        # Task stall sweep (ADR 0129 D9). Started unconditionally like the loops above;
+        # self-guards on STATE.tasks_store + STATE.inbox_store and nudges an in-progress
+        # task that nothing is driving, parking it waiting after the nudge cap.
+        STATE.task_stall_task = asyncio.create_task(_task_stall_loop())
         # Directive GitHub-ref sweep (ADR 0129 D4/Q2). Started unconditionally like the
         # loops above; idles when no in-force directive links an unresolved issue/PR.
         STATE.directive_link_sweep_task = asyncio.create_task(_directive_link_sweep_loop())
@@ -1144,6 +1149,8 @@ def _main():
             STATE.a2a_reaper_task.cancel()
         if STATE.task_link_sweep_task is not None:
             STATE.task_link_sweep_task.cancel()
+        if STATE.task_stall_task is not None:
+            STATE.task_stall_task.cancel()
         if STATE.directive_link_sweep_task is not None:
             STATE.directive_link_sweep_task.cancel()
         # (memory_guard_task was cancelled at the top — it can os._exit.)
