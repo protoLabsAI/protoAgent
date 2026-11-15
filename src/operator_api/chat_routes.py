@@ -22,13 +22,14 @@ import re
 import secrets
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from a2a_impl import conversation_origin
 from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first
 from infra.paths import package_version
 from runtime.session_ids import SessionId, require_session_id, session_id_problem
@@ -413,6 +414,205 @@ async def session_summary(session_id: str) -> dict | None:
             session_id, newest_state=last_state, newest_task_id=(row.task_id if row else None), newest_updated=last
         ),
     }
+
+
+# ── Other conversations list (docs/design/other-conversations.md, slice S2) ─────
+# The Conversations tab lists the A2A threads this agent had with someone OTHER than the operator's
+# own console chats, read-only. Everything here is DISPLAY-ONLY — never an authorization input.
+
+#: Context-id prefixes the Conversations list never shows (spec §2 decision 1). ``chat-`` is the
+#: console's own chat tabs; ``job:`` / ``background:`` are the server's own job sessions
+#: (``a2a_impl.executor._SERVER_CONTEXT_PREFIXES``, ``events.JOB_CONTEXT_PREFIX``); ``system:`` is
+#: the durable Activity thread (``events.ACTIVITY_CONTEXT`` = ``system:activity``); ``palette-`` is
+#: the command palette AND the Fleet Room's member DMs (both ride the console's ``palette-`` chat
+#: contexts, the way ``graph/middleware/memory.py`` classifies them). Incognito / hidden threads are
+#: dropped separately, off the opening turn's stored metadata.
+_CONVERSATION_EXCLUDE_PREFIXES = ("chat-", "job:", "background:", "system:", "palette-")
+#: Sessions the server mints for an API caller (``_mint_session_id`` / ``_v1_session_id``). With no
+#: stored origin they read as "From the API" rather than the generic "From another agent" (§4.2).
+_API_SESSION_PREFIXES = ("api-", "openai-compat-")
+_CONVERSATION_WINDOW_DAYS = 7
+_CONVERSATION_LIMIT_CAP = 50
+
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")  # [text](url) -> text
+_MD_LEADING = re.compile(r"^\s*(?:[>#*+\-]|\d+[.)])+\s*")  # heading / quote / list markers
+_MD_MARKS = re.compile(r"[*_`~]+")  # emphasis / inline-code marks
+
+
+def _clip_one_line(text: object, limit: int) -> str:
+    """Whitespace collapsed to single spaces and clipped to ``limit`` with an ellipsis — the
+    one-line shape ``conversation_origin._one_line`` gives a STORED title, mirrored here so a title
+    DERIVED from the first message reads the same."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+def _strip_markdown(line: str) -> str:
+    """One line with its common Markdown shed (spec §4.4): link text kept, leading
+    heading/quote/list markers and emphasis/inline-code marks removed. Deliberately light — a title
+    is a label, not a render."""
+    line = _MD_LINK.sub(r"\1", line)
+    line = _MD_LEADING.sub("", line)
+    return _MD_MARKS.sub("", line)
+
+
+def _first_user_line(history) -> str:
+    """The first line of a thread's first USER message, Markdown-stripped and clipped to 80 — the
+    second title fallback (spec §4.4). ``""`` when the stored history carries no user text. The SDK
+    serialises the stored role as ``ROLE_USER`` (``MessageToDict``); the lowercase spelling is
+    accepted defensively."""
+    for msg in history or []:
+        if not isinstance(msg, dict) or str(msg.get("role") or "") not in ("ROLE_USER", "user"):
+            continue
+        text = "".join(
+            part.get("text") or ""
+            for part in (msg.get("parts") or [])
+            if isinstance(part, dict) and part.get("text")
+        )
+        if text.strip():
+            return _clip_one_line(_strip_markdown(text.splitlines()[0]), 80)
+    return ""
+
+
+def _is_private_history(history) -> bool:
+    """True when a stored turn's history carries an incognito or hidden message — the per-message
+    privacy stamp the executor keeps (``a2a_impl.executor._TRANSCRIPT_METADATA_KEYS``). Read off a
+    thread's OPENING turn: a conversation STARTED private is never listed (spec §2 decision 1),
+    while a mid-thread hidden resume on an otherwise normal thread is not a reason to hide it."""
+    for msg in history or []:
+        md = msg.get("metadata") if isinstance(msg, dict) else None
+        if isinstance(md, dict) and (md.get("incognito") or md.get("hidden")):
+            return True
+    return False
+
+
+def _origin_fields_of(task_metadata) -> dict[str, str]:
+    """The display-only origin dict slice S1 stored on a thread's opening turn
+    (``conversation_origin.METADATA_KEY``), kept to its non-empty string fields exactly as
+    ``conversation_origin.read_origin`` keeps them. ``{}`` when the turn stored none."""
+    origin = task_metadata.get(conversation_origin.METADATA_KEY) if isinstance(task_metadata, dict) else None
+    if not isinstance(origin, dict):
+        return {}
+    return {k: v for k, v in origin.items() if isinstance(v, str) and v}
+
+
+def _conversation_group(origin: dict) -> str:
+    """``for_you`` when a PERSON started the thread or an agent acted on a person's behalf
+    (``caller_kind == "person"`` or ``on_behalf_of`` set); ``automated`` otherwise, including a
+    thread with no stored metadata (spec §4.1). The server never guesses a person."""
+    if origin.get("caller_kind") == "person" or origin.get("on_behalf_of"):
+        return "for_you"
+    return "automated"
+
+
+def _origin_label(origin: dict, session_id: str) -> str:
+    """The muted one-line origin copy (spec §4.2). ``caller`` + ``on_behalf_of`` → "From Claude Code
+    for Josh"; an agent caller → "Delegation from protoEngineer" (``delegate_to`` is the sole sender
+    that stamps ``caller_kind: agent``, slice S1); a bare caller → "From Claude Code"; an API-minted
+    session with no metadata → "From the API"; nothing stored → "From another agent"."""
+    caller = origin.get("caller")
+    on_behalf_of = origin.get("on_behalf_of")
+    if caller and on_behalf_of:
+        return f"From {caller} for {on_behalf_of}"
+    if caller and origin.get("caller_kind") == "agent":
+        return f"Delegation from {caller}"
+    if caller:
+        return f"From {caller}"
+    if session_id.startswith(_API_SESSION_PREFIXES):
+        return "From the API"
+    return "From another agent"
+
+
+def _conversation_rank(active: bool, last_state: str | None) -> int:
+    """The within-group sort bucket (spec §4.3): 0 needs you (parked on an answer), 1 running (a
+    turn in flight — live or a stored non-terminal state), 2 everything else. Newest
+    ``last_updated`` breaks ties within a bucket."""
+    if last_state and _PAUSED_TASK_STATE.search(last_state):
+        return 0
+    if active or (last_state and not _TERMINAL_TASK_STATE.search(last_state)):
+        return 1
+    return 2
+
+
+def _oldest_turn_ranked(task_model, dialect_name: str, where):
+    """One row per task of the contexts ``where`` selects, with its context's OLDEST-created turn at
+    ``rn == 1`` — the reverse of ``_newest_turn_ranked``'s ordering (``conversation_origin.read_origin``
+    uses the same oldest-first rule). The opening turn is where slice S1 stored the thread's origin
+    and the operator's first message."""
+    from sqlalchemy import func, literal_column, select
+
+    if dialect_name == "sqlite":
+        order: tuple = (literal_column(f"{task_model.__tablename__}.rowid").asc(),)
+    else:
+        order = (task_model.last_updated.asc().nulls_first(), task_model.id.asc())
+    return (
+        select(
+            task_model.context_id.label("context_id"),
+            task_model.task_metadata.label("origin_meta"),
+            task_model.history.label("history"),
+            func.row_number().over(partition_by=task_model.context_id, order_by=order).label("rn"),
+        )
+        .where(where)
+        .subquery("oldest_turn")
+    )
+
+
+def _parse_before_cursor(before: str | None):
+    """A ``before`` paging cursor as a NAIVE UTC datetime, to compare against the store's naive-UTC
+    ``last_updated`` (#4145), or ``None`` for the default 7-day window. An unparseable cursor
+    degrades to the default window rather than erroring the read."""
+    if not before:
+        return None
+    try:
+        cursor = datetime.fromisoformat(before)
+    except ValueError:
+        return None
+    if cursor.tzinfo is not None:
+        cursor = cursor.astimezone(timezone.utc).replace(tzinfo=None)
+    return cursor
+
+
+async def _conversation_index(engine, *, before, cutoff, pool_cap: int):
+    """Per non-excluded, non-tombstoned context: its newest-turn summary (task_id, status,
+    turn_count, ``last_updated``) and its opening turn's stored origin + history, newest activity
+    first and bounded to ``pool_cap``. Two windowed passes, one scan each (#3972): the contexts in
+    the window, then their opening turns."""
+    from sqlalchemy import exists, select
+
+    from a2a.server.tasks.database_task_store import TaskModel
+
+    async with engine.begin() as conn:
+        tombstones = await _ensure_chat_tombstones(conn)
+        where = ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id))
+        for prefix in _CONVERSATION_EXCLUDE_PREFIXES:
+            where = where & ~TaskModel.context_id.like(f"{prefix}%")
+        newest = _newest_turn_ranked(TaskModel, conn.dialect.name, where)
+        summary_q = select(
+            newest.c.context_id, newest.c.task_id, newest.c.status, newest.c.turn_count, newest.c.last_updated
+        ).where(newest.c.rn == 1)
+        if before is not None:
+            # Paging older than the cursor (spec §4.3 "Show older"); no 7-day floor applies.
+            summary_q = summary_q.where(newest.c.last_updated < before)
+        elif cutoff is not None:
+            summary_q = summary_q.where(newest.c.last_updated >= cutoff)
+        summaries = (
+            await conn.execute(
+                summary_q.order_by(
+                    newest.c.last_updated.desc().nulls_last(), newest.c.context_id.desc()
+                ).limit(pool_cap)
+            )
+        ).fetchall()
+        context_ids = [row.context_id for row in summaries]
+        openings: dict = {}
+        if context_ids:
+            oldest = _oldest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id.in_(context_ids))
+            for row in (
+                await conn.execute(
+                    select(oldest.c.context_id, oldest.c.origin_meta, oldest.c.history).where(oldest.c.rn == 1)
+                )
+            ).fetchall():
+                openings[row.context_id] = row
+    return summaries, openings
 
 
 class ChatRequest(BaseModel):
@@ -1391,6 +1591,88 @@ def register_chat_routes(app, ui: str) -> None:
         if reason is not None:
             result["reason"] = reason
         return result
+
+    @app.get("/api/conversations")
+    async def _api_conversations(group: str | None = None, before: str | None = None, limit: int = 50):
+        """The agent's OTHER conversations — every A2A thread that is NOT one of the operator's own
+        console chats (docs/design/other-conversations.md, slice S2). One row per context id, each
+        carrying ``session_id``, ``title``, ``origin_label``, ``group`` (``for_you`` | ``automated``),
+        ``last_updated``, ``turn_count``, ``active`` and ``last_state`` (the same meaning as
+        ``GET /api/chat/sessions/{id}``).
+
+        Never listed (spec §2 decision 1): the console chats (``chat-``), background jobs, the
+        command palette, the Fleet Room, the Activity thread, and any thread opened incognito or
+        hidden. Ordered ``for_you`` before ``automated`` and, within a group, needs-you then running
+        then newest. The default window is the last 7 days; ``before=<iso>`` pages older, 50 at a
+        time (``limit`` caps at 50). ``group=for_you`` / ``group=automated`` filters to one group.
+
+        Read-only over the A2A task store; degrades to an empty list with a ``reason`` rather than
+        erroring, exactly like the session index."""
+        from runtime import turn_activity
+
+        engine = getattr(STATE, "a2a_task_engine", None)
+        if engine is None:
+            return {"conversations": [], "reason": "task store not initialized"}
+        limit = max(1, min(int(limit), _CONVERSATION_LIMIT_CAP))
+        want_group = group if group in ("for_you", "automated") else None
+        before_cursor = _parse_before_cursor(before)
+        cutoff = (
+            None
+            if before_cursor is not None
+            else datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_CONVERSATION_WINDOW_DAYS)
+        )
+        try:
+            # Over-fetch the newest window (bounded) so dropping private threads and filtering to one
+            # group still fills a page of ``limit``.
+            summaries, openings = await _conversation_index(
+                engine, before=before_cursor, cutoff=cutoff, pool_cap=_CONVERSATION_LIMIT_CAP * 4
+            )
+        except Exception as exc:  # noqa: BLE001 — discovery is opportunistic, like the session index
+            log.warning("[chat] conversation index read failed: %s", exc)
+            return {"conversations": [], "reason": f"read failed: {type(exc).__name__}"}
+        rows: list[dict] = []
+        for row in summaries:
+            opening = openings.get(row.context_id)
+            history = (getattr(opening, "history", None) or []) if opening is not None else []
+            # A thread opened incognito or hidden is private and never listed (spec §2 decision 1).
+            if _is_private_history(history):
+                continue
+            origin = _origin_fields_of(getattr(opening, "origin_meta", None)) if opening is not None else {}
+            grp = _conversation_group(origin)
+            if want_group is not None and grp != want_group:
+                continue
+            label = _origin_label(origin, row.context_id)
+            # Title: the stored title, else the first line of the first message, else from the origin
+            # (spec §4.4, "<origin>" being the label without its leading "From ").
+            title = (
+                origin.get("title")
+                or _first_user_line(history)
+                or f"Conversation from {label.removeprefix('From ')}"
+            )
+            last_state = _status_state(row.status)
+            active = turn_activity.is_active(row.context_id)
+            rows.append(
+                {
+                    "session_id": row.context_id,
+                    "title": title,
+                    "origin_label": label,
+                    "group": grp,
+                    "last_updated": _utc_iso(row.last_updated),
+                    "turn_count": int(row.turn_count or 0),
+                    "active": active,
+                    "last_state": last_state,
+                    "_rank": _conversation_rank(active, last_state),
+                }
+            )
+        # Needs you, then running, then newest — within each group, and ``for_you`` before
+        # ``automated`` (spec §4.3). Two STABLE passes: newest activity first (id desc tiebreak),
+        # then bucket by (group, rank) so the newest-first order survives within each bucket.
+        rows.sort(key=lambda s: (s["last_updated"] or "", s["session_id"]), reverse=True)
+        rows.sort(key=lambda s: (0 if s["group"] == "for_you" else 1, s["_rank"]))
+        rows = rows[:limit]
+        for s in rows:
+            del s["_rank"]
+        return {"conversations": rows}
 
     @app.post("/api/chat/sessions")
     async def _api_register_session(req: SessionRegisterRequest):
