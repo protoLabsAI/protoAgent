@@ -300,3 +300,72 @@ def test_editing_a_job_clears_its_backoff(tmp_path):
     followup_backoff.set_backoff(job.id, job.created_at, (datetime.now(UTC) + timedelta(hours=1)).timestamp())
     scheduler.update_job(job.id, prompt="follow up harder", schedule="*/5 * * * *")
     assert followup_backoff.backoff_until(job.id, job.created_at) is None
+
+
+@pytest.mark.parametrize("release", ["deadline", "answered", "edit"])
+def test_backoff_survives_restart_and_release_is_persisted(tmp_path, release):
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("durable", invoke_url="http://test", db_dir=tmp_path)
+    job = scheduler.add_job("follow up", "*/5 * * * *", origin_session="chat-42")
+    now = datetime.now(UTC)
+    deadline = (now + timedelta(hours=1)).timestamp()
+    followup_backoff.set_backoff(job.id, job.created_at, deadline)
+    followup_backoff.clear_all()  # Simulate losing all process state, not the database.
+    scheduler = LocalScheduler("durable", invoke_url="http://test", db_dir=tmp_path)
+    assert followup_backoff.backoff_until(job.id, job.created_at) == deadline
+    assert followup_backoff.is_backed_off(job.id, job.created_at, now.timestamp())
+    assert scheduler._followup_backed_off(job, now)
+
+    if release == "deadline":
+        assert not scheduler._followup_backed_off(job, now + timedelta(hours=1))
+    elif release == "answered":
+        followup_backoff.set_waiting_check(lambda session: False)
+        assert not scheduler._followup_backed_off(job, now)
+    else:
+        scheduler.update_job(job.id, "updated follow up", "*/5 * * * *")
+    with scheduler._connect() as db:
+        assert db.execute(
+            "SELECT followup_backoff_until FROM jobs WHERE id = ?", (job.id,)
+        ).fetchone()[0] is None
+    followup_backoff.clear_all()
+    scheduler = LocalScheduler("durable", invoke_url="http://test", db_dir=tmp_path)
+    assert followup_backoff.backoff_until(job.id, job.created_at) is None
+
+
+def test_recreated_job_does_not_inherit_backoff_or_stale_writes(tmp_path):
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("recreate", invoke_url="http://test", db_dir=tmp_path)
+    old = scheduler.add_job("follow up", "*/5 * * * *", job_id="same-id")
+    deadline = (datetime.now(UTC) + timedelta(hours=1)).timestamp()
+    followup_backoff.set_backoff(old.id, old.created_at, deadline)
+    assert scheduler.cancel_job(old.id)
+    assert followup_backoff.backoff_until(old.id, old.created_at) is None
+    new = scheduler.add_job("replacement", "*/5 * * * *", job_id=old.id)
+    assert new.created_at != old.created_at
+    followup_backoff.set_backoff(old.id, old.created_at, deadline)
+    followup_backoff.clear_all()
+    scheduler = LocalScheduler("recreate", invoke_url="http://test", db_dir=tmp_path)
+    assert not followup_backoff.is_backed_off(new.id, new.created_at, deadline - 1)
+    followup_backoff.set_backoff(new.id, new.created_at, deadline)
+    followup_backoff.clear(old.id, old.created_at)
+    assert followup_backoff.backoff_until(new.id, new.created_at) == deadline
+
+
+def test_backoff_column_migrates_existing_jobs(tmp_path):
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("legacy", invoke_url="http://test", db_dir=tmp_path)
+    job = scheduler.add_job("existing follow up", "*/5 * * * *")
+    with scheduler._connect() as db:
+        db.execute("ALTER TABLE jobs DROP COLUMN followup_backoff_until")
+    followup_backoff.clear_all()
+    scheduler = LocalScheduler("legacy", invoke_url="http://test", db_dir=tmp_path)
+    assert scheduler.get_job(job.id).prompt == job.prompt
+    assert followup_backoff.backoff_until(job.id, job.created_at) is None
+    deadline = (datetime.now(UTC) + timedelta(hours=1)).timestamp()
+    followup_backoff.set_backoff(job.id, job.created_at, deadline)
+    followup_backoff.clear_all()
+    scheduler = LocalScheduler("legacy", invoke_url="http://test", db_dir=tmp_path)
+    assert followup_backoff.is_backed_off(job.id, job.created_at, deadline - 1)

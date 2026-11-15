@@ -380,7 +380,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_ok     TEXT,
     -- The creating turn's tool fence (JSON list; NULL/'[]' = unfenced) — the fire
     -- carries it so a job a fenced turn scheduled runs fenced.
-    fence       TEXT
+    fence       TEXT,
+    followup_backoff_until REAL
 );
 
 -- No foreign key: cancellation must not erase evidence of an unresolved send.
@@ -478,6 +479,13 @@ class LocalScheduler:
             self._fire_timeout_s = 600.0
         self._adopt_existing_jobs = adopt_existing_jobs
         self._init_db(adopt_existing_jobs=adopt_existing_jobs)
+        if adopt_existing_jobs:
+            from scheduler import followup_backoff
+
+            try:
+                followup_backoff._register_store(self)
+            except sqlite3.DatabaseError:
+                log.exception("[scheduler] could not load follow-up backoffs at %s", self.path)
 
     # ── DB plumbing ─────────────────────────────────────────────────────────
 
@@ -657,6 +665,7 @@ class LocalScheduler:
             db,
             "jobs",
             (
+                ("followup_backoff_until", "REAL"),
                 ("timezone", "TEXT"),  # per-job timezone
                 ("context_id", "TEXT"),  # ADR 0053 same-session resume
                 ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
@@ -853,7 +862,7 @@ class LocalScheduler:
             db = self._connect()
             try:
                 cur = db.execute(
-                    "UPDATE jobs SET prompt = ?, schedule = ?, timezone = ?, next_fire = ? WHERE id = ? AND agent_name = ?",
+                    "UPDATE jobs SET prompt = ?, schedule = ?, timezone = ?, next_fire = ?, followup_backoff_until = NULL WHERE id = ? AND agent_name = ?",
                     (prompt, schedule, timezone, next_fire, job_id, self.agent_name),
                 )
                 if cur.rowcount == 0:
@@ -863,18 +872,16 @@ class LocalScheduler:
                     "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
                     (job_id, self.agent_name),
                 ).fetchone()
-                # An explicit edit is the operator engaging with the job, so any
-                # follow-up backoff it carried must clear and the job fire fresh (ADR
-                # 0129 S14, #5270). Best-effort — a registry hiccup never fails the edit.
-                try:
-                    from scheduler import followup_backoff
-
-                    followup_backoff.clear(job_id)
-                except Exception:  # noqa: BLE001
-                    log.exception("[scheduler] could not clear follow-up backoff on edit of %s", job_id)
-                return _row_to_job(row)
             finally:
                 db.close()
+        # Clear the registry after releasing the store lock: write-through acquires it.
+        try:
+            from scheduler import followup_backoff
+
+            followup_backoff.clear(job_id, row["created_at"])
+        except Exception:  # noqa: BLE001 — a registry hiccup never fails the edit
+            log.exception("[scheduler] could not clear follow-up backoff on edit of %s", job_id)
+        return _row_to_job(row)
 
     def set_enabled(self, job_id: str, enabled: bool) -> Job:
         """Pause (``enabled=False``) or resume (``enabled=True``) a job in place.

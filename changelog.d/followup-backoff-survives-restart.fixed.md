@@ -1,0 +1,1 @@
+- **Follow-up backoff survives restarts (#5299).** Persist quiet recurring follow-up deadlines in the existing scheduler database, clearing them when the deadline elapses, the operator answers, or the job is edited. Recreated jobs start with a fresh generation.
