@@ -455,8 +455,17 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     await mount();
     const tabs = Array.from(container.querySelectorAll(".pl-tabbar__tab"));
     expect(pinnedTab()).toBe(tabs[0]); // pinned first in the strip (§3.1)
-    expect(pinnedTab()!.textContent).toContain("Conversations");
+    expect(pinnedTab()!.textContent).toContain("From others");
     expect(pinnedTab()!.querySelector(".pl-tabbar__close")).toBeNull();
+  });
+
+  it.each([
+    [1, "From others tab added: 1 thread from Claude Code for Josh."],
+    [7, "From others tab added: 7 threads from Claude Code for Josh."],
+  ])("announces the tab's first appearance with the From others wording (count=%i) (r3)", async (count, msg) => {
+    setConv({ tabVisible: true, count, rows: [row()], forYou: [row()] });
+    await mount();
+    expect(container.querySelector(".conversations-announce")!.textContent).toBe(msg);
   });
 
   it("offers Show on the background only while hidden with rows (r1)", async () => {
@@ -465,8 +474,12 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     await act(async () => {
       container.querySelector(".pl-tabbar")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
     });
-    const bg = vi.mocked(openContextMenu).mock.calls.slice(-1)[0]![2] as { onShowConversations?: () => void };
+    const bg = vi.mocked(openContextMenu).mock.calls.slice(-1)[0]![2] as {
+      onShowConversations?: () => void;
+      showConversationsLabel?: string;
+    };
     expect(typeof bg.onShowConversations).toBe("function");
+    expect(bg.showConversationsLabel).toBe("Show “From others”"); // §9 C7a desktop wording
     bg.onShowConversations!();
     expect(conversationsStore.show).toHaveBeenCalled();
   });
@@ -475,8 +488,9 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     setConv({ tabVisible: true, count: 1, rows: [row()], forYou: [row()] });
     await mount();
     await act(async () => pinnedTab()!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
-    const ctx = vi.mocked(openContextMenu).mock.calls.slice(-1)[0]![2] as { onHideConversations?: () => void; onClose?: () => void };
+    const ctx = vi.mocked(openContextMenu).mock.calls.slice(-1)[0]![2] as { onHideConversations?: () => void; onClose?: () => void; hideConversationsLabel?: string };
     expect(typeof ctx.onHideConversations).toBe("function");
+    expect(ctx.hideConversationsLabel).toBe("Hide “From others”"); // §9 C7a desktop wording
     expect(ctx.onClose).toBeUndefined();
     ctx.onHideConversations!();
     expect(conversationsStore.hide).toHaveBeenCalled();
@@ -484,8 +498,8 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
   });
 
   it.each([
-    [{ running: 1, needsYou: 0 }, ", 7 conversations, 1 running, read-only", "info", "warning"],
-    [{ running: 1, needsYou: 2 }, ", 7 conversations, 1 running, 2 needs you, read-only", "warning", "info"],
+    [{ running: 1, needsYou: 0 }, ", 7 threads, 1 running, read-only", "info", "warning"],
+    [{ running: 1, needsYou: 2 }, ", 7 threads, 1 running, 2 needs you, read-only", "warning", "info"],
   ])("names the count/status/read-only and colours the non-pulsing dot %o (r2)", async (counts, sr, on, off) => {
     setConv({ tabVisible: true, count: 7, ...counts, rows: [row()], forYou: [row()] });
     await mount();
@@ -545,9 +559,9 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     });
     await mount();
     const pane = container.querySelector(".conversations-pane")!;
-    expect(pane.querySelector("h2")!.textContent).toBe("Conversations");
+    expect(pane.querySelector("h2")!.textContent).toBe("From others");
     expect(pane.querySelector(".pl-eyebrow")!.textContent).toBe("Read-only");
-    expect(pane.textContent).toContain("other people and agents had with");
+    expect(pane.textContent).toContain("other people and agents started with");
     expect(pane.textContent).toContain("type here");
     const disclosure = pane.querySelector(".conversations-disclosure")!;
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
@@ -569,7 +583,7 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     await mount();
     const pane = container.querySelector(".conversations-pane")!;
     expect(pane.querySelector(".pl-alert--error")).not.toBeNull();
-    expect(pane.textContent).toContain("load conversations");
+    expect(pane.textContent).toContain("load threads from others");
     const retry = Array.from(pane.querySelectorAll("button")).find((b) => b.textContent === "Try again")!;
     await act(async () => retry.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(conversationsStore.retry).toHaveBeenCalled();

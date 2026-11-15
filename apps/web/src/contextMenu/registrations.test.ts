@@ -121,6 +121,21 @@ describe("chat-tab bulk-close menu", () => {
     expect(ids(resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop }))).not.toContain("show-conversations");
   });
 
+  // §9 C7a: the desktop tab supplies "From others" labels through the SAME shared menu. §9 C7b
+  // renamed the phone too, so the no-label default is now "From others" (asserted above); a caller
+  // can still override it here.
+  it("uses the caller-supplied From others labels for the pinned-tab Hide/Show entries", () => {
+    const hide = resolveMenu("chat-tab", { onHideConversations: noop, hideConversationsLabel: "Hide “From others”" }) as Item[];
+    expect(hide[0].label).toBe("Hide “From others”");
+    const bg = resolveMenu("chat-tab", {
+      onNew: noop,
+      onNewIncognito: noop,
+      onShowConversations: noop,
+      showConversationsLabel: "Show “From others”",
+    }) as Item[];
+    expect(bg.find((i) => i.id === "show-conversations")!.label).toBe("Show “From others”");
+  });
+
   it("marks the bulk closers destructive", () => {
     const items = resolveMenu("chat-tab", {
       sessionId: "s2",
