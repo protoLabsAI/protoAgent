@@ -5,6 +5,7 @@ import { Drawer } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
 
 import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
 
 // The mobile session switcher. Replaces the DS TabBar's `responsive` <select> collapse,
 // which is a desktop idiom wearing a phone's clothes — a native chat app switches threads
@@ -57,6 +58,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
           className="session-sheet-new"
           disabled={blank != null && blank.id === chat.currentSessionId}
           onClick={() => {
+            leaveConversationsForChat();
             chatStore.createSession();
             onClose();
           }}
@@ -76,6 +78,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
                 className="session-sheet-pick"
                 aria-current={current || undefined}
                 onClick={() => {
+                  leaveConversationsForChat();
                   chatStore.switchSession(s.id);
                   onClose();
                 }}

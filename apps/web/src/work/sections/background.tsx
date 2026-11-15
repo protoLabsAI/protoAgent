@@ -25,6 +25,7 @@ import { api } from "../../lib/api";
 import { jobFailureReason } from "../../app/background-jobs";
 import { Markdown } from "../../chat/LazyMarkdown";
 import { chatStore, useChatState } from "../../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../../chat/conversations-store";
 import { BackgroundToolFeed, useBackgroundProgress } from "../../app/BackgroundToolFeed";
 import { CopyResult } from "../../app/BackgroundJobs";
 import { SubagentsPanel } from "../../app/SubagentsPanel";
@@ -70,7 +71,7 @@ function FromChat({ sessionId }: { sessionId: string }) {
   const session = sessions.find((s) => s.id === sessionId);
   if (!session) return <span className="work-background__from">another chat</span>;
   return (
-    <Button variant="ghost" size={size} onClick={() => chatStore.switchSession(sessionId)}>
+    <Button variant="ghost" size={size} onClick={() => { leaveConversationsForChat(); chatStore.switchSession(sessionId); }}>
       {session.title}
     </Button>
   );

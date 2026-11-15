@@ -8,6 +8,7 @@ import { flushSync } from "react-dom";
 
 import { useUI } from "../../state/uiStore";
 import { chatStore } from "../../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../../chat/conversations-store";
 import { agentHref } from "../../lib/api";
 import { seedKnowledgeSearch } from "../../knowledge/searchSeed";
 import { runBindingById } from "../../keybindings/useKeybindings";
@@ -181,6 +182,9 @@ export function applyNavIntent(intent: NavIntent) {
       //
       // A vanished chat still routes to the chat surface — the operator lands where their
       // chats are and can see the tab is gone, which beats a click that does nothing at all.
+      // Leave the read-only Conversations stage (§3.3/§4.7) so the chat we're navigating to is
+      // shown rather than staying hidden behind the Conversations list pane.
+      leaveConversationsForChat();
       if (chatStore.getSnapshot().sessions.some((s) => s.id === intent.sessionId)) {
         chatStore.switchSession(intent.sessionId);
       }

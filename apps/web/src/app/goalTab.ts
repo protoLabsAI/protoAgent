@@ -1,4 +1,5 @@
 import { chatStore, registerGoalKickoff } from "../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
 import type { GoalSetBody } from "../chat/goalForm";
 import { useUI } from "../state/uiStore";
 
@@ -11,6 +12,9 @@ import { useUI } from "../state/uiStore";
 // registers the kickoff via `onSet` AFTER the goal POST resolves, so the drive turn never
 // races ahead of the goal being set on the server.
 export function newGoalTab(body: GoalSetBody): { body: GoalSetBody; onSet: () => void } {
+  // The goal drives in its own tab — leave the read-only Conversations stage (§3.3/§4.7) so
+  // that tab is shown rather than staying hidden behind the Conversations list pane.
+  leaveConversationsForChat();
   const session = chatStore.createSession();
   chatStore.renameSession(session.id, body.condition);
   // On mobile the Work surface is pushed OVER chat; pop back to the chat root so the

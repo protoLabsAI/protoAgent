@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { jobIdOf } from "../chat/backgroundJobStore";
 import { chatStore } from "../chat/chat-store";
+import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
@@ -251,6 +252,8 @@ export function BackgroundJobs() {
   // doesn't exist yet (#2692's fallback for THAT case is this durable panel itself,
   // not session resurrection), so this deliberately doesn't attempt it.
   function jumpToChat(sessionId: string) {
+    // Leave the read-only Conversations stage (§3.3/§4.7) so the job's chat is shown.
+    leaveConversationsForChat();
     chatStore.switchSession(sessionId);
     setOpen(false);
   }
