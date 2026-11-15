@@ -126,6 +126,18 @@ describe("the one-row fit", () => {
     expect(more()).toBeNull();
   });
 
+  it("lays the roster out for the right-edge CSS: the Users icon leads, +K trails the chips", async () => {
+    // The structural contract the chat-status-rail.css right-edge rules depend on: the leading
+    // Users icon carries margin-inline-start: auto (so it must be the roster's first child), and
+    // `+K` is the last VISIBLE chip (the mirror row below is out-of-flow spans, not buttons).
+    await render(<Harness cast={CAST} />);
+    const roster = host.querySelector(".chat-roster")!;
+    expect(roster.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+    const chips = [...roster.querySelectorAll("button.chat-roster-chip")];
+    expect(chips[chips.length - 1]?.getAttribute("data-testid")).toBe("chat-roster-more");
+    expect(chips[chips.length - 1]?.textContent).toBe("+1");
+  });
+
   it("uses the measured mirror row once ResizeObserver delivers, and refits on resize", async () => {
     // Mirror-row children at 60px pitch, 50px wide (the icon is child 0, chips from 60 on).
     const offsets = {

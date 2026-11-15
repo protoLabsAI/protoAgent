@@ -46,6 +46,24 @@
   position: relative;
   padding: 0;
 }
+/* People sit on the rail's right edge (D5). The roster flexes into whatever the work chips
+   leave; its leading Users icon's auto margin absorbs the slack and pushes the whole group
+   (icon, names, `+K`) to the end. NOT justify-content: flex-end — on overflow an auto margin
+   collapses to zero, so a not-yet-refitted chip clips on the RIGHT (the least important name,
+   as today); flex-end would collapse against the start and clip the icon and the first,
+   most important names instead. The hidden mirror row is out of flow (left: 0) so this margin
+   never moves it. */
+.chat-status-rail .chat-roster > svg:first-child {
+  margin-inline-start: auto;
+}
+/* The two groups never touch at the tightest fit: a full --pl-space-4 sits between the last
+   work chip and the roster. The rail's own --pl-space-1_5 gap already spans part of it, so
+   this tops it up to --pl-space-4 — leaving the work chips (and the roster's own chips) at the
+   tighter --pl-space-1_5. Only when a work group precedes the roster; alone on the row the
+   people take the whole width and need no leading gap. */
+.chat-status-rail .chat-roster:not(:first-child) {
+  margin-inline-start: calc(var(--pl-space-4) - var(--pl-space-1_5));
+}
 .chat-status-rail .chat-roster-chip {
   flex: none;
 }
