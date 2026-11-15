@@ -26,6 +26,7 @@ stays agent_init's, and so are the patches that fake it.
 import asyncio
 import logging
 import os
+from typing import Any
 
 from runtime.state import STATE
 from server import _event_bus
@@ -455,6 +456,94 @@ async def _task_link_sweep_loop() -> None:
             except Exception:
                 log.exception("[tasks] PR link sweep failed")
         await asyncio.sleep(TASK_LINK_SWEEP_INTERVAL_S)
+
+
+async def run_task_stall_pass(store: Any, inbox: Any, *, now: Any, sources: Any) -> dict:
+    """One stall-sweep pass (ADR 0129 D9 items 2–4). Returns ``{nudged, parked}``.
+
+    For each stalled task (``in_progress``, undriven, older than the threshold —
+    ``tasks.stall.find_stalled``): while it is under :data:`~tasks.stall.STALL_NUDGE_CAP`
+    nudges, queue ONE ``task-stall`` inbox item (priority ``next``, never ``needs_human``
+    — a stall is work for the agent, not an operator page) and, only when the add actually
+    inserted (a deduped add returns ``None`` and must not advance the count), record the
+    nudge. At the cap, stop nudging: park the task ``waiting`` with the stalled ask so it
+    leaves the agent's active lane and lands in the operator's Needs-you queue, and queue
+    nothing. Every store/inbox call is offloaded with ``asyncio.to_thread`` — both are
+    synchronous SQLite and must not block the server's event loop."""
+    from tasks.stall import STALL_NUDGE_CAP, _age_seconds, find_stalled
+
+    tasks = await asyncio.to_thread(store.list, include_closed=False)
+    nudged = 0
+    parked = 0
+    for task in find_stalled(tasks, now=now, sources=sources):
+        task_id = str(task.get("id") or "")
+        count = int(task.get("stall_nudges") or 0)
+        if count >= STALL_NUDGE_CAP:
+            # Three reminders went unheeded — a fourth would only repeat into the void.
+            # Hand it back to a human: park it waiting with an ask (which also moves it
+            # out of the stalled set — status is no longer in_progress).
+            await asyncio.to_thread(
+                store.update,
+                task_id,
+                status="waiting",
+                ask="Stalled: no progress after 3 reminders. Continue, defer or close?",
+            )
+            parked += 1
+            continue
+        age_s = _age_seconds(now, task.get("updated_at"))
+        minutes = int(age_s // 60) if age_s is not None else 0
+        title = task.get("title") or ""
+        text = (
+            f"Task {task_id} is in progress but nothing is driving it (no linked work running, "
+            f"no follow-up scheduled); last updated {minutes} min ago: {title}. Do one of: act on "
+            "it now; link the card/PR/job doing it; schedule a follow-up (wait or schedule_task); "
+            "set it waiting with an ask; defer it; or close it. Restating progress is not enough."
+        )
+        # The dedup key carries ``updated_at`` and the current count: a real update (which
+        # bumps updated_at and zeroes the count) mints a fresh key, and a re-run of the
+        # same pass hits the same key and dedupes — so one nudge lands per stall step.
+        item = await asyncio.to_thread(
+            inbox.add,
+            text,
+            priority="next",
+            source="task-stall",
+            dedup_key=f"task-stall:{task_id}:{task.get('updated_at')}:{count}",
+            needs_human=False,
+        )
+        if item is not None:
+            await asyncio.to_thread(store.record_stall_nudge, task_id)
+            nudged += 1
+    return {"nudged": nudged, "parked": parked}
+
+
+async def _task_stall_loop() -> None:
+    """Periodic stall sweep for in-progress tasks (ADR 0129 D9): nudge an undriven task
+    once a pass, and park it ``waiting`` after the nudge cap. Started unconditionally like
+    ``_task_link_sweep_loop``; self-guards on ``STATE.tasks_store`` and ``STATE.inbox_store``
+    (no-op until both exist) and isolates failures so a stall-sweep error never harms chat
+    service. The per-pass body lives in :func:`run_task_stall_pass` so it is testable without
+    the loop."""
+    from datetime import UTC, datetime
+
+    from tasks.stall import STALL_SWEEP_INTERVAL_S, default_sources
+
+    await asyncio.sleep(60)  # let boot settle before the first sweep
+    while True:
+        store = STATE.tasks_store
+        inbox = STATE.inbox_store
+        if store is not None and inbox is not None:
+            try:
+                res = await run_task_stall_pass(
+                    store, inbox, now=datetime.now(UTC), sources=default_sources()
+                )
+                if res["nudged"] or res["parked"]:
+                    log.info(
+                        "[tasks] stall sweep nudged %d task(s), parked %d", res["nudged"], res["parked"]
+                    )
+            except Exception:
+                log.exception("[tasks] stall sweep failed")
+        await asyncio.sleep(STALL_SWEEP_INTERVAL_S)
+
 
 # Directive GitHub-ref sweep cadence (ADR 0129 D4/Q2). GitHub publishes nothing onto the
 # in-process bus, so closed/merged issues and PRs are the one linked-work kind the event

@@ -501,7 +501,8 @@ def test_dispatch_attaches_a2a_trace_when_tracing_active(patched):
 
     send = next(b for b in bodies if b.get("method") == "SendMessage")
     wire = {"traceId": _TID, "spanId": _SID}
-    expected = {"origin": "a2a", "trigger": "delegate_to", "a2a.trace": wire}
+    # A delegation is always agent-to-agent, so caller_kind rides the provenance too (#5283).
+    expected = {"origin": "a2a", "trigger": "delegate_to", "caller_kind": "agent", "a2a.trace": wire}
     assert send["params"]["metadata"] == expected
     assert send["params"]["message"]["metadata"] == expected
 
@@ -514,7 +515,7 @@ def test_dispatch_attaches_trace_id_only_when_no_current_span(patched):
     assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
 
     send = next(b for b in bodies if b.get("method") == "SendMessage")
-    expected = {"origin": "a2a", "trigger": "delegate_to", "a2a.trace": {"traceId": _TID}}
+    expected = {"origin": "a2a", "trigger": "delegate_to", "caller_kind": "agent", "a2a.trace": {"traceId": _TID}}
     assert send["params"]["metadata"] == expected
     assert send["params"]["message"]["metadata"] == expected
 
@@ -528,7 +529,7 @@ def test_dispatch_stamps_a2a_provenance_when_tracing_inactive(patched):
     assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
 
     send = next(b for b in bodies if b.get("method") == "SendMessage")
-    expected = {"origin": "a2a", "trigger": "delegate_to"}
+    expected = {"origin": "a2a", "trigger": "delegate_to", "caller_kind": "agent"}
     assert send["params"]["metadata"] == expected
     assert send["params"]["message"]["metadata"] == expected
 
@@ -544,7 +545,7 @@ def test_dispatch_names_the_calling_agent_in_its_provenance(patched):
     assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
 
     send = next(b for b in bodies if b.get("method") == "SendMessage")
-    expected = {"origin": "a2a", "trigger": "delegate_to", "caller": "hub"}
+    expected = {"origin": "a2a", "trigger": "delegate_to", "caller": "hub", "caller_kind": "agent"}
     assert send["params"]["metadata"] == expected
     assert send["params"]["message"]["metadata"] == expected
 

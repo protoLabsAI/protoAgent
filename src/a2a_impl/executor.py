@@ -55,7 +55,7 @@ from google.protobuf import json_format, struct_pb2
 
 import protolabs_a2a as pa
 
-from a2a_impl import hitl_routing
+from a2a_impl import conversation_origin, hitl_routing
 from graph.turn_liveness import TurnStop, bind_turn_stop
 from runtime import turn_activity
 from runtime.session_ids import session_id_problem
@@ -983,11 +983,23 @@ class ProtoAgentExecutor(AgentExecutor):
                 _md.pop(key, None)
             _origin = ""
         if not resume:
+            # Who started this thread (docs/design/other-conversations.md §8): on a context's
+            # turn, store the caller's display-only origin fields (caller, caller_kind,
+            # on_behalf_of, title) on the task so the Conversations list (S2) can label the
+            # thread per context. Private turns and turns without the fields store nothing;
+            # the per-context reader takes the EARLIEST turn that carries any, so a later
+            # turn never overwrites the thread's origin. Never an authorization input.
+            _origin_fields = conversation_origin.origin_fields(_md)
+            _task_metadata: struct_pb2.Struct | None = None
+            if _origin_fields:
+                _task_metadata = struct_pb2.Struct()
+                _task_metadata.update({conversation_origin.METADATA_KEY: _origin_fields})
             await event_queue.enqueue_event(
                 Task(
                     id=context.task_id,
                     context_id=context.context_id,
                     status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                    metadata=_task_metadata,
                     # The operator's message OPENS the task's durable history. The SDK
                     # records the request message itself only when an agent's first
                     # event is a status/artifact update; when the agent enqueues its own

@@ -134,8 +134,9 @@ for (const width of [1440, 390]) {
         const action = actions.locator(".pl-btn").first();
         expect((await action.boundingBox())!.width).toBeGreaterThanOrEqual((await actions.boundingBox())!.width - 1);
       }
-      // One group, so exactly one "Open in Work".
-      await expect(details.getByRole("button", { name: "Open in Work" })).toHaveCount(1);
+      // One group, so exactly one "Open in Work" action. `exact`: each row's accessible name
+      // ends with ". Open in Work" (§1 Rows), which a substring match would also count.
+      await expect(details.getByRole("button", { name: "Open in Work", exact: true })).toHaveCount(1);
       await page.screenshot({ path: info.outputPath("rail-details.png"), fullPage: true, animations: "disabled" });
 
       await page.keyboard.press("Escape");

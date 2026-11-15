@@ -155,6 +155,31 @@ def find_stalled(
     return stalled
 
 
+def task_activity(
+    task: dict,
+    *,
+    now: datetime | str,
+    sources: Any,
+    threshold_s: float = STALL_THRESHOLD_S,
+) -> str:
+    """The D9 activity of an ``in_progress`` ``task`` (ADR 0129 D9 item 5), for the task
+    API and the Work view: ``"driven"`` when something is driving it, ``"stalled"`` when
+    nothing is and it has gone untouched past ``threshold_s``, else ``"idle"``.
+
+    Shares :func:`is_driven` and the ``updated_at`` read with :func:`find_stalled`, so the
+    API label, the stall sweep and the ``task_update`` warning can never disagree (that
+    agreement is this module's whole reason for existing). An ``updated_at`` that can't be
+    read is ``"idle"`` — never claim a stall we can't prove, mirroring ``find_stalled``'s
+    skip of unparseable rows. The caller decides which statuses get a label; this answers
+    only for the in-progress ones."""
+    if is_driven(task, sources=sources):
+        return "driven"
+    age = _age_seconds(now, task.get("updated_at"))
+    if age is not None and age > threshold_s:
+        return "stalled"
+    return "idle"
+
+
 def default_sources() -> DriverSources:
     """Build the live :class:`DriverSources` from the process :data:`runtime.state.STATE`.
 
