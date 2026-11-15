@@ -139,11 +139,12 @@ describe("the fleet-wide marker", () => {
     expect(button("Reply in chat instead")).toBeTruthy();
     expect(section()!.querySelector(".chat-needs-you__stale")!.textContent).toContain("30 minutes");
     expect(section()!.querySelector(".pl-alert")).toBeNull();
-    // The other decision: a one-line agent/question/age row that expands on select.
-    const rowBtn = section()!.querySelector<HTMLButtonElement>(".chat-needs-you__row")!;
+    // The other decision: a quiet row (the question over an "<agent> · asked <age>" line, reusing
+    // the S2b quiet-row styles) that expands into a DecisionCard on select.
+    const rowBtn = section()!.querySelector<HTMLButtonElement>(".chat-status-row[aria-expanded]")!;
     expect(rowBtn.getAttribute("aria-expanded")).toBe("false");
-    expect(rowBtn.textContent).toContain("Decide q2");
-    expect(rowBtn.querySelector(".chat-status-details__meta")!.getAttribute("title")).toBeTruthy();
+    expect(rowBtn.querySelector(".chat-status-row__text")!.textContent).toBe("Decide q2");
+    expect(rowBtn.querySelector(".chat-status-row__cue")!.textContent).toContain("scout · asked");
     await click(rowBtn);
     expect(section()!.querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(2);
     // Delivery page and stopped goal are neutral rows, never DecisionCards.
@@ -174,8 +175,11 @@ describe("the fleet-wide marker", () => {
     expect(marker()!.getAttribute("aria-label")).toBe(needsYouSpokenLabel(2));
     await click(marker());
     expect(panel()!.querySelector("h2")!.textContent).toBe("Needs you · 2");
-    expect(section()!.textContent).toContain("Waiting on you: Ship the release");
-    await click(section()!.querySelector(".chat-needs-you__task button"));
+    // A quiet row — the task title over a "Waiting on you · <age>" cue, no per-row button.
+    expect(section()!.textContent).toContain("Ship the release");
+    const taskRow = section()!.querySelector<HTMLButtonElement>(".chat-status-row")!;
+    expect(taskRow.querySelector(".chat-status-row__cue")!.textContent).toContain("Waiting on you");
+    await click(taskRow);
     expect(useUI.getState().surfaceStates.work?.itemId).toBe("task:t-parked");
     expect(dec.openChat).not.toHaveBeenCalled();
   });
