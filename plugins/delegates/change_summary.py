@@ -42,7 +42,25 @@ class Snapshot:
     root: str
     head: str  # "" for a repo with no commits yet
     tree: str
+    branch: str = ""  # checked-out branch; "" when detached or unknown
     dirty: list[str] = field(default_factory=list)  # porcelain lines present BEFORE the dispatch
+
+
+@dataclass
+class BranchSwitch:
+    """Outcome of trying to put a checkout back on the branch it started on.
+
+    ``changed`` is True when the delegate left the checkout on a DIFFERENT branch than
+    the one it found (a bare ``delegate_to(project=…)`` shares the board's base checkout,
+    so a coder that switches branches there strands the board). ``switched`` is True only
+    when it was then safely put back. ``reason`` explains a refusal (dirty tree / unpushed
+    commits / git failure) — set only when ``changed`` and not ``switched``."""
+
+    original: str
+    left_on: str
+    changed: bool
+    switched: bool
+    reason: str = ""
 
 
 def _git(root: str, *args: str, env: dict | None = None) -> str:
@@ -94,6 +112,15 @@ def _head(root: str, env: dict) -> str:
         return ""  # unborn branch
 
 
+def _branch(root: str, env: dict) -> str:
+    """Name of the checked-out branch; "" when detached, unborn, or git can't say."""
+    try:
+        name = _git(root, "rev-parse", "--abbrev-ref", "HEAD", env=env).strip()
+    except ChangeCaptureError:
+        return ""
+    return "" if name == "HEAD" else name  # "HEAD" ⇒ detached
+
+
 def _write_tree(root: str, head: str, env: dict) -> str:
     """Tree id of the working tree under ``root`` (tracked + untracked, minus ignored)."""
     real_index = _git(root, "rev-parse", "--path-format=absolute", "--git-path", "index", env=env).strip()
@@ -122,13 +149,15 @@ def snapshot(root: str) -> Snapshot:
     dirty = [
         ln for ln in _git(root, "status", "--porcelain", "--untracked-files=all", "--", ".", env=env).splitlines() if ln
     ]
-    return Snapshot(root=root, head=head, tree=_write_tree(root, head, env), dirty=dirty)
+    return Snapshot(root=root, head=head, branch=_branch(root, env), tree=_write_tree(root, head, env), dirty=dirty)
 
 
 def after(before: Snapshot) -> Snapshot:
     env = _base_env()
     head = _head(before.root, env)
-    return Snapshot(root=before.root, head=head, tree=_write_tree(before.root, head, env))
+    return Snapshot(
+        root=before.root, head=head, branch=_branch(before.root, env), tree=_write_tree(before.root, head, env)
+    )
 
 
 def render(before: Snapshot, after_: Snapshot, *, project: str = "", cap: int = DIFF_CAP, overlapped: bool = False) -> str:
@@ -175,6 +204,61 @@ def render(before: Snapshot, after_: Snapshot, *, project: str = "", cap: int = 
             "some of these changes may be its, not this delegate's."
         )
     return "\n".join(lines)
+
+
+# ── branch restore: a coder shares the board's base checkout, so put it back ──
+
+
+def _tracked_dirty(root: str, env: dict) -> bool:
+    """True when the index/working tree has uncommitted changes to TRACKED files.
+
+    Untracked files are excluded (``--untracked-files=no``): they ride along a switch
+    and don't strand anything, so they don't block putting the checkout back."""
+    out = _git(root, "status", "--porcelain", "--untracked-files=no", "--", ".", env=env)
+    return any(ln.strip() for ln in out.splitlines())
+
+
+def _unpushed_count(root: str, env: dict) -> int:
+    """Commits reachable from HEAD but from NO remote-tracking ref — i.e. not pushed.
+
+    After ``git push`` updates ``refs/remotes/<remote>/<branch>`` this is 0, so a branch
+    the coder pushed counts as safe to leave. A repo with no remote at all reports every
+    HEAD commit as unpushed, which is the safe answer: don't switch away from work that
+    lives nowhere else."""
+    out = _git(root, "rev-list", "--count", "HEAD", "--not", "--remotes", env=env).strip()
+    try:
+        return int(out or "0")
+    except ValueError:
+        return 0
+
+
+def restore_branch(before: Snapshot, after_: Snapshot) -> BranchSwitch:
+    """Put ``before.root`` back on the branch it was on pre-dispatch, when it's safe.
+
+    Safe means: the coder left it on a different branch, the working tree has no
+    uncommitted tracked changes, and every commit on the branch it left is already on a
+    remote. Then ``git switch`` back — never stash, reset or delete, so nothing the coder
+    did is thrown away. Otherwise touch nothing and report why, so the lead can act."""
+    original, left_on = before.branch, after_.branch
+    # Nothing to undo: the dispatch stayed put, or there was no known branch to return to
+    # (a detached/unborn starting point has no name to switch back to).
+    if not original or original == left_on:
+        return BranchSwitch(original=original, left_on=left_on, changed=False, switched=False)
+    env = _base_env()
+    root = before.root
+    try:
+        if _tracked_dirty(root, env):
+            return BranchSwitch(original, left_on, True, False, "the working tree has uncommitted changes")
+        unpushed = _unpushed_count(root, env)
+        if unpushed:
+            on = f"`{left_on}`" if left_on else "the checkout"
+            verb = "is" if unpushed == 1 else "are"
+            noun = "commit" if unpushed == 1 else "commits"
+            return BranchSwitch(original, left_on, True, False, f"{unpushed} {noun} on {on} {verb} not pushed to any remote")
+        _git(root, "switch", original, env=env)
+    except ChangeCaptureError as exc:
+        return BranchSwitch(original, left_on, True, False, str(exc))
+    return BranchSwitch(original, left_on, changed=True, switched=True)
 
 
 # ── overlap tracking: two captures on one root can't tell whose edits are whose ──
