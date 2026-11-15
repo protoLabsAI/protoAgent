@@ -138,7 +138,7 @@ export function MobileShell({
   // The Conversations stage (docs/design/other-conversations.md §3.7). The phone has no tab strip,
   // so the stage lives here instead of in ChatSurface (which suppresses the pane on mobile): while
   // `conversations` is the selected stage AND the tab is visible, the list/thread fills the screen
-  // over the chat root, the header reads "Conversations" (list) or shows ← List (a thread), and a
+  // over the chat root, the header reads "From others" (list) or shows ← List (a thread), and a
   // pushed surface (if one is open) still wins — it layers on top and owns the back header.
   const conv = useConversations();
   const onConversations = conv.tabVisible && conv.stage === "conversations" && pushed == null;
@@ -192,7 +192,7 @@ export function MobileShell({
         ) : onConversationThread ? (
           <>
             {/* A read thread: the header back reads ← List and returns to the list (§3.7). The
-                reader renders its own title/badge band below; the centre stays "Conversations" so
+                reader renders its own title/badge band below; the centre stays "From others" so
                 the top bar keeps naming the tab, like the static back header above. */}
             <Button
               variant="ghost"
@@ -205,7 +205,7 @@ export function MobileShell({
               <ChevronLeft size={20} aria-hidden /> List
             </Button>
             <span className="mshell-title mshell-title--static">
-              <span className="mshell-title-text">Conversations</span>
+              <span className="mshell-title-text">From others</span>
             </span>
             <span className="mshell-head-spacer" aria-hidden />
           </>
@@ -240,10 +240,10 @@ export function MobileShell({
               aria-haspopup="dialog"
               aria-expanded={sessionSheetOpen}
             >
-              {/* On the Conversations list the title reads "Conversations" where the chat title
+              {/* On the Conversations list the title reads "From others" where the chat title
                   would be; the tap still opens the sheet (§3.7). */}
               <span className="mshell-title-text">
-                {onConversations ? "Conversations" : (current?.title ?? "New chat")}
+                {onConversations ? "From others" : (current?.title ?? "New chat")}
               </span>
               <ChevronDown size={15} aria-hidden />
             </button>

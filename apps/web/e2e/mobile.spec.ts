@@ -478,7 +478,7 @@ test("mobile: Conversations pins above the chats, and its list and a thread fill
   await expect(sheet).toBeVisible();
   const item = page.locator(".session-sheet-convo");
   await expect(item).toBeVisible();
-  await expect(item).toContainText("Conversations");
+  await expect(item).toContainText("From others");
   await expect(item).toContainText("2"); // the 7-day count
   await expect(item).toContainText("Read-only");
   await expect(item.locator(".pl-dot")).toHaveCount(1);
@@ -492,10 +492,10 @@ test("mobile: Conversations pins above the chats, and its list and a thread fill
   expect(await topOf(".session-sheet-convo")).toBeLessThan(await topOf(".session-sheet-divider"));
   expect(await topOf(".session-sheet-divider")).toBeLessThan(await topOf(".session-sheet-row"));
 
-  // Tapping it closes the sheet and shows the list full screen under a "Conversations" header.
+  // Tapping it closes the sheet and shows the list full screen under a "From others" header.
   await item.click();
   await expect(sheet).toHaveCount(0);
-  await expect(page.locator(".mshell-title-text")).toHaveText("Conversations");
+  await expect(page.locator(".mshell-title-text")).toHaveText("From others");
   const pane = page.locator(".mshell-conversations .conversations-pane");
   await expect(pane).toBeVisible();
 
@@ -531,7 +531,7 @@ test("mobile: a long-press on the Conversations item offers Hide", async ({ page
   // A long-press is modelled as a contextmenu (the handler treats them the same, matching the
   // desktop tab's right-click); it opens the single Hide entry.
   await item.dispatchEvent("contextmenu", { clientX: 40, clientY: 400, bubbles: true });
-  await expect(page.getByRole("menuitem", { name: "Hide Conversations tab" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Hide “From others”" })).toBeVisible();
 });
 
 test("mobile: a device that hid the tab shows no Conversations item", async ({ page }) => {

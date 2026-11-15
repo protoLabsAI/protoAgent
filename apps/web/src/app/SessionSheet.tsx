@@ -33,7 +33,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
   // a distinct item at the top of the sheet, under the same C1 store that drives the desktop tab.
   const conv = useConversations();
 
-  // Long-press opens the same single-entry "Hide Conversations tab" menu the desktop tab shows on
+  // Long-press opens the same single-entry Hide “From others” menu the desktop tab shows on
   // right-click (§3.2) — routed through the app-root ContextMenuRenderer, so the DS Menu renders
   // over the sheet. A press that becomes a tap (released, moved into a scroll, or cancelled before
   // the timer fires) clears it; a long-press sets `longPressed` so the trailing click is swallowed.
@@ -108,7 +108,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
             type="button"
             variant="ghost"
             className="session-sheet-convo"
-            aria-label={`Conversations, ${conv.count} conversation${conv.count === 1 ? "" : "s"}, ${
+            aria-label={`From others, ${conv.count} conversation${conv.count === 1 ? "" : "s"}, ${
               conv.running
             } running${conv.needsYou > 0 ? `, ${conv.needsYou} needs you` : ""}, read-only`}
             onPointerDown={(e) => {
@@ -139,7 +139,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
             }}
           >
             <MessagesSquare size={16} aria-hidden />
-            <span className="session-sheet-convo-title">Conversations</span>
+            <span className="session-sheet-convo-title">From others</span>
             <span className="session-sheet-convo-count" aria-hidden="true">
               {conv.count}
             </span>

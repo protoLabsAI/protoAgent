@@ -111,7 +111,7 @@ describe("chat-tab bulk-close menu", () => {
     let hid = 0, shown = 0;
     const hide = resolveMenu("chat-tab", { onHideConversations: () => hid++ }) as (Item & { run: () => void })[];
     expect(ids(hide)).toEqual(["hide-conversations"]);
-    expect(hide[0].label).toBe("Hide Conversations tab");
+    expect(hide[0].label).toBe("Hide “From others”");
     hide[0].run();
     const bg = resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop, onShowConversations: () => shown++ }) as (Item & { run: () => void })[];
     expect(ids(bg)).toEqual(["new", "new-incognito", "show-conversations"]);
@@ -121,8 +121,9 @@ describe("chat-tab bulk-close menu", () => {
     expect(ids(resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop }))).not.toContain("show-conversations");
   });
 
-  // §9 C7a: the desktop tab supplies "From others" labels through the SAME shared menu; with no
-  // label the entries keep the default "Conversations" wording the phone session sheet still uses.
+  // §9 C7a: the desktop tab supplies "From others" labels through the SAME shared menu. §9 C7b
+  // renamed the phone too, so the no-label default is now "From others" (asserted above); a caller
+  // can still override it here.
   it("uses the caller-supplied From others labels for the pinned-tab Hide/Show entries", () => {
     const hide = resolveMenu("chat-tab", { onHideConversations: noop, hideConversationsLabel: "Hide “From others”" }) as Item[];
     expect(hide[0].label).toBe("Hide “From others”");
