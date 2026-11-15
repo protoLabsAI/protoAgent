@@ -469,11 +469,7 @@ def _build_task_tools(tasks_store) -> list:
         return result
 
     @tool
-    def task_close(
-        issue_id: str,
-        reason: str = "",
-        state: Annotated[Any, InjectedState] = None,
-    ) -> str:
+    def task_close(issue_id: str, reason: str = "") -> str:
         """Close an issue (done, or won't-do). Optional ``reason``."""
         try:
             i = tasks_store.close(issue_id, reason=reason or None)
