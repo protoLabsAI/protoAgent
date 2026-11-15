@@ -310,15 +310,23 @@ class AcpAdapter(Adapter):
             overlapped = cs.end(root, token)
         try:
             after = await asyncio.to_thread(cs.after, before)
+        except (cs.ChangeCaptureError, OSError) as exc:
+            # No post-dispatch snapshot means no known after-branch, so the branch restore
+            # can't run and can't name what to warn about — degrade to the note alone.
+            return f"{reply}\n\n[no change summary — post-dispatch snapshot failed: {exc}]"
+        try:
             summary = await asyncio.to_thread(
                 lambda: cs.render(before, after, project=d.project_name, overlapped=overlapped)
             )
         except (cs.ChangeCaptureError, OSError) as exc:
-            return f"{reply}\n\n[no change summary — post-dispatch snapshot failed: {exc}]"
+            # Rendering the diff failed, but we still hold ``after`` — so the branch restore
+            # below still runs (the card requires its warning even on a git failure).
+            summary = f"[no change summary — rendering the diff failed: {exc}]"
         # A bare project dispatch shares the board's base checkout, so a coder that checks
         # out another branch there (a release changelog fix, say) strands the board on it.
         # Put it back when it's safe; otherwise warn loudly and leave it untouched (bd-nfaen).
-        switch = await asyncio.to_thread(cs.restore_branch, before, after)
+        # ``overlapped`` blocks the switch when a concurrent coder may still hold this checkout.
+        switch = await asyncio.to_thread(cs.restore_branch, before, after, overlapped=overlapped)
         return _with_branch_note(f"{reply}\n\n{summary}", switch, root)
 
     async def _prompt(

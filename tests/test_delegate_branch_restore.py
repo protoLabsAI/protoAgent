@@ -170,6 +170,26 @@ def test_restore_branch_refuses_unpushed_commits(tmp_path):
     assert _branch(root) == "feature"
 
 
+def test_restore_branch_refuses_when_another_capture_overlapped(tmp_path):
+    # Clean tree + every commit pushed would normally switch back — but a concurrent
+    # delegation overlapped this one on the SAME checkout, so a still-running coder may
+    # hold `feature` mid-turn. The overlap flag blocks the switch rather than yank it away.
+    root, start = _repo_with_origin(tmp_path)
+    before = cs.snapshot(str(root))
+    _git(root, "checkout", "-q", "-b", "feature")
+    (root / "app.py").write_text("print('fix')\n", encoding="utf-8")
+    _git(root, "commit", "-q", "-am", "fix")
+    _git(root, "push", "-q", "origin", "feature")
+    res = cs.restore_branch(before, cs.after(before), overlapped=True)
+    assert res.changed and not res.switched
+    assert "another delegation" in res.reason
+    assert res.original == start and res.left_on == "feature"
+    assert _branch(root) == "feature"  # left untouched for the overlapping run to own
+    # Without the overlap it WOULD switch back — proving the flag is what held it.
+    assert cs.restore_branch(before, cs.after(before)).switched
+    assert _branch(root) == start
+
+
 def test_restore_branch_is_a_noop_when_the_branch_never_changed(tmp_path):
     root, start = _repo_with_origin(tmp_path)
     before = cs.snapshot(str(root))

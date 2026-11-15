@@ -15,6 +15,7 @@ import { api } from "../lib/api";
 import type { GoalState, InboxItem, Task } from "../lib/types";
 import type { AnswerResult, DecisionRow } from "../lib/api/decisions";
 import { DecisionCard } from "../decisions/DecisionCard";
+import { navigate } from "../app/palette/nav";
 import { openSourceChat } from "../work/openSourceChat";
 import { relTime, type GroupableWorkItem } from "../work/tone";
 import { chatStore } from "./chat-store";
@@ -31,6 +32,13 @@ export const STALE_DECISION_MS = 30 * 60_000;
 export function decisionStale(createdAt: string, now: number = Date.now()): boolean {
   const asked = new Date(createdAt).getTime();
   return Number.isFinite(asked) && now - asked >= STALE_DECISION_MS;
+}
+
+/** The session id to open as a read-only Conversations thread (C6a's `#/conversations/<id>`
+ *  route, §4.6), or null when there is no thread to open: this agent's own `chat-…` session
+ *  (it opens as a chat, not here), a `job:…` background job, or an absent id. */
+export function conversationThreadId(sessionId: string | null | undefined): string | null {
+  return sessionId && !sessionId.startsWith("chat-") && !sessionId.startsWith("job:") ? sessionId : null;
 }
 
 export function NeedsYouSection({ items, held, onHold, records, answer, mobile, onNavigate, openWork, goalsRetry }: {
@@ -93,6 +101,26 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
     }
   };
 
+  // §4.6 (C6b): an item from a non-chat, non-job session — a real A2A context — gets a quiet
+  // ghost button that closes the panel and deep-links to its read-only Conversations thread
+  // (C6a's #/conversations/<id> route). Items from this agent's own chat-… sessions get none.
+  const conversationButton = (sessionId: string | null | undefined) => {
+    const contextId = conversationThreadId(sessionId);
+    return contextId ? (
+      <Button
+        size={size}
+        variant="ghost"
+        className="chat-needs-you__open-conversation"
+        onClick={() => {
+          onNavigate();
+          navigate({ kind: "conversation", contextId });
+        }}
+      >
+        Open conversation
+      </Button>
+    ) : null;
+  };
+
   const name = count > 0 ? `Needs you, ${count}` : "Needs you";
   return (
     <section className="chat-status-details__section chat-needs-you" aria-label={name}>
@@ -118,6 +146,7 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
               {row.state === "pending" && decisionStale(row.created_at) && (
                 <p className="chat-needs-you__stale">Still waiting — asked over 30 minutes ago.</p>
               )}
+              {conversationButton(row.session_id)}
             </div>
           );
         }
@@ -147,8 +176,11 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
             // detail (openWork("task:<id>")) to answer in place — no per-row action button.
             const age = relTime((item.raw as Task).updated_at ?? "").text;
             const cue = ["Waiting on you", age].filter(Boolean).join(" · ");
+            // A waiting task raised from a non-chat A2A context trails the row with an "Open
+            // conversation" link to its thread; the row itself still opens the Work detail.
+            const convButton = conversationButton((item.raw as Task).session_id);
             return (
-              <li key={`task:${item.id}`}>
+              <li key={`task:${item.id}`} className={convButton ? "chat-needs-you__task" : undefined}>
                 <button
                   type="button"
                   className="chat-status-row"
@@ -162,6 +194,7 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
                   <span className="chat-status-row__text">{item.title}</span>
                   <span className="chat-status-row__cue">{cue}</span>
                 </button>
+                {convButton}
               </li>
             );
           })}

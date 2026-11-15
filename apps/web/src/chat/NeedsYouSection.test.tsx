@@ -12,6 +12,7 @@ import type { DecisionRow } from "../lib/api/decisions";
 import { beginThisChatVisit, endThisChatVisit } from "../work/visitScope";
 import { useUI } from "../state/uiStore";
 import { api } from "../lib/api";
+import { setPaletteNavigator } from "../app/palette/nav";
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
 const openChat = vi.hoisted(() => vi.fn());
@@ -215,6 +216,71 @@ describe("the quiet-frame rows (S3a)", () => {
       await flush();
       expect(api.clearGoal).toHaveBeenCalledWith("g1", false);
       expect(goalsRetry).toHaveBeenCalledTimes(2);
+    } finally { await cleanup(); }
+  });
+
+  // ── C6b: Open conversation for non-chat threads ─────────────────────────────────────────────
+  const waitingFrom = (id: string, sessionId: string | undefined): GroupableWorkItem => ({
+    kind: "task", id, status: "needs-you", title: "Ship the release", meta: "", sessionId,
+    raw: { id, title: "Ship the release", status: "waiting", session_id: sessionId,
+      updated_at: new Date().toISOString() } as never,
+  });
+
+  // r1
+  it("a waiting task from a non-chat A2A context gets an Open conversation link that opens the thread and closes the panel", async () => {
+    const nav = vi.fn();
+    setPaletteNavigator(nav);
+    const onNavigate = vi.fn();
+    const openWork = vi.fn();
+    const { section, cleanup } = await renderSection({ items: [waitingFrom("t1", "ctx-9")], onNavigate, openWork });
+    try {
+      const li = section().querySelector<HTMLElement>("li.chat-needs-you__task")!;
+      const open = findButton(li, (t) => t === "Open conversation")!;
+      expect(open).toBeTruthy();
+      // The row still opens its Work detail in place — the trailing link doesn't swallow its click.
+      await act(async () => li.querySelector<HTMLButtonElement>(".chat-status-row")!.click());
+      expect(openWork).toHaveBeenCalledWith("task:t1");
+      expect(nav).not.toHaveBeenCalled();
+      // The link closes the panel and deep-links to the read-only thread (C6a's route).
+      onNavigate.mockClear();
+      await act(async () => open.click());
+      expect(onNavigate).toHaveBeenCalledOnce();
+      expect(nav).toHaveBeenCalledWith({ kind: "conversation", contextId: "ctx-9" });
+    } finally { setPaletteNavigator(null); await cleanup(); }
+  });
+
+  // r1
+  it("a pending decision from a non-chat A2A context gets an Open conversation link beside its card", async () => {
+    const nav = vi.fn();
+    setPaletteNavigator(nav);
+    const onNavigate = vi.fn();
+    const items = [decisionItem(decisionRow("q1", { session_id: "ctx-7" }))];
+    const { section, cleanup } = await renderSection({ items, onNavigate });
+    try {
+      const card = section().querySelector<HTMLElement>(".chat-needs-you__card")!;
+      expect(card.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy(); // beside the answer area
+      const open = findButton(card, (t) => t === "Open conversation")!;
+      expect(open).toBeTruthy();
+      await act(async () => open.click());
+      expect(onNavigate).toHaveBeenCalledOnce();
+      expect(nav).toHaveBeenCalledWith({ kind: "conversation", contextId: "ctx-7" });
+    } finally { setPaletteNavigator(null); await cleanup(); }
+  });
+
+  // r2
+  it("shows no Open conversation link for chat- or job: sessions, leaving the S3a rows unchanged", async () => {
+    const items = [
+      decisionItem(decisionRow("q1")), // default session_id = chat-q1
+      waitingFrom("t2", "chat-abc"),
+      waitingFrom("t3", "job:7"),
+    ];
+    const { section, cleanup } = await renderSection({ items });
+    try {
+      expect(findButton(section(), (t) => t === "Open conversation")).toBeUndefined();
+      expect(section().querySelector(".chat-needs-you__task")).toBeNull(); // no trailing-link row layout
+      // The chat-/job: task rows stay the plain single-control S3a rows.
+      const li = [...section().querySelectorAll("li")].find((node) => node.textContent?.includes("Ship the release"))!;
+      expect(li.querySelectorAll("button")).toHaveLength(1);
     } finally { await cleanup(); }
   });
 });

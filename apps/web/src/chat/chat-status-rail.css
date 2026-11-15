@@ -336,6 +336,20 @@
   align-items: center;
   gap: var(--pl-space-2);
 }
+/* A waiting task raised from a non-chat A2A context (C6b, §4.6): the row still fills the width
+   and keeps its own click; the "Open conversation" link trails it without swallowing that click. */
+.chat-needs-you__task {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+}
+.chat-needs-you__task .chat-status-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-needs-you__open-conversation {
+  flex: 0 0 auto;
+}
 
 /* ── Phone (§5/§6): numbers-only chips, ≥48px rows, md full-width stacked actions ──── */
 @media (max-width: 767px) {
@@ -376,6 +390,15 @@
     width: 100%;
   }
   .chat-needs-you__goal-actions .pl-btn {
+    width: 100%;
+  }
+  /* The waiting-task "Open conversation" link stacks full width below its row, like every other
+     sheet action, so the touch targets stay the full-width md buttons. */
+  .chat-needs-you__task {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .chat-needs-you__open-conversation {
     width: 100%;
   }
 }

@@ -232,18 +232,28 @@ def _unpushed_count(root: str, env: dict) -> int:
         return 0
 
 
-def restore_branch(before: Snapshot, after_: Snapshot) -> BranchSwitch:
+def restore_branch(before: Snapshot, after_: Snapshot, *, overlapped: bool = False) -> BranchSwitch:
     """Put ``before.root`` back on the branch it was on pre-dispatch, when it's safe.
 
-    Safe means: the coder left it on a different branch, the working tree has no
-    uncommitted tracked changes, and every commit on the branch it left is already on a
-    remote. Then ``git switch`` back — never stash, reset or delete, so nothing the coder
-    did is thrown away. Otherwise touch nothing and report why, so the lead can act."""
+    Safe means: the coder left it on a different branch, no OTHER capture overlapped this
+    one on the same checkout, the working tree has no uncommitted tracked changes, and every
+    commit on the branch it left is already on a remote. Then ``git switch`` back — never
+    stash, reset or delete, so nothing the coder did is thrown away. Otherwise touch nothing
+    and report why, so the lead can act.
+
+    ``overlapped`` is the ``end()`` verdict for this capture: True when another delegation ran
+    in this same checkout concurrently. That other coder may STILL be mid-turn on this branch,
+    so switching away would yank the shared checkout out from under a live run — refuse and let
+    the overlapping run own the branch (its own ``restore_branch`` runs when it ends)."""
     original, left_on = before.branch, after_.branch
     # Nothing to undo: the dispatch stayed put, or there was no known branch to return to
     # (a detached/unborn starting point has no name to switch back to).
     if not original or original == left_on:
         return BranchSwitch(original=original, left_on=left_on, changed=False, switched=False)
+    if overlapped:
+        return BranchSwitch(
+            original, left_on, True, False, "another delegation was working in this checkout at the same time"
+        )
     env = _base_env()
     root = before.root
     try:
