@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.244.0",
+    "date": "2026-11-15",
+    "changes": [
+      "The desktop \"Conversations\" tab is now \"From others\" (#5309).",
+      "The phone \"Conversations\" item and header now read \"From others\" (#5311).",
+      "Slimmer thread-reader header (#5321).",
+      "One-row thread-reader footer (#5323).",
+      "Conversation titles drop a redundant \"From <caller>:\" prefix, and their meta line shows an absolute time (#5310).",
+      "Other conversations carry who started them (#5308).",
+      "The memory_list_intent eval accepts recent_activity as well as memory_list (#5320)."
+    ]
+  },
+  {
     "version": "v0.243.0",
     "date": "2026-11-15",
     "changes": [

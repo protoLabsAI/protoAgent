@@ -15,6 +15,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.244.0] - 2026-11-15
+
+### Changed
+- **The desktop "Conversations" tab is now "From others" (#5309).** The pinned tab's label, its
+  screen-reader name and first-appearance announcement, its Hide/Show menu items, and the
+  read-only list pane's heading, intro and failed-state message all read "From others" and
+  "threads" now. The tab stays pinned first; its route, id and deep links are unchanged.
+
+- **The phone "Conversations" item and header now read "From others" (#5311).** On the phone, the pinned session-sheet item — its title, its accessible name and its long-press Hide option (now "Hide “From others”") — and the mobile header on both the read-only list and inside a thread now say "From others" instead of "Conversations". The route, reserved tab id, store keys and CSS classes are unchanged, so deep links from Work and Needs you still open it.
+
+- **Slimmer thread-reader header (#5321).** Reading a thread from others now shows a compact two-line header — **← Back** beside a shortened title (the full title on hover) and the status badge, then a muted "<who> · <date> · <count>" line (its long form on hover). The "Conversation · read-only" eyebrow is gone and the header is roughly a third shorter.
+
+- **One-row thread-reader footer (#5323).** Reading a thread from others now shows a single compact footer row where a composer would sit: a lock icon and "Read-only. Replies start a new chat." on the left, with **Copy link** and **Continue in a new chat** on the right. The lock's tooltip keeps the full "Replies go to a new chat, so <origin> isn't interrupted." explanation (also its accessible name). On the phone the row stays one line — "Read-only", an icon-only Copy link, and Continue — with 44px touch targets. This replaces the old sentence row plus button row and roughly halves the footer's height.
+
+- **Conversation titles drop a redundant "From <caller>:" prefix, and their meta line shows an absolute time (#5310).** A new pure `displayTitle(title, { caller, onBehalfOf })` helper trims a leading "From Claude Code (Josh's session): …" from a conversation title when the named caller is the one already shown on the origin line — matched literally, case-insensitively and on a word boundary, only within the first 60 characters, and never down to an empty title — and capitalises what remains. A shared `conversationMeta` formatter renders the muted line as "<origin without the leading 'From'> · 14 Nov, 12:29 · N messages" (count only above 1) with the long "From … · 14 Nov at 12:29 · N messages" form for its tooltip. Pure helpers only; the Conversations tab wires them in next. (docs/design/other-conversations.md §3.4, §9 C9.)
+
+- **Other conversations carry who started them (#5308).** Each `GET /api/conversations` row now
+  includes the display-only `caller`, `caller_kind` and `on_behalf_of` recorded on the thread's
+  first turn, so the Conversations list can show who a thread is from and on whose behalf. Absent
+  or unrecognised fields are omitted; they are never an authorization input.
+
+- **The `memory_list_intent` eval accepts `recent_activity` as well as `memory_list` (#5320).** Asking what you did today can be answered from the activity digest or the memory log; the case no longer fails when the agent picks the digest. See #5314.
+
 ## [0.243.0] - 2026-11-15
 
 ### Added
