@@ -144,30 +144,9 @@ def test_restore_branch_switches_back_when_clean_and_pushed(tmp_path):
     assert _branch(root) == start  # really put back
 
 
-def test_restore_branch_refuses_a_dirty_tree(tmp_path):
-    root, start = _repo_with_origin(tmp_path)
-    before = cs.snapshot(str(root))
-    _git(root, "checkout", "-q", "-b", "feature")
-    (root / "app.py").write_text("print('fix')\n", encoding="utf-8")
-    _git(root, "commit", "-q", "-am", "fix")
-    _git(root, "push", "-q", "origin", "feature")
-    (root / "app.py").write_text("print('still editing')\n", encoding="utf-8")  # uncommitted, tracked
-    res = cs.restore_branch(before, cs.after(before))
-    assert res.changed and not res.switched
-    assert "uncommitted" in res.reason
-    assert _branch(root) == "feature"  # left untouched
-
-
-def test_restore_branch_refuses_unpushed_commits(tmp_path):
-    root, start = _repo_with_origin(tmp_path)
-    before = cs.snapshot(str(root))
-    _git(root, "checkout", "-q", "-b", "feature")
-    (root / "app.py").write_text("print('fix')\n", encoding="utf-8")
-    _git(root, "commit", "-q", "-am", "fix")  # committed but never pushed
-    res = cs.restore_branch(before, cs.after(before))
-    assert res.changed and not res.switched
-    assert "not pushed" in res.reason and "feature" in res.reason
-    assert _branch(root) == "feature"
+# The dirty-tree and unpushed-commits refusals are exercised end to end — and their exact
+# reason wording asserted — by the dispatch tests below, so restore_branch isn't unit-tested
+# for them a second time here.
 
 
 def test_restore_branch_refuses_when_another_capture_overlapped(tmp_path):
