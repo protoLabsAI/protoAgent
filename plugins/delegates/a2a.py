@@ -791,6 +791,7 @@ class A2aAdapter(Adapter):
         timeout: float | None = None,
         item_id: str | None = None,
         resume_task_id: str | None = None,
+        summary: str = "",
     ) -> str:
         import time
 
@@ -908,6 +909,7 @@ class A2aAdapter(Adapter):
                     started=started,
                     live=live,
                     headers=headers,
+                    summary=summary,
                 )
             except asyncio.CancelledError:
                 if live is not None:
@@ -922,7 +924,8 @@ class A2aAdapter(Adapter):
             return reply
 
     async def _dispatch_traced(
-        self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None, started=None, live=None, headers=None
+        self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None, started=None, live=None,
+        headers=None, summary=""
     ) -> str:
         """The wire half of ``dispatch``, inside the outbound span (see caller)."""
         import time
@@ -951,6 +954,15 @@ class A2aAdapter(Adapter):
         caller = _own_agent_name()
         if caller:
             provenance["caller"] = caller
+        # Who started the thread, for the receiver's Conversations list (#5283,
+        # docs/design/other-conversations.md §8): a delegation is always agent-to-agent, and
+        # ``delegate_to``'s one-line ``summary`` of the ask becomes the thread title. Both are
+        # display only. Stamped on ``provenance`` BEFORE the request/message copies below so
+        # each level carries them (older peers may preserve only one).
+        provenance["caller_kind"] = "agent"
+        title = " ".join(str(summary or "").split())  # one line; the receiver owns the 80-char cap
+        if title:
+            provenance["title"] = title
 
         # Fleet tracing: when this dispatch runs inside a traced turn, hand the
         # peer our Langfuse trace context as ``a2a.trace`` metadata — the shape
