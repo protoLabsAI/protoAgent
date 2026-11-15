@@ -240,7 +240,7 @@ vi.mock("./conversations-store", async (original) => ({
   useConversations: () => convHarness.state,
   hide: vi.fn(),
   show: vi.fn(),
-  openConversations: vi.fn(),
+  setStage: vi.fn(),
   openChat: vi.fn(),
   openThread: vi.fn(),
   retry: vi.fn(),
@@ -500,7 +500,7 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     setConv({ tabVisible: true, stage: "chat", count: 1, rows: [row()], forYou: [row()] });
     await mount();
     await act(async () => pinnedTab()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(conversationsStore.openConversations).toHaveBeenCalled();
+    expect(conversationsStore.setStage).toHaveBeenCalledWith("conversations");
     expect(chatStore.switchSession).not.toHaveBeenCalled();
     const chatTab = Array.from(container.querySelectorAll(".pl-tabbar__tab"))[1];
     await act(async () => chatTab.dispatchEvent(new MouseEvent("click", { bubbles: true })));
