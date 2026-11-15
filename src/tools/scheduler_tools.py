@@ -20,7 +20,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from scheduler.interface import is_cron, parse_ttl
-from tools.session import _session_id_from
+from tools.session import _origin_session_from, _session_id_from
 
 log = logging.getLogger("protoagent.tools")  # same logger lg_tools used
 
@@ -169,7 +169,7 @@ def _build_scheduler_tools(scheduler) -> list:
                     )
         except Exception:  # noqa: BLE001 — dedup is best-effort; never block scheduling
             pass
-        # Two DISTINCT session stamps derive from the same turn session id:
+        # Two DISTINCT session stamps derive from the turn:
         #  - ``context_id`` controls WHERE the fire RUNS (ADR 0053). A one-shot resumes
         #    the ORIGINATING chat; a cron deliberately passes none, and the scheduler's
         #    ``job_sessions`` assigns it a durable isolated ``job:`` execution owner
@@ -184,6 +184,10 @@ def _build_scheduler_tools(scheduler) -> list:
         # origin, no delivery attempted (backward compatible).
         ctx = _session_id_from(state) or None
         context_id = ctx if not is_cron(when) else None
+        # Server turns inherit delivery provenance without changing where the fire runs.
+        origin_session = ctx
+        if ctx and ctx.startswith(("job:", "background:")):
+            origin_session = _origin_session_from(state) or None
         try:
             job = await asyncio.to_thread(
                 scheduler.add_job,
@@ -192,7 +196,7 @@ def _build_scheduler_tools(scheduler) -> list:
                 job_id=job_id,
                 timezone=timezone,
                 context_id=context_id,
-                origin_session=ctx,
+                origin_session=origin_session,
                 ttl=ttl,
                 max_fires=max_fires,
             )
@@ -375,6 +379,8 @@ def _build_task_tools(tasks_store) -> list:
         # backlog is queryable; from injected graph state (current_session_id() is empty in a
         # tool body). Empty when there's no session context — an instance-global task, as before.
         session_id = _session_id_from(state) or ""
+        if session_id.startswith(("job:", "background:")):
+            session_id = _origin_session_from(state)
         try:
             i = tasks_store.create(
                 title,
