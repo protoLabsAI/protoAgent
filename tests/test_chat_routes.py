@@ -797,6 +797,273 @@ def test_delete_session_purges_legacy_summary_name(monkeypatch, tmp_path):
     assert not (tmp_path / session_filename(sid)).exists()
 
 
+# ── GET /api/conversations — Other conversations list, slice S2 ─────────────────
+
+
+def _origin(*, caller=None, kind=None, on_behalf_of=None, title=None):
+    """The ``conversation_origin`` dict slice S1 stores on a thread's opening turn, wrapped as the
+    task ``metadata`` column holds it. Only the non-None fields are kept."""
+    fields = {"caller": caller, "caller_kind": kind, "on_behalf_of": on_behalf_of, "title": title}
+    return {"conversation_origin": {k: v for k, v in fields.items() if v is not None}}
+
+
+def _user_msg(text, *, incognito=False, hidden=False):
+    """One stored history message in the SDK's ``MessageToDict`` shape (role ``ROLE_USER``)."""
+    meta = {}
+    if incognito:
+        meta["incognito"] = True
+    if hidden:
+        meta["hidden"] = True
+    msg = {"role": "ROLE_USER", "parts": [{"text": text}]}
+    if meta:
+        msg["metadata"] = meta
+    return msg
+
+
+def _seeded_conversations_engine(tmp_path, name, rows):
+    """A real SQLite A2A task store for the conversations list. Each row carries
+    ``{id, context_id, state, at}`` plus optional ``metadata`` (the opening turn's origin) and
+    ``history``."""
+    import asyncio
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/{name}.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for row in rows:
+                await conn.execute(
+                    TaskModel.__table__.insert(),
+                    {
+                        "id": row["id"],
+                        "context_id": row["context_id"],
+                        "kind": "task",
+                        "status": {"state": row["state"]},
+                        "artifacts": [],
+                        "history": row.get("history") or [],
+                        "last_updated": row["at"],
+                        # The attribute is ``task_metadata``; the DB column is ``metadata``.
+                        "metadata": row.get("metadata"),
+                    },
+                )
+
+    asyncio.run(_seed())
+    return engine
+
+
+def _recent(minutes_ago):
+    """A naive-UTC stamp ``minutes_ago`` back — the SDK's spelling, and inside the 7-day window."""
+    from datetime import datetime, timedelta, timezone
+
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes_ago)
+
+
+def test_conversations_lists_non_chat_and_excludes_reserved_and_private(monkeypatch, tmp_path):
+    """r1: one row per non-``chat-`` context; the console chats, background jobs, the Activity
+    thread, the command palette / Fleet Room (``palette-``) and incognito/hidden threads are never
+    listed."""
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "excl",
+        [
+            {"id": "a", "context_id": "conv-keep", "state": "TASK_STATE_COMPLETED", "at": _recent(1),
+             "metadata": _origin(caller="Claude Code", kind="agent")},
+            {"id": "b", "context_id": "chat-123", "state": "TASK_STATE_COMPLETED", "at": _recent(2)},
+            {"id": "c", "context_id": "job:abc", "state": "TASK_STATE_COMPLETED", "at": _recent(3)},
+            {"id": "d", "context_id": "background:xyz", "state": "TASK_STATE_COMPLETED", "at": _recent(4)},
+            {"id": "e", "context_id": "system:activity", "state": "TASK_STATE_COMPLETED", "at": _recent(5)},
+            {"id": "f", "context_id": "palette-9", "state": "TASK_STATE_COMPLETED", "at": _recent(6)},
+            {"id": "g", "context_id": "conv-incognito", "state": "TASK_STATE_COMPLETED", "at": _recent(7),
+             "history": [_user_msg("secret", incognito=True)]},
+            {"id": "h", "context_id": "conv-hidden", "state": "TASK_STATE_COMPLETED", "at": _recent(8),
+             "history": [_user_msg("secret", hidden=True)]},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    body = client.get("/api/conversations").json()
+    assert [r["session_id"] for r in body["conversations"]] == ["conv-keep"]
+
+
+def test_conversations_row_fields_group_and_origin_labels(monkeypatch, tmp_path):
+    """r2 + r4: every row carries the documented fields; ``for_you`` follows
+    caller_kind/on_behalf_of; a no-metadata thread is automated "From another agent"; the origin
+    labels cover caller+on_behalf_of, bare caller, delegation and API."""
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "fields",
+        [
+            {"id": "1", "context_id": "conv-josh", "state": "TASK_STATE_INPUT_REQUIRED", "at": _recent(1),
+             "metadata": _origin(caller="Claude Code", kind="person", on_behalf_of="Josh", title="Friction triage")},
+            {"id": "2", "context_id": "conv-cc", "state": "TASK_STATE_COMPLETED", "at": _recent(2),
+             "metadata": _origin(caller="Claude Code", kind="person", title="A chat")},
+            {"id": "3", "context_id": "conv-del", "state": "TASK_STATE_COMPLETED", "at": _recent(3),
+             "metadata": _origin(caller="protoEngineer", kind="agent", title="Release 1.2")},
+            {"id": "4", "context_id": "api-42-abc", "state": "TASK_STATE_COMPLETED", "at": _recent(4)},
+            {"id": "5", "context_id": "conv-bare", "state": "TASK_STATE_COMPLETED", "at": _recent(5),
+             "history": [_user_msg("hello there")]},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    rows = {r["session_id"]: r for r in client.get("/api/conversations").json()["conversations"]}
+
+    josh = rows["conv-josh"]
+    assert set(josh) == {
+        "session_id", "title", "origin_label", "group", "last_updated", "turn_count", "active", "last_state",
+    }
+    assert josh["origin_label"] == "From Claude Code for Josh"
+    assert josh["group"] == "for_you"
+    assert josh["title"] == "Friction triage"
+    assert josh["turn_count"] == 1
+    assert josh["active"] is False
+    assert josh["last_state"] == "TASK_STATE_INPUT_REQUIRED"
+    assert josh["last_updated"].endswith("+00:00")
+
+    assert rows["conv-cc"]["origin_label"] == "From Claude Code" and rows["conv-cc"]["group"] == "for_you"
+    assert rows["conv-del"]["origin_label"] == "Delegation from protoEngineer"
+    assert rows["conv-del"]["group"] == "automated"
+    assert rows["api-42-abc"]["origin_label"] == "From the API"
+    bare = rows["conv-bare"]
+    assert bare["origin_label"] == "From another agent" and bare["group"] == "automated"
+
+
+def test_conversations_title_fallbacks(monkeypatch, tmp_path):
+    """r3: stored title wins; else the first line of the first user message (Markdown stripped,
+    80 chars); else "Conversation from <origin>"."""
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "titles",
+        [
+            {"id": "1", "context_id": "conv-stored", "state": "TASK_STATE_COMPLETED", "at": _recent(1),
+             "metadata": _origin(caller="protoEngineer", kind="agent", title="Stored title"),
+             "history": [_user_msg("# ignored heading")]},
+            {"id": "2", "context_id": "conv-firstline", "state": "TASK_STATE_COMPLETED", "at": _recent(2),
+             "metadata": _origin(caller="brandLaunch", kind="agent"),
+             "history": [_user_msg("## **Ship** the [release](http://x) now\nsecond line")]},
+            {"id": "3", "context_id": "conv-longline", "state": "TASK_STATE_COMPLETED", "at": _recent(3),
+             "history": [_user_msg("x " * 60)]},
+            {"id": "4", "context_id": "api-7-z", "state": "TASK_STATE_COMPLETED", "at": _recent(4)},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    rows = {r["session_id"]: r for r in client.get("/api/conversations").json()["conversations"]}
+    assert rows["conv-stored"]["title"] == "Stored title"
+    # Leading list/heading markers, emphasis and link syntax shed; only the first line kept.
+    assert rows["conv-firstline"]["title"] == "Ship the release now"
+    assert len(rows["conv-longline"]["title"]) == 80 and rows["conv-longline"]["title"].endswith("…")
+    assert rows["api-7-z"]["title"] == "Conversation from the API"
+
+
+def test_conversations_ordering_needs_you_running_newest_by_group(monkeypatch, tmp_path):
+    """r4: within a group — needs you, then running, then newest; ``for_you`` before
+    ``automated``."""
+    import runtime.state as rs
+
+    fy = lambda **kw: _origin(caller="Claude Code", kind="person", **kw)  # noqa: E731 — compact for_you origin
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "order",
+        [
+            # for_you group: idle-new, idle-old, running, needs-you (seeded out of order on purpose).
+            {"id": "1", "context_id": "fy-idle-new", "state": "TASK_STATE_COMPLETED", "at": _recent(1), "metadata": fy()},
+            {"id": "2", "context_id": "fy-idle-old", "state": "TASK_STATE_COMPLETED", "at": _recent(9), "metadata": fy()},
+            {"id": "3", "context_id": "fy-running", "state": "TASK_STATE_WORKING", "at": _recent(5), "metadata": fy()},
+            {"id": "4", "context_id": "fy-needs", "state": "TASK_STATE_INPUT_REQUIRED", "at": _recent(7), "metadata": fy()},
+            # automated group: one needs-you — still sorts AFTER every for_you row.
+            {"id": "5", "context_id": "auto-needs", "state": "TASK_STATE_INPUT_REQUIRED", "at": _recent(2),
+             "metadata": _origin(caller="protoEngineer", kind="agent")},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    order = [r["session_id"] for r in client.get("/api/conversations").json()["conversations"]]
+    assert order == ["fy-needs", "fy-running", "fy-idle-new", "fy-idle-old", "auto-needs"]
+
+
+def test_conversations_window_before_paging_and_limit(monkeypatch, tmp_path):
+    """r4: the default 7-day window hides older threads; ``before=`` pages into them; ``limit``
+    caps (at 50)."""
+    from datetime import timedelta
+
+    import runtime.state as rs
+
+    recent_at = _recent(60)  # ~1h ago, inside the window
+    old_at = _recent(60 * 24 * 10)  # ~10 days ago, outside it
+    origin = _origin(caller="Claude Code", kind="agent")
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "window",
+        [
+            {"id": "1", "context_id": "conv-recent", "state": "TASK_STATE_COMPLETED", "at": recent_at, "metadata": origin},
+            {"id": "2", "context_id": "conv-old", "state": "TASK_STATE_COMPLETED", "at": old_at, "metadata": origin},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    # Default window: only the recent thread.
+    assert [r["session_id"] for r in client.get("/api/conversations").json()["conversations"]] == ["conv-recent"]
+
+    # Page older than a 5-day-ago cursor: only the 10-day-old thread.
+    cursor = (_recent(0) - timedelta(days=5)).isoformat()
+    paged = client.get(f"/api/conversations?before={cursor}").json()["conversations"]
+    assert [r["session_id"] for r in paged] == ["conv-old"]
+
+    # limit is capped at 50 and honoured.
+    assert len(client.get("/api/conversations?limit=1").json()["conversations"]) == 1
+    assert client.get("/api/conversations?limit=999").status_code == 200
+
+
+def test_conversations_group_filter(monkeypatch, tmp_path):
+    """r2: ``group=`` returns only that group's rows."""
+    import runtime.state as rs
+
+    engine = _seeded_conversations_engine(
+        tmp_path,
+        "groupf",
+        [
+            {"id": "1", "context_id": "conv-fy", "state": "TASK_STATE_COMPLETED", "at": _recent(1),
+             "metadata": _origin(caller="Claude Code", kind="person")},
+            {"id": "2", "context_id": "conv-auto", "state": "TASK_STATE_COMPLETED", "at": _recent(2),
+             "metadata": _origin(caller="protoEngineer", kind="agent")},
+        ],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    assert [r["session_id"] for r in client.get("/api/conversations?group=for_you").json()["conversations"]] == [
+        "conv-fy"
+    ]
+    assert [r["session_id"] for r in client.get("/api/conversations?group=automated").json()["conversations"]] == [
+        "conv-auto"
+    ]
+
+
+def test_conversations_without_a_task_store_degrades(monkeypatch):
+    """A headless app (no task engine) answers an empty list with a reason, not a 500."""
+    import runtime.state as rs
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    body = client.get("/api/conversations").json()
+    assert body["conversations"] == [] and "reason" in body
+
+
 def test_compact_session_route(monkeypatch):
     # The route is a thin pass-through to server.chat.compact_session — forwards the
     # path session_id and returns the compaction result dict verbatim.
