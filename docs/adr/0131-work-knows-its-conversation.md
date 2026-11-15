@@ -1,9 +1,9 @@
 # ADR 0131 — Work knows its conversation: continuity and progress on the stores we already have
 
-- Status: Proposed (2026-11-15). Scope decisions by Josh 2026-11-15; the ADR as a whole awaits his approval.
+- Status: Accepted (2026-11-15, Josh: "yep lets do it"). **Committed scope: P1 and P2.** P3–P5 are planned but re-decided after P2 ships, using real data.
 - Date: 2026-11-15
 - Deciders: Josh Mabry; protoAgent maintainers
-- Implementation: not started. Phases P1–P5 below; each slice is boarded only after this ADR is accepted.
+- Implementation: P1 and P2 boarded 2026-11-15. P3–P5 not boarded.
 - Builds on: [ADR 0129](./0129-work-consolidation.md) (tasks, D8 answer-in-place, D9 driven/stall), [ADR 0130](./0130-server-authoritative-live-sync.md) (durable change feed), `docs/design/other-conversations.md` (the From others tab).
 - Umbrella issue: #5299. Its audit comment (2026-11-15) and the due-diligence section in the issue body are the evidence base.
 
