@@ -31,25 +31,36 @@ starting with a **bold lead-in**:
 Write it the way you'd want to read it in release notes six months from now: what broke,
 why it mattered, what changed. Same bar as before — only the destination moved.
 
-**You don't need the PR number** (#4874). At release, `collate` puts `(#N)` inside every
-bold lead that doesn't already cite a number. It reads the number from the commit that
-added the fragment to `main`: the squash-merge subject's `(#N)`, or a `Merge pull request
-#N` commit. The entry above ships as `**… didn't achieve (#2286).**`. So the fragment is
-right in the PR's first commit, and you don't push a second commit to rename it or add
-the number. Before this, a PR with no issue pushed that second commit, and each push ran
-another full review.
+**Never put a number in the bold lead** (#4874, #5295). You don't know the PR number when
+you write the fragment, so any `(#N)` in the lead is a guess — and a guessed number ships
+wrong. At release, `collate` reads the PR that actually **merged** the fragment — from the
+squash-merge subject's `(#N)`, or a `Merge pull request #N` commit — and stamps `(#<that
+PR>)` into the lead for you. The entry above ships as `**… didn't achieve (#2286).**`. So
+the fragment is right in the PR's first commit, and you never push a second commit to rename
+it or add the number. Before this, a PR with no issue pushed that second commit, and each
+push ran another full review.
 
-To cite an **issue** (or several PRs) instead, put it inside the bold lead yourself —
-`**Short summary (#2286).**` — and it is left alone. Don't write a placeholder like
-`(#NNNN)`; the gate rejects it, because the stamp would land next to it. A ref at the end
-of the paragraph, outside the bold, doesn't count: the marketing `/changelog` bullet is
-derived from the `**…**` lead ALONE (`changelog.py scaffold` → `_titles`, #3291). That is
-why every bullet needs a bold lead; the PR gate checks it.
+If a lead does carry a wrong number, `collate` replaces it with the merging PR and prints a
+warning — but don't rely on that safety net: the PR gate **rejects any `#N` in the bold
+lead** (`leave the number out; collate stamps the merging PR`), so the mistake can't reach
+release. The gate also rejects a placeholder like `(#NNNN)` for the same reason.
+
+To point at an **issue**, mention it in the **body text**, outside the bold lead:
+
+```markdown
+- **Fleet stop no longer reports a stop it didn't achieve.** Fixes #2286 — the endpoint
+  returned `{"ok": true, "stopped": true}` while the process kept running…
+```
+
+A ref there is kept verbatim. Only the `**…**` lead survives into the marketing `/changelog`
+bullet (`changelog.py scaffold` → `_titles`, #3291), and the PR gate counts entries by it,
+so every bullet still needs a bold lead — just without a number in it.
 
 ## What happens at release
 
-`scripts/changelog.py collate` stamps missing PR numbers (above), folds every fragment into
-`## [Unreleased]`, grouped under one heading per kind, then deletes the fragments. `roll` promotes that section to a dated
+`scripts/changelog.py collate` stamps the merging PR into each lead (above), folds every
+fragment into `## [Unreleased]`, grouped under one heading per kind, then deletes the
+fragments. `roll` promotes that section to a dated
 version. Both run in `prepare-release.yml`, so `CHANGELOG.md` is only ever edited by the
 release process.
 

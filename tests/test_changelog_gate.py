@@ -7,6 +7,7 @@ the same way CI drives it against the PR checkout.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -20,6 +21,13 @@ from tests._git_templates import copy_repo
 from tests.bashpath import real_bash
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "changelog_gate.sh"
+
+# The gate shells out to `changelog.py lint-fragments`; the collate-time stamping lives in the
+# same module. Load it so the #5295 restamp/collate cases can be driven with a fake resolver,
+# no git needed. (This module's pytestmark still gates on bash+git, both present in CI.)
+_CL_SPEC = importlib.util.spec_from_file_location("changelog", Path(__file__).parent.parent / "scripts" / "changelog.py")
+cl = importlib.util.module_from_spec(_CL_SPEC)
+_CL_SPEC.loader.exec_module(cl)
 
 pytestmark = [
     pytest.mark.skipif(
@@ -115,7 +123,7 @@ def test_a_changelog_edit_alongside_a_fragment_is_fine(pr_template: Path, tmp_pa
     repo = _pr_repo(pr_template, tmp_path)
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n", encoding="utf-8")
     (repo / "changelog.d").mkdir(exist_ok=True)
-    (repo / "changelog.d" / "42.fixed.md").write_text("- **a thing (#42).** why\n", encoding="utf-8")
+    (repo / "changelog.d" / "42.fixed.md").write_text("- **a thing.** why\n", encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "fragment + unrelated changelog touch")
 
@@ -272,7 +280,7 @@ def test_passes_when_pr_adds_a_changelog_fragment(pr_template: Path, tmp_path: P
     repo = _pr_repo(pr_template, tmp_path)
     (repo / "changelog.d").mkdir(exist_ok=True)
     (repo / "changelog.d" / "2286.fixed.md").write_text(
-        "- **fleet stop lied (#2286).** it reported a stop it never achieved\n", encoding="utf-8"
+        "- **fleet stop lied.** it reported a stop it never achieved\n", encoding="utf-8"
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "add fragment")
@@ -348,6 +356,20 @@ def test_a_placeholder_pr_number_fails_the_gate(pr_template: Path, tmp_path: Pat
     assert "fix-x.fixed.md" in out and "placeholder" in out
 
 
+def test_a_pr_number_in_the_bold_lead_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
+    """#5295: a guessed `(#N)` in the lead is why 8 of 15 v0.242.0 entries cited the wrong PR.
+    The gate now rejects any `#N` in the bold lead so collate can stamp the real merging PR."""
+    repo = _pr_repo(pr_template, tmp_path)
+    _add_fragment(repo, "fix-x.fixed.md", "- **A fix (#5283).** Why.\n")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 1
+    out = result.stdout + result.stderr
+    assert "fix-x.fixed.md" in out
+    assert "leave the number out" in out.lower()
+
+
 def test_a_bullet_with_no_bold_lead_and_no_ref_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """#3291's loss in the new world: no lead to stamp into, so /changelog would name nothing."""
     repo = _pr_repo(pr_template, tmp_path)
@@ -371,7 +393,7 @@ def test_a_fragment_name_with_a_space_fails_the_gate(pr_template: Path, tmp_path
 
 def test_well_formed_fragment_still_passes(pr_template: Path, tmp_path: Path) -> None:
     repo = _pr_repo(pr_template, tmp_path)
-    _add_fragment(repo, "2600.fixed.md", "- **A real entry (#2600).** With a body that wraps\n  onto a second line.\n")
+    _add_fragment(repo, "2600.fixed.md", "- **A real entry.** With a body that wraps\n  onto a second line.\n")
 
     result = _run_gate(repo)
 
@@ -445,3 +467,66 @@ def test_plain_release_branch_still_skips(pr_template: Path, tmp_path: Path) -> 
     _git(repo, "commit", "-aqm", "release prep")
 
     assert _run_gate(repo, head_ref="release/v1.2.3").returncode == 0
+
+
+# ── #5295: collate links the PR that actually merged a fragment ──────────────────────────────
+# At release, `read_fragments(resolve_pr=…)` resolves the adding PR for EVERY fragment and makes
+# the lead cite it. A fake resolver stands in for `pr_for_fragment`, so these need no git history.
+
+
+def _write(directory: Path, name: str, body: str) -> None:
+    (directory / name).write_text(body, encoding="utf-8")
+
+
+def test_collate_stamps_a_lead_with_no_ref(tmp_path: Path) -> None:
+    _write(tmp_path, "fix-a.fixed.md", "- **A fix.** Why.\n")
+
+    buckets, _ = cl.read_fragments(tmp_path, resolve_pr=lambda _p: 5289)
+
+    assert buckets["fixed"] == ["- **A fix (#5289).** Why."]
+
+
+def test_collate_leaves_a_lead_already_citing_the_adding_pr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write(tmp_path, "fix-a.fixed.md", "- **A fix (#5289).** Why.\n")
+
+    buckets, _ = cl.read_fragments(tmp_path, resolve_pr=lambda _p: 5289)
+
+    assert buckets["fixed"] == ["- **A fix (#5289).** Why."]
+    assert capsys.readouterr().err == ""  # nothing dropped → no warning
+
+
+def test_collate_replaces_a_guessed_pr_number_and_warns(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The v0.242.0 shape: the lead guessed the next PR number but merged as a different one."""
+    _write(tmp_path, "rail-s3b.fixed.md", "- **Chat status rail S3b marker panel (#5283).** Why.\n")
+
+    buckets, _ = cl.read_fragments(tmp_path, resolve_pr=lambda _p: 5289)
+
+    assert buckets["fixed"] == ["- **Chat status rail S3b marker panel (#5289).** Why."]
+    err = capsys.readouterr().err
+    assert "rail-s3b.fixed.md" in err and "#5283" in err
+
+
+def test_collate_replaces_a_source_issue_number_and_warns(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The other v0.242.0 shape: the lead cited the source issue, not the PR that merged it."""
+    _write(tmp_path, "from-issue.changed.md", "- **A change (#5270).** Why.\n")
+
+    buckets, _ = cl.read_fragments(tmp_path, resolve_pr=lambda _p: 5281)
+
+    assert buckets["changed"] == ["- **A change (#5281).** Why."]
+    err = capsys.readouterr().err
+    assert "from-issue.changed.md" in err and "#5270" in err
+
+
+def test_collate_keeps_an_unresolvable_fragment_unchanged(tmp_path: Path) -> None:
+    _write(tmp_path, "from-issue.fixed.md", "- **A fix (#5283).** Why.\n")
+
+    buckets, used = cl.read_fragments(tmp_path, resolve_pr=lambda _p: None)
+
+    assert buckets["fixed"] == ["- **A fix (#5283).** Why."] and len(used) == 1
+
+
+def test_restamp_pr_ref_reports_the_numbers_it_dropped() -> None:
+    body, dropped = cl.restamp_pr_ref("- **A fix (#5283).** Why.\n- **B.** y", 5289)
+
+    assert body == "- **A fix (#5289).** Why.\n- **B (#5289).** y"
+    assert dropped == ["#5283"]
