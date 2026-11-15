@@ -318,6 +318,37 @@ def _build_scheduler_tools(scheduler) -> list:
     return [schedule_task, list_schedules, cancel_schedule, wait]
 
 
+# ADR 0129 S13: the one appended line when a task is set ``in_progress`` with nothing
+# driving it — no unresolved link, no pending follow-up / watch / background job / running
+# turn in its chat (D9: ``task-59`` sat ``in_progress`` for an afternoon with nothing that
+# would ever bring the agent back to it). Keeps the model honest about leaving work parked:
+# either link the work, schedule a follow-up, or park it ``waiting`` with an ask.
+_UNDRIVEN_IN_PROGRESS_NOTE = (
+    "\nNote: nothing is driving this task (no linked work running, no follow-up scheduled "
+    "in its chat). Link the card/PR/job doing it, schedule a follow-up (wait or "
+    "schedule_task), or set it waiting with an ask; otherwise a stall reminder fires after "
+    "30 min."
+)
+
+
+def _undriven_in_progress_note(task: dict) -> str:
+    """The stall-reminder note (ADR 0129 S13) when ``task`` is undriven, else ``""``.
+
+    Uses the shared driver test (:func:`tasks.stall.is_driven` / :func:`default_sources`) so
+    the warning never disagrees with the stall sweep or the Work view. Fail-quiet: a driver
+    check that raises returns ``""`` — a best-effort live read that failed must never change
+    a successful update or its result. Imported lazily so the host-free tasks module loads
+    only when a task actually reaches ``in_progress``."""
+    try:
+        from tasks.stall import default_sources, is_driven
+
+        if is_driven(task, sources=default_sources()):
+            return ""
+    except Exception:  # noqa: BLE001 — a failing driver read must not change the update
+        return ""
+    return _UNDRIVEN_IN_PROGRESS_NOTE
+
+
 def _build_task_tools(tasks_store) -> list:
     """Bind the tasks issue tracker to a ``TaskStore`` (Sprint B) — the agent's
     in-process planning/task surface. Returns a list."""
@@ -390,6 +421,10 @@ def _build_task_tools(tasks_store) -> list:
         """Update an issue. ``status`` is open|in_progress|blocked|waiting|deferred|closed.
         Leave a field empty (``priority`` -1, ``links`` omitted) to keep it unchanged.
 
+        An ``in_progress`` task should be *driven* — have a linked card/PR/job in flight or
+        a scheduled follow-up (``wait``/``schedule_task``) in its chat — or the result warns
+        you (an undriven task gets a stall reminder after 30 min).
+
         Set ``waiting`` when the next step is the operator's call — don't leave a task
         ``in_progress`` while you wait on them. Supply ``ask``: a short, self-contained
         question or action for the operator, shown on the Needs you card so they can
@@ -425,7 +460,13 @@ def _build_task_tools(tasks_store) -> list:
             i = tasks_store.update(issue_id, **fields)
         except (KeyError, ValueError) as exc:
             return f"Error: {exc}"
-        return f"Updated {i['id']}: [{i['status']}] {i['title']}"
+        result = f"Updated {i['id']}: [{i['status']}] {i['title']}"
+        # ADR 0129 S13: a task now ``in_progress`` with nothing driving it earns a stall
+        # warning so it isn't silently parked. The update already succeeded — this only
+        # appends a line, and never raises (helper is fail-quiet).
+        if (i.get("status") or "") == "in_progress":
+            result += _undriven_in_progress_note(i)
+        return result
 
     @tool
     def task_close(
