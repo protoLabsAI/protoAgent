@@ -1,0 +1,1 @@
+- **Needs you links to the thread it came from.** A decision or waiting task raised from another agent's conversation now carries an "Open conversation" button that closes the status panel and opens that read-only thread (`#/conversations/<id>`). Items from your own chats are unchanged.
