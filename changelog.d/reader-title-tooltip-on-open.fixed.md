@@ -1,0 +1,1 @@
+- **Thread reader title tooltip.** Opening a From others thread keeps focus on its heading without covering the meta line with a tooltip; hover and keyboard focus still reveal the full title.

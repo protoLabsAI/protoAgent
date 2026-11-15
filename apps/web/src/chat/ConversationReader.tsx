@@ -175,11 +175,11 @@ export function ConversationReader({
           >
             ← Back
           </Button>
-          <Tooltip label={title}>
-            <h2 className="conversation-reader__title" tabIndex={-1} ref={titleRef}>
-              {shownTitle}
-            </h2>
-          </Tooltip>
+          <h2 className="conversation-reader__title" tabIndex={-1} ref={titleRef}>
+            <Tooltip label={title}>
+              <span tabIndex={0}>{shownTitle}</span>
+            </Tooltip>
+          </h2>
           {load.kind === "ready" && tone.badge && <Badge status={tone.tone}>{tone.badge}</Badge>}
         </div>
         {meta.text && (
