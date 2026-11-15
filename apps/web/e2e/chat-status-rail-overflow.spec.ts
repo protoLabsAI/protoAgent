@@ -59,21 +59,24 @@ test("a long background-job label stays inside the details panel instead of wide
   expect(m.slotScroll).toBeLessThanOrEqual(m.slotClient + 1);
   expect(m.wrap).toBeLessThanOrEqual(m.slotClient + 1);
 
-  // The label is one click away, ellipsized inside the panel — the title is the thing that
-  // gives (its content is wider than its box), and the panel stays inside the viewport.
+  // The label is one click away, wrapped and two-line clamped inside the panel — it is the
+  // thing that gives (its content is taller than its clamped box, §1 "-webkit-line-clamp: 2"),
+  // and the panel stays inside the viewport.
   await chip.click();
   const panel = page.locator(".chat-status-details");
   await expect(panel).toContainText("File a protoAgent issue");
   const d = await page.evaluate(() => {
-    const title = document.querySelector(".chat-status-details__title") as HTMLElement;
+    const text = document.querySelector(".chat-status-row__text") as HTMLElement;
     const details = document.querySelector(".chat-status-details") as HTMLElement;
     return {
-      titleScroll: title.scrollWidth,
-      titleClient: title.clientWidth,
+      textScrollH: text.scrollHeight,
+      textClientH: text.clientHeight,
+      textRight: text.getBoundingClientRect().right,
       panelRight: details.getBoundingClientRect().right,
       viewport: window.innerWidth,
     };
   });
-  expect(d.titleScroll).toBeGreaterThan(d.titleClient);
+  expect(d.textScrollH).toBeGreaterThan(d.textClientH); // clamped to two lines, the rest hidden
+  expect(d.textRight).toBeLessThanOrEqual(d.panelRight + 1); // never wider than its panel
   expect(d.panelRight).toBeLessThanOrEqual(d.viewport + 1);
 });
