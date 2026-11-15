@@ -194,6 +194,11 @@ class InboxAddRequest(BaseModel):
     # The item genuinely needs the OPERATOR (an operator-class block page) — only these
     # may surface as Needs-you alerts in the console; a merely late delivery never does.
     needs_human: bool = False
+    # Display-only provenance (ADR 0131 D2): the chat session that CAUSED this item, and a
+    # small origin dict (caller, caller_kind, on_behalf_of only). Independent of `session`
+    # (which routes a thread note) — origin never routes or authorizes delivery.
+    origin_session: str = ""
+    origin: dict | None = None
 
 
 class TaskInitRequest(BaseModel):

@@ -22,6 +22,7 @@ that retries) within a window so they don't each fire a turn.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from collections import deque
@@ -29,6 +30,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 PRIORITIES = ("now", "next", "later")
+
+#: The recognised ``caller_kind`` values for an item's display-only origin (ADR 0131 D2).
+#: Mirrors ``a2a_impl.conversation_origin.KINDS`` — the server never guesses a person, so an
+#: unrecognised kind is dropped. (Mirrored, not imported: ``inbox`` must not depend on the
+#: A2A layer just to normalise three strings.)
+ORIGIN_KINDS = ("person", "agent")
 #: How an item reaches the agent. ``""`` is the tiered behaviour above; ``"thread"`` is
 #: folded into the operator's live chat at its next model call.
 DELIVERY_THREAD = "thread"
@@ -76,6 +83,43 @@ def _floor_set(priority_floor: str) -> tuple[str, ...]:
     """Tiers visible at a given floor: now→{now}, next→{now,next}, later→all."""
     cutoff = _RANK.get(priority_floor, 1)
     return tuple(p for p in PRIORITIES if _RANK[p] <= cutoff)
+
+
+def _origin_meta(origin: dict | None) -> dict:
+    """Keep ONLY the display-only origin fields (``caller``, ``caller_kind``,
+    ``on_behalf_of``) from a caller-supplied dict, each a trimmed string; an unrecognised
+    ``caller_kind`` (not in :data:`ORIGIN_KINDS`) is dropped, as is any other key. This is
+    provenance — who caused the item — never a delivery or authorization input (ADR 0131 D2).
+    Returns ``{}`` when nothing recognised is present."""
+    if not isinstance(origin, dict):
+        return {}
+    out: dict[str, str] = {}
+    caller = str(origin.get("caller") or "").strip()
+    if caller:
+        out["caller"] = caller
+    kind = str(origin.get("caller_kind") or "").strip()
+    if kind in ORIGIN_KINDS:
+        out["caller_kind"] = kind
+    on_behalf_of = str(origin.get("on_behalf_of") or "").strip()
+    if on_behalf_of:
+        out["on_behalf_of"] = on_behalf_of
+    return out
+
+
+def origin_meta_fields(raw: object) -> dict:
+    """Parse a stored ``origin_meta`` blob back to its display-origin dict — the inverse of
+    what :meth:`InboxStore.add` persists. Accepts the JSON text a row carries (or an already
+    decoded dict), re-filters through :func:`_origin_meta` so a hand-edited row can only ever
+    surface the three allowed fields, and tolerates ``None``/empty/corrupt input (``{}``)."""
+    if isinstance(raw, dict):
+        return _origin_meta(raw)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return _origin_meta(parsed)
 
 
 class InboxStore:
@@ -179,6 +223,15 @@ class InboxStore:
                 db.execute("ALTER TABLE inbox ADD COLUMN reply_text TEXT")
             if "replied_at" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN replied_at TEXT")
+            # Display-only provenance (ADR 0131 D2/P2a): the chat session that CAUSED this item
+            # (origin_session) and a small origin dict as JSON (origin_meta — caller,
+            # caller_kind, on_behalf_of only). Independent of target_session, which ROUTES a
+            # thread note to one chat; origin never routes or authorizes delivery, it only
+            # records where the item came from so work created from it can bind to that chat.
+            if "origin_session" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN origin_session TEXT")
+            if "origin_meta" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN origin_meta TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_undelivered ON inbox(delivered_at, priority)")
             # add() looks a dedup_key up inside its write transaction; keep that a seek.
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_dedup ON inbox(dedup_key, delivered_at)")
@@ -218,6 +271,8 @@ class InboxStore:
         delivery: str = "",
         target_session: str = "",
         needs_human: bool = False,
+        origin_session: str | None = None,
+        origin: dict | None = None,
         now: datetime | None = None,
     ) -> dict | None:
         """Insert an item. Returns the row, or ``None`` if deduped.
@@ -227,6 +282,14 @@ class InboxStore:
         late delivery never does. A producer that cannot pass the flag but is
         operator-class by construction is covered at read time instead
         (:func:`needs_operator_attention` on ``OPERATOR_ATTENTION_SOURCES``).
+
+        ``origin_session`` / ``origin`` are display-only provenance (ADR 0131 D2): the chat
+        that CAUSED the item and a small origin dict (``caller``, ``caller_kind``,
+        ``on_behalf_of`` only, via :func:`_origin_meta`). They are independent of
+        ``delivery`` and ``target_session`` — origin never routes or authorizes delivery, it
+        only records where the item came from so :meth:`origin_for_context` can bind work
+        fired from it back to that chat. An empty ``origin_session`` and an origin with no
+        recognised field are both stored as ``NULL``.
 
         Raises ``ValueError`` on empty text, an unknown priority or an unknown delivery.
         """
@@ -241,6 +304,9 @@ class InboxStore:
         target_session = (target_session or "").strip()
         if target_session and delivery != DELIVERY_THREAD:
             raise ValueError("only a direct message (thread delivery) can name a chat thread")
+        origin_session = (origin_session or "").strip()
+        origin_meta = _origin_meta(origin)
+        origin_meta_json = json.dumps(origin_meta, separators=(",", ":")) if origin_meta else None
         now = now or datetime.now(UTC)
 
         db = self._connect()
@@ -259,7 +325,7 @@ class InboxStore:
                     return None
             cur = db.execute(
                 "INSERT INTO inbox (created_at, priority, source, text, dedup_key, delivery, target_session, "
-                "needs_human) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "needs_human, origin_session, origin_meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     now.isoformat(),
                     priority,
@@ -269,6 +335,8 @@ class InboxStore:
                     delivery,
                     target_session or None,
                     1 if needs_human else 0,
+                    origin_session or None,
+                    origin_meta_json,
                 ),
             )
             db.commit()
@@ -659,6 +727,28 @@ class InboxStore:
                 "task_id": row["task_id"] or "",
                 "accepted_at": row["accepted_at"] or "",
             }
+        finally:
+            db.close()
+
+    def origin_for_context(self, context_id: str) -> str:
+        """The originating chat session of the inbox item that fired under ``context_id``.
+
+        Maps a ``job:`` execution context — the isolated identity :meth:`execution_identity`
+        assigns an independently fired item — back through ``inbox_executions`` to its item's
+        ``origin_session`` (ADR 0131 D2/P2a). ``""`` when the context is unknown, has no item,
+        or the item carried no origin. Display/routing provenance only, never authorization.
+        """
+        context_id = (context_id or "").strip()
+        if not context_id:
+            return ""
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT i.origin_session AS origin_session FROM inbox_executions e "
+                "JOIN inbox i ON i.id = e.item_id WHERE e.context_id = ? LIMIT 1",
+                (context_id,),
+            ).fetchone()
+            return (row["origin_session"] or "") if row is not None else ""
         finally:
             db.close()
 

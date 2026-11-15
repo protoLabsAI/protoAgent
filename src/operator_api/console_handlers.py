@@ -26,7 +26,7 @@ from graph.config_io import is_setup_complete as _operator_setup_complete
 from graph.goals.types import GoalState
 from graph.output_format import extract_output
 from graph.watches.types import Watch
-from inbox.store import RECOVERY_MAX_ATTEMPTS, needs_operator_attention
+from inbox.store import RECOVERY_MAX_ATTEMPTS, needs_operator_attention, origin_meta_fields
 from operator_api.runtime import build_runtime_status as _build_operator_status
 from operator_api.subagents import (
     list_subagents as _operator_list_subagents,
@@ -1095,6 +1095,10 @@ async def _operator_inbox_add(payload: dict) -> dict:
     target = (payload.get("session", "") or "").strip()
     if target and not target.startswith("chat-"):
         raise ValueError(f"{target!r} is not a chat thread id (they start with 'chat-')")
+    # Display-only provenance (ADR 0131 D2): the chat that caused the item and a small origin
+    # dict. The store filters `origin` to caller/caller_kind/on_behalf_of; neither field routes
+    # or authorizes delivery, so they are passed straight through alongside the tier fields.
+    origin = payload.get("origin")
     item = await asyncio.to_thread(
         STATE.inbox_store.add,
         payload.get("text", ""),
@@ -1104,6 +1108,8 @@ async def _operator_inbox_add(payload: dict) -> dict:
         delivery=delivery,
         target_session=target,
         needs_human=bool(payload.get("needs_human")),
+        origin_session=(payload.get("origin_session", "") or "").strip(),
+        origin=origin if isinstance(origin, dict) else None,
     )
     if item is None:
         return {"ok": True, "deduped": True}
@@ -1167,6 +1173,10 @@ def _inbox_row(item: dict) -> dict:
     row["queued_since"] = None if item.get("delivered_at") else item.get("created_at")
     row["attempts"] = int(item.get("recovery_attempts") or 0)
     row["needs_human"] = needs_operator_attention(item)
+    # Display-only provenance (ADR 0131 D2): surface the originating chat and the parsed
+    # origin dict (never the raw origin_meta JSON blob). Both default empty.
+    row["origin_session"] = item.get("origin_session") or ""
+    row["origin"] = origin_meta_fields(item.get("origin_meta"))
     row["retries_exhausted"] = bool(
         not item.get("delivered_at")
         and item.get("priority") == "now"
