@@ -137,14 +137,23 @@
 .mshell-conversations .conversation-reader__back {
   display: none;
 }
-/* The footer stacks on the phone: the note, then Continue in a new chat and Copy link, each
-   full width (§3.7). The note already sits above the actions; this stacks the two buttons. */
-.mshell-conversations .conversation-reader__footer-actions {
-  flex-direction: column;
+/* The footer is one row on the phone too (§3.7, revision 4): lock + "Read-only" on the left, an
+   icon-only Copy link and Continue on the right. Drop the long clause and the Copy link's label,
+   and float every target to the 44px touch floor. */
+.mshell-conversations .conversation-reader__footer-note-rest,
+.mshell-conversations .conversation-reader__footer-copy-label {
+  display: none;
+}
+.mshell-conversations .conversation-reader__footer-lock {
+  min-width: 44px;
+  min-height: 44px;
 }
 .mshell-conversations .conversation-reader__footer-actions > .pl-btn {
-  width: 100%;
   min-height: 44px;
+}
+.mshell-conversations .conversation-reader__footer-copy {
+  min-width: 44px;
+  justify-content: center;
 }
 /* Clear the home indicator, like the chat composer does — inset the footer's bottom edge. */
 .mshell-conversations .conversation-reader__footer {

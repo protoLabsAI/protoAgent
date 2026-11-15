@@ -182,15 +182,48 @@ describe("ConversationReader header, turns and footer", () => {
     expect(host.querySelector(".conversation-reader__origin")?.textContent).toBe("another agent");
   });
 
-  it("has no composer; its slot carries the read-only note and the two chat-forwarding actions (r2)", async () => {
+  it("has no composer; its slot is one row — the lock + the short read-only clause and the two chat-forwarding actions (r1, r2)", async () => {
     await renderReader();
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector("input")).toBeNull();
-    expect(host.textContent).toContain("Replies go to a new chat, so Claude Code");
+
+    // The footer is one row: the lede (lock + short clause) on the left, the two actions on the
+    // right. The long sentence is NOT visible text here — it lives on the lock's tooltip.
+    const footer = host.querySelector(".conversation-reader__footer")!;
+    expect(footer.querySelector(".conversation-reader__footer-lede")).not.toBeNull();
+    expect(footer.querySelector(".conversation-reader__footer-actions")).not.toBeNull();
+    expect(host.querySelector(".conversation-reader__footer-note")?.textContent).toBe(
+      "Read-only. Replies start a new chat.",
+    );
+    expect(host.textContent).not.toContain("Replies go to a new chat, so Claude Code");
 
     const buttons = [...host.querySelectorAll("button")].map((b) => b.textContent ?? "");
     expect(buttons.some((t) => t.includes("Continue in a new chat"))).toBe(true);
     expect(buttons.some((t) => t.includes("Copy link"))).toBe(true);
+  });
+
+  it("the footer lock is a focusable tooltip trigger whose accessible name is the full sentence (r2)", async () => {
+    await renderReader({ row: row({ origin_label: "From Claude Code" }) });
+    const lock = host.querySelector<HTMLElement>(".conversation-reader__footer-lock")!;
+    // Focusable (keyboard reaches it) and named by the full sentence…
+    expect(lock.tabIndex).toBe(0);
+    const name = lock.getAttribute("aria-label") ?? "";
+    expect(name).toContain("You can");
+    expect(name).toContain("Replies go to a new chat, so Claude Code");
+    expect(name).toContain("interrupted.");
+    // …and it is wrapped by a DS Tooltip trigger (its label carries the same sentence).
+    expect(lock.closest(".pl-tip-wrap")).not.toBeNull();
+  });
+
+  it("Copy link keeps its accessible name whether or not its visible label is shown (r2, r3)", async () => {
+    await renderReader();
+    const copy = [...host.querySelectorAll("button")].find((b) =>
+      b.getAttribute("aria-label") === "Copy link",
+    ) as HTMLButtonElement;
+    // The accessible name is set explicitly, so the phone's icon-only form (label hidden by CSS)
+    // keeps the same name a screen reader reads on desktop.
+    expect(copy).toBeTruthy();
+    expect(copy.querySelector(".conversation-reader__footer-copy-label")?.textContent).toBe("Copy link");
   });
 
   it("Continue in a new chat hands the thread's id, title and origin to onContinue (C4, r2)", async () => {

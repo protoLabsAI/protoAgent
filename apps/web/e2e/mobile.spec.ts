@@ -505,8 +505,15 @@ test("mobile: Conversations pins above the chats, and its list and a thread fill
   const back = page.locator(".mshell-back-list");
   await expect(back).toBeVisible();
   await expect(back).toContainText("List");
-  // The footer stacks note + the two full-width actions (the reader's own in-band back is hidden).
-  await expect(page.locator(".mshell-conversations .conversation-reader__footer-actions")).toBeVisible();
+  // The footer is one row (revision 4): the lock + "Read-only" on the left, an icon-only Copy link
+  // and Continue on the right (the reader's own in-band back is hidden; the app header owns ← List).
+  const footer = page.locator(".mshell-conversations .conversation-reader__footer");
+  await expect(footer.locator(".conversation-reader__footer-actions")).toBeVisible();
+  await expect(footer.getByRole("button", { name: "Continue in a new chat" })).toBeVisible();
+  await expect(footer.getByRole("button", { name: "Copy link" })).toBeVisible();
+  // Copy link is icon-only here and the long clause is dropped — both hidden by the phone CSS.
+  await expect(footer.locator(".conversation-reader__footer-copy-label")).toBeHidden();
+  await expect(footer.locator(".conversation-reader__footer-note-rest")).toBeHidden();
   await back.click();
   await expect(page.locator(".mshell-conversations .conversations-pane")).toBeVisible();
   await expect(page.locator(".mshell-conversations .conversation-reader")).toHaveCount(0);
