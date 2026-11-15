@@ -409,6 +409,15 @@ export function useConversations() {
   );
 }
 
+/** The live row for one thread by context id, or null when it isn't listed (yet). Work's
+ *  provenance line (§4.6) reads its `origin_label` to name who started a waiting task's
+ *  conversation, without pulling the whole list's derived shape. Shares the one hydration — a
+ *  consumer here subscribes the same singleton the Conversations tab does. */
+export function useConversationRow(contextId: string): ConversationRow | null {
+  const s = useSyncExternalStore(subscribe, snapshot, snapshot);
+  return useMemo(() => s.rows.find((r) => r.session_id === contextId) ?? null, [s.rows, contextId]);
+}
+
 export function subscribeForTest(l: () => void) {
   return subscribe(l);
 }

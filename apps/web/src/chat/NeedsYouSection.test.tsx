@@ -62,7 +62,7 @@ it.each(["agent-handoff", undefined])("opens the shared answer detail for source
     expect(detail).toBeTruthy();
     expect(detail.textContent).toContain("Can we ship?");
     expect(detail.querySelector("a")?.getAttribute("href")).toBe("https://example.com/pull/7");
-    expect(detail.textContent).toContain("Started in an agent-to-agent conversation");
+    expect(detail.textContent).toContain("Started in a conversation");
     const labels = [...detail.querySelectorAll("button")].map((button) => button.textContent);
     expect(labels).toEqual(expect.arrayContaining(["Send reply", "Done…", "Dismiss…"]));
     expect(labels).not.toContain("Open chat");

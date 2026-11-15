@@ -532,7 +532,7 @@ async function fillInput(value: string) {
 }
 
 it.each([
-  ["a2a-session", "Started in an agent-to-agent conversation"],
+  ["a2a-session", "Started in a conversation"],
   ["job:daily", "Started by a background job"],
   ["chat-deleted", "Its chat was deleted"],
 ])("opens the waiting detail for %s, with provenance and no chat jump", async (source, provenance) => {

@@ -10,6 +10,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ConversationRow } from "../../lib/api/chat";
+import { __resetForTest as resetConversationsStore } from "../../chat/conversations-store";
+
 const apiMock = vi.hoisted(() => ({
   setScheduleEnabled: vi.fn(async () => ({ job: {} })),
   cancelSchedule: vi.fn(async () => ({ canceled: true, undo_token: "tok-sched" })),
@@ -18,6 +21,10 @@ const apiMock = vi.hoisted(() => ({
   updateTask: vi.fn(async () => ({ issue: {} })),
   closeTask: vi.fn(async () => ({ issue: {} })),
   undo: vi.fn(async () => ({ restored: true, kind: "task" })),
+  // The waiting-task detail reads turns to tell a live source from a deleted one, and lists
+  // conversations to name a thread's caller for the §4.6 provenance link.
+  chatSessionTurns: vi.fn(async () => ({ turns: [] as unknown[] })),
+  listConversations: vi.fn(async () => ({ conversations: [] as ConversationRow[] })),
 }));
 vi.mock("../../lib/api", () => ({ api: apiMock, currentSlug: () => "test" }));
 
@@ -538,5 +545,80 @@ describe("Jobs in the list (§2, r1)", () => {
     await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([taskItem({ status: "closed", closed_at: "2026-11-09T10:00:00Z" })]) }) })));
     expect(host!.querySelectorAll("ul.work-group > li").length).toBe(0);
     expect(allText()).toContain("No jobs");
+  });
+});
+
+describe("Waiting-task provenance links into the conversation (§4.6)", () => {
+  function convRow(over: Partial<ConversationRow> = {}): ConversationRow {
+    return {
+      session_id: "ctx-55",
+      title: "Friction triage",
+      origin_label: "From Claude Code for Josh",
+      group: "for_you",
+      last_updated: "2026-11-14T09:00:00Z",
+      turn_count: 3,
+      active: false,
+      last_state: "input-required",
+      ...over,
+    };
+  }
+  function waiting(over: Partial<TaskRaw> = {}): WorkItem {
+    return taskItem({ status: "waiting", session_id: "ctx-55", ...over });
+  }
+  // The detail's source check + the conversations list both resolve asynchronously; poll the
+  // DOM until the "Checking source chat…" placeholder clears (or give up after a bounded wait).
+  async function settle() {
+    for (let i = 0; i < 50; i++) {
+      await act(async () => { await Promise.resolve(); });
+      if (!allText().includes("Checking source chat")) return;
+    }
+  }
+
+  // The store is a module singleton — reset so each case drives its own rows, not a leftover.
+  beforeEach(() => resetConversationsStore());
+
+  it("an A2A context becomes a TextLink to #/conversations/<id> that names the caller (r2)", async () => {
+    apiMock.listConversations.mockResolvedValueOnce({ conversations: [convRow()] });
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([waiting()]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settle();
+    const link = document.querySelector<HTMLAnchorElement>('a.pl-link[href="#/conversations/ctx-55"]');
+    expect(link).not.toBeNull();
+    // "From Claude Code for Josh" → "…from Claude Code for Josh" (the leading "From " dropped).
+    expect(link!.textContent).toBe("Started in a conversation from Claude Code for Josh");
+  });
+
+  it("falls back to the plain link text when the thread isn't listed (r2)", async () => {
+    apiMock.listConversations.mockResolvedValueOnce({ conversations: [] });
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([waiting()]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settle();
+    const link = document.querySelector<HTMLAnchorElement>('a.pl-link[href="#/conversations/ctx-55"]');
+    expect(link).not.toBeNull();
+    expect(link!.textContent).toBe("Started in a conversation");
+  });
+
+  it("a job: source keeps its plain 'Started by a background job' text, no link (r2)", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([waiting({ session_id: "job:weekly" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settle();
+    expect(allText()).toContain("Started by a background job");
+    expect(document.querySelector('a[href^="#/conversations/"]')).toBeNull();
+  });
+
+  it("a deleted chat keeps its plain 'Its chat was deleted' text, no link (r2)", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([waiting({ session_id: "chat-9" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settle();
+    expect(allText()).toContain("Its chat was deleted");
+    expect(document.querySelector('a[href^="#/conversations/"]')).toBeNull();
   });
 });
