@@ -174,6 +174,32 @@ def current_origin_session() -> str:
     return _ORIGIN_SESSION.get()
 
 
+# ``delegate_to``'s one-line ``summary`` of the ask, carried to the a2a send so it rides the
+# outgoing provenance as the thread ``title`` (docs/design/other-conversations.md §8). A
+# ContextVar for the same reason the origin session is one: the room path reaches
+# ``DelegateRegistry.dispatch`` through host-free ``graph/mention_op``. Default ``""`` means
+# "no summary" — no title is sent, exactly as before.
+_SUMMARY: ContextVar[str] = ContextVar("protoagent_delegate_summary", default="")
+
+
+@contextlib.contextmanager
+def delegate_summary(summary: str):
+    """Bind ``summary`` as the title for a2a delegations dispatched in the block. A blank
+    summary binds ``""`` (no title). See ``_SUMMARY`` for why this is a ContextVar."""
+    token = _SUMMARY.set(str(summary or ""))
+    try:
+        yield
+    finally:
+        _SUMMARY.reset(token)
+
+
+def current_summary() -> str:
+    """The ask summary bound by the enclosing ``delegate_summary`` block, or ``""``. Read by
+    ``DelegateRegistry.dispatch`` to fill the a2a thread ``title`` for the room path that
+    can't pass it explicitly."""
+    return _SUMMARY.get()
+
+
 def _digest(credential: str) -> str:
     """A short one-way digest of a delegate row's auth material (never the material itself)."""
     credential = str(credential or "")
