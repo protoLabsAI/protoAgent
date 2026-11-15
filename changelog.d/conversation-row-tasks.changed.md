@@ -1,0 +1,1 @@
+- **Conversation task summaries.** Conversation list rows now include the IDs, titles, and statuses of open tasks bound to their thread, using one task-store read per request and omitting the field when there are none.

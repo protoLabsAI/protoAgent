@@ -1618,7 +1618,8 @@ def register_chat_routes(app, ui: str) -> None:
         console chats (docs/design/other-conversations.md, slice S2). One row per context id, each
         carrying ``session_id``, ``title``, ``origin_label``, ``group`` (``for_you`` | ``automated``),
         ``last_updated``, ``turn_count``, ``active`` and ``last_state`` (the same meaning as
-        ``GET /api/chat/sessions/{id}``).
+        ``GET /api/chat/sessions/{id}``). Rows with open bound tasks also carry ``tasks`` summaries
+        (``id``, ``title``, ``status``).
 
         Never listed (spec §2 decision 1): the console chats (``chat-``), background jobs, the
         command palette, the Fleet Room, the Activity thread, and any thread opened incognito or
@@ -1693,8 +1694,23 @@ def register_chat_routes(app, ui: str) -> None:
         rows.sort(key=lambda s: (s["last_updated"] or "", s["session_id"]), reverse=True)
         rows.sort(key=lambda s: (0 if s["group"] == "for_you" else 1, s["_rank"]))
         rows = rows[:limit]
+        tasks_by_session: dict[str, list[dict[str, Any]]] = {}
+        tasks_store = getattr(STATE, "tasks_store", None)
+        if tasks_store is not None:
+            try:
+                # One snapshot for the page; keep synchronous store I/O off the event loop.
+                open_tasks = await asyncio.to_thread(tasks_store.list, include_closed=False)
+                for task in open_tasks:
+                    if session_id := task.get("session_id"):
+                        tasks_by_session.setdefault(session_id, []).append(
+                            {key: task[key] for key in ("id", "title", "status")}
+                        )
+            except Exception as exc:  # noqa: BLE001 — task enrichment must not hide conversations
+                log.warning("[chat] conversation tasks read failed: %s", exc)
         for s in rows:
             del s["_rank"]
+            if tasks := tasks_by_session.get(s["session_id"]):
+                s["tasks"] = tasks
         return {"conversations": rows}
 
     @app.post("/api/chat/sessions")
