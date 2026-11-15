@@ -118,12 +118,12 @@ export function ConversationsPane({ agentName }: { agentName: string }) {
   }
 
   return (
-    <section className="conversations-pane" aria-label="Conversations" ref={listRef}>
+    <section className="conversations-pane" aria-label="From others" ref={listRef}>
       <header className="conversations-pane__head">
         <Eyebrow>Read-only</Eyebrow>
-        <h2 className="conversations-pane__title">Conversations</h2>
+        <h2 className="conversations-pane__title">From others</h2>
         <p className="conversations-pane__sub">
-          Conversations other people and agents had with {agentName}. You can&rsquo;t type here.
+          Threads that other people and agents started with {agentName}. You can&rsquo;t type here.
         </p>
       </header>
 
@@ -131,7 +131,7 @@ export function ConversationsPane({ agentName }: { agentName: string }) {
         {conv.status === "loading" ? (
           // Deep-link first load (§5): the tab is normally never drawn while loading, so this
           // only shows when a link forced it open before the list arrived.
-          <SkeletonGroup className="conversations-skeletons" aria-label="Loading conversations">
+          <SkeletonGroup className="conversations-skeletons" aria-label="Loading threads from others">
             {Array.from({ length: 4 }, (_, i) => (
               <Skeleton key={i} height={44} />
             ))}
@@ -145,7 +145,7 @@ export function ConversationsPane({ agentName }: { agentName: string }) {
               </Button>
             }
           >
-            Couldn&rsquo;t load conversations. Check the connection, then try again.
+            Couldn&rsquo;t load threads from others. Check the connection, then try again.
           </Alert>
         ) : (
           <>

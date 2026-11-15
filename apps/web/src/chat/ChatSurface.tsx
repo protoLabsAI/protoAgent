@@ -129,7 +129,7 @@ export function ChatSurface({
     announcedAppearRef.current = true;
     const origin = conv.rows[0]?.origin_label.replace(/^From /i, "") || "another agent";
     setConvAnnounce(
-      `Conversations tab added: ${conv.count} conversation${conv.count === 1 ? "" : "s"} from ${origin}.`,
+      `From others tab added: ${conv.count} thread${conv.count === 1 ? "" : "s"} from ${origin}.`,
     );
   }, [conv.tabVisible, conv.count, conv.rows]);
   useEffect(() => {
@@ -167,7 +167,7 @@ export function ChatSurface({
     ? {
         id: CONVERSATIONS_STAGE_ID,
         pinned: true,
-        label: "Conversations",
+        label: "From others",
         icon: (
           <span className="conversations-tab__icon">
             <MessagesSquare size={14} aria-hidden />
@@ -180,7 +180,7 @@ export function ChatSurface({
           <>
             <span aria-hidden="true">{conv.count}</span>
             <span className="conversations-tab__sr">
-              {`, ${conv.count} conversation${conv.count === 1 ? "" : "s"}, ${conv.running} running${
+              {`, ${conv.count} thread${conv.count === 1 ? "" : "s"}, ${conv.running} running${
                 conv.needsYou > 0 ? `, ${conv.needsYou} needs you` : ""
               }, read-only`}
             </span>
@@ -433,6 +433,9 @@ export function ChatSurface({
     // which also returns to the chat the operator was reading.
     if (isConversationsStage(id)) {
       openContextMenu("chat-tab", e, {
+        // Desktop labels the shared pinned-tab menu "From others" (§9 C7a); the phone session
+        // sheet shares this entry but keeps "Conversations" until C7b renames that surface.
+        hideConversationsLabel: "Hide “From others”",
         onHideConversations: () => {
           hideConversationsTab();
           leaveConversationsForChat();
@@ -473,8 +476,10 @@ export function ChatSurface({
     openContextMenu("chat-tab", e, {
       onNew: () => createChatSession(),
       onNewIncognito: () => createChatSession({ incognito: true }),
-      // "Show Conversations tab" (§3.2) — offered only while the tab is hidden AND has rows to
-      // show but isn't already drawn (needs-you would already force it back on its own).
+      // "Show From others" (§9 C7a) — offered only while the tab is hidden AND has rows to show
+      // but isn't already drawn (needs-you would already force it back on its own). The label
+      // rides alongside; the registration reads it only when onShowConversations is present.
+      showConversationsLabel: "Show “From others”",
       onShowConversations:
         conv.hidden && conv.count > 0 && !conv.tabVisible ? () => showConversationsTab() : undefined,
     });
