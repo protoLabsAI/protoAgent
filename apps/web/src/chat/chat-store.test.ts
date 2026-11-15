@@ -1019,3 +1019,85 @@ describe("a HITL-answered turn (question → answer → reply on one task)", () 
     expect(byId("a1")?.parts?.some((p) => p.kind === "text" && p.text === reply)).toBe(true);
   });
 });
+
+// ── continueConversation (other-conversations C4, §4.5) ───────────────────────────────────────
+// "Continue in a new chat" opens and selects a fresh chat- tab, pre-fills its composer draft with
+// a human lead plus a HIDDEN recall_session reference to the source thread, and switches the
+// Conversations stage back to `chat` so the new tab is actually shown. Nothing is sent; no toast.
+// A fresh module graph per test so the store (and the conversations-store it drives, resolved from
+// the same reset cycle) start clean.
+describe("continueConversation (other-conversations C4)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  });
+
+  async function fresh() {
+    const chat = await import("./chat-store");
+    const conv = await import("./conversations-store");
+    const scratch = await import("./scratchState");
+    return { chat, conv, scratch };
+  }
+
+  const args = { contextId: "ctx-abc", title: "Release triage", origin: "From Claude Code for Josh" };
+
+  it("opens a fresh chat- tab, selects it, and never reuses the reserved Conversations id (r1)", async () => {
+    const { chat, conv } = await fresh();
+    conv.openThread(args.contextId); // the reader is open on the Conversations stage
+    const before = chat.chatStore.getSnapshot().sessions.length;
+
+    const session = chat.chatStore.continueConversation(args);
+
+    expect(session.id.startsWith("chat-")).toBe(true);
+    expect(session.id).not.toBe(conv.CONVERSATIONS_STAGE_ID);
+    const snap = chat.chatStore.getSnapshot();
+    expect(snap.sessions).toHaveLength(before + 1);
+    expect(snap.currentSessionId).toBe(session.id);
+    expect(snap.activeSessions).toContain(session.id);
+  });
+
+  it("switches the Conversations stage back to chat so the new tab shows (r1)", async () => {
+    const { chat, conv } = await fresh();
+    conv.openThread(args.contextId);
+    expect(conv.snapshotForTest().stage).toBe("conversations");
+
+    chat.chatStore.continueConversation(args);
+    expect(conv.snapshotForTest().stage).toBe("chat");
+  });
+
+  it("pre-fills the composer draft with the lead and a hidden recall_session reference (r1)", async () => {
+    const { chat, scratch } = await fresh();
+    const session = chat.chatStore.continueConversation(args);
+
+    const draft = scratch.loadDraft(session.id);
+    expect(draft).toBe(
+      chat.continueConversationDraft({ title: args.title, origin: args.origin, contextId: args.contextId }),
+    );
+    // The visible lead the operator finishes, verbatim per §4.5.
+    expect(draft.startsWith('About the conversation "Release triage" (From Claude Code for Josh): ')).toBe(true);
+    // The hidden reference the agent can act on: the context id in a recall_session call, tucked in
+    // an HTML comment — carried in the draft text itself, not a new wire field.
+    expect(draft).toContain('recall_session(session_id="ctx-abc")');
+    expect(draft).toContain("<!--");
+    expect(draft).toContain("-->");
+  });
+
+  it("sends nothing and shows no toast — the new empty, selected tab is the only feedback (r2)", async () => {
+    const { chat } = await fresh();
+    const session = chat.chatStore.continueConversation(args);
+    const snap = chat.chatStore.getSnapshot();
+    const created = snap.sessions.find((s) => s.id === session.id)!;
+    // No turn is run: the tab opens empty and idle; the operator edits and sends.
+    expect(created.messages).toEqual([]);
+    expect(snap.sessionStatusMap[session.id]).toBeUndefined();
+  });
+
+  it("continueConversationDraft is lead-first with the id hidden below (pure)", async () => {
+    const { chat } = await fresh();
+    const draft = chat.continueConversationDraft({ title: "Foo", origin: "A2A", contextId: "ctx-9" });
+    expect(draft).toBe(
+      'About the conversation "Foo" (A2A): \n\n<!-- Continuing session "ctx-9"; read its full transcript with recall_session(session_id="ctx-9"). -->',
+    );
+  });
+});
