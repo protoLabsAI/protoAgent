@@ -1,1 +1,0 @@
-- **The `memory_list_intent` eval accepts `recent_activity` as well as `memory_list`.** Asking what you did today can be answered from the activity digest or the memory log; the case no longer fails when the agent picks the digest. See #5314.

@@ -1,1 +1,0 @@
-- **Slimmer thread-reader header.** Reading a thread from others now shows a compact two-line header — **← Back** beside a shortened title (the full title on hover) and the status badge, then a muted "<who> · <date> · <count>" line (its long form on hover). The "Conversation · read-only" eyebrow is gone and the header is roughly a third shorter.
