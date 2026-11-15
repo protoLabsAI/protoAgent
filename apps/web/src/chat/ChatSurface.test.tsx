@@ -15,6 +15,8 @@ import {
   serverTurnRestoreAfterFailedCancel,
 } from "./ChatSurface";
 import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
+import * as conversationsStore from "./conversations-store";
+import type { ConversationRow } from "./conversations-store";
 
 describe("ChatSurface server-turn controls", () => {
   const control = { taskId: "task-server" };
@@ -192,6 +194,30 @@ const closeHarness = vi.hoisted(() => ({
   refetch: vi.fn(),
   goals: [] as { session_id: string; status: string; condition: string }[],
 }));
+// The C1 conversations store is mocked so the tab/pane render off a controllable snapshot (no
+// network, no bus). `state` is the exact object `useConversations()` returns; the mutators are
+// spies. `def()` is the no-tab default, so every test that doesn't opt in (incl. the close-
+// request suite above) sees the strip exactly as it is today.
+const convHarness = vi.hoisted(() => {
+  const def = () => ({
+    status: "ready" as "idle" | "loading" | "ready" | "error",
+    rows: [] as unknown[],
+    hasOlder: false,
+    loadingOlder: false,
+    hidden: false,
+    stage: "chat" as "chat" | "conversations",
+    openThreadId: null as string | null,
+    deepLink: false,
+    forYou: [] as unknown[],
+    automated: [] as unknown[],
+    count: 0,
+    running: 0,
+    needsYou: 0,
+    tabVisible: false,
+    loadOlder: vi.fn(),
+  });
+  return { def, state: def() };
+});
 vi.mock("@tanstack/react-query", async (original) => ({
   ...await original<typeof import("@tanstack/react-query")>(),
   useQuery: () => ({ data: { goals: closeHarness.goals }, refetch: closeHarness.refetch }),
@@ -208,6 +234,16 @@ vi.mock("../contextMenu", () => ({ openContextMenu: vi.fn() }));
 vi.mock("@protolabsai/ui/overlays", async (original) => ({
   ...await original<typeof import("@protolabsai/ui/overlays")>(),
   useToast: () => vi.fn(),
+}));
+vi.mock("./conversations-store", async (original) => ({
+  ...await original<typeof import("./conversations-store")>(),
+  useConversations: () => convHarness.state,
+  hide: vi.fn(),
+  show: vi.fn(),
+  openConversations: vi.fn(),
+  openChat: vi.fn(),
+  openThread: vi.fn(),
+  retry: vi.fn(),
 }));
 
 describe("ChatSurface close requests", () => {
@@ -341,5 +377,184 @@ describe("ChatSurface close requests", () => {
     await act(async () => resolve({ error: null, data: { goals: [] } }));
     expect(retireChatSession).not.toHaveBeenCalled();
     if (change !== "removed") expectDialog();
+  });
+});
+
+describe("ChatSurface Conversations tab (other conversations C2)", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const onError = vi.fn();
+
+  const row = (over: Partial<ConversationRow> = {}): ConversationRow => ({
+    session_id: "ctx-1",
+    title: "Friction triage",
+    origin_label: "From Claude Code for Josh",
+    group: "for_you",
+    last_updated: "2026-11-14T10:00:00Z",
+    turn_count: 13,
+    active: false,
+    last_state: "completed",
+    ...over,
+  });
+
+  function setConv(patch: Partial<typeof convHarness.state>) {
+    convHarness.state = { ...convHarness.state, ...patch };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetServerTurns();
+    closeHarness.goals = [];
+    convHarness.state = convHarness.def();
+    const snapshot = {
+      ...chatStore.getSnapshot(),
+      sessions: [{ id: "chat-1", title: "My chat", messages: [], createdAt: 1, updatedAt: 1 }],
+      currentSessionId: "chat-1",
+      activeSessions: [],
+      sessionStatusMap: {},
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+    };
+    vi.spyOn(chatStore, "getSnapshot").mockImplementation(() => snapshot);
+    vi.spyOn(chatStore, "switchSession").mockImplementation(() => {});
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: false, addEventListener() {}, removeEventListener() {},
+    });
+    // Radix Tooltip (the rows' full-timestamp tip) mounts cleanly in jsdom with this stub.
+    (window as unknown as { ResizeObserver?: unknown }).ResizeObserver ||= class { observe() {} unobserve() {} disconnect() {} };
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    resetServerTurns();
+    convHarness.state = convHarness.def();
+    vi.restoreAllMocks();
+  });
+
+  async function mount() {
+    await act(async () => root.render(h(ChatSurface, { onError })));
+  }
+  const pinnedTab = () => container.querySelector(".pl-tabbar__tab--pinned") as HTMLElement | null;
+
+  it.each([
+    ["while the list is loading", { status: "loading" as const, tabVisible: false }],
+    ["with zero rows in the window", { status: "ready" as const, count: 0, tabVisible: false }],
+    ["after Hide with nothing needing you", { status: "ready" as const, count: 3, hidden: true, tabVisible: false }],
+  ])("does not draw the tab %s (r1)", async (_label, patch) => {
+    setConv(patch);
+    await mount();
+    expect(pinnedTab()).toBeNull();
+  });
+
+  it("draws the tab pinned first, with no close button, once rows have loaded (r1)", async () => {
+    setConv({ tabVisible: true, count: 7, running: 1, rows: [row()], forYou: [row()] });
+    await mount();
+    const tabs = Array.from(container.querySelectorAll(".pl-tabbar__tab"));
+    expect(pinnedTab()).toBe(tabs[0]); // pinned first in the strip (§3.1)
+    expect(pinnedTab()!.textContent).toContain("Conversations");
+    expect(pinnedTab()!.querySelector(".pl-tabbar__close")).toBeNull();
+  });
+
+  it("offers Show on the background only while hidden with rows (r1)", async () => {
+    setConv({ status: "ready", count: 2, hidden: true, tabVisible: false });
+    await mount();
+    await act(async () => {
+      container.querySelector(".pl-tabbar")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    const bg = vi.mocked(openContextMenu).mock.calls.slice(-1)[0]![2] as { onShowConversations?: () => void };
+    expect(typeof bg.onShowConversations).toBe("function");
+    bg.onShowConversations!();
+    expect(conversationsStore.show).toHaveBeenCalled();
+  });
+
+  it("right-clicking the tab offers only Hide (no Close/rename), which hides and returns to chat (r2)", async () => {
+    setConv({ tabVisible: true, count: 1, rows: [row()], forYou: [row()] });
+    await mount();
+    await act(async () => pinnedTab()!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+    const ctx = vi.mocked(openContextMenu).mock.calls.slice(-1)[0]![2] as { onHideConversations?: () => void; onClose?: () => void };
+    expect(typeof ctx.onHideConversations).toBe("function");
+    expect(ctx.onClose).toBeUndefined();
+    ctx.onHideConversations!();
+    expect(conversationsStore.hide).toHaveBeenCalled();
+    expect(conversationsStore.openChat).toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ running: 1, needsYou: 0 }, ", 7 conversations, 1 running, read-only", "info", "warning"],
+    [{ running: 1, needsYou: 2 }, ", 7 conversations, 1 running, 2 needs you, read-only", "warning", "info"],
+  ])("names the count/status/read-only and colours the non-pulsing dot %o (r2)", async (counts, sr, on, off) => {
+    setConv({ tabVisible: true, count: 7, ...counts, rows: [row()], forYou: [row()] });
+    await mount();
+    const pinned = pinnedTab()!;
+    expect(pinned.querySelector(".conversations-tab__sr")!.textContent).toBe(sr);
+    expect(pinned.querySelector(`.conversations-tab__icon .pl-dot--${on}`)).not.toBeNull();
+    expect(pinned.querySelector(`.conversations-tab__icon .pl-dot--${off}`)).toBeNull();
+    expect(pinned.querySelector(".pl-dot--pulse")).toBeNull();
+  });
+
+  it("selecting the tab switches stage; selecting a chat tab returns without changing currentSessionId (r3)", async () => {
+    setConv({ tabVisible: true, stage: "chat", count: 1, rows: [row()], forYou: [row()] });
+    await mount();
+    await act(async () => pinnedTab()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(conversationsStore.openConversations).toHaveBeenCalled();
+    expect(chatStore.switchSession).not.toHaveBeenCalled();
+    const chatTab = Array.from(container.querySelectorAll(".pl-tabbar__tab"))[1];
+    await act(async () => chatTab.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(conversationsStore.openChat).toHaveBeenCalled();
+    expect(chatStore.switchSession).toHaveBeenCalledWith("chat-1");
+    expect(chatStore.getSnapshot().currentSessionId).toBe("chat-1");
+  });
+
+  it("shows the read-only list pane (no composer) with For you, a collapsed Automated disclosure and Show older (r3)", async () => {
+    setConv({
+      tabVisible: true, stage: "conversations", count: 3, hasOlder: true, forYou: [row()],
+      automated: [row({ session_id: "ctx-2", title: "Nightly sweep", origin_label: "From another agent", group: "automated" })],
+    });
+    await mount();
+    const pane = container.querySelector(".conversations-pane")!;
+    expect(pane.querySelector("h2")!.textContent).toBe("Conversations");
+    expect(pane.querySelector(".pl-eyebrow")!.textContent).toBe("Read-only");
+    expect(pane.textContent).toContain("other people and agents had with");
+    expect(pane.textContent).toContain("type here");
+    const disclosure = pane.querySelector(".conversations-disclosure")!;
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(disclosure.getAttribute("aria-controls")).toBe("conversations-automated");
+    expect(pane.querySelector("#conversations-automated")!.hasAttribute("hidden")).toBe(true);
+    expect(pane.textContent).toContain("Show older");
+    expect(pane.querySelector("textarea")).toBeNull(); // no composer
+    expect((container.querySelector(".chat-session-pool") as HTMLElement).style.display).toBe("none");
+  });
+
+  it("renders a 4-row skeleton while a deep link loads (r4)", async () => {
+    setConv({ status: "loading", tabVisible: true, stage: "conversations", deepLink: true });
+    await mount();
+    expect(container.querySelectorAll(".conversations-skeletons .pl-skel").length).toBe(4);
+  });
+
+  it("renders the failed state with a working Try again (r4)", async () => {
+    setConv({ status: "error", tabVisible: true, stage: "conversations" });
+    await mount();
+    const pane = container.querySelector(".conversations-pane")!;
+    expect(pane.querySelector(".pl-alert--error")).not.toBeNull();
+    expect(pane.textContent).toContain("load conversations");
+    const retry = Array.from(pane.querySelectorAll("button")).find((b) => b.textContent === "Try again")!;
+    await act(async () => retry.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(conversationsStore.retry).toHaveBeenCalled();
+  });
+
+  it("in the automated-only state, For you says nothing started and Automated opens by default (r4)", async () => {
+    setConv({
+      status: "ready", tabVisible: true, stage: "conversations", count: 2, forYou: [],
+      automated: [row({ session_id: "ctx-9", group: "automated", origin_label: "From another agent" })],
+    });
+    await mount();
+    const pane = container.querySelector(".conversations-pane")!;
+    expect(pane.textContent).toContain("Nothing started for you this week.");
+    expect(pane.querySelector(".conversations-disclosure")!.getAttribute("aria-expanded")).toBe("true");
+    expect(pane.querySelector("#conversations-automated")!.hasAttribute("hidden")).toBe(false);
   });
 });

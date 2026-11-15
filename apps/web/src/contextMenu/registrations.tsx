@@ -254,7 +254,22 @@ registerContextMenu({
     onCloseOthers?: () => void;
     onCloseLeft?: () => void;
     onCloseRight?: () => void;
+    // "Other conversations" (docs/design/other-conversations.md §3.2): the pinned Conversations
+    // tab's only right-click action is Hide; the tab-bar background gains Show while it's hidden.
+    onHideConversations?: () => void;
+    onShowConversations?: () => void;
   }): MenuEntry[] => {
+    // The Conversations tab is not a chat — its menu is a single Hide entry, nothing else.
+    if (ctx?.onHideConversations) {
+      return [
+        {
+          id: "hide-conversations",
+          label: "Hide Conversations tab",
+          icon: <EyeOff size={14} />,
+          run: () => ctx.onHideConversations?.(),
+        },
+      ];
+    }
     const out: MenuEntry[] = [
       { id: "new", label: "New chat", icon: <Plus size={14} />, run: () => ctx?.onNew?.() },
       {
@@ -308,6 +323,16 @@ registerContextMenu({
         out.push({ id: "bulk-div", divider: true });
         out.push(...bulk);
       }
+    }
+    // Background menu, tab hidden (§3.2): bring the Conversations tab back. Sits alongside the
+    // New chat affordances this menu already hosts.
+    if (ctx?.onShowConversations) {
+      out.push({
+        id: "show-conversations",
+        label: "Show Conversations tab",
+        icon: <Eye size={14} />,
+        run: () => ctx.onShowConversations?.(),
+      });
     }
     return out;
   },

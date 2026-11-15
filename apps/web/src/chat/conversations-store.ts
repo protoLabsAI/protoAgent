@@ -156,6 +156,12 @@ function refetch(initial: boolean) {
     });
 }
 
+/** Re-run the initial windowed fetch after a failure — the list pane's "Try again" (§5). Shows
+ *  the loading state again, then ready or error. Safe to call anytime; a newer fetch wins. */
+export function retry() {
+  refetch(true);
+}
+
 /** Page back 50 older rows with `before=<oldest last_updated>` (§4.3). */
 function loadOlder() {
   if (state.loadingOlder || !state.rows.length) return;
