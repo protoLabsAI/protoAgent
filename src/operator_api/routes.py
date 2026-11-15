@@ -10,6 +10,7 @@ import re
 import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, Literal
 
@@ -522,6 +523,33 @@ def _delete_task_with_undo(task_svc: _TaskStoreAdapter, project_path: str, issue
     return result
 
 
+def _with_task_activity(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach an ``activity`` of ``driven`` | ``idle`` | ``stalled`` to every ``in_progress``
+    task (ADR 0129 D9 item 5); other statuses are returned untouched.
+
+    Computed ONCE per request against a single ``default_sources()`` — not per task — so a
+    busy board doesn't re-wire the live signals for every row. The whole annotation is
+    best-effort: if building the sources or reading them raises, the field is left off every
+    task (the console then falls back to its prior behaviour) rather than failing the list
+    (D9 fail-quiet). A board with no in-progress task skips the live read entirely."""
+    if not any((issue.get("status") or "") == "in_progress" for issue in issues):
+        return issues
+    try:
+        from tasks.stall import default_sources, task_activity
+
+        sources = default_sources()
+        now = datetime.now(UTC)
+        out: list[dict[str, Any]] = []
+        for issue in issues:
+            if (issue.get("status") or "") == "in_progress":
+                issue = {**issue, "activity": task_activity(issue, now=now, sources=sources)}
+            out.append(issue)
+        return out
+    except Exception:  # noqa: BLE001 — activity is advisory; never fail the list (D9)
+        log.warning("[tasks] computing task activity failed; returning issues unannotated", exc_info=True)
+        return issues
+
+
 def _bg_job_out(job) -> dict:
     """A background job for the console, its ``error`` redacted on the way out (#4726).
 
@@ -768,6 +796,9 @@ def register_operator_routes(
         _require_tasks()
         try:
             issues = await asyncio.to_thread(task_svc.list, project_path)
+            # Tag each in_progress row driven | idle | stalled (ADR 0129 D9 item 5), off the
+            # loop with the (potentially IO-bound) list read; best-effort, never 500s.
+            issues = await asyncio.to_thread(_with_task_activity, issues)
             return {"issues": issues}
         except Exception as exc:
             raise _http_error(exc) from exc
