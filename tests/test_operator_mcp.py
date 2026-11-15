@@ -25,6 +25,11 @@ def _bare_state(monkeypatch):
     for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store"):
         monkeypatch.setattr(STATE, attr, None, raising=False)
     monkeypatch.setattr(STATE, "plugin_tools", [], raising=False)
+    # _boot_stores_only installs a local bus as HOST.publish when none is set; restore it
+    # after every test so a boot here can't leak a publisher into the rest of the suite.
+    from graph.plugins import host
+
+    monkeypatch.setattr(host.HOST, "publish", None)
 
 
 def test_resolver_lives_in_runtime_and_is_reexported():
@@ -81,9 +86,6 @@ def test_boot_stores_builds_skills_index(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)  # skip real TaskStore
     monkeypatch.setattr(STATE, "skills_index", None, raising=False)
-    from graph.plugins import host
-
-    monkeypatch.setattr(host.HOST, "publish", None)  # the boot's local bus must not leak
 
     cfg = _cfg([])
     cfg.skills_db_path = str(tmp_path / "skills.db")  # don't touch the real DB
