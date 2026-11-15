@@ -29,7 +29,11 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from a2a_impl import conversation_origin
+from a2a_impl import conversation_origin, conversation_policy
+from a2a_impl.conversation_policy import (
+    CONVERSATION_WINDOW_DAYS as _CONVERSATION_WINDOW_DAYS,
+    listed_outside_thread,
+)
 from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first
 from infra.paths import package_version
 from runtime.session_ids import SessionId, require_session_id, session_id_problem
@@ -420,18 +424,10 @@ async def session_summary(session_id: str) -> dict | None:
 # The Conversations tab lists the A2A threads this agent had with someone OTHER than the operator's
 # own console chats, read-only. Everything here is DISPLAY-ONLY — never an authorization input.
 
-#: Context-id prefixes the Conversations list never shows (spec §2 decision 1). ``chat-`` is the
-#: console's own chat tabs; ``job:`` / ``background:`` are the server's own job sessions
-#: (``a2a_impl.executor._SERVER_CONTEXT_PREFIXES``, ``events.JOB_CONTEXT_PREFIX``); ``system:`` is
-#: the durable Activity thread (``events.ACTIVITY_CONTEXT`` = ``system:activity``); ``palette-`` is
-#: the command palette AND the Fleet Room's member DMs (both ride the console's ``palette-`` chat
-#: contexts, the way ``graph/middleware/memory.py`` classifies them). Incognito / hidden threads are
-#: dropped separately, off the opening turn's stored metadata.
-_CONVERSATION_EXCLUDE_PREFIXES = ("chat-", "job:", "background:", "system:", "palette-")
+_CONVERSATION_EXCLUDE_PREFIXES = conversation_policy.CONVERSATION_EXCLUDE_PREFIXES
 #: Sessions the server mints for an API caller (``_mint_session_id`` / ``_v1_session_id``). With no
 #: stored origin they read as "From the API" rather than the generic "From another agent" (§4.2).
 _API_SESSION_PREFIXES = ("api-", "openai-compat-")
-_CONVERSATION_WINDOW_DAYS = 7
 _CONVERSATION_LIMIT_CAP = 50
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")  # [text](url) -> text
@@ -604,8 +600,7 @@ async def _conversation_index(engine, *, before, cutoff, pool_cap: int):
     async with engine.begin() as conn:
         tombstones = await _ensure_chat_tombstones(conn)
         where = ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id))
-        for prefix in _CONVERSATION_EXCLUDE_PREFIXES:
-            where = where & ~TaskModel.context_id.like(f"{prefix}%")
+        where = where & listed_outside_thread(TaskModel.context_id)
         newest = _newest_turn_ranked(TaskModel, conn.dialect.name, where)
         summary_q = select(
             newest.c.context_id, newest.c.task_id, newest.c.status, newest.c.turn_count, newest.c.last_updated
