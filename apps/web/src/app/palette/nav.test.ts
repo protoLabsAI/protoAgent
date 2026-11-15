@@ -4,6 +4,13 @@ import { useUI } from "../../state/uiStore";
 import { applyNavIntent, navigate, openView, setPaletteNavigator } from "./nav";
 import type { NavIntent } from "./nav";
 import { registeredPaletteCommands } from "../../ext/paletteRegistry";
+import {
+  hide as hideConversationsTab,
+  show as showConversationsTab,
+  isTabVisible,
+  snapshotForTest as conversationsSnapshot,
+  __resetForTest as resetConversationsStore,
+} from "../../chat/conversations-store";
 import "./registry";
 
 // The dock-routing chokepoint (finding 14) had NO test, which is how it silently no-opped
@@ -202,6 +209,52 @@ describe("applyNavIntent — surface: opens the large shell MODAL on a section (
       applyNavIntent(JSON.parse(JSON.stringify(intent)) as NavIntent);
       expect(useUI.getState().surfaceModal).toEqual({ viewId: "work", state: { section } });
     }
+  });
+});
+
+describe("applyNavIntent — conversation: the #/conversations/<id> deep link (§4.6)", () => {
+  beforeEach(() => {
+    resetConversationsStore();
+    showConversationsTab(); // start each case from the un-hidden default
+  });
+
+  it("opens the thread and forces the Conversations tab open even when this device hid it", () => {
+    // Come from another surface, with the device having hidden the tab.
+    useUI.setState({ surface: "knowledge", mobileActive: "knowledge" });
+    hideConversationsTab();
+    expect(isTabVisible(conversationsSnapshot())).toBe(false);
+
+    applyNavIntent({ kind: "conversation", contextId: "ctx-42" });
+
+    const conv = conversationsSnapshot();
+    expect(conv.deepLink).toBe(true);
+    expect(conv.stage).toBe("conversations");
+    expect(conv.openThreadId).toBe("ctx-42");
+    // The deep-link override wins over the device's hide preference — the tab shows regardless.
+    expect(isTabVisible(conv)).toBe(true);
+    // The chat surface — which hosts the pinned Conversations tab — comes to the front, on
+    // desktop (surface) and phone (mobileActive).
+    const ui = useUI.getState();
+    expect(ui.surface).toBe("chat");
+    expect(ui.mobileActive).toBe("chat");
+  });
+
+  it("the reserved stage id is never treated as a thread (store guard holds)", () => {
+    applyNavIntent({ kind: "conversation", contextId: "conversations" });
+    // openDeepLink's guard keeps the reserved id out of openThreadId; the tab still opens.
+    const conv = conversationsSnapshot();
+    expect(conv.openThreadId).toBeNull();
+    expect(conv.stage).toBe("conversations");
+    expect(conv.deepLink).toBe(true);
+  });
+
+  it("routes through navigate() so the launcher forwards it to the main window", () => {
+    const sink = vi.fn();
+    setPaletteNavigator(sink);
+    navigate({ kind: "conversation", contextId: "ctx-7" });
+    expect(sink).toHaveBeenCalledWith({ kind: "conversation", contextId: "ctx-7" });
+    // The shell-less launcher window must not touch the store — it hands the intent off.
+    expect(conversationsSnapshot().openThreadId).toBeNull();
   });
 });
 

@@ -19,16 +19,18 @@ import { useWorkActionSize } from "../../shell/SurfaceFrame";
  * Edit (the existing PATCH, reusing `TaskCreateDialog`) and Delete…, which hands back an
  * `undo_token` (bd-0ia51.5) driving the §4.5 undo toast.
  */
-import { useRef, useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
-import { Button, Callout } from "@protolabsai/ui/primitives";
+import { Button, Callout, TextLink } from "@protolabsai/ui/primitives";
 import { FormField, Input } from "@protolabsai/ui/forms";
 import { CircleDashed } from "lucide-react";
 import { WorkEmpty as Empty } from "../WorkEmpty";
 import { useToast } from "@protolabsai/ui/overlays";
 
 import { chatStore } from "../../chat/chat-store";
+import { useConversationRow } from "../../chat/conversations-store";
+import { navigate } from "../../app/palette/nav";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
 import type { Task } from "../../lib/types";
@@ -144,6 +146,13 @@ function jobMeta(item: WorkItem): string {
   return typeAndPriority(task);
 }
 
+/** The caller name for the provenance link — the conversation row's origin label with its
+ *  leading "From " / "Delegation from " dropped so it reads "…from Claude Code" (§4.6). Empty
+ *  when the thread isn't listed yet, which falls back to the plain "Started in a conversation". */
+function conversationOrigin(originLabel: string | undefined): string {
+  return (originLabel ?? "").replace(/^(from|delegation from)\s+/i, "").trim();
+}
+
 async function sourceHasTurns(sessionId: string): Promise<boolean> {
   if (!sessionId) return false;
   const result = await api.chatSessionTurns(sessionId, 1);
@@ -164,6 +173,9 @@ function WaitingTaskDetail({ task, actions, openChat, refresh }: {
   // Retrying finishes the same reply instead of creating another chat or turn.
   const attempt = useRef<{ sessionId: string; id: string; text: string; sent: boolean; fresh: boolean } | null>(null);
   const source = task.session_id ?? "";
+  // The conversation row (if this agent lists the thread) names who started it, for the §4.6
+  // provenance link. Unknown → the plain "Started in a conversation".
+  const convRow = useConversationRow(source);
   const history = useQuery({
     queryKey: ["work-task-source", task.id, source],
     queryFn: () => sourceHasTurns(source),
@@ -216,8 +228,22 @@ function WaitingTaskDetail({ task, actions, openChat, refresh }: {
   if (history.data && !history.isError && openChat) waitingActions.push({
     id: "open-chat", label: "Open chat", run: async () => openChat(source),
   });
-  const provenance = source.startsWith("job:") ? "Started by a background job"
-    : source.startsWith("chat-") ? "Its chat was deleted" : "Started in an agent-to-agent conversation";
+  // An A2A context's provenance links into its read-only thread at `#/conversations/<source>`
+  // (§4.6), naming the caller when the Conversations list knows it. A `job:` or deleted-`chat-`
+  // source has no thread to open, so those stay as plain muted text.
+  const origin = conversationOrigin(convRow?.origin_label);
+  const provenance: ReactNode = source.startsWith("job:") ? "Started by a background job"
+    : source.startsWith("chat-") ? "Its chat was deleted"
+    // A real A2A context links into its thread; a missing source (no context to open) keeps the
+    // plain text rather than a dead `#/conversations/` link.
+    : source ? (
+      <TextLink
+        href={`#/conversations/${source}`}
+        onClick={(event) => { event.preventDefault(); navigate({ kind: "conversation", contextId: source }); }}
+      >
+        {origin ? `Started in a conversation from ${origin}` : "Started in a conversation"}
+      </TextLink>
+    ) : "Started in a conversation";
   return <WorkDetail title={task.title} status="needs-you" type="Job" technical={{ Id: task.id }}
     onUndo={async (token) => { await api.undo(token); await refresh(); }}
     actions={send.isPending ? [] : [...waitingActions, ...actions]}

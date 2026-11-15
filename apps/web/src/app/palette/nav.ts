@@ -8,7 +8,7 @@ import { flushSync } from "react-dom";
 
 import { useUI } from "../../state/uiStore";
 import { chatStore } from "../../chat/chat-store";
-import { openChat as leaveConversationsForChat } from "../../chat/conversations-store";
+import { openChat as leaveConversationsForChat, openDeepLink as openConversationsDeepLink } from "../../chat/conversations-store";
 import { agentHref } from "../../lib/api";
 import { seedKnowledgeSearch } from "../../knowledge/searchSeed";
 import { runBindingById } from "../../keybindings/useKeybindings";
@@ -88,6 +88,14 @@ export type NavIntent =
   // launcher boundary like every other navigation, and so the id is validated in the window
   // that owns the store — see `applyNavIntent`.
   | { kind: "chat"; sessionId: string }
+  // Open a read-only Conversations thread by context id — the `#/conversations/<context_id>`
+  // deep link (docs/design/other-conversations.md §4.6). Work's provenance line (and, in C6b,
+  // the Needs you "Open conversation" button) point here. An INTENT, not a direct store poke,
+  // so it forwards to the main window from the launcher like every other navigation, and so the
+  // conversations store + chat surface it touches are driven in the window that owns them (see
+  // `applyNavIntent`). `contextId` is a real A2A context id — never a `chat-`/`job:` id, which
+  // the caller filters out before building the link.
+  | { kind: "conversation"; contextId: string }
   // Open a surface in the large shell MODAL on a specific saved place (#4955 §3.6 — the Work
   // hub's palette rows). A separate arm from `{ kind: "view" }` because that one DOCKS/ROUTES
   // to a rail; this one opens the modal via `openSurfaceModal`, carrying the view's
@@ -191,6 +199,16 @@ export function applyNavIntent(intent: NavIntent) {
       openView("chat");
       break;
     }
+    case "conversation":
+      // Force the Conversations tab open on the thread (§4.6): `openDeepLink` shows the tab even
+      // when this device hid it (the `deepLink` override wins in `isTabVisible`), selects the
+      // `conversations` stage and opens the thread; `openView("chat")` brings the chat surface —
+      // which hosts the pinned tab — to the front on desktop and sets `mobileActive` so the phone
+      // shows the thread full screen (C5). The reader renders over the list while a thread is
+      // open, so the deep link lands straight on the conversation.
+      openConversationsDeepLink(intent.contextId);
+      openView("chat");
+      break;
   }
 }
 
