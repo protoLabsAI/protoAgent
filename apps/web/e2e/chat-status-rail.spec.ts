@@ -102,7 +102,7 @@ for (const width of [1440, 390]) {
       // useInnerText: the phone hides the wordy spans with CSS; textContent would still see them.
       await expect(doing).toHaveText(width === 390 ? "2" : "Doing now · goal 3/8 · 2", { useInnerText: true });
       await expect(coming).toHaveText(width === 390 ? "1" : "Coming up 1", { useInnerText: true });
-      await expect(told).toHaveText(width === 390 ? "2" : "Told it 2", { useInnerText: true });
+      await expect(told).toHaveText(width === 390 ? "2" : "Instructions 2", { useInnerText: true });
       // (The exact spoken labels are pinned once, in ChatStatusRail.test.tsx — not re-checked here.)
 
       // Nothing scrolls sideways (§6, the 390px / 400%-zoom rule).
@@ -171,7 +171,7 @@ for (const width of [1440, 390]) {
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
 
-      // The ledger failed: the Told it chip renders in its problem state without a count.
+      // The ledger failed: the Instructions chip renders in its problem state without a count.
       // (Its exact spoken label is pinned once, in ChatStatusRail.test.tsx.)
       const told = page.getByTestId("chat-status-chip-instructions");
       await expect(told).toHaveClass(/chat-status-chip--problem/);

@@ -177,7 +177,7 @@ describe("chips", () => {
       ["doing-now", "Doing now · goal 3/8 · 2",
         "Doing now, 2 running in this chat, including the goal at step 3 of 8. Show details"],
       ["coming-up", "Coming up 3", "Coming up: 3 not started in this chat. Show details"],
-      ["instructions", "Told it 1", "Told it: 1 instruction in force in this chat. Show details"],
+      ["instructions", "Instructions 1", "Instructions: 1 instruction in force in this chat. Show details"],
     ];
     for (const [id, text, label] of table) {
       expect(chip(id)!.textContent).toBe(text);
@@ -197,12 +197,12 @@ describe("chips", () => {
     expect(state.ledgerSessions[0]).toBe(SESSION);
   });
 
-  it("uses the spinner with no goal, pluralizes Told it, and keeps only started blocked work in Doing now", async () => {
+  it("uses the spinner with no goal, pluralizes Instructions, and keeps only started blocked work in Doing now", async () => {
     await render(rail([bg("bg-run", "running", SESSION), directive("d1", SESSION), directive("d2", SESSION)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");
     expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeTruthy();
     expect(chip("instructions")!.getAttribute("aria-label"))
-      .toBe("Told it: 2 instructions in force in this chat. Show details");
+      .toBe("Instructions: 2 instructions in force in this chat. Show details");
     await render(rail(MIXED));
     expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull(); // goal → target icon
     // started: false is the selector's only "never ran" proof — absent means it did start.
@@ -226,7 +226,7 @@ describe("details panel", () => {
     expect(chip("instructions")!.getAttribute("aria-haspopup")).toBe("dialog");
     expect(chip("instructions")!.getAttribute("aria-expanded")).toBe("true");
 
-    // Exactly one section — "Your instructions · N", Work's own name (never "Told it"), the
+    // Exactly one section — "Your instructions · N", Work's full group name, the
     // count in the h2's accessible name. No Needs you, no other group, no People picker.
     expect(panel!.querySelectorAll("section")).toHaveLength(1);
     expect([...panel!.querySelectorAll("h2")].map((h) => [h.textContent, h.getAttribute("aria-label")])).toEqual([
@@ -346,6 +346,17 @@ describe("details panel", () => {
     expect(chip("doing-now")).toBeNull();
   });
 
+  it("keeps the Instructions label when its group empties while details are open", async () => {
+    await render(rail([directive("d1", SESSION)]));
+    await click(chip("instructions"));
+    await render(rail([]));
+    expect(dialog()).toBeTruthy();
+    expect(chip("instructions")!.textContent).toBe("Instructions");
+    expect(chip("instructions")!.getAttribute("aria-label"))
+      .toBe("Instructions: no instructions in force in this chat. Show details");
+    expect(chip("instructions")!.querySelector(".chat-status-chip__count")).toBeNull();
+  });
+
   it("traps Tab inside the panel and returns focus to the chip on Escape", async () => {
     await render(rail(MIXED));
     await click(chip("doing-now"));
@@ -402,7 +413,8 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
     // chat's failure down to "stale" — the downgrade that used to hide the failure here.
     await render(rail([bg("bg-run", "running", SESSION)], {}, { status: "stale", error: new Error("down") }));
     const told = chip("instructions")!;
-    expect(told.getAttribute("aria-label")).toBe("Told it: couldn't check instructions in this chat. Show details");
+    expect(told.textContent).toBe("Instructions");
+    expect(told.getAttribute("aria-label")).toBe("Instructions: couldn't check instructions in this chat. Show details");
     expect(told.querySelector(".chat-status-chip__count")).toBeNull();
     await click(told);
     const panel = dialog()!;
@@ -426,7 +438,7 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
     // but THIS chat's instructions are current — no stale note, no Load again, no problem chip.
     for (const status of ["stale", "error"] as const) {
       await render(rail([directive("d1", SESSION)], {}, { status, error: new Error("elsewhere") }));
-      expect(chip("instructions")!.textContent).toBe("Told it 1");
+      expect(chip("instructions")!.textContent).toBe("Instructions 1");
       await click(chip("instructions"));
       const panel = dialog()!;
       expect(panel.textContent).not.toContain("may be out of date");
@@ -441,7 +453,7 @@ describe("instructions failure (preserved from the ledger strip, scoped to THIS 
   it("keeps the retained count on a stale local refresh, offers Load again, and omits empty groups", async () => {
     state.ledger = { state: "stale", loadedAt: 1, refresh: vi.fn() };
     await render(rail([directive("d1", SESSION)], {}, { status: "ready" }));
-    expect(chip("instructions")!.textContent).toBe("Told it 1");
+    expect(chip("instructions")!.textContent).toBe("Instructions 1");
     await click(chip("instructions"));
     const panel = dialog()!;
     // The empty running/planned groups render no section at all.
@@ -476,7 +488,7 @@ describe("live region", () => {
     const region = regions[0];
     expect(region.getAttribute("aria-live")).toBe("polite");
     expect(region.textContent).toBe("");
-    expect(chip("instructions")!.textContent).toBe("Told it 1");
+    expect(chip("instructions")!.textContent).toBe("Instructions 1");
 
     // The job ends: the tied approval leaves the count in the same update, and the whole rail
     // empties — but the announcement is a TEXT CHANGE inside the SAME long-lived node (a
