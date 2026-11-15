@@ -123,6 +123,10 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   // (fleetPalette.ts) and a different shape, so the switcher must not share it.
   { id: "fleet.switcherRecent", area: "local", pattern: /^protoagent\.fleet\.switcherRecent$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "fleet.collapsed", area: "local", pattern: /^protoagent\.fleet\.collapsed$/, category: "prefs", slug: noSlug, evictable: false },
+  // Other conversations (docs/design/other-conversations.md §4.7): whether this device has HIDDEN
+  // the Conversations tab. Per device, not the S6 server chat list — hiding on one browser never
+  // hides it on another. Per agent, like the chat list itself.
+  { id: "conversations.hidden", area: "local", pattern: new RegExp(`^protoagent\\.conversations\\.hidden(?::${SLUG})?$`), category: "prefs", slug: (m) => hostOr(m[1]), evictable: false },
   { id: "palette.recent", area: "local", pattern: /^protoagent\.palette\.recent$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "codePane.widened", area: "local", pattern: /^protoagent\.codePane\.widened$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "kb.openGroups", area: "local", pattern: /^protoagent\.kb\.openGroups$/, category: "prefs", slug: noSlug, evictable: false },
