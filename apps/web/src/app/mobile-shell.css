@@ -113,6 +113,48 @@
   min-height: 0;
 }
 
+/* ── Conversations layer (§3.7) ──────────────────────────────────────────────
+   The read-only Conversations list / thread, full screen over the chat root. Opaque and
+   full-bleed like `.mshell-pushed`, so the covered (and inert) chat doesn't show through. */
+.mshell-conversations {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  background: var(--pl-color-bg);
+}
+/* `ConversationsPane` renders its list root (`.conversations-pane`) or the thread reader
+   (`.conversation-reader`) as the single child — fill the layer and scroll internally, the
+   same contract as a pushed surface. */
+.mshell-conversations > .conversations-pane,
+.mshell-conversations > .conversation-reader {
+  flex: 1 1 0;
+  min-height: 0;
+}
+/* The shell header already carries ← List on a thread (§3.7), so the reader's own in-band
+   Back to list button is redundant here — drop it, keeping the eyebrow / title / badge band. */
+.mshell-conversations .conversation-reader__back {
+  display: none;
+}
+/* The footer stacks on the phone: the note, then Continue in a new chat and Copy link, each
+   full width (§3.7). The note already sits above the actions; this stacks the two buttons. */
+.mshell-conversations .conversation-reader__footer-actions {
+  flex-direction: column;
+}
+.mshell-conversations .conversation-reader__footer-actions > .pl-btn {
+  width: 100%;
+  min-height: 44px;
+}
+/* Clear the home indicator, like the chat composer does — inset the footer's bottom edge. */
+.mshell-conversations .conversation-reader__footer {
+  padding-bottom: max(calc(env(safe-area-inset-bottom) - 12px), var(--pl-space-3));
+}
+/* The ← List header back keeps the 44px touch floor (it is a text+icon button, not `icon`). */
+.mshell-back-list {
+  min-height: 44px;
+}
+
 /* `.chat-stage` is `grid-template-rows: auto minmax(0,1fr)` — the `auto` row is the DS
    TabBar, which this shell removes (SessionSheet replaces it). Left as-is, the session
    pool lands in the `auto` row and sizes to CONTENT while the `1fr` row sits empty below
@@ -206,6 +248,38 @@
 .session-sheet-del {
   min-width: 44px;
   min-height: 44px;
+}
+
+/* The pinned Conversations item (§3.7) — the phone's version of the desktop tab, sitting above
+   the chat rows. A DS ghost Button laid out like `.session-sheet-pick`: icon · label · count ·
+   status dot · muted "Read-only", left-aligned, on the 44px touch floor. No delete ✕. */
+.session-sheet-convo {
+  width: 100%;
+  justify-content: flex-start;
+  gap: var(--pl-space-2);
+  min-height: 44px;
+}
+.session-sheet-convo-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.session-sheet-convo-count {
+  color: var(--pl-color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.session-sheet-convo-ro {
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-sm);
+}
+/* The divider after the item (§3.7), separating it from the chat rows below. */
+.session-sheet-divider {
+  height: var(--pl-border-width);
+  margin: var(--pl-space-2) 0;
+  background: var(--pl-color-border);
 }
 
 /* ── Toasts ──────────────────────────────────────────────────────────────────

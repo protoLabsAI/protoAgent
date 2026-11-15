@@ -1,11 +1,19 @@
+import { useQuery } from "@tanstack/react-query";
 import { StatusDot } from "@protolabsai/ui/data";
 import { Button } from "@protolabsai/ui/primitives";
 import { ChevronDown, ChevronLeft, Menu, Plus, Search } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 
 import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
-import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
+import { ConversationsPane } from "../chat/ConversationsPane";
+import {
+  backToList as backToConversationsList,
+  openChat as leaveConversationsForChat,
+  useConversations,
+} from "../chat/conversations-store";
 import { useKbIntents } from "../keybindings/intents";
+import { brandName } from "../lib/brand";
+import { runtimeStatusQuery } from "../lib/queries";
 import { SessionSheet } from "./SessionSheet";
 
 // The shell owns the action; chat places it above its variable-height composer.
@@ -56,6 +64,17 @@ export function MobileWorkHandle() {
       </svg>
     </Button>
   );
+}
+
+// The pinned Conversations tab, full screen on the phone (docs/design/other-conversations.md §3.7).
+// Reuses the C2/C3 `ConversationsPane` verbatim — it renders the read-only list, or the
+// `ConversationReader` thread when the store holds an open thread id. Kept as its own component so
+// the `runtimeStatusQuery` read (for the agent's display name) runs ONLY while the layer is shown:
+// `MobileShell.test.tsx` mounts the shell with no QueryClientProvider, and the shell never enters
+// this branch there (the store is idle), so `useQuery` is never called off a bare mount.
+function MobileConversations() {
+  const { data: runtimeInfo } = useQuery(runtimeStatusQuery());
+  return <ConversationsPane agentName={brandName(runtimeInfo?.identity?.name)} />;
 }
 
 /**
@@ -116,6 +135,14 @@ export function MobileShell({
   const chatState = useChatState();
   const sessionSheetTriggerRef = useRef<HTMLButtonElement>(null);
   const current = chatState.sessions.find((s) => s.id === chatState.currentSessionId);
+  // The Conversations stage (docs/design/other-conversations.md §3.7). The phone has no tab strip,
+  // so the stage lives here instead of in ChatSurface (which suppresses the pane on mobile): while
+  // `conversations` is the selected stage AND the tab is visible, the list/thread fills the screen
+  // over the chat root, the header reads "Conversations" (list) or shows ← List (a thread), and a
+  // pushed surface (if one is open) still wins — it layers on top and owns the back header.
+  const conv = useConversations();
+  const onConversations = conv.tabVisible && conv.stage === "conversations" && pushed == null;
+  const onConversationThread = onConversations && conv.openThreadId != null;
   // "+" is a no-op when the blank it would reuse is already what you're looking at, so
   // disable it rather than let it read as a dead tap. If the blank is on ANOTHER tab the
   // button stays live — pressing it switches you there, which is a visible result.
@@ -162,6 +189,26 @@ export function MobileShell({
             {/* Optically centres the title against the back chevron. */}
             <span className="mshell-head-spacer" aria-hidden />
           </>
+        ) : onConversationThread ? (
+          <>
+            {/* A read thread: the header back reads ← List and returns to the list (§3.7). The
+                reader renders its own title/badge band below; the centre stays "Conversations" so
+                the top bar keeps naming the tab, like the static back header above. */}
+            <Button
+              variant="ghost"
+              size="md"
+              type="button"
+              className="mshell-back-list"
+              aria-label="Back to list"
+              onClick={() => backToConversationsList()}
+            >
+              <ChevronLeft size={20} aria-hidden /> List
+            </Button>
+            <span className="mshell-title mshell-title--static">
+              <span className="mshell-title-text">Conversations</span>
+            </span>
+            <span className="mshell-head-spacer" aria-hidden />
+          </>
         ) : (
           <>
             <Button
@@ -193,7 +240,11 @@ export function MobileShell({
               aria-haspopup="dialog"
               aria-expanded={sessionSheetOpen}
             >
-              <span className="mshell-title-text">{current?.title ?? "New chat"}</span>
+              {/* On the Conversations list the title reads "Conversations" where the chat title
+                  would be; the tap still opens the sheet (§3.7). */}
+              <span className="mshell-title-text">
+                {onConversations ? "Conversations" : (current?.title ?? "New chat")}
+              </span>
               <ChevronDown size={15} aria-hidden />
             </button>
             {/* The palette, on the shell that needs it MOST and had it least. A phone has no
@@ -240,12 +291,21 @@ export function MobileShell({
       <div className="mshell-body">
         {/* `inert` only while something actually covers the root — NOT merely when the back
             affordance shows. A docked background plugin view is active INSIDE the root
-            (display-toggled, no pushed layer), and inerting it would kill its interactivity. */}
-        <div className="mshell-root" inert={pushed != null}>
-          <WorkHandleContext.Provider value={showBack || pushed != null ? null : { onOpen: onOpenWork, blocked: sessionSheetOpen || sheetOpen }}>
+            (display-toggled, no pushed layer), and inerting it would kill its interactivity.
+            The Conversations layer covers the root the same way a pushed surface does. */}
+        <div className="mshell-root" inert={pushed != null || onConversations}>
+          <WorkHandleContext.Provider value={showBack || pushed != null || onConversations ? null : { onOpen: onOpenWork, blocked: sessionSheetOpen || sheetOpen }}>
             {root}
           </WorkHandleContext.Provider>
         </div>
+
+        {/* The read-only Conversations list/thread, full screen over the chat root (§3.7). Only
+            when no pushed surface is up — a pushed surface layers on top and owns the shell. */}
+        {onConversations ? (
+          <div className="mshell-conversations">
+            <MobileConversations />
+          </div>
+        ) : null}
 
         {pushed != null ? <div className="mshell-pushed">{pushed}</div> : null}
       </div>
