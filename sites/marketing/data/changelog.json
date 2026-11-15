@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.243.0",
+    "date": "2026-11-15",
+    "changes": [
+      "A pinned Conversations tab lists the agent's other conversations, read-only (#5297).",
+      "Opening a conversation in the Conversations tab reads the whole thread, read-only (#5298).",
+      "Continue in a new chat turns a read-only conversation into a real chat tab (#5301).",
+      "The Conversations tab reaches the phone, pinned at the top of the session sheet (#5303).",
+      "Work links a waiting job to the conversation that started it (#5302).",
+      "Needs you links to the thread it came from (#5304).",
+      "Release notes link the PR that actually merged a changelog fragment, not a number the author guessed (#5296).",
+      "Delegates leave a project checkout on the branch they found (#5305)."
+    ]
+  },
+  {
     "version": "v0.242.0",
     "date": "2026-11-15",
     "changes": [

@@ -15,6 +15,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.243.0] - 2026-11-15
+
+### Added
+- **A pinned Conversations tab lists the agent's other conversations, read-only (#5297).** The chat tab bar now draws a pinned first **Conversations** tab as soon as the agent has outside A2A threads in the last 7 days — a badge with the count and a non-pulsing status dot (warning when a thread needs you, else info when one is running), its accessible name spelling out the count, the status in words and "read-only". Selecting it replaces the chat with a read-only list pane — a "For you" group, a collapsed "Automated · N" disclosure and "Show older", no composer — while leaving the open chat untouched; selecting a chat tab returns to it. Right-click the tab to hide it per device (it comes back on its own when a thread needs you, or via "Show Conversations tab" on the tab-bar background), and the pane carries loading, failed and automated-only states. (docs/design/other-conversations.md §3, slice C2.)
+
+- **Opening a conversation in the Conversations tab reads the whole thread, read-only (#5298).** Clicking a row in the Conversations tab now opens the thread in the same pane, with the tab still selected: a header band (**← Back to list**, "Conversation · read-only", the title as a focused `h2`, a Running / Needs you / Failed badge and the origin line) over the thread's turns, each message labelled with its speaker — the caller ("Claude Code for Josh") and the agent — and a `TypingIndicator` on the last message while the thread is running. There is no composer; its slot holds a read-only note — "You can't type here. Replies go to a new chat, so the caller isn't interrupted." — with **Continue in a new chat** and **Copy link** (`#/conversations/<id>`). A thread waiting on you shows a warning callout with **Answer in Needs you**; a swept thread shows "This conversation is no longer stored."; a failed load shows a retryable error. The tab remembers the open thread across tab switches, and **Back to list** returns focus to the row it came from. (docs/design/other-conversations.md §3.4, slice C3.)
+
+- **Continue in a new chat turns a read-only conversation into a real chat tab (#5301).** The **Continue in a new chat** button in the Conversations reader now opens and selects a fresh chat tab, leaves the Conversations stage so the new tab is actually shown, and pre-fills its composer with `About the conversation "<title>" (<origin>): ` plus a hidden `recall_session` reference to the original thread's context id — so the agent can pull the full transcript on demand. Nothing is sent and no toast fires: the opened, selected, pre-filled tab is the feedback — you edit the prompt and send. (docs/design/other-conversations.md §4.5, slice C4.)
+
+- **The Conversations tab reaches the phone, pinned at the top of the session sheet (#5303).** On a phone the pinned Conversations tab becomes an item above the chats in the session sheet — the `MessagesSquare` icon, "Conversations", the 7-day count, a non-pulsing status dot (warning when a thread needs you, else info when one is running) and a muted "Read-only", with no delete control. It appears and hides under the same rules as the desktop tab, and a long-press opens a "Hide Conversations tab" menu (matching the desktop right-click). Tapping it closes the sheet and shows the read-only list full screen, with the header reading "Conversations" where a chat title would be and the title tap still opening the sheet; tapping a thread opens it full screen, the header gaining a **← List** back, and the thread footer stacking the note over full-width **Continue in a new chat** and **Copy link**. The phone's chat screen gains nothing. (docs/design/other-conversations.md §3.7, slice C5.)
+
+- **Work links a waiting job to the conversation that started it (#5302).** A waiting job whose source is an outside A2A conversation now shows its provenance as a link — "Started in a conversation from &lt;caller&gt;" when the thread is listed, else "Started in a conversation" — that opens the read-only thread inside the Conversations tab (`#/conversations/<context_id>`), selecting the tab and showing it even if this device had hidden it. Jobs started by a background job or whose chat was deleted keep their plain text. (docs/design/other-conversations.md §4.6, slice C6a.)
+
+- **Needs you links to the thread it came from (#5304).** A decision or waiting task raised from another agent's conversation now carries an "Open conversation" button that closes the status panel and opens that read-only thread (`#/conversations/<id>`). Items from your own chats are unchanged.
+
+### Fixed
+- **Release notes link the PR that actually merged a changelog fragment, not a number the
+  author guessed (#5296).** `collate` now resolves the adding PR for every fragment and replaces a
+  bold lead that cites the wrong number (a guessed next-PR, or the source issue) with the
+  merging PR, warning about what it dropped; the PR gate rejects any `#N` in a new fragment's
+  bold lead so the guess never reaches release. Eight of fifteen v0.242.0 entries had cited
+  the wrong PR.
+
+- **Delegates leave a project checkout on the branch they found (#5305).** A `delegate_to(project=…)` coder that checks out and pushes another branch in the board's shared base checkout is now switched back to the original branch when it's safe (clean tree, every commit already on a remote), and the change summary says which branch it left and that it switched back. When it can't switch safely — a dirty tree, unpushed commits, a concurrent delegation still holding the same checkout, or a git failure — the checkout is left untouched and the summary opens with a warning naming the root, both branches and the reason, so the lead can act instead of the board silently stranding.
+
 ## [0.242.0] - 2026-11-15
 
 ### Added
