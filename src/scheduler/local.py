@@ -1006,6 +1006,28 @@ class LocalScheduler:
         self._interrupted_task_ids = {str(t) for t in task_ids if t}
         self._interrupted_recovery = recovery
 
+    def origin_for_context(self, context_id: str) -> str:
+        """Read execution provenance, never authorization; unknown/error returns empty.
+
+        Match the generation too: execution mappings outlive deleted jobs, and a
+        replacement with the same id must not supply an old execution's origin.
+        """
+        try:
+            db = self._connect()
+            try:
+                row = db.execute(
+                    "SELECT j.origin_session FROM job_sessions s JOIN jobs j "
+                    "ON j.id = s.job_id AND j.created_at = s.created_at "
+                    "WHERE s.context_id = ? AND j.agent_name = ? "
+                    "ORDER BY s.created_at ASC LIMIT 1",
+                    (context_id, self.agent_name),
+                ).fetchone()
+                return (row["origin_session"] or "") if row is not None else ""
+            finally:
+                db.close()
+        except Exception:
+            return ""
+
     def get_job(self, job_id: str) -> Job | None:
         """Fetch a single job by id (namespaced by agent), or ``None`` if absent.
 
