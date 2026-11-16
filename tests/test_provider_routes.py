@@ -1021,3 +1021,46 @@ def test_model_roles_image_describe_available_with_its_own_chain(client, monkeyp
     assert describe["chain"] == ["prod-gateway:vision"]
     assert describe["inherited"] is False and describe["source"] == "image_describe"
     assert describe["status"] == "ok" and "reason" not in describe
+
+
+def test_model_roles_reports_skips_probed_live_without_a_production_build(client, monkeypatch):
+    # The status surface probes buildability from the LIVE config, so a role no production path
+    # ever builds — ``aux`` and the blank aux-family roles that inherit its chain — still reports
+    # the fallback a graph rebuild would drop. The rejected approach recorded skips only when a
+    # role's own ``create_role_llm`` ran, so aux reported ``skipped: []`` here.
+    cfg = _install(monkeypatch, **BASE)
+    cfg.aux_model = ["ok", "bad", "ok2"]
+    broken = True
+
+    def factory(config, model_name, **kwargs):
+        if broken and model_name == "bad":
+            raise ValueError("Missing credentials: secret")
+        return RunnableLambda(lambda _: "answer")
+
+    monkeypatch.setattr(model_roles, "create_llm", factory)
+
+    def role_status(role):
+        response = client.get("/api/config/model-roles")
+        assert response.status_code == 200
+        return next(r for r in response.json()["roles"] if r["role"] == role)
+
+    # No create_role_llm("aux") call — the skip is probed, not read from a prior build.
+    aux = role_status("aux")
+    assert aux["chain"] == ["ok", "bad", "ok2"]
+    assert aux["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+    # The redacted reason is the exception type alone, never the provider payload.
+    assert all("secret" not in str(v) for v in aux["skipped"][0].values())
+    # A blank aux-family role inherits the WHOLE aux chain, so it reports the same drop.
+    compaction = role_status("compaction")
+    assert compaction["inherited"] is True and compaction["source"] == "aux"
+    assert compaction["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+
+    # Fixing credentials clears the skip on the very next read — no rebuild needed.
+    broken = False
+    assert role_status("aux")["skipped"] == []
+    assert role_status("compaction")["skipped"] == []
+
+    # A shorter, fully-buildable chain has nothing to skip.
+    broken = True
+    cfg.aux_model = ["ok", "ok2"]
+    assert role_status("aux")["skipped"] == []

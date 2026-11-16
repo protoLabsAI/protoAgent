@@ -106,7 +106,13 @@ def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=(), config=
         return _Agent()
 
     monkeypatch.setattr(agent_mod, "create_agent", fake_create_agent)
-    monkeypatch.setattr(agent_mod, "create_llm", lambda _c, *, model_name=None, **_k: models.get(model_name, object()))
+    def factory(_c, *, model_name=None, **_k):
+        model = models.get(model_name, object())
+        if isinstance(model, Exception):
+            raise model
+        return model
+
+    monkeypatch.setattr(agent_mod, "create_llm", factory)
 
     cfg = config or LangGraphConfig(model_provider="openai")
     cfg.routing_fallback_models = list(routing_fallbacks)
@@ -251,3 +257,11 @@ def test_researcher_chain_edit_keeps_enabled_and_profile(tmp_path):
     assert cfg.researcher.model == ["protolabs/a", "protolabs/b"]  # the chain IS updated
     assert cfg.researcher.enabled is False  # a disabled researcher stays off
     assert cfg.researcher.profile == "deepthink"  # the profile is not cleared
+
+
+def test_subagent_skips_unbuildable_backup_and_keeps_route_names(monkeypatch, caplog):
+    models = {"a": _FakeModel("a"), "bad": ValueError("Missing credentials"), "b": _FakeModel("b")}
+    model, fb = _capture_dispatch(monkeypatch, pin=["a", "bad", "b"], models=models)
+    assert model is models["a"]
+    assert fb is not None and fb.models == [models["b"]] and fb._fallback_names == ["b"]
+    assert "[model-roles] subagent:stub[1] bad skipped: ValueError" in caplog.text

@@ -677,9 +677,20 @@ def _build_middleware(
 
     # Model routing / failover — retry on fallback models (same gateway).
     # Observable wrapper (#2956): the stock middleware fails over silently.
-    if config.routing_fallback_models:
-        fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
-        middleware.append(ObservableModelFallbackMiddleware(*fallbacks, config=config))
+    #
+    # The lead builds the configured primary separately. Coherence filtering may remove
+    # that name, in which case ALL surviving entries remain fallbacks, including index 0.
+    # Keep the resolved chain's indices so skip diagnostics agree with Settings.
+    from graph.config import model_field_primary, role_chain
+    from graph.model_roles import build_fallbacks
+
+    fallback_names, fallbacks = build_fallbacks(
+        "main", role_chain(config, "main"),
+        lambda name: create_llm(config, model_name=name),
+        primary_name=model_field_primary(config.model_name),
+    )
+    if fallbacks:
+        middleware.append(ObservableModelFallbackMiddleware(*fallbacks, config=config, names=fallback_names))
 
     # Self-heal the other thread-bricking history defect (ADR 0097): a replayed
     # encrypted-reasoning blob the provider cannot verify — a cross-issuer replay
@@ -1491,8 +1502,13 @@ async def _run_subagent_inner(
     # models, not the global fallbacks. No-op when the resolved fallback set is empty — the
     # subagent stack is then unchanged.
     sub_fallback_names = pin_chain[1:] if len(pin_chain) > 1 else list(config.routing_fallback_models or [])
-    if sub_fallback_names:
-        sub_fallbacks = [create_llm(config, model_name=m, **profile_kwargs) for m in sub_fallback_names]
+    from graph.model_roles import build_fallbacks
+
+    sub_fallback_names, sub_fallbacks = build_fallbacks(
+        f"subagent:{subagent_type}", [sub_model, *sub_fallback_names],
+        lambda name: create_llm(config, model_name=name, **profile_kwargs),
+    )
+    if sub_fallbacks:
         sub_middleware.append(
             ObservableModelFallbackMiddleware(*sub_fallbacks, config=config, names=list(sub_fallback_names))
         )

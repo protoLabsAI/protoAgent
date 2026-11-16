@@ -172,3 +172,147 @@ def test_stream_failure_never_replays_partial_answer(monkeypatch, partial):
     else:
         assert list(stream) == ["backup"]
         assert model_roles.last_fallback("aux")["to"] == "backup"
+
+
+@pytest.mark.parametrize("role", ["aux", "main"])
+@pytest.mark.parametrize("bad_index", [0, 1, 2])
+def test_unbuildable_backup_is_skipped_but_primary_is_fatal(monkeypatch, caplog, role, bad_index):
+    names = ["primary", "middle", "last"]
+    cfg = SimpleNamespace(aux_model=names, model_name="primary", routing_fallback_models=names[1:])
+    calls = []
+    error = ValueError("Missing credentials: sensitive provider payload")
+
+    def factory(config, model_name, **kwargs):
+        if model_name == names[bad_index]:
+            raise error
+
+        def answer(value):
+            calls.append(model_name)
+            if model_name == "primary":
+                raise TimeoutError()
+            return model_name
+
+        return RunnableLambda(answer)
+
+    monkeypatch.setattr(model_roles, "create_llm", factory)
+    if bad_index == 0:
+        with pytest.raises(ValueError) as caught:
+            model_roles.create_role_llm(cfg, role)
+        assert caught.value is error
+        return
+    llm = model_roles.create_role_llm(cfg, role)
+    assert llm.names == [name for i, name in enumerate(names) if i != bad_index]
+    assert llm.invoke("prompt") == ("last" if bad_index == 1 else "middle")
+    assert calls == llm.names
+    assert f"[model-roles] {role}[{bad_index}] {names[bad_index]} skipped: ValueError" in caplog.text
+    assert "sensitive provider payload" not in caplog.text
+
+
+@pytest.mark.parametrize("backups", [["bad", "good"], ["bad"]])
+def test_main_graph_compiles_with_unbuildable_fallbacks(monkeypatch, caplog, backups):
+    import graph.agent as agent
+    from graph.config import LangGraphConfig
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    cfg = LangGraphConfig()
+    cfg.model_name = "primary"
+    cfg.routing_fallback_models = backups
+    model = GenericFakeChatModel(messages=iter([AIMessage(content="ok")]))
+    error = ValueError("Missing credentials")
+
+    def factory(config, model_name=None, **kwargs):
+        if model_name == "bad":
+            raise error
+        return model
+
+    monkeypatch.setattr(agent, "create_llm", factory)
+    captured = []
+    real_create = agent.create_agent
+
+    def compile_agent(**kwargs):
+        captured.extend(kwargs["middleware"])
+        return real_create(**kwargs)
+
+    monkeypatch.setattr(agent, "create_agent", compile_agent)
+    graph = agent.create_agent_graph(cfg, include_subagents=False)
+    assert graph.get_graph().nodes
+    fallbacks = [mw for mw in captured if isinstance(mw, agent.ObservableModelFallbackMiddleware)]
+    if "good" in backups:
+        assert len(fallbacks) == 1
+        assert fallbacks[0].models == [model]
+        assert fallbacks[0]._fallback_names == ["good"]
+    else:
+        assert fallbacks == []
+    assert "[model-roles] main[1] bad skipped: ValueError" in caplog.text
+
+    def broken_primary(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(agent, "create_llm", broken_primary)
+    with pytest.raises(ValueError) as caught:
+        agent.create_agent_graph(cfg, include_subagents=False)
+    assert caught.value is error
+
+
+@pytest.mark.parametrize(
+    "head, tail, legacy, expected_chain, bad_index",
+    [
+        ("primary", ["bad", "b"], [], ["primary", "bad", "b"], 1),
+        ("protolabs/reasoning", [], ["b", "bad"], ["b", "bad"], 1),
+        ("protolabs/reasoning", ["bad", "b"], [], ["bad", "b"], 0),
+    ],
+)
+def test_main_chain_from_list_model_name_builds_tail_and_aligns_with_status(
+    monkeypatch, caplog, head, tail, legacy, expected_chain, bad_index,
+):
+    """Every coherent fallback survives, even when filtering removes the configured head."""
+    import graph.agent as agent
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    from graph.config import LangGraphConfig, role_chain
+
+    cfg = LangGraphConfig()
+    cfg.model_name = [head, *tail] if tail else head
+    cfg.routing_fallback_models = legacy
+    cfg.model_provider = "anthropic-oauth"
+    cfg.api_key = ""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg.providers = []
+    model = GenericFakeChatModel(messages=iter([AIMessage(content="ok")]))
+    error = ValueError("Missing credentials")
+
+    def factory(config, model_name=None, **kwargs):
+        if model_name == "bad":
+            raise error
+        return model
+
+    monkeypatch.setattr(agent, "create_llm", factory)
+    monkeypatch.setattr(model_roles, "create_llm", factory)
+
+    # Resolve with real coherence filtering, including removal of a bare gateway alias.
+    assert role_chain(cfg, "main") == expected_chain
+
+    captured = []
+    real_create = agent.create_agent
+
+    def compile_agent(**kwargs):
+        captured.extend(kwargs["middleware"])
+        return real_create(**kwargs)
+
+    monkeypatch.setattr(agent, "create_agent", compile_agent)
+    graph = agent.create_agent_graph(cfg, include_subagents=False)
+    assert graph.get_graph().nodes
+
+    fallbacks = [mw for mw in captured if isinstance(mw, agent.ObservableModelFallbackMiddleware)]
+    assert len(fallbacks) == 1
+    assert fallbacks[0].models == [model]
+    assert fallbacks[0]._fallback_names == ["b"]
+    assert f"[model-roles] main[{bad_index}] bad skipped: ValueError" in caplog.text
+
+    from operator_api.provider_routes import _role_status_list
+
+    main = next(entry for entry in _role_status_list(cfg) if entry["role"] == "main")
+    assert main["chain"] == expected_chain
+    assert main["skipped"] == [{"index": bad_index, "model": "bad", "reason": "ValueError"}]

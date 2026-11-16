@@ -1,0 +1,1 @@
+- **Skip unbuildable model fallbacks.** Missing credentials or other construction failures in a backup no longer reject graph rebuilds. Surviving models retain their order, primary construction failures still surface, and model-role status reports skipped entries with redacted reasons.
