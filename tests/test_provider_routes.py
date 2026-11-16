@@ -1007,3 +1007,39 @@ def test_model_roles_image_describe_available_with_its_own_chain(client, monkeyp
     assert describe["chain"] == ["prod-gateway:vision"]
     assert describe["inherited"] is False and describe["source"] == "image_describe"
     assert describe["status"] == "ok" and "reason" not in describe
+
+
+def test_model_roles_reports_skips_and_clears_them_on_rebuild(client, monkeypatch):
+    cfg = _install(monkeypatch, **BASE)
+    cfg.aux_model = ["ok", "bad", "ok2"]
+    broken = True
+
+    def factory(config, model_name, **kwargs):
+        if broken and model_name == "bad":
+            raise ValueError("Missing credentials: secret")
+        return RunnableLambda(lambda _: "answer")
+
+    monkeypatch.setattr(model_roles, "create_llm", factory)
+
+    def aux_status():
+        response = client.get("/api/config/model-roles")
+        assert response.status_code == 200
+        return next(r for r in response.json()["roles"] if r["role"] == "aux")
+
+    model_roles.create_role_llm(cfg, "aux")
+    assert aux_status()["chain"] == ["ok", "bad", "ok2"]
+    assert aux_status()["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+    broken = False
+    from copy import copy
+
+    model_roles.create_role_llm(copy(cfg), "aux")
+    assert len(aux_status()["skipped"]) == 1  # a turn override cannot clear live diagnostics
+    model_roles.create_role_llm(cfg, "aux")
+    assert aux_status()["skipped"] == []
+    broken = True
+    model_roles.create_role_llm(cfg, "aux")
+    cfg.aux_model = ["ok", "ok2"]
+    assert aux_status()["skipped"] == []
+    replacement = _install(monkeypatch, **BASE)
+    replacement.aux_model = ["ok", "bad", "ok2"]
+    assert aux_status()["skipped"] == []

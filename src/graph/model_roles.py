@@ -68,6 +68,42 @@ def last_fallback(role: str) -> dict | None:
         return {**record, "from": list(record["from"])} if record else None
 
 
+def skipped_entries(config, role: str, names: list[str]) -> list[dict]:
+    """Build diagnostics for this config and chain only; never expose provider payloads."""
+    with _lock:
+        record = getattr(config, "_model_role_skips", {}).get(role)
+        if record is None or record[0] != tuple(names):
+            return []
+        return [dict(entry) for entry in record[1]]
+
+
+def build_fallbacks(config, role: str, names: list[str], build):
+    """Build a chain's tail, keeping names aligned with models after skips.
+
+    The caller builds the primary outside this guard so its failure remains fatal.
+    Diagnostics live on the config, not globally: a failed config transaction cannot
+    overwrite the running graph's status. A rebuild replaces the previous failures.
+    """
+    kept, models, skipped = [], [], []
+    for index, name in enumerate(names[1:], start=1):
+        try:
+            model = build(name)
+        except Exception as exc:  # noqa: BLE001 — a backup must not reject the graph
+            reason = type(exc).__name__
+            log.warning("[model-roles] %s[%d] %s skipped: %s", role, index, name, reason)
+            skipped.append({"index": index, "model": name, "reason": reason})
+        else:
+            kept.append(name)
+            models.append(model)
+    with _lock:
+        # Copy on write: per-turn model overrides may shallow-copy the config.
+        config._model_role_skips = {
+            **getattr(config, "_model_role_skips", {}),
+            role: (tuple(names), skipped),
+        }
+    return kept, models
+
+
 def _answered(role, model, failures):
     with _lock:
         if not failures:
@@ -117,10 +153,7 @@ class _Guarded(Runnable):
 
 
 class _Attempt(_Guarded):
-    """One chain entry. Its model is resolved lazily (``resolve(index)``) so a fallback that
-    cannot even be built — a keyless connection, a bad alias — is constructed only if the
-    chain actually reaches it. A healthy primary is never blocked by an unbuildable backup
-    (ADR 0133 M4)."""
+    """One built chain entry, observing retryable invocation failures."""
 
     def __init__(self, role, index, name, resolve, failures):
         self.role, self.index, self.name, self._resolve, self.failures = (
@@ -129,15 +162,7 @@ class _Attempt(_Guarded):
 
     @contextmanager
     def _operation(self):
-        try:
-            model = self._resolve(self.index)
-        except Exception as exc:  # noqa: BLE001 — an unbuildable entry fails like a transient
-            # Only an earlier entry's failure gets us here, so treat the build error as this
-            # attempt failing: the chain falls through to the next entry, and on exhaustion
-            # the first (primary) entry's original provider error is what surfaces — the same
-            # contract as an invoke-time failure below.
-            self.failures.append((self.name, f"unbuildable: {type(exc).__name__}"))
-            raise _RetryableError(exc) from exc
+        model = self._resolve(self.index)
         try:
             yield model
         except Exception as exc:
@@ -152,21 +177,9 @@ class _Attempt(_Guarded):
 
 
 class _RoleLLM(_Guarded):
-    def __init__(self, role, names, primary, build):
-        self.role, self.names, self.primary, self._build = role, names, primary, build
-        # index -> built model. The primary is built eagerly by create_role_llm; fallbacks
-        # are built on first reach and cached so a degraded path doesn't rebuild per call.
-        self._cache = {0: primary}
-        self._cache_lock = Lock()
-
-    def _model(self, index):
-        model = self._cache.get(index)
-        if model is not None:
-            return model
-        with self._cache_lock:
-            if index not in self._cache:
-                self._cache[index] = self._build(self.names[index])
-            return self._cache[index]
+    def __init__(self, role, names, models):
+        self.role, self.names, self.primary = role, names, models[0]
+        self._model = models.__getitem__
 
     @contextmanager
     def _operation(self):
@@ -192,19 +205,18 @@ def create_role_llm(config, role: str, **kwargs):
     Multi-model results expose the Runnable invocation, batch and stream API.
     A streak ends when the primary successfully completes an operation.
 
-    Only the PRIMARY is built eagerly; each fallback is constructed lazily the first time
-    the chain reaches it, so a fallback that cannot be built (e.g. a keyless connection)
-    never makes a role with a healthy primary raise — matching how goal eval, memory
-    selection and image description built only the primary before ADR 0133.
+    An unbuildable fallback is skipped with a redacted diagnostic. The primary's
+    build error still propagates, and invocation retries remain transient-only.
     """
     names = role_chain(config, role)
     if not names:
         raise ValueError(f"model role {role!r} has no configured models")
     primary = create_llm(config, model_name=names[0], **kwargs)
-    if len(names) == 1:
-        return primary
 
     def _build(name):
         return create_llm(config, model_name=name, **kwargs)
 
-    return _RoleLLM(role, names, primary, _build)
+    kept, fallbacks = build_fallbacks(config, role, names, _build)
+    if len(names) == 1:
+        return primary
+    return _RoleLLM(role, [names[0], *kept], [primary, *fallbacks])

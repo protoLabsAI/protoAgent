@@ -517,7 +517,7 @@ def _image_describe_can_read(cfg, source: str | None) -> bool:
 
 
 def _role_status_list(cfg) -> list[dict]:
-    """Per-role resolved chain + inherited flag + last fallback, for the status surface."""
+    """Configured chains, inheritance, build skips and last fallback for Settings."""
     from graph import model_roles
     from graph.config import _ROLE_FIELDS, resolve_role_chain
 
@@ -541,6 +541,7 @@ def _role_status_list(cfg) -> list[dict]:
             "source": source,
             "status": status,
             "last_fallback": model_roles.last_fallback(role),
+            "skipped": model_roles.skipped_entries(cfg, role, chain),
         }
         if reason is not None:
             entry["reason"] = reason
@@ -555,7 +556,9 @@ def register_provider_routes(app) -> None:
 
         Read-only status for Settings › Models (M7): the chain each role resolves to (D2),
         whether it is set or inherited (and from which parent), the last time a fallback fired
-        for it (M2's record, reason redacted to exception type/status), and for image_describe
+        for it (M2's record, reason redacted to exception type/status), and construction
+        skips (zero-based chain index, model, exception type). Unbuilt roles have no recorded
+        skips. For image_describe, this also reports
         whether any resolved model can read images (`status: "unavailable"`, `reason:
         "no-vision"` when none can)."""
         return {"roles": _role_status_list(_config())}
