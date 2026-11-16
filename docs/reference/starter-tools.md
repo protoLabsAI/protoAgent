@@ -114,14 +114,14 @@ Built by default; drop with `middleware.scheduler: false` (or `SCHEDULER_DISABLE
 
 ### Tasks — bound when a `TaskStore` exists
 
-Built by default. The agent's in-process planning board, mirrored to the console Tasks panel.
+Built by default. The agent's persistent planning board; tasks appear as jobs in **Work**.
 Defined in `tools/scheduler_tools.py` (`_build_task_tools`).
 
 | Tool | What it does |
 |---|---|
-| [`task_create(title, description="", priority=2, issue_type="task")`](#task_create) | Open an issue. `priority` 0 (highest)–3; type `task\|bug\|feature\|chore\|epic`. |
+| [`task_create(title, description="", priority=2, issue_type="task", links=None)`](#task_create) | Open an issue. `priority` 0 (highest)–3; type `task\|bug\|feature\|chore\|epic`. |
 | [`task_list(include_closed=False)`](#task_list) | List the board. |
-| [`task_update(issue_id, status="", title="", description="", priority=-1, issue_type="")`](#task_update) | Change fields; `status` is `open\|in_progress\|blocked\|deferred\|closed`. |
+| [`task_update(issue_id, status="", title="", description="", priority=-1, issue_type="", links=None, ask="")`](#task_update) | Change fields; `status` is `open\|in_progress\|blocked\|waiting\|deferred\|closed`. `waiting` requires an `ask` unless already set; `links` replaces linked work. |
 | [`task_close(issue_id, reason="")`](#task_close) | Close as done or won't-do. |
 
 ### Directives — always bound, **lead agent only**
@@ -702,18 +702,29 @@ yield is durable across restart. For an absolute time or a recurring cadence use
 
 ## Tasks
 
-The agent's own planning board — an in-process SQLite issue tracker, mirrored to the console
-Tasks panel. Tasks are attributed to the session that created them.
+The agent's persistent planning board — tasks appear as jobs (labelled **Job**) in
+**Work**. Tasks belong to the conversation that caused them, including when created in
+background, scheduled, or inbox turns. If no originating conversation can be resolved,
+the task remains instance-wide.
 
 ### `task_create` {#task_create}
 
 ```python
-def task_create(title: str, description: str = "", priority: int = 2, issue_type: str = "task") -> str
+def task_create(title: str, description: str = "", priority: int = 2,
+                issue_type: str = "task", links: list[str] | None = None) -> str
 ```
 
 Open an issue and return its id. `priority` is 0 (highest) to 3 (low); `issue_type` is one of
 `task` / `bug` / `feature` / `chore` / `epic`. An invalid value returns `"Error: …"` rather
 than raising.
+
+`links` names the work that delivers the task: board card ids (`bd-…`), scheduler job ids,
+directive ids, or PR URLs. The task automatically closes with an attributed reason once
+every linked item finishes. Board cards resolve when their owner reports completion via
+`task.link.closed` (done or cancelled); scheduler jobs resolve when finished, expired, or
+cancelled; directives when fulfilled or revoked; PRs when merged or closed. Tasks without
+links do not auto-close. Use `task_update` to set `waiting` with an `ask` when the next step
+needs the operator.
 
 ### `task_list` {#task_list}
 
@@ -722,17 +733,33 @@ def task_list(include_closed: bool = False) -> str
 ```
 
 One line per issue — `[status] id (pN, type) title`. Open issues only unless
-`include_closed=True`. `"No issues on the board."` when empty.
+`include_closed=True`. Linked refs are appended as `links=…`, with `✓` marking finished
+items. `"No issues on the board."` when empty.
 
 ### `task_update` {#task_update}
 
 ```python
 def task_update(issue_id: str, status: str = "", title: str = "", description: str = "",
-                priority: int = -1, issue_type: str = "") -> str
+                priority: int = -1, issue_type: str = "",
+                links: list[str] | None = None, ask: str = "") -> str
 ```
 
-Change any subset of fields. `status` is `open` / `in_progress` / `blocked` / `deferred` /
-`closed`. Leave a string field empty — or `priority` at `-1` — to keep it unchanged.
+Change any subset of fields. `status` is `open` / `in_progress` / `blocked` / `waiting` /
+`deferred` / `closed`. Leave a string field empty, `priority` at `-1`, or `links` omitted
+(`None`) to keep it unchanged.
+
+Set `waiting` when the next step is the operator's call. Supply `ask`: a short,
+self-contained question or action shown under **Needs you** in Work, so the operator can
+answer without opening the source chat. An ask is required unless the task already has one.
+
+`links` **replaces** the linked-work list; pass `[]` to clear it. A retained ref that the
+task already resolved stays finished. If every ref in a nonempty replacement list has
+already finished, the task closes immediately with its attributed reason.
+
+An `in_progress` task should have something driving it, such as linked work in flight or
+a scheduled follow-up (`wait` or `schedule_task`) in its conversation. If nothing is driving
+it, the update succeeds but appends a warning: link the work, schedule a follow-up, or set
+`waiting` with an `ask`. The warning also notes the stall reminder after 30 minutes.
 
 ### `task_close` {#task_close}
 

@@ -1,0 +1,1 @@
+- **Task tool reference matches Work.** Document waiting tasks and their required ask, linked work and automatic closure, warnings for tasks with nothing driving them, and originating conversation attribution.
