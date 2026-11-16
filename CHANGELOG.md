@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.245.0] - 2026-11-16
+
+### Added
+- **Jobs from other conversations (#5344).** Show linked open jobs beneath the conversation reader's metadata and append open-job counts to From others list rows and their accessible names.
+
+- **Jobs from this thread (#5340).** A new reader component shows the open jobs a conversation caused as a collapsed "Jobs from this thread · N" line that expands to a per-job list, ordered waiting, in progress, blocked, not started, with a "needs you" marker when a job is waiting on you. It reconciles each job against the live Work tasks cache so a closed or restatused job is counted correctly. Not surfaced in the reader yet.
+
+### Changed
+- **"Started in" on every open job (#5342).** Work's job detail now shows where a job began right after Type and priority, not only on waiting jobs: the originating thread's title links into its conversation with the origin alongside, a live chat links in place, and a background job reads as plain text. Threads outside the loaded list link out as "Open the conversation"; jobs with no reachable source, and closed jobs, show no field.
+
+### Fixed
+- **Collect ACP work after a foreground timeout (#5341).** Fixes #5318. Foreground coding delegations now keep the original run as a tracked background task and return its `resume_task_id` collection handle, avoiding duplicate dispatches. Late completion preserves the room exchange. If tracking fails, the reply explains that the session could not be kept and warns about possible side effects.
+
 ## [0.244.1] - 2026-11-16
 
 ### Changed

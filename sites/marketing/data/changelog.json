@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.245.0",
+    "date": "2026-11-16",
+    "changes": [
+      "Jobs from other conversations (#5344).",
+      "Jobs from this thread (#5340).",
+      "\"Started in\" on every open job (#5342).",
+      "Collect ACP work after a foreground timeout (#5341)."
+    ]
+  },
+  {
     "version": "v0.244.1",
     "date": "2026-11-16",
     "changes": [
