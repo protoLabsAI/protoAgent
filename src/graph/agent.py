@@ -1157,6 +1157,7 @@ async def _run_subagent(
     ledger_session_id: str | None = None,
     turn_model: str = "",
     profile: str | None = None,
+    incognito: bool = False,
 ) -> str:
     """Run a subagent delegation, recording the edge in the delegation ledger.
 
@@ -1206,6 +1207,7 @@ async def _run_subagent(
                 session_id=session_id,
                 turn_model=turn_model,
                 profile=profile,
+                incognito=incognito,
             )
         finally:
             if usage_sink is not None:
@@ -1272,6 +1274,7 @@ async def _run_subagent_inner(
     session_id: str = "",
     turn_model: str = "",
     profile: str | None = None,
+    incognito: bool = False,
 ) -> str:
     """Run a single subagent delegation and return its output text.
 
@@ -1555,6 +1558,13 @@ async def _run_subagent_inner(
                     {
                         "messages": [{"role": "user", "content": prompt}],
                         "session_id": session_id,
+                        # The parent turn's incognito flag rides onto the sub-graph's
+                        # state (ADR 0069 D3b): the in-graph `task` path seeds a fresh
+                        # sub-graph, so without this a memory_save/knowledge_ingest run
+                        # by a delegated subagent during an incognito chat would read no
+                        # flag and write memory the chat was meant to leave no trace of.
+                        # Set only when true, so ordinary turns stay byte-for-byte as before.
+                        **({"incognito": True} if incognito else {}),
                         **({"subagent_fence": sub_fence} if sub_fence else {}),
                     },
                     config=sub_run_config,
@@ -1995,6 +2005,7 @@ def _build_task_tools(
                     parent_task_id=tool_call_id,
                     usage_sink=usage_rows,
                     turn_model=turn_model_from(state),
+                    incognito=_incognito_from(state),
                 )
             )
             done, _pending = await asyncio.wait({inline}, timeout=auto_s)
@@ -2044,6 +2055,7 @@ def _build_task_tools(
                 parent_task_id=tool_call_id,
                 usage_sink=usage_rows,
                 turn_model=turn_model_from(state),
+                incognito=_incognito_from(state),
             )
         )
         delegations.register(session_id, tool_call_id, deleg, label=description)
@@ -2189,6 +2201,7 @@ def _build_task_tools(
                         parent_task_id=tool_call_id,
                         usage_sink=usage_rows,
                         turn_model=turn_model_from(state),
+                        incognito=_incognito_from(state),
                     )
                 except SubagentError as e:
                     # One failed delegation is reported inline; the batch goes on.
