@@ -170,6 +170,47 @@ def test_list_subagents_recovers_disabled_worker_popped_from_registry() -> None:
     assert "recent_activity" in dream["default_tools"]  # described from DREAM_CONFIG, not lost
 
 
+def test_list_subagents_retains_disabled_plugin_metadata_across_reload(monkeypatch) -> None:
+    from dataclasses import replace
+
+    from graph.subagents.config import DISABLED_SUBAGENT_DEFAULTS, SUBAGENT_REGISTRY, SubagentConfig
+    from server import agent_init
+
+    monkeypatch.setattr(agent_init, "_subagent_static_defaults", {})
+    monkeypatch.setattr(agent_init, "_disabled_config_subagents", set())
+    monkeypatch.setattr(agent_init, "_plugin_subagent_names", set())
+    worker = SubagentConfig(
+        name="alpha", description="Plugin worker", system_prompt="Work",
+        tools=["read_file"], max_turns=9,
+    )
+    cfg = LangGraphConfig()
+    cfg.subagent_overrides = {
+        "alpha": {"enabled": False, "model": ["fast", "slow"]},
+        "unknown-worker": {"enabled": False},
+    }
+    monkeypatch.setattr(agent_init, "_subagent_overlay_warnings", set())
+    for definition in (worker, replace(worker, description="Updated worker", max_turns=12)):
+        agent_init._register_plugin_subagents([definition])
+        for _ in range(2):
+            agent_init._apply_config_subagents(cfg)
+            assert "alpha" not in SUBAGENT_REGISTRY
+            rows = {row["name"]: row for row in list_subagents(cfg)}
+            assert rows["alpha"] == {
+                "name": "alpha", "description": definition.description, "enabled": False,
+                "tools": ["read_file"], "default_tools": ["read_file"],
+                "max_turns": definition.max_turns, "default_max_turns": definition.max_turns,
+                "model": ["fast", "slow"],
+            }
+            assert "unknown-worker" not in rows
+
+    cfg.subagent_overrides["alpha"]["enabled"] = True
+    agent_init._apply_config_subagents(cfg)
+    assert "alpha" in SUBAGENT_REGISTRY
+    assert "alpha" not in DISABLED_SUBAGENT_DEFAULTS
+    rows = [row for row in list_subagents(cfg) if row["name"] == "alpha"]
+    assert len(rows) == 1 and rows[0]["enabled"] is True
+
+
 def test_list_subagents_reports_declared_model_pin() -> None:
     # The console reads a subagent's chain from this `model` field; researcher's pin lives on a
     # typed config field that never lands in subagent_overrides, so it must surface here too.

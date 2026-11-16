@@ -1,1 +1,2 @@
 - **Model roles in Settings.** Group model chains by purpose, show registry-driven subagent overrides, and expose recent fallback and image availability details without blocking editing when history is unavailable.
+- **Disabled plugin subagents stay visible.** Retain registered worker metadata when config disables a worker so Settings can show its chain and off status across reloads.

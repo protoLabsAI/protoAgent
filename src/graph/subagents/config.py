@@ -854,6 +854,11 @@ nothing is a correct result. Return a compact audit of changes, proposals, and s
 )
 
 
+# Definitions removed by enabled:false remain discoverable to operator surfaces,
+# but must never be used for dispatch through SUBAGENT_REGISTRY.
+DISABLED_SUBAGENT_DEFAULTS: dict[str, SubagentConfig] = {}
+
+
 SUBAGENT_REGISTRY: dict[str, SubagentConfig] = {
     "researcher": RESEARCHER_CONFIG,
     "antagonist": ANTAGONIST_CONFIG,

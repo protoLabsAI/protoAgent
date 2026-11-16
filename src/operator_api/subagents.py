@@ -18,7 +18,7 @@ def list_subagents(config: Any) -> list[dict[str, Any]]:
     A worker DISABLED in config is POPPED from ``SUBAGENT_REGISTRY`` by
     ``server.agent_init._apply_config_subagents`` before this runs, so iterating
     the live registry alone would drop it. It is recovered below from the shipped
-    static defaults (the ``*_CONFIG`` constants) + the config overlay and reported
+    static defaults (including retained disabled plugin definitions) + the config overlay and reported
     with ``enabled: false`` — the ADR 0133 M7c Model-roles line marks it "(off)"
     instead of silently losing it.
     """
@@ -53,7 +53,7 @@ def list_subagents(config: Any) -> list[dict[str, Any]]:
         )
 
     # Recover workers a config `enabled: false` popped from the live registry (above). Their
-    # shipped defaults still exist as module `*_CONFIG` constants; the overlay (researcher's
+    # shipped defaults and disabled registry snapshots remain available; the overlay (researcher's
     # typed field, or the `subagent_overrides` dict) carries what the operator set.
     from dataclasses import asdict
 
@@ -64,6 +64,7 @@ def list_subagents(config: Any) -> list[dict[str, Any]]:
         for key, value in vars(_sub).items()
         if key.endswith("_CONFIG") and isinstance(value, _sub.SubagentConfig)
     }
+    bases.update(_sub.DISABLED_SUBAGENT_DEFAULTS)
     seen = {row["name"] for row in out}
     disabled: list[tuple[str, dict[str, Any]]] = [
         (name, sub)
