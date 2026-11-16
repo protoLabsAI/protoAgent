@@ -658,7 +658,8 @@ _SUMMARY_PROMPT = (
 async def _default_summarizer(transcript: str, config) -> str:
     from graph.model_roles import create_role_llm
 
-    # Preserve the historical aux selection; reserved memory overrides stay inactive.
+    # The "harvest" role resolves memory.harvest_model (ADR 0133); a blank chain inherits
+    # aux, preserving the historical aux selection when nothing is set.
     llm = create_role_llm(config, "harvest")
     resp = await llm.ainvoke([HumanMessage(content=_SUMMARY_PROMPT.format(transcript=transcript))])
     # The aux model may or may not wrap output in tags; extract defensively. A Responses

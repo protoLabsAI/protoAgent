@@ -300,9 +300,10 @@ def test_default_summarizer_drops_provider_reasoning_blocks(monkeypatch):
     (``encrypted_content``) and then the text. ``str()`` of that list landed in history as
     the summary (15 such rows in the audit); only the text may.
 
-    ADR 0133 M3: the seam resolves its model via ``create_role_llm(config, "memory_harvest")``.
-    A single-string ``aux_model`` is a one-entry chain, so the role LLM is the built model
-    unchanged — the text-extraction behaviour under test is unaffected."""
+    ADR 0133: the seam resolves its model via ``create_role_llm(config, "harvest")`` (which
+    reads ``memory.harvest_model``). A single-string ``aux_model`` is a one-entry chain, so
+    the role LLM is the built model unchanged — the text-extraction behaviour under test is
+    unaffected."""
     import graph.model_roles
     from types import SimpleNamespace
 
@@ -323,6 +324,42 @@ def test_default_summarizer_drops_provider_reasoning_blocks(monkeypatch):
     monkeypatch.setattr(graph.model_roles, "create_llm", lambda config, model_name=None, **kw: _LLM())
     out = asyncio.run(_default_summarizer("User: alive?", SimpleNamespace(aux_model="aux")))
     assert out == "User asked for a one-word reply."
+
+
+def test_harvest_pass_builds_from_memory_harvest_model(monkeypatch):
+    """ADR 0133 fix: the session-end harvest pass resolves its model from
+    ``memory.harvest_model`` — the chain Settings writes — not the aux fallback. A primary
+    that rate-limits falls through to the next chain entry. On the pre-fix code the "harvest"
+    role read nothing and inherited aux, so this would build ``aux`` and never touch [x, y]."""
+    import graph.model_roles
+    from types import SimpleNamespace
+
+    from graph.conversation_harvest import _default_summarizer
+
+    built: list[str] = []
+
+    class _Transient(Exception):
+        def __init__(self):
+            super().__init__("transient")
+            self.status_code = 429
+
+    class _LLM:
+        def __init__(self, name):
+            self.name = name
+
+        async def ainvoke(self, messages, config=None, **kwargs):
+            built.append(self.name)
+            if self.name == "x":
+                raise _Transient()
+            return AIMessage(content="harvest summary")
+
+    monkeypatch.setattr(graph.model_roles, "_last_fallbacks", {})  # isolate M2's process-global
+    monkeypatch.setattr(graph.model_roles, "_streaks", set())
+    monkeypatch.setattr(graph.model_roles, "create_llm", lambda config, model_name=None, **kw: _LLM(model_name))
+    cfg = SimpleNamespace(aux_model="aux", memory_harvest_model=["x", "y"])
+    out = asyncio.run(_default_summarizer("User: anything to remember?", cfg))
+    assert out == "harvest summary"
+    assert built == ["x", "y"]  # read memory.harvest_model and fell x → y; aux never built
 
 
 def test_harvest_skips_facts_when_disabled(tmp_path):
