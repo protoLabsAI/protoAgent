@@ -334,14 +334,21 @@ class ProjectionOptions:
                         "window for the model, so delivery is unbounded",
                         budget_pct,
                     )
+        from copy import copy
+
         from graph.config import model_field_primary
-        from graph.llm import create_llm, split_slot_target
+        from graph.llm import split_slot_target
+        from graph.model_roles import create_role_llm, resolve_chain
 
         # Each of these is list-capable (ADR 0133); route on the primary entry. `str(list)`
         # here would make a chain's Python repr ("['x', 'y']") the whole select-model id.
         main_model = model_field_primary(model_name) or model_field_primary(getattr(config, "model_name", ""))
-        select_model = (model_field_primary(getattr(config, "memory_select_model", ""))
-                        or model_field_primary(getattr(config, "aux_model", "")) or main_model)
+        role_config = config
+        if model_name:
+            role_config = copy(config)
+            role_config.model_name = model_name
+        select_chain = resolve_chain(role_config, "memory_select")
+        select_model = select_chain[0] if select_chain else main_model
         # Provider-qualified and bare spellings of the same model must not
         # accidentally enable the expensive path. Treat equal bare names
         # conservatively even when they route through different connections.
@@ -353,7 +360,7 @@ class ProjectionOptions:
             whole_store_weak_score=float(getattr(config, "memory_whole_store_weak_score", cls.whole_store_weak_score)),
             select_model_name=select_model,
             main_model_name=main_model,
-            select_model_factory=None if same_model else lambda: create_llm(config, model_name=select_model),
+            select_model_factory=None if same_model else lambda: create_role_llm(role_config, "memory_select"),
             top_k=_int_or_default(getattr(config, "knowledge_top_k", cls.top_k), cls.top_k),
             prior_sessions_policy=_coerce_prior_sessions_policy(
                 getattr(config, "context_prior_sessions", cls.prior_sessions_policy)

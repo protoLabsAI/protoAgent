@@ -1617,15 +1617,26 @@ def create_describe_image_fn(
     Lets a TEXT-only chat model "see" an attached image: the bytes are sent to the configured
     vision model (``knowledge.image_describe_model``) as an OpenAI ``image_url`` block, and its
     description + transcribed text is inlined as context by the attachment pipeline — the same
-    shape as ``create_transcribe_fn`` does for audio. Returns ``None`` when no describe model is
-    configured (images then stay unsupported on non-vision models, with a clear error)."""
-    # ``knowledge.image_describe_model`` is list-capable (ADR 0133); route on its primary
-    # entry (and blank → None → images unsupported, unchanged) until a later milestone reads
-    # the chain. ``model_field_primary`` keeps a scalar value byte-identical to the old strip.
-    model = model_field_primary(getattr(config, "image_describe_model", ""))
-    if not model:
+    shape as ``create_transcribe_fn`` does for audio. Blank inherits the main chain.
+    Returns ``None`` when the resolved chain cannot read images."""
+    from graph.model_roles import create_role_llm, resolve_chain
+
+    names = resolve_chain(config, "image_describe")
+    if not names:
         return None
-    llm = create_llm(config, model_name=model)
+    llm = create_role_llm(config, "image_describe")
+    explicit = bool(model_field_primary(getattr(config, "image_describe_model", "")))
+    models = llm.models if len(names) > 1 else [llm]
+    for model in models:
+        profile = getattr(model, "profile", None) or {}
+        # Explicit describe models historically assert vision support. Preserve that
+        # for unknown profiles; inherited models use the main model's vision flag.
+        supports_images = profile.get("image_inputs")
+        if supports_images is False or (
+            supports_images is None and not explicit and not getattr(config, "model_vision", False)
+        ):
+            log.warning("[image_describe] role unavailable: resolved model lacks image support")
+            return None
 
     def _describe(data: bytes, mime: str, filename: str) -> str:
         import base64

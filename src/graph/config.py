@@ -234,14 +234,11 @@ _ROLE_FIELDS: dict[str, str] = {
     "memory_gist": "memory_gist_model",
 }
 
-#: What a BLANK role inherits — its parent's whole chain (D2). ``main`` is the root (its
-#: chain is ``model.name`` ++ the legacy ``routing.fallback_models`` tail, so it has no
-#: parent here); ``image_describe`` is absent on purpose — a blank describe model stays OFF
-#: (``[]``), never inheriting, so a text-only chat model with no describe model refuses
-#: image attachments rather than silently using the main model. ``memory_select`` and
-#: ``soul_drift_judge`` inherit aux (not main) per the D2 exceptions.
+#: Blank roles inherit their parent's whole chain (ADR 0133 D2).
+#: Image description inherits main because aux models may not support images.
 _ROLE_PARENT: dict[str, str] = {
     "aux": "main",
+    "image_describe": "main",
     "compaction": "aux",
     "goal_eval": "aux",
     "memory_select": "aux",
@@ -291,7 +288,7 @@ def role_chain(config, role: str) -> list[str]:
 
     A SET chain is exactly what's listed; a BLANK role inherits its parent's whole chain
     (specific role → aux → main; harvest → aux, facts → harvest, gist → aux), except a blank
-    ``image_describe`` which stays OFF (``[]``) and never inherits. Each entry is run through
+    ``image_describe`` which inherits main directly. Each entry is run through
     the gateway-alias coherence check: one incoherent with the live provider (a bare gateway
     alias under a native-OAuth provider with no gateway key to route it) is DROPPED with a
     log line naming the role and position, and a chain EMPTIED by that drop is treated as
@@ -326,8 +323,6 @@ def role_chain(config, role: str) -> list[str]:
         chain = _coherent(_role_raw_chain(config, r), r)
         if chain:
             return chain
-        if r == "image_describe":
-            return []  # a blank describe model stays off — never inherits
         parent = _ROLE_PARENT.get(r)
         return _resolve(parent) if parent is not None else []  # main (root) with nothing set
 
@@ -1532,12 +1527,8 @@ class LangGraphConfig:
     # as-is; video has its audio track pulled by ffmpeg first. Blank disables
     # audio/video ingestion (they error with a clear message).
     transcribe_model: str = "whisper-1"
-    # Vision model used to DESCRIBE attached images for a text-only chat model (#1381) —
-    # the screenshot is sent to this vision-capable gateway model, its description + any
-    # transcribed text is inlined as context the chat model can read. Blank disables image
-    # attachments on non-vision models (they error with a clear "switch models" message). A
-    # scalar or an ordered-list chain (ADR 0133 D1); blank stays OFF and never inherits —
-    # ``role_chain(config, "image_describe")`` returns [] when blank.
+    # Vision model for describing images to text-only callers. A scalar or chain;
+    # blank inherits the main chain (ADR 0133 D2). Unavailable without vision.
     image_describe_model: str | list[str] = ""
     # Semantic recall (ADR 0021): when True, the knowledge store is the
     # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused

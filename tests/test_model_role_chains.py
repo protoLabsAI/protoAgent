@@ -77,9 +77,9 @@ def test_blank_specific_role_falls_through_aux_to_main():
 # ── D2 exceptions ─────────────────────────────────────────────────────────────
 
 
-def test_blank_image_describe_stays_off_and_never_inherits():
-    off = _cfg(model_name="m", aux_model="x", image_describe_model="")
-    assert role_chain(off, "image_describe") == []
+def test_blank_image_describe_inherits_main_chain():
+    off = _cfg(model_name=["m", "backup"], aux_model="x", image_describe_model="")
+    assert role_chain(off, "image_describe") == ["m", "backup"]
     on = _cfg(model_name="m", image_describe_model="vision")
     assert role_chain(on, "image_describe") == ["vision"]
 

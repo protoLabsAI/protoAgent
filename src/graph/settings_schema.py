@@ -1012,8 +1012,8 @@ FIELDS: list[Field] = [
         "Vision-capable gateway model used to DESCRIBE attached images when the chat model "
         "can't see them (text-only) — a single model or an ordered fallback chain (ADR 0133). "
         "The screenshot is sent to this model; its description + any transcribed text is inlined "
-        "as context. Blank disables image attachments on non-vision models (they error with a "
-        "clear message) — unlike the other slots, a blank describe model is never inherited. "
+        "as context. Blank inherits the main model chain; image description is unavailable "
+        "when the resolved models cannot read images. "
         "Needs a vision model (e.g. protolabs/smart); the chat model can stay text-only.",
         options_source="slot_models",
         restart=True,

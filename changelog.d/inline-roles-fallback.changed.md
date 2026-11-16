@@ -1,0 +1,1 @@
+- **Role fallbacks for inline workflows.** Goal verification, memory selection, SOUL drift judging, and image description now use model role chains. Blank image description inherits the main chain and reports unavailable when image support is absent.
