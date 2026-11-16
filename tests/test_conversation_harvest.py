@@ -673,56 +673,66 @@ def test_harvested_chat_shows_as_closed_with_gist_then_expires(tmp_path, history
     assert "closed" not in block2
 
 
-def test_unharvested_close_leaves_no_closed_entry(tmp_path, history_store):
-    """Shift+click / bulk close harvest nothing, so no closed record is written — proven at
-    the one writer: an incognito thread is skipped before the record is ever recorded."""
-    from graph.middleware.memory import load_closed_pool, memory_path
-    from graph.state import ProtoAgentState
+def _retirement_state(monkeypatch, db):
+    from types import SimpleNamespace
 
-    db = str(tmp_path / "c.db")
-    g = StateGraph(ProtoAgentState)
-    g.add_node("n", lambda s: {"messages": [AIMessage(content="noted")]})
-    g.add_edge(START, "n")
-    g.add_edge("n", END)
-
-    async def main():
-        app = g.compile(checkpointer=build_sqlite_checkpointer(db))
-        await app.ainvoke(
-            {"messages": [HumanMessage(content="secret plan")], "session_id": "chat-x", "incognito": True},
-            {"configurable": {"thread_id": "a2a:chat-9"}},
-        )
-
-    asyncio.run(main())
-
-    async def _boom(transcript, config):
-        raise AssertionError("incognito thread must not be summarized")
-
-    out = asyncio.run(
-        harvest_thread("a2a:chat-9", checkpointer=build_sqlite_checkpointer(db), knowledge_store=None,
-                       config=object(), summarizer=_boom)
-    )
-    assert out is None
-    assert load_closed_pool(memory_path(), closed_days=14) == []
+    monkeypatch.setattr(STATE, "checkpointer", build_sqlite_checkpointer(db))
+    monkeypatch.setattr(STATE, "checkpoint_path", db)
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(checkpoint_harvest_enabled=True))
+    monkeypatch.setattr(STATE, "knowledge_store", None)
+    monkeypatch.setattr(STATE, "memory_store", None)
+    monkeypatch.setattr(STATE, "a2a_task_engine", None)
 
 
-def test_erase_removes_the_closed_entry_but_save_a_summary_keeps_it(tmp_path, history_store):
-    """Erase drops an existing closed record; the ordinary "Save a summary" card cleanup
-    (including_closed=False) keeps it — that carry-over is the whole point."""
-    from graph.middleware.memory import delete_session_summary, load_closed_pool, memory_path
+@pytest.mark.parametrize("erase", [False, True], ids=["unharvested-delete", "erase-existing-summary"])
+def test_delete_route_leaves_no_closed_entry(tmp_path, history_store, monkeypatch, erase):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import operator_api.chat_routes as routes
+    from graph.middleware.memory import load_closed_pool, load_digest_pool, memory_path
 
     db = str(tmp_path / "c.db")
     _seed_chat(db, "a2a:chat-9", "chat-9")
-    assert _harvest_teal(db) is not None
-    base = memory_path()
-    assert [e.session_id for e in load_closed_pool(base, closed_days=14)] == ["chat-9"]
+    if erase:
+        assert _harvest_teal(db) is not None
+        assert load_closed_pool(memory_path(), closed_days=14)
+    _write_open_card(memory_path(), "chat-9", topic="theme", gist="Open theme discussion.")
+    _retirement_state(monkeypatch, db)
+    app = FastAPI()
+    routes.register_chat_routes(app, ui="none")
+    with TestClient(app) as client:
+        response = client.delete(f"/api/chat/sessions/chat-9?harvest=false&forget={str(erase).lower()}")
+    assert response.status_code == 200
+    assert response.json()["harvested"] is False
+    assert asyncio.run(STATE.checkpointer.aget_tuple({"configurable": {"thread_id": "a2a:chat-9"}})) is None
+    assert load_closed_pool(memory_path(), closed_days=14) == []
+    assert load_digest_pool(memory_path(), closed_days=14)[0] == []
 
-    # The "Save a summary" chat-delete cleanup removes the open card but KEEPS the closed record.
-    delete_session_summary("chat-9", base)
-    assert [e.session_id for e in load_closed_pool(base, closed_days=14)] == ["chat-9"]
 
-    # Erase (forget): the closed record is dropped.
-    assert delete_session_summary("chat-9", base, including_closed=True) is True
-    assert load_closed_pool(base, closed_days=14) == []
+def test_idle_retirement_replaces_open_card_with_closed_summary(tmp_path, history_store, monkeypatch):
+    import graph.conversation_harvest as ch
+    from graph.middleware.memory import load_digest_pool, memory_path
+    from server.maintenance_loops import _retire_thread
+
+    db = str(tmp_path / "c.db")
+    # A custom thread id proves cleanup uses the checkpoint's session identity.
+    _seed_chat(db, "custom:theme", "chat-9")
+    _write_open_card(memory_path(), "chat-9", topic="theme", gist="Stale open gist.")
+    _retirement_state(monkeypatch, db)
+
+    async def summarize(thread_id, **kwargs):
+        return await harvest_thread(thread_id, summarizer=_teal_summary, **kwargs)
+
+    monkeypatch.setattr(ch, "harvest_thread", summarize)
+    assert asyncio.run(_retire_thread("custom:theme")) is not None
+    assert asyncio.run(STATE.checkpointer.aget_tuple({"configurable": {"thread_id": "custom:theme"}})) is None
+    pool, _ = load_digest_pool(memory_path(), closed_days=14)
+    assert len(pool) == 1
+    assert pool[0].session_id == "chat-9"
+    assert "closed" in pool[0].line
+    assert "The user wants a teal theme." in pool[0].line
+    assert "Stale open gist." not in pool[0].line
 
 
 def test_closed_carryover_off_writes_nothing(tmp_path, history_store):
