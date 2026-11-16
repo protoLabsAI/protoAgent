@@ -420,6 +420,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 _DIGEST_TOPIC_MAX_CHARS = 80
+_DIGEST_EXCLUDED_SURFACES = ("background", "palette", "activity")
 
 # Session ids become filenames under memory_path() — restrict to the characters
 # real ids use (``:`` included — e.g. ``background:job``) so a crafted id can't
@@ -456,7 +457,7 @@ def _surface_for(session_id: str) -> str:
     if session_id.startswith("job:"):
         # ADR 0129 execution sessions (``job:<execution_uuid>``): background work,
         # never an operator chat. Unlike ADR 0070 ``background:`` workers these ARE
-        # durable sessions, so their summaries persist and list in the digest.
+        # durable sessions, so their summaries persist for on-demand recall.
         return "background"
     if session_id == "system:activity":
         return "activity"
@@ -596,7 +597,8 @@ def load_digest_pool(
     exclude_session_id: str = "",
 ) -> tuple[list[DigestEntry], bool]:
     """The newest-``max_sessions`` digest entries (pre token-trim) and whether
-    the memory dir exists at all.
+    the memory dir exists at all. Automated surfaces are excluded before the
+    newest-N cut so they cannot crowd out chats and outside threads.
 
     ``exclude_session_id`` (ADR 0108 D9, #3186): the ACTIVE session's own
     summary — persisted on every terminal turn since ADR 0069 D4 — must never
@@ -636,7 +638,9 @@ def load_digest_pool(
     except OSError:
         return [], False
     pool: list[DigestEntry] = []
-    for _, fpath in files[:max_sessions]:
+    for _, fpath in files:
+        if len(pool) >= max_sessions:
+            break
         try:
             with open(fpath, encoding="utf-8") as fh:
                 summary = json.load(fh)
@@ -644,6 +648,8 @@ def load_digest_pool(
             continue
         sid = str(summary.get("session_id") or "unknown")
         if exclude_session_id and sid == exclude_session_id:
+            continue
+        if _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
             continue
         pool.append(DigestEntry(sid, _digest_line(summary)))
     return pool, True
@@ -676,6 +682,7 @@ def load_digest(
                 memory_dir=memory_dir,
                 limit=max_sessions,
                 exclude_session_id=exclude_session_id,
+                exclude_surfaces=_DIGEST_EXCLUDED_SURFACES,
             )
         except Exception:  # noqa: BLE001 — no FTS5 / no terms / index error → newest
             log.debug("[memory] relevant digest unavailable — falling back to newest", exc_info=True)
@@ -684,7 +691,7 @@ def load_digest(
         pairs: list[DigestEntry] = []
         for m in matches:
             sid = str(m.get("session_id") or "")
-            if not sid or not is_safe_session_id(sid):
+            if not sid or not is_safe_session_id(sid) or _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
                 continue
             for fpath in session_file_candidates(sid, base):
                 if not os.path.isfile(fpath):
@@ -693,6 +700,8 @@ def load_digest(
                     with open(fpath, encoding="utf-8") as fh:
                         summary = json.load(fh)
                 except (OSError, json.JSONDecodeError, ValueError):
+                    break
+                if _surface_for(str(summary.get("session_id") or "unknown")) in _DIGEST_EXCLUDED_SURFACES:
                     break
                 pairs.append(DigestEntry(sid, _digest_line(summary)))
                 break
@@ -714,8 +723,8 @@ def load_prior_sessions(
     framing header plus one line per session (id, timestamp, surface, topic,
     message count) — instead of verbatim message bodies; the full summary is
     retrievable on demand via the ``recall_session`` tool, which renders it
-    with :func:`format_session_summary`. Reads up to ``max_sessions`` newest
-    JSON files and drops oldest-first to fit ``max_tokens`` (char/4
+    with :func:`format_session_summary`. Selects up to ``max_sessions`` newest
+    eligible summaries and drops oldest-first to fit ``max_tokens`` (char/4
     approximation). ``memory_dir`` defaults to the writer's resolved
     ``memory_path()``. Never raises.
     """

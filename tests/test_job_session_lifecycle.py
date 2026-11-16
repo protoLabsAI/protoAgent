@@ -313,11 +313,10 @@ def test_job_session_summary_persists_under_an_encoded_cross_platform_key(monkey
     assert json.loads(encoded.read_text(encoding="utf-8"))["session_id"] == JOB_A
 
     # Unlike disposable ADR 0070 ``background:`` workers, a job session's summary is a
-    # durable prior session: it lists in the digest, attributed to the background surface.
+    # durable prior session: it remains recallable but does not take a digest slot.
     pool, exists = load_digest_pool(str(tmp_path))
     assert exists
-    entry = next(e for e in pool if e.session_id == JOB_A)
-    assert "· background ·" in entry.line
+    assert pool == []
 
 
 # ── retirement: pins and the ADR boundary ─────────────────────────────────────────

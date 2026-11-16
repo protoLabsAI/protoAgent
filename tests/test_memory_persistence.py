@@ -607,14 +607,14 @@ def test_persist_session_removes_legacy_raw_name(tmp_path):
     """After a successful encoded write, the pre-encoding raw-':' file for the
     same id is removed — the digest must never list the session twice."""
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
-    (tmp_path / "system:activity.json").write_text(
-        json.dumps({"session_id": "system:activity", "messages": [], "timestamp": "old"})
+    (tmp_path / "a2a:outside.json").write_text(
+        json.dumps({"session_id": "a2a:outside", "messages": [], "timestamp": "old"})
     )
-    mod._persist_session(_make_state("system:activity"), "t-win2")
-    assert (tmp_path / "system%3Aactivity.json").exists()
-    assert not (tmp_path / "system:activity.json").exists()
+    mod._persist_session(_make_state("a2a:outside"), "t-win2")
+    assert (tmp_path / "a2a%3Aoutside.json").exists()
+    assert not (tmp_path / "a2a:outside.json").exists()
     _, ids = mod.load_prior_sessions_digest(str(tmp_path))
-    assert ids == ["system:activity"]  # once, not twice
+    assert ids == ["a2a:outside"]  # once, not twice
 
 
 def test_persist_session_overwrites_existing_summary(tmp_path):

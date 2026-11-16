@@ -618,3 +618,32 @@ def test_load_memory_defaults_the_exclusion_to_the_ambient_session(tmp_path, mon
     monkeypatch.setattr(tracing, "current_session_id", lambda: "mine")
     assert "mine" not in mw.load_memory(memory_path=str(tmp_path))
     assert "mine" in mw.load_memory(memory_path=str(tmp_path), exclude_session_id="")
+
+
+@pytest.mark.parametrize("policy", ["newest", "relevant"])
+@pytest.mark.parametrize("legacy_names", [False, True])
+def test_automated_sessions_do_not_take_chat_digest_slots(tmp_path, policy, legacy_names):
+    from graph.middleware.memory import session_filename
+    from graph.session_search import search_session_summaries
+
+    for i in range(3):
+        _write(tmp_path, f"chat-{i}", "rocket launch", mtime=100 + i)
+    _write(tmp_path, "a2a:outside", "rocket launch", mtime=90)
+    automated = [f"job:{i}" if i % 2 else f"palette-{i}" for i in range(10)]
+    automated += ["system:activity", "background:legacy"]
+    for i, sid in enumerate(automated):
+        _write(tmp_path, sid, "rocket launch", mtime=200 + i)
+        if legacy_names:
+            (tmp_path / session_filename(sid)).rename(tmp_path / f"{sid}.json")
+    if policy == "relevant" and not _fts_available(tmp_path):
+        pytest.skip("SQLite FTS5 unavailable")
+
+    result = load_digest(policy, query="rocket launch", memory_dir=str(tmp_path))
+    assert {e.session_id for e in result.entries} == {"chat-0", "chat-1", "chat-2", "a2a:outside"}
+    assert all(sid not in result.block for sid in automated)
+    if policy == "newest":
+        assert [e.session_id for e in result.entries] == ["chat-2", "chat-1", "chat-0", "a2a:outside"]
+    else:
+        # Explicit search still exposes durable automation summaries.
+        hits = search_session_summaries("rocket launch", memory_dir=str(tmp_path), surface="activity")
+        assert [hit["session_id"] for hit in hits] == ["system:activity"]
