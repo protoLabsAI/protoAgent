@@ -20,8 +20,8 @@ predicate here via ``set_waiting_check``; ``still_waiting`` runs it.
 It lives in ``scheduler`` (not ``server``) because the scheduler must never import the
 server bootstrap (import-layering contract). Keyed by ``(job_id, generation)`` — the
 generation is the job's ``created_at``, so a cancel-and-recreate on the same id starts
-clean (its new generation has no entry). Local schedulers register their existing
-jobs stores at construction; deadlines are loaded and written through to those stores.
+clean (its new generation has no entry). Local schedulers that adopt existing jobs
+register their stores at construction; deadlines are loaded and written through to those stores.
 Reads refresh from SQLite so cancellation or edits by another producer cannot leave a
 stale cached deadline. Without a registered store the registry remains in-memory.
 """
@@ -49,17 +49,18 @@ def _register_store(store) -> None:
     """Attach an existing scheduler DB and load its deadlines before polling."""
     path = store.path
     with _lock, closing(sqlite3.connect(path)) as db:
-        _stores.add(store)
         rows = db.execute(
             "SELECT id, created_at, followup_backoff_until FROM jobs"
         ).fetchall()
+        # A failed load must not attach a store that breaks every later registry call.
+        _stores.add(store)
         for job_id, generation, until in rows:
             if until is not None:
                 _BACKOFF[(job_id, generation)] = until
 
 
 def _write(
-    job_id: str, generation: str | None, until: float | None, *, expired_by: float | None = None,
+    job_id: str, generation: str | None, until: float | None,
 ) -> None:
     # Caller holds the registry lock. Never invoke this while holding a store lock.
     for path in {store.path for store in _stores}:
@@ -69,9 +70,6 @@ def _write(
             if generation is not None:
                 sql += " AND created_at = ?"
                 args.append(generation)
-            if expired_by is not None:
-                sql += " AND followup_backoff_until <= ?"
-                args.append(expired_by)
             db.execute(sql, args)
 
 
@@ -117,11 +115,8 @@ def is_backed_off(job_id: str, generation: str, now: float) -> bool:
     """Whether this job generation is currently backed off at ``now`` (epoch seconds)."""
     with _lock:
         until = _read(job_id, generation)
-        if until is not None and now >= until:
-            # Another process may have extended the deadline since the read.
-            _write(job_id, generation, None, expired_by=now)
-            _BACKOFF.pop((job_id, generation), None)
-            until = _read(job_id, generation)
+        # Keep elapsed deadlines: the server distinguishes a later hourly fire from
+        # the first transition into backoff, including after a restart.
         return until is not None and now < until
 
 
@@ -149,7 +144,7 @@ def still_waiting(origin_session: str) -> bool | None:
 
 def clear(job_id: str, generation: str | None = None) -> None:
     """Drop the backoff for a job. With ``generation`` given, drop only that generation;
-    with ``None``, drop every generation of the id (used when the job is edited)."""
+    with ``None``, drop every generation of the id."""
     with _lock:
         _write(job_id, generation, None)
         if generation is None:

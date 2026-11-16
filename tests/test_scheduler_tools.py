@@ -13,6 +13,67 @@ import pytest
 from tools.lg_tools import _build_scheduler_tools
 
 
+@pytest.fixture
+def work_contexts(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from background.store import BackgroundStore
+    from inbox.store import InboxStore
+    from runtime.state import STATE
+    from scheduler.local import LocalScheduler
+
+    inbox = InboxStore(str(tmp_path / "inbox.db"))
+    scheduler = LocalScheduler("origin-test", invoke_url="http://test", db_dir=tmp_path / "scheduler")
+    background = BackgroundStore(str(tmp_path / "background.db"))
+    monkeypatch.setattr(STATE, "inbox_store", inbox)
+    monkeypatch.setattr(STATE, "scheduler", scheduler)
+    monkeypatch.setattr(STATE, "background_mgr", SimpleNamespace(store=background))
+    item = inbox.add("work", priority="now", origin_session="chat-a")
+    cron = scheduler.add_job("work", "0 * * * *", origin_session="chat-a")
+    bg = background.create(agent_name="origin-test", origin_session="chat-a",
+                           subagent_type="test", description="work", prompt="work")
+    return {
+        "inbox": inbox.execution_identity(item["id"])["context_id"],
+        "cron": cron.context_id,
+        "background": f"background:{bg}",
+        "chat": "chat-a",
+        "missing_job": "job:missing",
+        "missing_background": "background:missing",
+    }
+
+
+@pytest.mark.parametrize("source, expected", [
+    ("inbox", "chat-a"), ("cron", "chat-a"), ("background", "chat-a"),
+    ("chat", "chat-a"), ("missing_job", ""), ("missing_background", ""),
+])
+def test_task_create_binds_to_causing_conversation(work_contexts, tmp_path, source, expected):
+    from tasks.store import TaskStore
+    from tools.scheduler_tools import _build_task_tools
+
+    store = TaskStore(str(tmp_path / "tasks.db"))
+    create = next(t for t in _build_task_tools(store) if t.name == "task_create")
+    out = create.invoke({"title": "Follow up", "state": {"session_id": work_contexts[source]}})
+    assert out.startswith("Created ")
+    assert store.list()[0]["session_id"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source, expected", [
+    ("inbox", "chat-a"), ("cron", "chat-a"), ("background", "chat-a"),
+    ("missing_job", None), ("missing_background", None),
+])
+@pytest.mark.parametrize("when", ["2099-05-01T15:00:00+00:00", "0 9 * * *"])
+async def test_schedule_inherits_origin_without_changing_execution(work_contexts, source, expected, when):
+    context = work_contexts[source]
+    sched = _FakeScheduler()
+    out = await _schedule_tool(sched).ainvoke(
+        {"prompt": "Follow up", "when": when, "state": {"session_id": context}}
+    )
+    assert out.startswith("Scheduled job ")
+    assert sched.last_origin_session == expected
+    assert sched.last_context_id == (None if when == "0 9 * * *" else context)
+
+
 class _FakeJob:
     def __init__(self, next_fire: str):
         self.id = "job-1"

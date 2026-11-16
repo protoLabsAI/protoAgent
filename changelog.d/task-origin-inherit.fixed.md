@@ -1,0 +1,1 @@
+- **Tasks inherit their originating conversation.** Tasks and schedules created during inbox, scheduled, or background turns now resolve their originating conversation for replies and result delivery. Unresolvable origins remain empty, while schedule execution contexts and waits retain their existing behavior.

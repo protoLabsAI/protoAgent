@@ -466,7 +466,7 @@ async function stubPhoneConversations(page: Page, rows = phoneConversationRows()
   );
 }
 
-test("mobile: Conversations pins above the chats, and its list and a thread fill the screen", async ({ page }) => {
+test("mobile: Conversations pins above the chats, and its list and a thread fill the screen", async ({ page }, testInfo) => {
   await stubPhoneConversations(page);
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.locator(".mshell")).toBeVisible();
@@ -502,6 +502,12 @@ test("mobile: Conversations pins above the chats, and its list and a thread fill
   // Tapping a thread opens it full screen; the header gets ← List, which returns to the list.
   await pane.locator(".conversations-row__btn").first().click();
   await expect(page.locator(".mshell-conversations .conversation-reader")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2 })).toBeFocused();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await testInfo.attach("reader-title-on-open-390px", {
+    body: await page.screenshot({ path: testInfo.outputPath("reader-title-on-open-390px.png") }),
+    contentType: "image/png",
+  });
   const back = page.locator(".mshell-back-list");
   await expect(back).toBeVisible();
   await expect(back).toContainText("List");

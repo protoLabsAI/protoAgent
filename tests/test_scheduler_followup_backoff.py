@@ -324,13 +324,16 @@ def test_backoff_survives_restart_and_release_is_persisted(tmp_path, release):
         assert not scheduler._followup_backed_off(job, now)
     else:
         scheduler.update_job(job.id, "updated follow up", "*/5 * * * *")
+    expected = deadline if release == "deadline" else None
+    assert followup_backoff.backoff_until(job.id, job.created_at) == expected
     with scheduler._connect() as db:
         assert db.execute(
             "SELECT followup_backoff_until FROM jobs WHERE id = ?", (job.id,)
-        ).fetchone()[0] is None
+        ).fetchone()[0] == expected
     followup_backoff.clear_all()
     scheduler = LocalScheduler("durable", invoke_url="http://test", db_dir=tmp_path)
-    assert followup_backoff.backoff_until(job.id, job.created_at) is None
+    assert followup_backoff.backoff_until(job.id, job.created_at) == expected
+    assert not followup_backoff.is_backed_off(job.id, job.created_at, deadline)
 
 
 def test_recreated_job_does_not_inherit_backoff_or_stale_writes(tmp_path):
@@ -369,3 +372,52 @@ def test_backoff_column_migrates_existing_jobs(tmp_path):
     followup_backoff.clear_all()
     scheduler = LocalScheduler("legacy", invoke_url="http://test", db_dir=tmp_path)
     assert followup_backoff.is_backed_off(job.id, job.created_at, deadline - 1)
+
+
+def test_failed_store_load_does_not_poison_registry(tmp_path):
+    import sqlite3
+
+    from scheduler.local import LocalScheduler
+
+    broken = LocalScheduler("broken", invoke_url="http://test", db_dir=tmp_path / "broken")
+    with broken._connect() as db:
+        db.execute("ALTER TABLE jobs DROP COLUMN followup_backoff_until")
+    followup_backoff.clear_all()
+    with pytest.raises(sqlite3.OperationalError, match="followup_backoff_until"):
+        followup_backoff._register_store(broken)
+
+    # Failed registration leaves the in-memory fallback usable.
+    followup_backoff.set_backoff("memory", "generation", 100)
+    assert followup_backoff.is_backed_off("memory", "generation", 99)
+    followup_backoff.clear("memory")
+    assert followup_backoff.backoff_until("memory", "generation") is None
+
+    healthy = LocalScheduler("healthy", invoke_url="http://test", db_dir=tmp_path / "healthy")
+    job = healthy.add_job("follow up", "*/5 * * * *")
+    followup_backoff.set_backoff(job.id, job.created_at, 100)
+    assert followup_backoff.is_backed_off(job.id, job.created_at, 99)
+    followup_backoff.clear(job.id, job.created_at)
+    assert followup_backoff.backoff_until(job.id, job.created_at) is None
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_elapsed_backoff_does_not_repeat_waiting_card(tmp_path, monkeypatch, _events, persistent):
+    from scheduler.local import LocalScheduler
+
+    if persistent:
+        scheduler = LocalScheduler("cards", invoke_url="http://test", db_dir=tmp_path)
+        job = scheduler.add_job("follow up", "*/5 * * * *", job_id="job-1", origin_session="chat-42")
+    else:
+        job = _Job()
+    _setup(monkeypatch, job=job, tasks=_FakeTasks(waiting_for="chat-42"))
+    _run(text="NO_UPDATE")
+    _run(text="NO_UPDATE")
+    generation = getattr(job, "created_at", "") or ""
+    deadline = followup_backoff.backoff_until(job.id, generation)
+    assert not followup_backoff.is_backed_off(job.id, generation, deadline)
+    assert followup_backoff.backoff_until(job.id, generation) == deadline
+    if persistent:
+        followup_backoff.clear_all()
+        scheduler = LocalScheduler("cards", invoke_url="http://test", db_dir=tmp_path)
+    _run(text="NO_UPDATE")
+    assert [c["summary"] for c in _cards(_events)] == [a2a._FOLLOWUP_WAITING_SUMMARY]
