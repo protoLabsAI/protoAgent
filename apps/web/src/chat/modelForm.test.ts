@@ -9,6 +9,7 @@ import {
   laneOf,
   modelCardHint,
   modelChoices,
+  modelFieldPrimary,
   modelFormPayload,
   modelPickerData,
   providerOf,
@@ -56,6 +57,36 @@ describe("modelPickerData — schema extraction", () => {
 
   it("falls back to the saved model when the gateway list is empty (same as the composer picker)", () => {
     expect(modelPickerData(groups([], [])).models).toEqual(["protolabs/reasoning"]);
+  });
+
+  it("reads a list-valued model.name (ADR 0133 chain) by its primary entry, not String(array)", () => {
+    const chainGroups = groups([], ["protolabs/reasoning", "protolabs/fast"]);
+    chainGroups[0].fields[0].value = ["protolabs/reasoning", "protolabs/fast"];
+    const data = modelPickerData(chainGroups);
+    expect(data.globalModel).toBe("protolabs/reasoning"); // the primary, never "protolabs/reasoning,protolabs/fast"
+    expect(data.models).toEqual(["protolabs/reasoning", "protolabs/fast"]);
+  });
+});
+
+// ADR 0133 D1: a model-role field (model.name, routing.aux_model, …) is a scalar OR a
+// chain (list). The composer badge and the /model picker read it by its PRIMARY entry.
+describe("modelFieldPrimary", () => {
+  it("returns a scalar string as itself, trimmed", () => {
+    expect(modelFieldPrimary("protolabs/reasoning")).toBe("protolabs/reasoning");
+    expect(modelFieldPrimary("  protolabs/reasoning  ")).toBe("protolabs/reasoning");
+  });
+  it("collapses a list to its first non-blank entry (never a comma-joined id)", () => {
+    expect(modelFieldPrimary(["a", "b"])).toBe("a");
+    expect(modelFieldPrimary(["  ", "", "b"])).toBe("b");
+  });
+  it("is empty for a blank scalar, an empty/blank list, and non-string values", () => {
+    expect(modelFieldPrimary("")).toBe("");
+    expect(modelFieldPrimary("   ")).toBe("");
+    expect(modelFieldPrimary([])).toBe("");
+    expect(modelFieldPrimary(["", "  "])).toBe("");
+    expect(modelFieldPrimary(null)).toBe("");
+    expect(modelFieldPrimary(undefined)).toBe("");
+    expect(modelFieldPrimary(42)).toBe("");
   });
 });
 
