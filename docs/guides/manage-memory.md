@@ -88,6 +88,11 @@ The confirmation dialog asks one **Memory** question with three choices:
 - **Erase from memory** also removes the summaries and archives this chat
   already saved.
 
+Deleting a chat removes it from the server-held chat list and from other
+devices when they sync. Its associated Work tasks remain; delete those
+separately if needed. See [What is kept, and where](/guides/what-is-kept) for
+retention and device sync.
+
 Deleting or clearing also removes the chat's session summary, attachments and
 [standing directives](/guides/scheduler#standing-directives).
 **Don't save anything** leaves previously saved facts in the knowledge store;

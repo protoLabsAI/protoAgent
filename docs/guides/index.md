@@ -34,6 +34,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 - [Connect MCP servers](/guides/mcp)
 - [Connect Discord](/guides/discord)
 - [Use browser automation](/guides/browser-automation)
+- [What is kept, and where](/guides/what-is-kept)
 - [Use protoAgent on your phone or tablet](/guides/phone-access)
 - [Manage paired devices](/guides/pairing)
 - [Export or copy an agent](/guides/agent-snapshots)

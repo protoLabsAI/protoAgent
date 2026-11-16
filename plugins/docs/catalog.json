@@ -60,6 +60,7 @@
         {
           "label": "Devices and data",
           "pages": [
+            "guides/what-is-kept.md",
             "guides/phone-access.md",
             "guides/pairing.md",
             "guides/agent-snapshots.md",
@@ -324,6 +325,10 @@
     },
     "guides/python-runtime.md": {
       "title": "Enable document creation (desktop)",
+      "status": "current"
+    },
+    "guides/what-is-kept.md": {
+      "title": "What is kept, and where",
       "status": "current"
     },
     "guides/manage-memory.md": {

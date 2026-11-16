@@ -118,7 +118,7 @@ a clean one.
 ```yaml
 checkpoint:
   db_path: /sandbox/checkpoints.db   # blank = in-memory
-  keep_per_thread: 5                 # latest checkpoints kept per session
+  keep_per_thread: 2                 # latest checkpoints kept per session
   max_age_days: 30                   # drop sessions idle longer than this (0 = never)
   prune_interval_hours: 6            # sweep cadence (0 disables)
 ```
@@ -146,10 +146,14 @@ out, it's first summarized into the `history` table by the cheap aux model and
 `session_search` and readable via `recall_session` while the bulky raw history is
 reclaimed — signal kept, space freed. Needs the knowledge middleware enabled. An
 explicit delete (the chat tab's trash button, `DELETE /api/chat/sessions/{id}`)
-harvests only when the dialog's Harvest switch is on, whatever this setting says.
-Compaction archives a long chat's earlier messages on its own, and the delete
-dialog can forget those too; see
-[Conversations in memory, and deleting a chat](/guides/knowledge#conversations-in-memory-and-deleting-a-chat).
+uses the dialog's **Memory** choice instead of this setting: **Save a summary**
+harvests before deleting; **Don't save anything** leaves earlier saved memory
+alone; **Erase from memory** also removes the chat's saved summaries and archives.
+**Save a summary** is the default for ordinary chats. Incognito chats omit it
+and default to **Don't save anything**. See
+[Delete a chat and its saved memory](/guides/manage-memory#delete-a-chat) for
+the limits, and [What is kept, and where](/guides/what-is-kept) for the separate
+retention policies for turns, checkpoints, and saved history.
 
 ## What's already optimal
 

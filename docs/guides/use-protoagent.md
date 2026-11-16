@@ -30,6 +30,7 @@ Start with [Use the app](/guides/react-tauri-ui) for chat and controls. Choose [
 
 ## Devices and data
 
+- [What is kept, and where](/guides/what-is-kept)
 - [Use protoAgent on your phone or tablet](/guides/phone-access)
 - [Manage paired devices](/guides/pairing)
 - [Export or copy an agent](/guides/agent-snapshots)
