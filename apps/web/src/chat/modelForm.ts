@@ -90,6 +90,20 @@ export function bareModel(value: string, known?: Set<string>): string {
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x) : [];
 
+/** The PRIMARY model id of a model-role field value (ADR 0133 D1): a scalar is itself, a
+ *  list collapses to its first non-blank string entry, and a blank (or anything else)
+ *  yields "". The web counterpart of the backend `model_field_primary` — the composer
+ *  badge and the /model picker read `model.name` by its primary while the chain's
+ *  fallbacks are consumed by a later milestone. `model.name` is now a `string_list`, so
+ *  `String(value)` would comma-join a chain into an id that matches no option. */
+export function modelFieldPrimary(value: unknown): string {
+  if (Array.isArray(value)) {
+    const first = value.find((v): v is string => typeof v === "string" && v.trim() !== "");
+    return first ? first.trim() : "";
+  }
+  return typeof value === "string" ? value.trim() : "";
+}
+
 /** Extract the picker's inputs from the settings schema (`GET /api/settings/schema`) —
  *  the SAME source the composer's model menu reads, so /model can never disagree with it. */
 export function modelPickerData(groups: SettingsGroup[], liveProvider = ""): ModelPickerData {
@@ -97,7 +111,9 @@ export function modelPickerData(groups: SettingsGroup[], liveProvider = ""): Mod
   const name = fields.find((f) => f.key === "model.name");
   const favs = fields.find((f) => f.key === "model.favorites");
   const prov = fields.find((f) => f.key === "model.provider");
-  const globalModel = typeof name?.value === "string" ? name.value : "";
+  // `model.name` is now a role chain (ADR 0133 D1) — scalar OR list. The picker's default
+  // is the chain's PRIMARY entry; `String(value)` would comma-join a list into a non-id.
+  const globalModel = modelFieldPrimary(name?.value);
   const models = strings(name?.options);
   return {
     favorites: [...new Set(strings(favs?.value))],

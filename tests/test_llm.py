@@ -239,6 +239,51 @@ def test_create_llm_routes_acp_model_name_to_acp_aux(monkeypatch):
     assert out is sentinel and captured["agent"] == "claude"
 
 
+# ── ADR 0133: a model-role field may be an ordered chain (a list) ────────────────
+# The runtime resolves a chain to its PRIMARY entry until a later milestone reads the
+# fallbacks. A list reaching `.strip()` in split_slot_target / _build_llm_kwargs used to
+# raise AttributeError and fail EVERY agent build for a config M1 now makes loadable.
+
+
+def test_build_llm_kwargs_collapses_a_list_model_name_to_its_primary():
+    kwargs = _build_llm_kwargs(LangGraphConfig(model_name=["protolabs/primary", "protolabs/fallback"]))
+    assert kwargs["model"] == "protolabs/primary"
+
+
+def test_split_slot_target_routes_a_list_model_name_on_its_primary():
+    from graph.llm import split_slot_target
+
+    cfg = LangGraphConfig.from_dict(
+        {
+            "providers": [{"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"}],
+            "model": {"name": ["prod-gateway:reasoning", "prod-gateway:backup"]},
+        }
+    )
+    assert split_slot_target(cfg.model_name, cfg) == ("prod-gateway", "reasoning")
+
+
+def test_create_llm_builds_the_main_model_from_a_list_model_name():
+    from graph.llm import create_llm
+
+    cfg = LangGraphConfig(
+        model_name=["protolabs/primary", "protolabs/fallback"],
+        api_base="http://gw.test/v1",
+        api_key="sk-test",
+    )
+    out = create_llm(cfg)  # the main build — the model_name argument is None, so config.model_name is read
+    assert out.model_name == "protolabs/primary"
+
+
+def test_create_llm_accepts_a_list_model_name_argument():
+    # An aux/goal/compaction/subagent slot may itself be a chain; the explicit model_name
+    # argument collapses to its primary rather than raising at the `acp:`-prefix `.strip()`.
+    from graph.llm import create_llm
+
+    cfg = LangGraphConfig(api_base="http://gw.test/v1", api_key="sk-test")
+    out = create_llm(cfg, model_name=["protolabs/aux-primary", "protolabs/aux-fallback"])
+    assert out.model_name == "protolabs/aux-primary"
+
+
 # --- #1931: the shared gateway HTTP client (api_base + bearer + allowlisted UA) ---
 
 

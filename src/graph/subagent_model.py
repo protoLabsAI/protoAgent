@@ -96,13 +96,21 @@ def resolve_subagent_model(
     ``include_default=False`` stops after the turn override — the background fire's
     form: with neither a pin nor an override its turn keeps the configured default.
     ``pinned`` supplies the pin directly when the caller already holds the subagent's
-    config entry (``None`` → read it from the registry)."""
+    config entry (``None`` → read it from the registry).
+
+    ``routing.aux_model`` is now an ADR 0133 role chain (a scalar or a list), so its
+    PRIMARY entry is taken via ``model_field_primary`` — the same reader ``agent._
+    resolve_aux_model`` uses — and a list value no longer collapses to ``""`` and
+    misroutes the delegation onto the main model. Chain-aware aux fan-out lands in a
+    later milestone."""
+    from graph.config import model_field_primary
+
     pin = _clean(pinned) if pinned is not None else pinned_subagent_model(subagent_type)
     for candidate in (pin, _clean(turn_model)):
         if candidate:
             return candidate
     if include_default:
-        aux = _clean(getattr(config, "aux_model", ""))
+        aux = model_field_primary(getattr(config, "aux_model", ""))
         if aux:
             return aux
     return None

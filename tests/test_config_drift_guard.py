@@ -34,7 +34,7 @@ import pytest
 
 from graph.config import GenerationProfile, LangGraphConfig
 from graph.config_io import config_to_dict
-from graph.settings_schema import FIELDS
+from graph.settings_schema import FIELDS, MODEL_ROLE_CHAIN_KEYS
 
 _SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
 
@@ -109,7 +109,9 @@ def test_fields_types_match_dataclass(field):
     * ``bool``        → default is a ``bool``.
     * ``number``      → default is ``int``/``float`` (and NOT ``bool``, which is
       an ``int`` subclass).
-    * ``string_list`` → default is a ``list``.
+    * ``string_list`` → default is a ``list`` — EXCEPT a model-role chain
+      (``MODEL_ROLE_CHAIN_KEYS``, ADR 0133), which renders as ``string_list`` but
+      accepts a scalar OR a list, so a blank default is the scalar ``""`` / a model id.
 
     ``string``/``select``/``secret`` are intentionally not type-asserted: a blank
     default is often ``""`` and ``select`` values are plain strings, so there is
@@ -125,9 +127,15 @@ def test_fields_types_match_dataclass(field):
             f"{field.key!r} is type 'number' but {field.attr} defaults to {type(val).__name__} ({val!r})."
         )
     elif field.type == "string_list":
-        assert isinstance(val, list), (
-            f"{field.key!r} is type 'string_list' but {field.attr} defaults to {type(val).__name__} ({val!r})."
-        )
+        if field.key in MODEL_ROLE_CHAIN_KEYS:
+            assert isinstance(val, (str, list)), (
+                f"{field.key!r} is a model-role chain but {field.attr} defaults to "
+                f"{type(val).__name__} ({val!r}) — expected a scalar string or a list."
+            )
+        else:
+            assert isinstance(val, list), (
+                f"{field.key!r} is type 'string_list' but {field.attr} defaults to {type(val).__name__} ({val!r})."
+            )
 
 
 # --------------------------------------------------------------------------- #

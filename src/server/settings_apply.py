@@ -569,10 +569,17 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # credential store, not api_base/key, so this gateway probe would fall back to the
         # SAVED gateway base + a Claude/Codex model and 401 ("No api key passed in"). The
         # wizard's own Test-connection button covers the real OAuth check.
+        from graph.config import model_field_primary
         from graph.providers import is_native_oauth_provider
 
         _runtime = str((config or {}).get("agent_runtime", "native") or "native")
         _model_cfg = (config or {}).get("model")
+        # ``model.name`` may be an ADR 0133 role chain (a list). Setup resolves ONE connection
+        # and probes ONE model, so collapse the submitted name to its primary id once here; a
+        # scalar stays byte-identical to the old ``str(...).strip()``, a blank/empty chain → "".
+        _model_name_primary = model_field_primary(
+            (_model_cfg or {}).get("name") if isinstance(_model_cfg, dict) else ""
+        )
         # Setup writes ONE connection now (ADR 0106) and a qualified `model.name`, so the
         # probe reads the connection rather than the retired provider/base/key triple.
         # Older clients still send the triple; both shapes are accepted here because this
@@ -585,7 +592,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # leaves the prefix unstripped. The wizard writes exactly one today, so this is
         # about any other caller of finish_setup — and about not encoding "there is only
         # one" a second time, which is the assumption this whole change removes.
-        _named = str(((config or {}).get("model") or {}).get("name", "") or "").partition(":")[0].strip().lower()
+        _named = _model_name_primary.partition(":")[0].strip().lower()
         _conn = next((c for c in _conns if str(c.get("id", "") or "").strip().lower() == _named), None)
         if _conn is None:
             _conn = _conns[0] if _conns else None
@@ -598,9 +605,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # let the operator connect a model later from Settings ▸ Model. A config that DOES
         # name a model (or declares a connection) is untouched: it still probes below and
         # still refuses on failure.
-        _submitted_model_name = (
-            str((_model_cfg or {}).get("name", "") or "").strip() if isinstance(_model_cfg, dict) else ""
-        )
+        _submitted_model_name = _model_name_primary
         _no_model = not _conns and not _submitted_model_name
         # Explore mode writes the registry as DECLARED-EMPTY. The shipped template
         # (config/langgraph-config.example.yaml) declares a placeholder `gateway`
@@ -634,7 +639,9 @@ def _build_settings_callbacks() -> dict[str, Any]:
                 test_base = m.get("api_base") or (live.base_url if live else "")
                 test_key = m.get("api_key") or (live.api_key if live else "")
                 allow_env = True
-            test_model = m.get("name") or (STATE.graph_config.model_name if STATE.graph_config else "")
+            test_model = _model_name_primary or (
+                model_field_primary(STATE.graph_config.model_name) if STATE.graph_config else ""
+            )
             # The gateway is asked for a MODEL, not for a route: sending it
             # `gateway:protolabs/reasoning` verbatim probes a model id that does not exist.
             if _conn and isinstance(test_model, str):

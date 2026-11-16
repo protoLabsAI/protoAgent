@@ -429,7 +429,9 @@ except Exception as exc:  # noqa: BLE001 — surfaced with an actionable message
     _IMPORT_ERROR = exc
 
 
-def resolve_claude_model_name(config: "LangGraphConfig", model_name: str | None = None) -> str:
+def resolve_claude_model_name(
+    config: "LangGraphConfig", model_name: str | list[str] | None = None
+) -> str:
     """The concrete Claude model id this native-OAuth call will build against.
 
     ``model_name`` (a per-slot override, e.g. an aux/subagent tier) wins; an empty/None
@@ -441,8 +443,18 @@ def resolve_claude_model_name(config: "LangGraphConfig", model_name: str | None 
     Config load reconciles the aux/subagent/fallback slots ahead of this
     (``graph.config._reconcile_slot_providers``), so a raise here now means the LEAD pair
     itself is incoherent — surfaced at load, not discovered here on a live delegation.
+
+    ``model_name`` and ``config.model_name`` may each be a scalar or an ADR 0133 role
+    chain (a list): the override's chain wins when non-empty, else the lead chain, and the
+    PRIMARY entry is resolved. Normalizing through ``_as_chain`` is what keeps a
+    list-valued ``model.name`` from raising on the old ``.strip()``; the '/'-alias guard
+    below still fires on that primary entry, so an all-alias lead chain surfaces here
+    exactly as a scalar alias lead did.
     """
-    name = (model_name or config.model_name or "").strip()
+    from graph.config import _as_chain
+
+    chain = _as_chain(model_name) or _as_chain(config.model_name)
+    name = chain[0] if chain else ""
     if not name or "/" in name:
         # A gateway alias like "protolabs/reasoning" is meaningless to Anthropic —
         # anthropic-oauth needs a real Claude model id.

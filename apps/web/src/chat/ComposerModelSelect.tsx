@@ -8,7 +8,7 @@ import { Menu, MenuItem, MenuSeparator, type MenuHandle } from "@protolabsai/ui/
 
 import { localChatTurnsQuery, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { chatStore, useChatState } from "./chat-store";
-import { bareModel, composerModelSections, groupByLane, lanesFromOptions, modelPickerData, sameModel } from "./modelForm";
+import { bareModel, composerModelSections, groupByLane, lanesFromOptions, modelFieldPrimary, modelPickerData, sameModel } from "./modelForm";
 
 // The composer's inline model picker — rendered in the DS PromptInput `actions` slot.
 // This is a PER-TAB override: it does NOT change the saved global model (that lives in
@@ -40,7 +40,10 @@ export function ComposerModelSelect() {
   const { sessions, currentSessionId } = useChatState();
   const field = schema.data?.groups.flatMap((g) => g.fields).find((f) => f.key === "model.name");
 
-  const globalModel = String(field?.value ?? "");
+  // `model.name` is an ADR 0133 role chain (scalar OR list). The default-badge comparison
+  // needs the chain's PRIMARY model id — `String([a, b])` would be the comma-joined "a,b",
+  // which matches no option, so no row earns the 'default' badge.
+  const globalModel = modelFieldPrimary(field?.value);
   const picker = schema.data ? modelPickerData(schema.data.groups, runtime.data?.model?.provider ?? "") : null;
   const fallback = field?.options?.length ? field.options : globalModel ? [globalModel] : [];
   const sections = picker

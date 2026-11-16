@@ -752,13 +752,22 @@ def provider_shape_middleware(config) -> list:
     return out
 
 
-def _resolve_aux_model(config, specific: str = "") -> str | None:
+def _resolve_aux_model(config, specific: str | list[str] = "") -> str | None:
     """Pick the model for an auxiliary call: a specific override, else the
-    shared ``routing.aux_model`` fast alias, else None (→ the main model)."""
+    shared ``routing.aux_model`` fast alias, else None (→ the main model).
+
+    Either candidate may be a scalar or an ADR 0133 role chain (a list) — both the
+    ``specific`` override (compaction passes ``config.compaction_model``) and
+    ``routing.aux_model`` are now list-capable. The PRIMARY entry of the first
+    non-empty chain is used; chain-aware aux fan-out lands in a later milestone.
+    ``model_field_primary`` is what keeps a list value from raising on the old
+    ``.strip()``."""
+    from graph.config import model_field_primary
+
     for candidate in (specific, getattr(config, "aux_model", "")):
-        cleaned = (candidate or "").strip()
-        if cleaned:
-            return cleaned
+        primary = model_field_primary(candidate)
+        if primary:
+            return primary
     return None
 
 

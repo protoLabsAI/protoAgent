@@ -71,6 +71,23 @@ def test_precedence_pin_then_override_then_aux_then_main(stub):
     assert resolve_subagent_model(cfg, "stub", "", include_default=False) is None
 
 
+def test_list_valued_aux_resolves_on_its_primary_entry(stub):
+    # ``routing.aux_model`` is now an ADR 0133 role chain: a list must route the
+    # delegation onto its PRIMARY entry, not fall through to the main model as it did
+    # when a non-str aux was cleaned to "" (same reader as agent._resolve_aux_model).
+    cfg = LangGraphConfig()
+    cfg.aux_model = ["protolabs/fast", "protolabs/backup"]
+    assert resolve_subagent_model(cfg, "stub", "") == "protolabs/fast"
+    # An override still wins over the aux chain, and the pin still wins over both.
+    assert resolve_subagent_model(cfg, "stub", OVERRIDE) == OVERRIDE
+    stub.register(PIN)
+    assert resolve_subagent_model(cfg, "stub", OVERRIDE) == PIN
+    # A list of only blanks is as empty as a blank scalar → the main model.
+    stub.register("")
+    cfg.aux_model = ["", "   "]
+    assert resolve_subagent_model(cfg, "stub", "") is None
+
+
 # ── in-graph task() ────────────────────────────────────────────────────────────
 
 

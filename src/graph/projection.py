@@ -334,11 +334,14 @@ class ProjectionOptions:
                         "window for the model, so delivery is unbounded",
                         budget_pct,
                     )
+        from graph.config import model_field_primary
         from graph.llm import create_llm, split_slot_target
 
-        main_model = model_name or getattr(config, "model_name", "")
-        select_model = (str(getattr(config, "memory_select_model", "") or "").strip()
-                        or str(getattr(config, "aux_model", "") or "").strip() or main_model)
+        # Each of these is list-capable (ADR 0133); route on the primary entry. `str(list)`
+        # here would make a chain's Python repr ("['x', 'y']") the whole select-model id.
+        main_model = model_field_primary(model_name) or model_field_primary(getattr(config, "model_name", ""))
+        select_model = (model_field_primary(getattr(config, "memory_select_model", ""))
+                        or model_field_primary(getattr(config, "aux_model", "")) or main_model)
         # Provider-qualified and bare spellings of the same model must not
         # accidentally enable the expensive path. Treat equal bare names
         # conservatively even when they route through different connections.

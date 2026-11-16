@@ -108,7 +108,13 @@ def _is_gateway_alias(model_value, config=None) -> bool:
     be incoherent with a lead provider — that is the whole point of qualifying it. The
     hardcoded prefix tuple only knows the three legacy lanes, so without the registry
     check a custom connection id read as a bare alias and the coherence warning fired on
-    a perfectly routable value."""
+    a perfectly routable value.
+
+    A list value (an ADR 0133 role chain) is never a single alias — ``role_chain`` runs
+    this check per ENTRY — so the scalar-slot reconcile below ignores it (returning False)
+    rather than stringifying ``['protolabs/x']`` and mis-flagging it."""
+    if isinstance(model_value, (list, tuple)):
+        return False
     v = str(model_value or "").strip()
     if not v or "/" not in v:
         return False
@@ -203,6 +209,140 @@ def _reconcile_slot_providers(config) -> list[str]:
         getattr(config, "model_name", ""),
     )
     return flagged
+
+
+# ── Model role chains (ADR 0133 D1/D2) ────────────────────────────────────────
+#
+# Every model-role field accepts either a SCALAR (a chain of one — today's shape) or an
+# ordered LIST (the primary, then each fallback in turn). ``role_chain`` is the single
+# reader: it normalizes the field to a list, applies the D2 inheritance for a blank role,
+# and drops any entry incoherent with the live provider (the same gateway-alias check
+# ``from_dict`` reconciles the scalar slots with). The runtime slot readers migrate onto it
+# in later ADR-0133 milestones; M1 only establishes the config shape and this helper.
+
+#: role name → the ``LangGraphConfig`` attribute that holds its declared chain.
+_ROLE_FIELDS: dict[str, str] = {
+    "main": "model_name",
+    "aux": "aux_model",
+    "compaction": "compaction_model",
+    "goal_eval": "goal_eval_model",
+    "memory_select": "memory_select_model",
+    "soul_drift_judge": "soul_drift_judge_model",
+    "image_describe": "image_describe_model",
+    "memory_harvest": "memory_harvest_model",
+    "memory_facts": "memory_facts_model",
+    "memory_gist": "memory_gist_model",
+}
+
+#: What a BLANK role inherits — its parent's whole chain (D2). ``main`` is the root (its
+#: chain is ``model.name`` ++ the legacy ``routing.fallback_models`` tail, so it has no
+#: parent here); ``image_describe`` is absent on purpose — a blank describe model stays OFF
+#: (``[]``), never inheriting, so a text-only chat model with no describe model refuses
+#: image attachments rather than silently using the main model. ``memory_select`` and
+#: ``soul_drift_judge`` inherit aux (not main) per the D2 exceptions.
+_ROLE_PARENT: dict[str, str] = {
+    "aux": "main",
+    "compaction": "aux",
+    "goal_eval": "aux",
+    "memory_select": "aux",
+    "soul_drift_judge": "aux",
+    "memory_harvest": "aux",
+    "memory_facts": "memory_harvest",
+    "memory_gist": "aux",
+}
+
+
+def _as_chain(value) -> list[str]:
+    """A model-role field value → a clean ordered list of model ids. A scalar is a chain of
+    one; a list is itself; blanks/``None`` drop out. Order preserved, entries stripped."""
+    if isinstance(value, (list, tuple)):
+        return [s for s in (str(v).strip() for v in value if v is not None) if s]
+    if value is None:
+        return []
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def model_field_primary(value) -> str:
+    """The PRIMARY model id of a model-role field value (ADR 0133): the scalar itself, the
+    FIRST entry of a chain (a list), or "" when blank. The runtime slot readers that still
+    expect a scalar collapse a list to this — M1 is config-shape only, so the chain's
+    fallbacks are consumed by a later milestone while :func:`role_chain` already reads the
+    whole chain. Built on the ONE list normalizer (``_as_chain``) so it cannot drift from
+    how a chain is parsed."""
+    chain = _as_chain(value)
+    return chain[0] if chain else ""
+
+
+def _role_raw_chain(config, role: str) -> list[str]:
+    """The chain a role declares ON ITS OWN, before inheritance. ``main`` folds in the
+    legacy ``routing.fallback_models`` tail so it reads as one chain (ADR 0133 D1)."""
+    chain = _as_chain(getattr(config, _ROLE_FIELDS[role], ""))
+    if role == "main":
+        chain = chain + _as_chain(getattr(config, "routing_fallback_models", None))
+    return chain
+
+
+def role_chain(config, role: str) -> list[str]:
+    """The ordered model chain for ``role`` (ADR 0133 D2). Reads only ``config`` and never
+    mutates it, but it is NOT side-effect-free: it emits a ``log.warning`` for each entry it
+    drops as incoherent (see below), so repeated resolution of the same incoherent config
+    logs repeatedly.
+
+    A SET chain is exactly what's listed; a BLANK role inherits its parent's whole chain
+    (specific role → aux → main; harvest → aux, facts → harvest, gist → aux), except a blank
+    ``image_describe`` which stays OFF (``[]``) and never inherits. Each entry is run through
+    the gateway-alias coherence check: one incoherent with the live provider (a bare gateway
+    alias under a native-OAuth provider with no gateway key to route it) is DROPPED with a
+    log line naming the role and position, and a chain EMPTIED by that drop is treated as
+    blank — so it then inherits — exactly as a scalar slot ``from_dict`` reconciles would.
+    """
+    if role not in _ROLE_FIELDS:
+        raise ValueError(f"unknown model role {role!r} (known: {sorted(_ROLE_FIELDS)})")
+
+    native_no_gateway = _native_provider_without_gateway(config)
+
+    def _coherent(chain: list[str], where: str) -> list[str]:
+        if not native_no_gateway:
+            return chain
+        kept: list[str] = []
+        for i, model in enumerate(chain):
+            if _is_gateway_alias(model, config):
+                log.warning(
+                    "[config] dropping incoherent model %r at %s[%d]: a bare gateway alias "
+                    "with no gateway key to route it under native provider %r (ADR 0133)",
+                    model,
+                    where,
+                    i,
+                    getattr(config, "model_provider", ""),
+                )
+                continue
+            kept.append(model)
+        return kept
+
+    # ``_ROLE_PARENT`` is a fixed acyclic module constant, so parent resolution always
+    # terminates at ``main`` (no parent) — no cycle guard is needed.
+    def _resolve(r: str) -> list[str]:
+        chain = _coherent(_role_raw_chain(config, r), r)
+        if chain:
+            return chain
+        if r == "image_describe":
+            return []  # a blank describe model stays off — never inherits
+        parent = _ROLE_PARENT.get(r)
+        return _resolve(parent) if parent is not None else []  # main (root) with nothing set
+
+    return _resolve(role)
+
+
+def _model_role(value, default):
+    """Parse a model-role field (ADR 0133 D1): a SCALAR (a chain of one — today's shape) or
+    an ordered LIST. Shape is PRESERVED so the value round-trips faithfully — a string stays
+    a string, a list is cleaned to ``list[str]`` (blanks/``None`` dropped) — and ``None``/
+    absent falls back to ``default``. A non-string scalar passes through as today's
+    ``data.get(...)`` did, so no existing scalar behavior changes."""
+    if isinstance(value, (list, tuple)):
+        return _as_chain(value)  # ONE list-normalizer, so the two can never drift apart
+    return default if value is None else value
 
 
 @dataclass
@@ -519,6 +659,10 @@ _ROUTED_SCALAR_SLOTS = (
     ("routing", "aux_model"),
     ("compaction", "model"),
     ("memory", "select_model"),
+    ("memory", "harvest_model"),
+    ("memory", "facts_model"),
+    ("memory", "gist_model"),
+    ("knowledge", "image_describe_model"),
     ("goal", "eval_model"),
     ("soul", "drift", "judge", "model"),
 )
@@ -556,7 +700,11 @@ def _routed_model_refs(doc: dict) -> list[tuple[object, object]]:
     for path in _ROUTED_SCALAR_SLOTS:
         parent = _node(doc, path[:-1])
         if isinstance(parent, dict) and path[-1] in parent:
-            refs.append((parent, path[-1]))
+            value = parent[path[-1]]
+            if isinstance(value, list):
+                refs.extend((value, i) for i in range(len(value)))
+            else:
+                refs.append((parent, path[-1]))
     for path in _ROUTED_LIST_SLOTS:
         values = _node(doc, path)
         if isinstance(values, list):
@@ -918,7 +1066,10 @@ def _parse_generation_profiles(raw) -> dict[str, GenerationProfile]:
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
     model_provider: str = "openai"
-    model_name: str = "protolabs/reasoning"  # override in YAML per agent
+    # A scalar (a chain of one) OR an ordered list — the primary, then each fallback in turn
+    # (ADR 0133 D1). Read the resolved chain via ``role_chain(config, "main")``, which also
+    # folds in the legacy ``routing.fallback_models`` tail. Scalar stays the default shape.
+    model_name: str | list[str] = "protolabs/reasoning"  # override in YAML per agent
     api_base: str = "http://gateway:4000/v1"
     api_key: str = ""  # set via OPENAI_API_KEY env (gateway master key)
     temperature: float = 0.2
@@ -1130,7 +1281,9 @@ class LangGraphConfig:
     pruning_at_fraction: float = 0.6
     pruning_keep_messages: int = 20
     pruning_min_chars: int = 4000
-    compaction_model: str = ""  # blank = summarize with the main model
+    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits aux → main. Resolve via
+    # ``role_chain(config, "compaction")``.
+    compaction_model: str | list[str] = ""  # blank = summarize with the main model
 
     # Deferred tools (ADR 0005 #3) — progressive tool disclosure for high tool
     # counts. When enabled, only a small base set + a ``search_tools`` meta-tool
@@ -1225,8 +1378,9 @@ class LangGraphConfig:
     # Auxiliary model — a single cheap/fast alias for the non-reasoning calls
     # (context summarization, goal verification, subagent delegation). Each of
     # those paths uses its own specific override if set, else falls back to
-    # this, else the main model. Blank = everything on the main model.
-    aux_model: str = ""
+    # this, else the main model. Blank = everything on the main model. A scalar or an
+    # ordered-list chain (ADR 0133 D1); resolve via ``role_chain(config, "aux")``.
+    aux_model: str | list[str] = ""
 
     # Goal mode — testable-outcome goals the agent self-drives toward. The
     # machinery is available when enabled, but no goal is active until one is
@@ -1239,7 +1393,9 @@ class LangGraphConfig:
     goal_enabled: bool = True
     goal_max_iterations: int = 8  # continuation budget per goal
     goal_no_progress_limit: int = 3  # identical verifier evidence N times -> unachievable
-    goal_eval_model: str = ""  # blank = main model (llm verifier / fuzzy goals)
+    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits aux → main. Resolve via
+    # ``role_chain(config, "goal_eval")``.
+    goal_eval_model: str | list[str] = ""  # blank = main model (llm verifier / fuzzy goals)
     goal_verify_timeout: float = 120.0  # seconds for command/test/ci verifiers
     # Per-TURN model-round cap for goal-driven turns (#3957) — ``max_iterations`` bounds the
     # continuations, this bounds each one. A goal turn runs unsupervised, and an
@@ -1343,7 +1499,9 @@ class LangGraphConfig:
     # deterministic tier already crossed its threshold — the cheap signal decides whether
     # to look, the judge decides what kind of drift it is. Blank model ⇒ the agent's own.
     soul_drift_judge_enabled: bool = False
-    soul_drift_judge_model: str = ""
+    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits aux → main. Resolve via
+    # ``role_chain(config, "soul_drift_judge")``.
+    soul_drift_judge_model: str | list[str] = ""
 
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
@@ -1377,8 +1535,10 @@ class LangGraphConfig:
     # Vision model used to DESCRIBE attached images for a text-only chat model (#1381) —
     # the screenshot is sent to this vision-capable gateway model, its description + any
     # transcribed text is inlined as context the chat model can read. Blank disables image
-    # attachments on non-vision models (they error with a clear "switch models" message).
-    image_describe_model: str = ""
+    # attachments on non-vision models (they error with a clear "switch models" message). A
+    # scalar or an ordered-list chain (ADR 0133 D1); blank stays OFF and never inherits —
+    # ``role_chain(config, "image_describe")`` returns [] when blank.
+    image_describe_model: str | list[str] = ""
     # Semantic recall (ADR 0021): when True, the knowledge store is the
     # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused
     # with RRF). OFF by default (#1681): out of the box the app must not depend
@@ -1453,7 +1613,20 @@ class LangGraphConfig:
     # Provisional: #4898 / 2026-11-11 eval attempt could not authenticate;
     # external fixture export was also denied. No measured optimum yet.
     memory_whole_store_weak_score: float = 0.5
-    memory_select_model: str = ""
+    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits aux → main. Resolve via
+    # ``role_chain(config, "memory_select")``.
+    memory_select_model: str | list[str] = ""
+    # The LLM passes behind session memory (ADR 0133 D5/D6), each a scalar or an ordered-list
+    # chain. Blank by default; inheritance (role_chain): harvest → aux, facts → harvest,
+    # gist → aux. ``memory_harvest`` names the session-end conversation-harvest model
+    # (graph/conversation_harvest.py), ``memory_facts`` the fact-extraction model
+    # (graph/memory_facts.py), ``memory_gist`` the short-gist summarizer. The runtime
+    # readers migrate onto role_chain in later ADR-0133 milestones; today they still read
+    # ``routing.aux_model`` directly. YAML: `memory.harvest_model` / `memory.facts_model` /
+    # `memory.gist_model`.
+    memory_harvest_model: str | list[str] = ""
+    memory_facts_model: str | list[str] = ""
+    memory_gist_model: str | list[str] = ""
     # Session-summary file retention (the ``memory/*.json`` files behind the prior-session
     # digest and recall_session). Nothing pruned them before. The periodic maintenance
     # sweep deletes files last written more than ``session_retention_days`` ago, then the
@@ -2374,7 +2547,7 @@ class LangGraphConfig:
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
-            model_name=model.get("name", cls.model_name),
+            model_name=_model_role(model.get("name", cls.model_name), cls.model_name),
             api_base=model.get("api_base", cls.api_base),
             api_key=secret_api_key or model.get("api_key", cls.api_key),
             temperature=model.get("temperature", cls.temperature),
@@ -2438,7 +2611,9 @@ class LangGraphConfig:
             pruning_at_fraction=data.get("pruning", {}).get("at_fraction", cls.pruning_at_fraction),
             pruning_keep_messages=data.get("pruning", {}).get("keep_messages", cls.pruning_keep_messages),
             pruning_min_chars=data.get("pruning", {}).get("min_chars", cls.pruning_min_chars),
-            compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
+            compaction_model=_model_role(
+                data.get("compaction", {}).get("model", cls.compaction_model), cls.compaction_model
+            ),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=_migrate_tools(
                 data.get("tools", {}).get("deferred", {}).get("keep", []), "tools.deferred.keep"
@@ -2467,11 +2642,11 @@ class LangGraphConfig:
             tools_subagent_only=_migrate_tools(data.get("tools", {}).get("subagent_only", []), "tools.subagent_only"),
             settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
-            aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
+            aux_model=_model_role(data.get("routing", {}).get("aux_model", cls.aux_model), cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
             goal_max_iterations=data.get("goal", {}).get("max_iterations", cls.goal_max_iterations),
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
-            goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
+            goal_eval_model=_model_role(data.get("goal", {}).get("eval_model", cls.goal_eval_model), cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
             goal_max_rounds_per_turn=data.get("goal", {}).get("max_rounds_per_turn", cls.goal_max_rounds_per_turn),
             watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
@@ -2501,8 +2676,9 @@ class LangGraphConfig:
             soul_drift_judge_enabled=bool(
                 (soul_drift.get("judge", {}) or {}).get("enabled", cls.soul_drift_judge_enabled)
             ),
-            soul_drift_judge_model=str(
-                (soul_drift.get("judge", {}) or {}).get("model", cls.soul_drift_judge_model) or ""
+            soul_drift_judge_model=_model_role(
+                (soul_drift.get("judge", {}) or {}).get("model", cls.soul_drift_judge_model),
+                cls.soul_drift_judge_model,
             ),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
@@ -2558,7 +2734,9 @@ class LangGraphConfig:
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             transcribe_model=knowledge.get("transcribe_model", cls.transcribe_model),
-            image_describe_model=knowledge.get("image_describe_model", cls.image_describe_model),
+            image_describe_model=_model_role(
+                knowledge.get("image_describe_model", cls.image_describe_model), cls.image_describe_model
+            ),
             knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             knowledge_inject_namespaces=list(knowledge.get("inject_namespaces", []) or []),
@@ -2580,7 +2758,10 @@ class LangGraphConfig:
             memory_whole_store_read=memory.get("whole_store_read", cls.memory_whole_store_read),
             memory_whole_store_max_rows=int(memory.get("whole_store_max_rows", cls.memory_whole_store_max_rows)),
             memory_whole_store_weak_score=float(memory.get("whole_store_weak_score", cls.memory_whole_store_weak_score)),
-            memory_select_model=memory.get("select_model", cls.memory_select_model),
+            memory_select_model=_model_role(memory.get("select_model", cls.memory_select_model), cls.memory_select_model),
+            memory_harvest_model=_model_role(memory.get("harvest_model", cls.memory_harvest_model), cls.memory_harvest_model),
+            memory_facts_model=_model_role(memory.get("facts_model", cls.memory_facts_model), cls.memory_facts_model),
+            memory_gist_model=_model_role(memory.get("gist_model", cls.memory_gist_model), cls.memory_gist_model),
             memory_session_retention_days=_coerce_retention(
                 memory.get("session_retention_days"), cls.memory_session_retention_days, "memory.session_retention_days"
             ),

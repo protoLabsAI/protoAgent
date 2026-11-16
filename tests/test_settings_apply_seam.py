@@ -234,6 +234,23 @@ def test_finish_setup_with_a_named_model_still_probes_and_refuses(monkeypatch, t
     assert "model connection failed" in msg
 
 
+def test_finish_setup_probes_the_primary_of_a_list_model_name(monkeypatch, tmp_path):
+    """ADR 0133: ``model.name`` may be a role chain (a list). The save-time connection probe
+    is a single-model 1-token completion, so it must post the chain's PRIMARY id — never the
+    list's Python repr — to ``validate_model_connection``, or the save would refuse on a shape
+    the loader accepts. Here the primary ``gpt-x`` is probed, the probe passes, setup completes."""
+    rec = _wire_finish_setup(monkeypatch, tmp_path, probe=(True, ""))
+    config = {"model": {"name": ["gpt-x", "gpt-y"], "api_base": "http://g/v1", "api_key": "sk-ok"}}
+
+    ok, _msg = settings_apply._build_settings_callbacks()["finish_setup"](config, None)
+
+    assert ok is True
+    assert len(rec["probe"]) == 1  # the probe ran once
+    _base, _key, probed_model = rec["probe"][0]
+    assert probed_model == "gpt-x"  # the primary, not "['gpt-x', 'gpt-y']"
+    assert rec["marked"] == [True]
+
+
 def test_finish_setup_explore_from_the_shipped_template_lands_declared_empty(monkeypatch, tmp_path):
     """#4566 review: an explore finish started from the SHIPPED template must land a
     DECLARED-EMPTY registry, not keep the template's placeholder ``gateway`` connection.

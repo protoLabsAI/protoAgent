@@ -48,11 +48,14 @@ def build_codex_llm(
     flags. ``model_name`` overrides ``config.model_name`` for aux/subagent slots.
     """
     # Local import — avoids a cycle at module load (the client subclasses graph.llm's).
+    from graph.config import model_field_primary
     from graph.providers.codex_client import build_codex_client, issuer_fingerprint
 
     creds = resolve_codex_oauth()  # raises OAuthCredentialError if none
 
-    name = (model_name or config.model_name or "").strip()
+    # ``config.model_name`` may be an ADR 0133 role chain (a list) when create_llm builds the
+    # lead with no per-slot override; collapse it to the chain's primary id (empty for blank).
+    name = (model_name or model_field_primary(config.model_name) or "").strip()
     if not name or "/" in name:
         raise RuntimeError(
             f"model.provider is 'openai-codex' but model.name={name!r} is not an OpenAI "
