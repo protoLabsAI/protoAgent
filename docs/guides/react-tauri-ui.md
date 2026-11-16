@@ -62,6 +62,10 @@ See [Steering](/explanation/steering) for pending-message behavior.
 On desktop, a failed streaming relay can fall back to showing the completed reply.
 If a reply stalls or fails, follow [Chat fails](/guides/troubleshooting#chat-fails).
 
+To read threads other people or agents started, open **From others**. See
+[Read conversations from others](/guides/conversations-from-others) for the
+seven-day list, read-only reader, and links to jobs in Work.
+
 ## Save a conversation
 
 Run `/export` to download the current chat as Markdown. Check the status note

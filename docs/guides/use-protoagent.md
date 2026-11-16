@@ -9,6 +9,7 @@ Start with [Use the app](/guides/react-tauri-ui) for chat and controls. Choose [
 ## Chat and models
 
 - [Use the app](/guides/react-tauri-ui)
+- [Read conversations from others](/guides/conversations-from-others)
 - [Connect and change models](/guides/model-connections)
 - [Call a model directly](/guides/model-passthrough)
 - [Command palette (⌘⇧K)](/guides/command-palette)

@@ -33,6 +33,7 @@
           "label": "Chat and models",
           "pages": [
             "guides/react-tauri-ui.md",
+            "guides/conversations-from-others.md",
             "guides/model-connections.md",
             "guides/model-passthrough.md",
             "guides/command-palette.md"
@@ -305,6 +306,10 @@
     },
     "guides/react-tauri-ui.md": {
       "title": "Use the app",
+      "status": "current"
+    },
+    "guides/conversations-from-others.md": {
+      "title": "Read conversations from others",
       "status": "current"
     },
     "guides/model-connections.md": {
