@@ -222,7 +222,22 @@ class _KillableTaskStore(ReasoningCoalescingTaskStore):
     async def save(self, task, context=None):
         if self.dead:
             return
-        await super().save(task, context)
+        await self._finish_io(super().save(task, context))
+
+    async def get(self, task_id, context=None):
+        return await self._finish_io(super().get(task_id, context))
+
+    async def _finish_io(self, operation):
+        # Real process death releases SQLite cursors. In-process cancellation
+        # can retain an interrupted aiosqlite cursor in captured tracebacks even
+        # after its connection closes, keeping a read lock until GC. Finish the
+        # database operation before propagating the simulated client's cancel.
+        task = asyncio.create_task(operation)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
 
 
 def _build_graph(coord: _Coordinator, saver):
@@ -353,14 +368,33 @@ def _boot_generation(tmp_path, monkeypatch, coord: _Coordinator, saver, agent: s
     return SimpleNamespace(store=store, graph=graph, app=app, sched=sched, interrupted=set())
 
 
+async def _let_zombies_unwind() -> None:
+    """Wait for every other task on the loop to finish before a restart revives the
+    shared saver. The killed generation's turn unwinds through ``record_failed_turn``,
+    whose write is dropped while the saver is dead — but a slow zombie still unwinding
+    when the next generation flips ``saver.dead = False`` would land that write on the
+    revived saver and rewrite the thread classification reads. A real SIGTERM takes the
+    writer with it; this is purely a harness artifact."""
+    me = asyncio.current_task()
+    for _ in range(100):
+        zombies = [t for t in asyncio.all_tasks() if t is not me and not t.done()]
+        if not zombies:
+            return
+        await asyncio.wait(zombies, timeout=0.1)
+    raise AssertionError("killed generation still has live tasks")
+
+
 async def _sigterm(coord: _Coordinator, saver, gen) -> None:
     """The process dies: nothing persists from here on, every runner is torn down."""
     saver.dead = True
     gen.store.dead = True
     coord.die.set()
-    await asyncio.sleep(0.1)  # let the zombie turns unwind through their error paths
     await gen.sched.stop()
     await drain_handlers()
+    # A simulated process death must finish its users before disposing the pool:
+    # a late reader could otherwise reopen the pool after disposal.
+    await _let_zombies_unwind()
+    assert gen.store.engine.pool.checkedout() == 0
     await gen.store.engine.dispose()
     _reset_module_globals()
 

@@ -1695,6 +1695,14 @@ async def test_adopted_acp_preserves_room_exchange_without_blocking_collection(m
     )
     monkeypatch.setattr(STATE, "background_mgr", mgr)
     release = asyncio.Event()
+    collecting = asyncio.Event()
+    wait_work = mgr.wait_work
+
+    async def wait_collecting(job_id, timeout):
+        collecting.set()
+        return await wait_work(job_id, timeout)
+
+    monkeypatch.setattr(mgr, "wait_work", wait_collecting)
     calls = []
 
     async def dispatch(self, target, query, **kwargs):
@@ -1710,13 +1718,19 @@ async def test_adopted_acp_preserves_room_exchange_without_blocking_collection(m
     }], monkeypatch).tools[0]
     state = {"session_id": "room-test", "messages": []}
     config = {"configurable": {"thread_id": "a2a:room-test"}}
+    collection = None
     try:
         async with _thread_lock("a2a:room-test"):
             reply = await _invoke_delegate(tool, {"target": "coder", "query": "build once", "state": state})
             task_id = re.search(r"still running .* on task ([^.]+)\.", reply).group(1)
+            # Start collection while the dispatch is still blocked and the turn
+            # owns the lock. The timeout is only a deadlock backstop, not a
+            # one-second performance requirement on a loaded Windows runner.
+            args = {"target": "coder", "query": "", "resume_task_id": task_id, "state": state, "timeout": 60}
+            collection = asyncio.create_task(_invoke_delegate(tool, args))
+            await asyncio.wait_for(collecting.wait(), 10)
             release.set()
-            args = {"target": "coder", "query": "", "resume_task_id": task_id, "state": state, "timeout": 1}
-            result = await _invoke_delegate(tool, args)
+            result = await collection
             reply_text = "coder failed" if fails else "original result"
             assert reply_text in result
             assert not (await graph.aget_state(config)).values
@@ -1744,4 +1758,6 @@ async def test_adopted_acp_preserves_room_exchange_without_blocking_collection(m
         assert len(calls) == 1
     finally:
         release.set()
+        if collection is not None:
+            await asyncio.gather(collection, return_exceptions=True)
         await asyncio.gather(*mgr._fire_tasks, return_exceptions=True)

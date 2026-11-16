@@ -499,17 +499,30 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         return page
 
     async def context_foreign(self, context_id: str, context: ServerCallContext) -> bool:
-        """Whether ``context_id`` holds a task another owner saved — a context a federation
-        caller must not continue (its thread is that owner's conversation). Never true for an
-        operator-tier caller."""
+        """Whether ``context_id`` is another owner's conversation, one a federation caller
+        must not continue. Never true for an operator-tier caller.
+
+        A conversation belongs to whoever STARTED it: the owner of its first-created task.
+        An operator can add turns to a federation peer's thread (an idle steer runs as an
+        operator-owned task in that context, ``server/chat.py`` ``_start_steer_turn``). That
+        must not take the thread from the peer (#5379). The peer still can't read those
+        operator tasks, because every read is owner-scoped. Creation order is the SQLite
+        ``rowid`` (:func:`task_newest_first`). Another dialect has no such column, so it keeps
+        the stricter rule: any task with another owner makes the context foreign."""
         owner = self.owner_resolver(context)
         if owner == OPERATOR_OWNER or not context_id:
             return False
         await self._ensure_initialized()
-        stmt = select(self.task_model.id).where(
-            self.task_model.context_id == context_id, self.task_model.owner != owner
-        )
+        in_context = self.task_model.context_id == context_id
         async with self.async_session_maker() as session:
+            if self.engine.dialect.name == "sqlite":
+                from sqlalchemy import literal_column
+
+                first = literal_column(f"{self.task_model.__tablename__}.rowid").asc()
+                stmt = select(self.task_model.owner).where(in_context).order_by(first).limit(1)
+                starter = (await session.execute(stmt)).scalar_one_or_none()
+                return starter is not None and starter != owner
+            stmt = select(self.task_model.id).where(in_context, self.task_model.owner != owner)
             return (await session.execute(stmt.limit(1))).first() is not None
 
 

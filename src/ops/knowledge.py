@@ -108,12 +108,18 @@ def _media_fns(graph_config):
     text/URL/PDF paths are unaffected."""
     if graph_config is None:
         return None, None
+    transcribe = None
+    describe = None
     try:
         from graph.llm import create_describe_image_fn, create_transcribe_fn
 
-        return create_transcribe_fn(graph_config), create_describe_image_fn(graph_config)
+        transcribe = create_transcribe_fn(graph_config)
+        describe = create_describe_image_fn(graph_config)
     except Exception:  # noqa: BLE001 — media stays optional; text/URL/PDF unaffected
-        return None, None
+        # A blank image role now inherits main, whose connection may be unavailable.
+        # Keep an already-built transcriber usable for audio/video ingestion.
+        pass
+    return transcribe, describe
 
 
 async def _extract(source: IngestSource, ctx: OpContext):
