@@ -1,0 +1,1 @@
+- **Conversations in Work proposal for team review.** Documents original-chat navigation, private operator steering, active-work history retention, backend gaps, and phased approval boundaries. This proposal does not authorize implementation or change runtime behavior.

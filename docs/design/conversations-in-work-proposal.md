@@ -6,7 +6,8 @@ Prepared 2026-11-15 (America/Los_Angeles). Code inspected at
 source inspection only; runtime scenarios and cited tests were **not executed**.
 Keep the proposal PR open under **merge hold**; do not auto-merge. Approval to
 review this document is not permission to build, release, or create implementation
-cards. This change adds this file only and leaves approved specifications intact.
+cards. This change adds this proposal and its required changelog fragment; it
+leaves runtime behavior and approved specifications intact.
 
 ## Decision sources and approval boundaries
 
@@ -258,7 +259,8 @@ and design revision before that state is advertised as supported.
 
 Live GitHub reads during preparation found [#5365](https://github.com/protoLabsAI/protoAgent/pull/5365)
 **merged** at `2026-11-16T07:21:45Z` (November 15 locally); its merge is this
-checkout's HEAD. [#5366](https://github.com/protoLabsAI/protoAgent/pull/5366)
+inspected base (`d9eadcc05d8cbadd6c5d79a656a978a7c69168eb`).
+[#5366](https://github.com/protoLabsAI/protoAgent/pull/5366)
 (model chains) and [#5363](https://github.com/protoLabsAI/protoAgent/pull/5363)
 (prior-session digest filtering) were the open PRs returned. They are separate
 work, but recovery, privacy and session discovery changes must be checked against
