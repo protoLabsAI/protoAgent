@@ -71,11 +71,11 @@ The roles are main, aux, compaction, harvest (new, inherits aux), facts (new, in
 
 **Out of scope:** embeddings (`embed_model`) and transcription (`transcribe_model`). An embedding fallback changes vector dimensions and silently corrupts search, and transcription is a different API. They stay single models.
 
-### D6 — Validated at load, editable in Settings later
+### D6 — Validated at load, editable in Settings
 
 - Each chain entry gets today's coherence check (the gateway-alias rule in `graph/config.py`). An incoherent entry is dropped with a log line naming the role and position, and a chain left empty falls back to inheriting.
 - `src/graph/config.py` ↔ `tests/test_config_roundtrip.py` golden covers the new list shapes.
-- A Settings UI for editing chains (an ordered list per role) is a separate slice. It goes to designSystem for a spec and preview, with Josh's approval, before it's built.
+- **Chains are editable in Settings, not only in YAML** (Josh, 2026-11-15: "need to make sure its exposed in the ui and not just config"). This is part of the committed scope, not a later extra. Every role in D5 appears in Settings › Routing as an ordered model chain, reusing the existing ordered-list control that `routing.fallback_models` uses today (gateway model options, up/down reorder, clear to remove; `apps/web/src/settings/SettingsCategory.tsx` ~719-800). A blank role shows what it inherits (e.g. "Inherits aux: Haiku → gpt-6-luna → fast"). The main model and its fallbacks are edited as one chain. Each role shows the last fallback that fired (M6). Changes apply live, the same way other routing settings do today. The exact layout comes from a designSystem spec and preview that Josh approves before M7 is carded.
 
 ## Build slices (each ≤ 4 files, changelog excluded)
 
@@ -87,7 +87,7 @@ The roles are main, aux, compaction, harvest (new, inherits aux), facts (new, in
 | **M4** | Move the inline resolvers: goal_eval, memory_select, drift judge, image describe | `src/graph/goals/verifiers.py`, `src/graph/projection.py`, `src/server/maintenance_loops.py`, `src/graph/multimodal.py` | M2 |
 | **M5** | Subagent tiers take chains | `src/graph/subagent_model.py`, `src/graph/agent.py`, a test | M2, M3 (shares `agent.py`) |
 | **M6** | Provider/status surface shows each role's chain and last fallback | `src/operator_api/provider_routes.py`, its test | M2 |
-| **M7** | Settings UI for chains | after a designSystem spec and Josh's approval | M1, M6 |
+| **M7** | Settings › Routing edits every role's chain (committed scope) | `src/graph/settings_schema.py`, `apps/web/src/settings/SettingsCategory.tsx`, its test, plus whatever the approved design spec names (split if over 4 files) | M1, M6, designSystem spec approved |
 
 ADR 0132's gist slice (S4) builds its model through `create_role_llm(config, "memory_gist")`, so it depends on M2.
 
