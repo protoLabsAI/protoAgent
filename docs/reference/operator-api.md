@@ -86,6 +86,7 @@ tells the two apart this way.
 
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/api/conversations` | Other conversations (excluding the operator's console chats and internal or private threads). Returns `{conversations: [...]}`; see [conversation fields](#conversation-fields) below. Query: `group=for_you\|automated`, `before=<ISO-8601 timestamp>`, `limit` (default 50, clamped to 1–50). Without a valid `before`, lists the last seven days; `before` pages older activity. An unrecognized `group` leaves the list unfiltered. |
 | POST | `/api/chat` | Run a non-streaming chat turn (the streaming path is A2A `/a2a`). Success → `{response, messages, session_id}`. A failed turn is a real HTTP error with the same status policy as `/v1`: **429** when the provider rate-limited (with `Retry-After` when it sent one), **502** for any other upstream failure, an unreachable gateway, or a provider that closed the stream, **503** when the turn's model connection can't be set up right now (`Retry-After`), **400** when the request named an unknown model, **500** otherwise. The body is `{"detail": {code, message, upstream_status, session_id, error_id}}`: `message` is the turn's own user-facing reason (the same text the transcript records); only when the server itself crashed is it replaced by a generic message carrying `error_id`. `error_id` is always logged next to the real message. |
 | GET | `/api/chat/sessions` | Recent server-known chat sessions, newest activity first (`?limit=`, max 200; `?parked=true` lists only sessions whose newest turn waits on the operator). Each row: `{session_id, last_updated, turn_count, last_task_id, title}` plus the [ADR 0130](/adr/0130-server-authoritative-live-sync) D1 server-held state — `status` (`idle`\|`running`\|`paused`, derived from the task store and the turn lock, never from a client), `live_task_id` (the running turn's task, or the parked task awaiting the operator; `null` when idle), `last_change_seq` (bus seq of the session's newest `session.changed`, `null` when none is recorded; compare against your `/api/events` cursor), `updated_at` (zoned ISO-8601 UTC of the session's last change). `title` is the server-held tab title ([ADR 0130](/adr/0130-server-authoritative-live-sync) **S6**, `null` when unnamed); the list carries only OPEN sessions (a just-created, turnless one included) and a top-level `closed: [session_id, …]` naming the sessions whose tab the server holds CLOSED (kept retrievable, hidden on every device) so a reconciling client can drop those tabs. When the server-held list could not be read, `closed` is **omitted** (not `[]`) and a `reason` is set: an empty `closed` would read as "nothing is closed", so the client treats its absence as "closed list unknown this read" and leaves its local tab dismissals untouched until a trustworthy read lands |
 | POST | `/api/chat/sessions` | **S6** register a session in the server-held list (first send): `{session_id, title?, created_at?}` → `{ok, session_id}`. Idempotent — creates it, reopens a closed one, or renames on a changed title; publishes `session.created`/`reopened`/`renamed` |
@@ -101,6 +102,30 @@ tells the two apart this way.
 | POST | `/api/chat/sessions/{id}/delegations/{del_id}/cancel` | Cancel one delegation (lead continues) |
 | GET | `/api/chat/sessions/{id}/directives` | The chat's [directive ledger](/guides/scheduler#standing-directives): `{directives: [{id, session_id, quote, conditions, scope, status, created_at, closed_at, close_reason, closed_by}], in_force}`, oldest first. `?status=in_force\|fulfilled\|revoked` narrows the list (another value → 400). A chat with none answers an empty list |
 | DELETE | `/api/chat/sessions/{id}/directives/{directive_id}` | Revoke one directive as the operator (`?reason=` optional) → `{directive}` with `closed_by: "operator"`. 404 when this chat holds no such id (another chat's included); 409 when already fulfilled or revoked |
+
+### Conversation fields
+
+Each `/api/conversations` row carries `{session_id, title, origin_label, group,
+last_updated, turn_count, active, last_state}`. `last_updated` is a UTC ISO-8601
+timestamp or `null`; `active` says a turn is running in that session, and `last_state` is
+the latest stored task state. `title` uses the stored title, then the first user
+message's first line, then an origin-based fallback.
+
+`origin_label` is display text such as `From Claude Code for Josh`,
+`Delegation from protoEngineer`, `From the API`, or `From another agent`.
+`group` is `for_you` when `caller_kind` is `person` or `on_behalf_of` is set;
+otherwise it is `automated`. Rows sort by group (`for_you` first), then those
+waiting on an answer, then running, then newest activity within each bucket.
+
+Optional `caller`, `caller_kind` (`person` or `agent`), and `on_behalf_of` strings
+come from the opening turn's stored origin. Missing fields and unrecognized
+caller kinds are omitted, not returned as `null`. These fields are for display,
+not authorization.
+
+Rows with open tasks bound to their `session_id` also carry
+`tasks: [{id, title, status}, …]`. `tasks` is omitted when none are found or the
+task store cannot be read. Failure to read the conversation index returns
+`{conversations: [], reason}` instead of failing the request.
 
 ## Goals (goal mode)
 
@@ -176,6 +201,26 @@ record.
 | GET | `/api/events` | Server-sent event stream (console live updates). Carries `session.changed` ([ADR 0130](/adr/0130-server-authoritative-live-sync) S2): one event per session transition — turn start/end, a HITL/decision park, a consumed steer, delete — with `{session_id, status, live_task_id, reason, updated_at}`, where `status` is `idle`\|`running`\|`paused` or `deleted` (event-only). Recorded in the durable change log, so a `Last-Event-ID` resume replays missed transitions; a client treats it as a cue to refetch the session |
 | POST | `/api/events/publish` | Publish an event to the bus |
 | GET · POST · PATCH · DELETE | `/api/tasks/...` | Tasks issue store (status, init, issues CRUD, close). An unknown issue id on `PATCH`, close or `DELETE` is a `404` (`DELETE` used to answer `200 {deleted: false}`). With no task store wired, `/api/tasks/status` reports `{initialized: false}` and every other task route answers `503 "tasks not enabled"` |
+
+`POST /api/inbox` also accepts optional `origin_session` (string, default `""`)
+and `origin` (object, default `null`). `origin_session` names the chat that caused
+the item; `origin` carries only `caller`, `caller_kind` (`person` or `agent`),
+and `on_behalf_of`. These record provenance; they do not route or authorize
+delivery. Use `session` with `deliver: "thread"` to address a thread.
+
+`GET /api/tasks/issues` returns `{issues: [...]}`. Task rows include:
+
+| Field | Shape and meaning |
+|---|---|
+| `activity` | Advisory `driven`, `idle`, or `stalled`, added only to `in_progress` tasks. `driven` means unresolved linked work or a session driver is present (or a driver source failed to read); `stalled` means no driver and more than 30 minutes since `updated_at`; otherwise `idle`, including an unreadable timestamp. Omitted if activity annotation fails. |
+| `ask` | String containing the operator-facing question or action needed; empty string when unset. Set with `PATCH /api/tasks/issues/{issue_id}`; `ask: ""` clears it. |
+| `links` | A **JSON-encoded string**, or `""` when no links are stored. Decode it to `[{ref, kind, state, reason}, …]`: `kind` is `card`, `directive`, `pr`, or `job`; `state` is `open` or `done`; `reason` is a string. |
+
+`POST /api/tasks/issues` and `PATCH /api/tasks/issues/{issue_id}` instead accept
+`links` as a list of reference strings (card ids, directive ids, PR URLs, or
+scheduler job ids). On PATCH, the list replaces the references while preserving
+the resolution of retained references; `[]` clears it, and omitted or `null`
+leaves it unchanged. Create and update return `{issue: {...}}`.
 
 ## Config, setup & settings
 

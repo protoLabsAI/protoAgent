@@ -8,17 +8,21 @@ deployment finishing.
 
 ## Set one (the short path)
 
-1. Open **Goals → New goal** (or **+ Goal** in the Work overview).
+1. Open the command palette and choose **Work: New goal…**, or type `/goal new`
+   in a chat. Both open the guided **New goal** form.
 2. Write a testable condition and choose a verifier. For a coding task, choose
    **test** and provide the test command and working directory.
-3. Start the goal. It opens a dedicated chat where you can follow and steer the work.
-4. Inspect the iteration count and verifier result in the Goals panel. Stop it
-   when you want to end the run; use **Add iterations** if it needs more time.
+3. Submit the form. The goal starts driving in a chat, where you can follow and
+   steer the work.
+4. Track the goal in **Work → Doing now** (it moves to **Needs you** if it stops
+   short). Open it for its progress, latest check, and history; use **Add 4
+   iterations** to give an active goal more room, or **Stop…** to end the run.
 
 For a goal judged from the conversation, send `/goal <condition>` in chat.
-Command, test, CI, and expression verifiers must be created through the operator
-panel or API; chat refuses them. The agent's `set_goal` tool uses registered
-plugin verifiers. See [Setting a goal](#setting-a-goal) for exact forms.
+Command, test, CI, and expression verifiers must be created through the **New
+goal** form or `POST /api/goals`; a `/goal` chat message refuses them. The
+agent's `set_goal` tool uses registered plugin verifiers. See [Setting a
+goal](#setting-a-goal) for exact forms.
 
 A goal stops as `achieved`, `exhausted`, or `unachievable`. It can pause while
 waiting for a watch, schedule, or delegated work and resume when the trigger
@@ -62,9 +66,10 @@ Send a control message through any channel (A2A, the React console chat, OpenAI-
   ```
 
   > **Shell/eval verifiers are operator-only.** Create `command`, `test`, `ci`,
-  > and `data`+`expr` goals through **Goals → New goal** or `POST /api/goals`.
-  > They are refused in a `/goal` chat message. The federation credential cannot
-  > access the operator API; see [Security and trust](/explanation/security-and-trust).
+  > and `data`+`expr` goals through the **New goal** form (**Work: New goal…** in
+  > the command palette, or `/goal new` in chat) or `POST /api/goals`. They are
+  > refused in a `/goal` chat message. The federation credential cannot access
+  > the operator API; see [Security and trust](/explanation/security-and-trust).
 
 - **Per-goal patience:** add `"no_progress_limit": N` to widen/narrow one goal's
   no-progress tolerance without changing the global default.
@@ -75,12 +80,13 @@ Type `/` in the chat composer to discover goal commands.
 
 ## Manage from the console
 
-Open **Goals** to inspect each session's condition, status, iteration count, and
-last verifier result. Select a row for its saved plan, completion contract,
-evidence, and iteration timeline.
+Goals appear in **Work → Doing now** (a goal that stops short moves to **Needs
+you**). Open one to read its finish line, progress, latest check, saved plan,
+and history; the session id, raw status, and verifier live under **Technical
+details**.
 
-Use **Add iterations** to extend an active goal or **Restart** to re-arm a
-finished one. When closing its chat tab, choose whether to keep it running in
+Use **Add 4 iterations** to extend an active goal or **Keep going** to re-arm a
+stopped one. When closing its chat tab, choose whether to keep it running in
 the background or stop it. Stopping from that prompt also closes the tasks
 filed in that session's backlog.
 
@@ -135,9 +141,9 @@ See the [`goal` config block](/reference/configuration#goal). Defaults: machiner
 ## Security
 
 Command, test, CI, and `data` expression verifiers are operator-only: use the
-Goals panel or authenticated API. Chat accepts `llm`, registered `plugin`
-checks, and `data` substring checks; the agent's tool is restricted further to
-plugin checks. See [Security and trust](/explanation/security-and-trust).
+**New goal** form or the authenticated API. Chat accepts `llm`, registered
+`plugin` checks, and `data` substring checks; the agent's tool is restricted
+further to plugin checks. See [Security and trust](/explanation/security-and-trust).
 
 For chat-created data checks, use a workspace-relative path such as `report.md`.
 Absolute paths and traversal are refused. The forms mark relative paths with

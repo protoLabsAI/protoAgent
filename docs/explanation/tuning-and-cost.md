@@ -147,8 +147,10 @@ out, it's first summarized into the `history` table by the cheap aux model and
 reclaimed — signal kept, space freed. Needs the knowledge middleware enabled. An
 explicit delete (the chat tab's trash button, `DELETE /api/chat/sessions/{id}`)
 uses the dialog's **Memory** choice instead of this setting: **Save a summary**
-harvests before deleting; **Don't save anything** leaves earlier saved memory
-alone; **Erase from memory** also removes the chat's saved summaries and archives.
+harvests before deleting; **Don't save anything** leaves earlier knowledge-store
+entries alone; **Erase from memory** also removes the chat's saved summaries and
+archives. All choices remove the separate session-summary file used for automatic
+recall.
 **Save a summary** is the default for ordinary chats. Incognito chats omit it
 and default to **Don't save anything**. See
 [Delete a chat and its saved memory](/guides/manage-memory#delete-a-chat) for

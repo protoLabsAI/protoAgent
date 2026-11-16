@@ -93,7 +93,8 @@ A2A turn records, not the separate task tracker entries. Delete those tasks
 separately if you want them removed.
 
 The dialog's **Memory** choice controls whether to save a summary, leave earlier
-saved memory alone, or erase conversation-derived memory. Follow
+knowledge-store entries alone, or erase conversation-derived memory. All choices
+remove the separate session-summary file used for automatic recall. Follow
 [Delete a chat and its saved memory](/guides/manage-memory#delete-a-chat) for the
 choices and their limits. `/clear` removes the current history while keeping
 the chat's tab and reusable session ID; it does not permanently retire the chat.
