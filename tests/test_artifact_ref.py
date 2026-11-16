@@ -616,13 +616,13 @@ def test_pdf_page_reselect_consumes_each_request_without_leaking(monkeypatch, tm
 var arts=[{id:'pdf', kind:'file', versions:[{ts:1, pdf:true}, {ts:2, pdf:true}]}];
 var selId='pdf', selVer=null, followNewest=true, lastRendered='', pendingSel=null, pendingPage=null;
 var editing=false, renderingId, renderingVer, renderingTs, renderingN, renderingLinks, linkLabels;
-var $bar={style:{}}, $empty={style:{}}, $frame={style:{}}, $edit={style:{}}, $vnav={style:{}};
+var $bar={style:{}}, $empty={style:{}}, $frame={style:{}}, $edit={style:{}}, $vnav={style:{}}, $open={style:{}};
 var $vlabel={}, $vprev={}, $vnext={}, frames=[];
 var frameNav={set:function(doc){frames.push(doc);}, clear:function(){}};
 function selArt(){return arts[0];}
 function verIdx(a){return selVer===null ? a.versions.length-1 : selVer;}
 function atNewest(){return true;}
-function saveSel(){} function pptxReset(){} function mediaReset(){} function renderLinks(){}
+function saveSel(){} function pptxReset(){} function mediaReset(){} function renderLinks(){} function openMint(){}
 function slidesOk(){return false;} function docxOk(){return false;} function isVideoFile(){return false;}
 function pdfOk(v){return !!v.pdf;}
 function fileCard(v, note, page){return {ts:v.ts, page:page};}

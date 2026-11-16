@@ -350,3 +350,16 @@ Decisions taken during implementation and hands-on testing. Each is also written
     `?theme=light|dark` sets `data-theme`, else `prefers-color-scheme`. Response headers:
     `nosniff`, `no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. No document
     CSP, because a srcdoc frame inherits its parent's policy.
+11. **The panel opens the standalone page too (D2, 2026-11-16, #4939).** The Artifact panel's
+    toolbar gets an **Open in browser** button for rendered kinds. The button gets the same
+    `artifact-page:` grant from a gated `POST /api/plugins/artifact/artifact/<id>/page-link`.
+    Only the bearer-gated data router serves it; the public view router never does. The panel
+    gets the grant for the version on screen when that version renders, and gets a fresh one on
+    hover or focus once it is within five minutes of expiring. So the button is a real
+    `<a target=_blank rel="noopener noreferrer">`, and a plain link click is the one new-tab path
+    every host honours. The console's plugin iframe allows popups that escape the sandbox, and
+    the desktop shell's `on_new_window` sends an own-origin, non-console URL to the system
+    browser. A `window.open()` after an awaited fetch loses the click's user activation in
+    WebKit, so it is only the fallback for a stale link. The console's `artifact.open_url`
+    watcher accepts this `/page` path as well as `/blob`. It used to accept `/blob` only, so
+    amendment 10's agent-side open never opened a tab for a rendered artifact.
