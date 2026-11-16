@@ -49,6 +49,7 @@ _MEMORY_LIST_MAX_LIMIT = 200
 # would expire the memory on its first read.
 _MEMORY_EXPIRES_MAX_DAYS = 3650
 _RECALL_SESSION_MAX_CHARS = 6000
+_INCOGNITO_REFUSAL = "This is an incognito chat, so nothing is saved to memory."
 
 # The four ``memories`` kinds (ADR 0125 D1; the ``kind`` CHECK set). Validated at the
 # tool boundary so a bad value returns a clean error instead of a sqlite CHECK failure.
@@ -500,6 +501,9 @@ def _build_memory_tools(
         """The ``memory_save`` body, shared by the shared-enabled and -disabled tool
         definitions below. ``shared=True`` routes to the shared operator profile; otherwise
         the write lands in the private core ``MemoryStore`` exactly as before."""
+        # Same injected-state read as graph.agent._incognito_from (ADR 0069 D3b).
+        if isinstance(state, dict) and bool(state.get("incognito")):
+            return _INCOGNITO_REFUSAL
         # Work status is not memory (ADR 0125 D5, 2026-11-08 refinement): refused before
         # anything is written, private or shared, with where the fact already lives.
         status = work_status_kind(content, subject)
@@ -664,6 +668,9 @@ def _build_memory_tools(
         """
         from pathlib import Path
 
+        # Refuse before fetching, writing, or spawning a background ingest job.
+        if isinstance(state, dict) and bool(state.get("incognito")):
+            return _INCOGNITO_REFUSAL
         src = (source or "").strip()
         if not src:
             raise ToolException("Error: provide a URL or a local file path to ingest.")

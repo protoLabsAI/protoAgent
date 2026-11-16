@@ -144,20 +144,21 @@ async def test_nonstreaming_other_errors_never_compact(graph, compaction):
 
 
 @pytest.mark.asyncio
-async def test_subagent_slash_command_runs_via_chat(graph, monkeypatch):
+@pytest.mark.parametrize("incognito", [True, False])
+async def test_subagent_slash_command_runs_via_chat(graph, monkeypatch, incognito):
     g = graph([])
     ran: list[tuple] = []
 
-    async def _fake_run(sub_type, prompt, *, session_id="", turn_model=""):
-        ran.append((sub_type, prompt, session_id))
+    async def _fake_run(sub_type, prompt, *, session_id="", turn_model="", incognito=False):
+        ran.append((sub_type, prompt, session_id, incognito))
         return "worker output"
 
     monkeypatch.setattr(commands_mod, "_run_parsed_subagent", _fake_run)
 
-    out = await chat_mod.chat("/researcher find the latest on X", "s-sub")
+    out = await chat_mod.chat("/researcher find the latest on X", "s-sub", incognito=incognito)
 
     assert out == [{"role": "assistant", "content": "worker output"}]
-    assert ran == [("researcher", "find the latest on X", "s-sub")]
+    assert ran == [("researcher", "find the latest on X", "s-sub", incognito)]
     assert g.inputs == []  # short-circuited: no lead-agent turn on the raw command
 
 

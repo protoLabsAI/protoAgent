@@ -164,7 +164,8 @@ class BackgroundManager:
         ``origin_incognito`` records that the spawning thread was incognito (ADR 0069
         D3b → ADR 0070): the completion then skips the push-resume nudge and the
         knowledge-store indexing — no memory trail — while the report still lives in
-        the jobs DB and drains into the origin session normally.
+        the jobs DB and drains into the origin session normally. The detached turn
+        also inherits this flag so its memory tools refuse writes.
 
         ``batch_id`` (#1766) tags the job as a member of a fan-out spawned by one turn
         (task_batch's specs, or several ``task(run_in_background=True)`` in a turn — all
@@ -211,7 +212,10 @@ class BackgroundManager:
         from graph.subagent_model import resolve_subagent_model
 
         model = resolve_subagent_model(None, subagent_type, turn_model, include_default=False)
-        t = asyncio.create_task(self._fire(job_id, fired_prompt, fence, model=model), name=f"background.fire.{job_id}")
+        t = asyncio.create_task(
+            self._fire(job_id, fired_prompt, fence, model=model, incognito=origin_incognito),
+            name=f"background.fire.{job_id}",
+        )
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
         log.info("[background] spawned %s (%s): %s", job_id, subagent_type, description)
@@ -620,7 +624,8 @@ class BackgroundManager:
             return ""
 
     async def _fire(
-        self, job_id: str, prompt: str, fence: list[str] | None = None, *, model: str | None = None
+        self, job_id: str, prompt: str, fence: list[str] | None = None, *, model: str | None = None,
+        incognito: bool = False,
     ) -> None:
         """POST the job to our own /a2a as a turn in a dedicated background context.
 
@@ -647,6 +652,8 @@ class BackgroundManager:
                         "origin": "background",
                         "trigger": job_id,
                         "background_job_id": job_id,
+                        # Detached turns must retain the origin's memory-write guard.
+                        **({"incognito": True} if incognito else {}),
                         # Per-subagent tool fence (#1639): the chat entry stamps this on
                         # the turn's state and SubagentFenceMiddleware enforces it — the
                         # same allowlist the in-graph task path applies, now on detached

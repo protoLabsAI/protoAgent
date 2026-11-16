@@ -141,6 +141,8 @@ async def _native_turn(
 
     from langchain_core.messages import HumanMessage
 
+    from server.chat_rehydrate import recovered_messages
+
     from graph.goals.goal_turn import goal_turn
     from graph.delegation_usage import billed_graph_config
 
@@ -222,7 +224,7 @@ async def _native_turn(
             graph_input = {
                 # Vision parts ride the user message when the model supports
                 # them (#1943) — same gating as the streaming path.
-                "messages": [
+                "messages": await recovered_messages(config, session_id, incognito=incognito) + [
                     _chat()._vision_human_message(_msg, turn_images, session_id=session_id, incognito=incognito)
                 ],
                 "session_id": session_id,
@@ -478,7 +480,9 @@ async def _chat_langgraph_impl(
             delegated_usage: list[dict] = []
             streamed_text = ""
             try:
-                async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
+                async with contextlib.aclosing(
+                    _chat_dispatch._pre_turn_dispatch(pre, session_id, {"incognito": bool(incognito)})
+                ) as _pre_frames:
                     async for frame in _pre_frames:
                         if frame and frame[0] == "usage":
                             # A `/<subagent>` / `/<workflow>` run's model calls (#3957) — this

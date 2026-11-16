@@ -242,7 +242,7 @@ def fake_delegation(monkeypatch):
     )
     monkeypatch.setattr(cc, "_parse_workflow_command", lambda m: ("wf", {"q": 1}) if m.startswith("/wf") else None)
 
-    async def _run_parsed_subagent(sub_type, prompt, *, session_id="", turn_model=""):
+    async def _run_parsed_subagent(sub_type, prompt, *, session_id="", turn_model="", incognito=False):
         return await _run_one(prompt)
 
     async def _run_parsed_workflow(name, inputs, *, on_step):

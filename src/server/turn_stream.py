@@ -1108,6 +1108,8 @@ async def _run_turn_stream(
     """
     from langgraph.types import Command
 
+    from server.chat_rehydrate import recovered_messages
+
     # astream_events normalizes an omitted limit to LangGraph's 25-step default
     # before graph defaults are merged. Match the configured server budget here
     # too, while preserving an explicit caller/goal/subagent limit.
@@ -1134,7 +1136,7 @@ async def _run_turn_stream(
         # Prepend any completed background-job notifications (ADR 0050) so the model
         # learns of detached work that finished since this session last ran a turn.
         else {
-            "messages": background_messages + [human],
+            "messages": await recovered_messages(config, session_id, incognito=incognito) + background_messages + [human],
             "session_id": session_id,
             # Incognito (ADR 0069 D3b): always stamped explicitly — the channel
             # persists in the checkpointer, so an omitted key would silently

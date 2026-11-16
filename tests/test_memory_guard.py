@@ -9,15 +9,203 @@ by default: off unless configured, and warning-only unless exiting is asked for.
 
 from __future__ import annotations
 
+import itertools
+import json
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessageChunk
+from langchain_core.outputs import ChatGenerationChunk
 
 from infra.memory_guard import EXIT_CODE, MemoryCeiling, read_rss_bytes
 
 pytestmark = pytest.mark.platform_sensitive
 
 _MB = 1024 * 1024
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incognito", [True, False, None])
+@pytest.mark.parametrize("destination", ["private", "shared", "file", "background"])
+async def test_incognito_prevents_memory_writes(tmp_path, monkeypatch, incognito, destination):
+    from knowledge.memories import MemoryStore
+    from knowledge.shared_profile import SharedProfileStore
+    from knowledge.store import KnowledgeStore
+    from tools.memory_tools import _build_memory_tools
+
+    knowledge = KnowledgeStore(db_path=str(tmp_path / "agent.db"))
+    memory = MemoryStore(db_path=str(tmp_path / "agent.db"))
+    shared = SharedProfileStore(tmp_path / "commons")
+    monkeypatch.setattr("runtime.state.STATE.shared_profile_store", shared, raising=False)
+    background = SimpleNamespace(spawn_work=AsyncMock(return_value="job-test"))
+    config = SimpleNamespace(memory_shared_profile=destination == "shared")
+    tools = {t.name: t for t in _build_memory_tools(
+        knowledge, config, memory_store=memory, background_mgr=background,
+    )}
+    state = {"session_id": "incognito-test"}
+    if incognito is not None:
+        state["incognito"] = incognito
+    content = "The operator prefers concise answers."
+    if destination in {"private", "shared"}:
+        args = {"content": content, "kind": "profile", "state": state}
+        if destination == "shared":
+            args["shared"] = True
+        result = await tools["memory_save"].ainvoke(args)
+    else:
+        document = tmp_path / "notes.txt"
+        document.write_text(content)
+        source = "https://example.com/notes" if destination == "background" else str(document)
+        result = await tools["knowledge_ingest"].ainvoke({"source": source, "state": state})
+
+    if incognito:
+        assert result == "This is an incognito chat, so nothing is saved to memory."
+    else:
+        assert result.startswith({
+            "private": "Saved memory #", "shared": "Proposed to the shared operator profile",
+            "file": "Ingested ", "background": "Ingesting ",
+        }[destination])
+    assert len(memory.list()) == int(not incognito and destination == "private")
+    assert len(shared.list()) == int(not incognito and destination == "shared")
+    assert knowledge.stats()["total"] == int(not incognito and destination == "file")
+    assert background.spawn_work.await_count == int(not incognito and destination == "background")
+
+
+class _ToolFake(GenericFakeChatModel):
+    """A scripted chat model dropped into ``create_agent`` via the patched
+    ``graph.agent.create_llm`` — replays preset AIMessages (incl. tool calls) over the
+    streaming path the subagent graph drives. Mirrors ``test_subagent_stream_isolation``."""
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _chunk(self):
+        msg = next(self.messages)
+        return ChatGenerationChunk(
+            message=AIMessageChunk(
+                content=msg.content,
+                tool_call_chunks=[
+                    {"name": tc["name"], "args": json.dumps(tc["args"]), "id": tc["id"], "index": i}
+                    for i, tc in enumerate(getattr(msg, "tool_calls", None) or [])
+                ],
+            )
+        )
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        yield self._chunk()
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        import asyncio
+
+        await asyncio.sleep(0)
+        yield self._chunk()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incognito", [True, False])
+@pytest.mark.parametrize("dispatch", ["inline", "slash", "sdk"])
+async def test_incognito_subagent_delegation_writes_no_memory(tmp_path, monkeypatch, incognito, dispatch):
+    """ADR 0132 S1 / ADR 0069 D3b — the subagent leak the first fix missed.
+
+    A subagent the lead delegates through the in-graph ``task`` path runs in a FRESH
+    sub-graph seeded by ``_run_subagent_inner``. The parent chat's ``incognito`` flag must
+    ride onto that sub-graph's state, or ``memory_save`` inside the subagent reads no flag
+    (``state.get("incognito")`` is ``None``) and writes a memory the incognito chat was
+    meant to leave no trace of. Drives the REAL subagent sub-graph with a scripted fake
+    model and a live ``MemoryStore``; the only difference between the two runs is the flag,
+    so the pair is non-vacuous (the non-incognito run proves the save actually fires)."""
+    import graph.agent as agent_mod
+    from graph.config import LangGraphConfig
+    from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
+    from knowledge.memories import MemoryStore
+    from langchain_core.messages import AIMessage
+    from tools.memory_tools import _build_memory_tools
+
+    memory = MemoryStore(db_path=str(tmp_path / "agent.db"))
+    config = LangGraphConfig()
+    # memory_save bound to the live store; the full memory toolset is the tool_map the
+    # delegated subagent resolves its allowlist from.
+    tool_map = {t.name: t for t in _build_memory_tools(None, config, memory_store=memory)}
+
+    # A subagent explicitly granted the write tool (write tools are opt-in, #4327); its lone
+    # scripted turn calls memory_save, then it answers.
+    monkeypatch.setitem(
+        SUBAGENT_REGISTRY,
+        "memsaver",
+        SubagentConfig(name="memsaver", description="saves a memory", system_prompt="Save it.", tools=["memory_save"]),
+    )
+    fake = _ToolFake(
+        messages=itertools.chain(
+            iter(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "memory_save",
+                                "args": {"content": "The operator prefers concise answers.", "kind": "profile"},
+                                "id": "m1",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="handled the request"),
+                ]
+            ),
+            itertools.repeat(AIMessage(content="handled the request")),
+        )
+    )
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *a, **k: fake)
+
+    if dispatch == "inline":
+        result = await agent_mod._run_subagent_inner(
+            config=config,
+            tool_map=tool_map,
+            available_subagents="memsaver",
+            description="save a memory",
+            prompt="save the operator's preference for concise answers",
+            subagent_type="memsaver",
+            session_id="chat-1",
+            incognito=incognito,
+        )
+
+        assert "memsaver completed" in str(result)
+    else:
+        from runtime.state import STATE
+        from server.chat_dispatch import _PreTurn, _pre_turn_dispatch
+
+        monkeypatch.setattr(STATE, "graph_config", config)
+        monkeypatch.setattr(STATE, "goal_controller", None)
+        monkeypatch.setattr(STATE, "plugin_chat_commands", {})
+        monkeypatch.setattr(agent_mod, "get_all_tools", lambda *a, **k: list(tool_map.values()))
+        if dispatch == "sdk":
+            import asyncio
+
+            from graph import sdk
+            from observability import tracing
+
+            # Workflow steps copy the turn context into their own tasks. Exercise
+            # the real SDK, subgraph and memory tool against the live store.
+            async with tracing.trace_session("chat-1", incognito=incognito):
+                result = await asyncio.create_task(sdk.run_subagent(
+                    "memsaver", "save the operator preference", description="save a memory",
+                    extra_tools=[],
+                ))
+            assert "memsaver completed" in result
+        else:
+            pre = _PreTurn("/memsaver save the operator preference")
+            frames = [frame async for frame in _pre_turn_dispatch(pre, "chat-1", {"incognito": incognito})]
+            assert pre.handled
+            assert frames[-1][0] == "done"
+
+    # An incognito chat leaves NO memory trail — even one written by a delegated subagent;
+    # a normal chat writes exactly the one profile memory the subagent saved.
+    saved = memory.list()
+    assert len(saved) == (0 if incognito else 1)
+    if not incognito:
+        assert "concise answers" in saved[0].content
 
 
 def test_disabled_by_default() -> None:

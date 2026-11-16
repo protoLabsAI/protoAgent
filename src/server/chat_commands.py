@@ -150,7 +150,9 @@ def _parse_subagent_command(message: str):
     return name, rest.strip()
 
 
-async def _run_parsed_subagent(subagent_type: str, prompt: str, *, session_id: str = "", turn_model: str = "") -> str:
+async def _run_parsed_subagent(
+    subagent_type: str, prompt: str, *, session_id: str = "", turn_model: str = "", incognito: bool = False
+) -> str:
     """Run one subagent from a chat slash command, formatted as the reply.
 
     ``turn_model`` is the turn's model override (request ``metadata.model``); the run
@@ -177,6 +179,7 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str, *, session_id: s
             reload_callback=reload_callback,
             session_id=session_id,
             turn_model=turn_model,
+            incognito=incognito,
         )
     except ValueError as exc:
         return f"⚠️ {exc}"

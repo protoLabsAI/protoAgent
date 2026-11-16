@@ -130,7 +130,7 @@ async def test_slash_liveness_frames_are_rate_limited(slash_state, busy_subagent
 def _wedged(monkeypatch, outcome: list[str]):
     """`_run_parsed_subagent` stuck inside one call that never returns."""
 
-    async def run(subagent_type, prompt, *, session_id="", turn_model=""):
+    async def run(subagent_type, prompt, *, session_id="", turn_model="", incognito=False):
         try:
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
@@ -157,14 +157,14 @@ async def test_another_turns_busy_subagent_cannot_keep_a_wedged_one_alive(slash_
     real_run = chat_commands._run_parsed_subagent
     outcome: list[str] = []
 
-    async def run(subagent_type, prompt, *, session_id="", turn_model=""):
+    async def run(subagent_type, prompt, *, session_id="", turn_model="", incognito=False):
         if prompt == "wedge":
             try:
                 await asyncio.sleep(3600)
             except asyncio.CancelledError:
                 outcome.append("A cancelled")
                 raise
-        return await real_run(subagent_type, prompt, session_id=session_id, turn_model=turn_model)
+        return await real_run(subagent_type, prompt, session_id=session_id, turn_model=turn_model, incognito=incognito)
 
     monkeypatch.setattr(chat_commands, "_run_parsed_subagent", run)
 
@@ -190,7 +190,7 @@ async def test_another_turns_busy_subagent_cannot_keep_a_wedged_one_alive(slash_
 async def test_a_failing_slash_subagent_still_fails_the_turn(slash_state, monkeypatch):
     """Moving the run into its own task keeps its failure the turn's failure."""
 
-    async def run(subagent_type, prompt, *, session_id="", turn_model=""):
+    async def run(subagent_type, prompt, *, session_id="", turn_model="", incognito=False):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(chat_commands, "_run_parsed_subagent", run)
