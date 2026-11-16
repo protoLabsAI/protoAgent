@@ -55,7 +55,7 @@ model:
 
 **Exceptions to "blank inherits":**
 - A blank `image_describe_model` inherits the **main** chain, not aux. Aux models may not read images, while the main model usually can (Josh, 2026-11-16, changing today's "blank = off"). If the resolved model can't read images, image description reports itself unavailable instead of failing on each call.
-- A blank `soul_drift_judge_model` inherits the **main** chain, not aux. Before ADR 0133 the blank drift judge ran on the agent's own (main) model, so a single-string config with aux set must keep judging drift on main (M4; the ADR's "a string behaves exactly as today" guarantee applied to this role).
+- A blank `soul_drift_judge_model` inherits the **aux** chain, falling through to main when aux is blank. This changes the pre-0133 behavior where a blank drift judge used the agent's own main model; an explicitly configured judge chain remains unchanged.
 - A blank `memory_select_model` inherits the aux chain (its pre-0133 behavior: `memory_select_model` → `aux_model` → main).
 
 **Settings decisions (Josh, 2026-11-16), from the designSystem mockup:**

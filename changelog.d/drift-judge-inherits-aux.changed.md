@@ -1,0 +1,1 @@
+- **Drift judge inherits aux.** A blank drift-judge model now uses the cheap aux chain (falling back to main when aux is blank), matching Settings and the model-role status API. Explicit drift-judge chains are unchanged.
