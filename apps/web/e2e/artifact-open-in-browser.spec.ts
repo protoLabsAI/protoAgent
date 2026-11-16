@@ -46,6 +46,14 @@ test("the button is a real link to the signed page for the version on screen", a
   expect(tab.url()).toContain("/plugins/artifact/media/artifact/art-doc/page?version=1");
   expect(tab.url()).not.toContain("token=");
   expect(await tab.evaluate(() => window.opener)).toBeNull();
+
+  // A narrow dock folds it into the ⋯ menu with the other actions, still the armed link.
+  await page.setViewportSize({ width: 420, height: 700 });
+  await page.locator("#more").click();
+  const item = page.locator("#moremenu #open");
+  await expect(item).toBeVisible();
+  await expect(item).toHaveAttribute("role", "menuitem");
+  await expect(item).toHaveAttribute("href", /art-doc\/page/);
 });
 
 test("stepping versions re-arms the link for the version now shown", async ({ page }) => {
@@ -88,15 +96,4 @@ test("a failed mint leaves no link and says so on the button", async ({ page }) 
   await open.click();
   await expect(open).toHaveText("Unavailable");
   await expect(page.locator("#dlstat")).toHaveText("Couldn't open this version in a browser tab");
-});
-
-test("in a narrow dock it folds into the ⋯ menu with the other actions", async ({ page }) => {
-  await mintRoute(page);
-  await page.setViewportSize({ width: 420, height: 700 });
-  await page.goto(VIEW);
-  await page.locator("#more").click();
-  const item = page.locator("#moremenu #open");
-  await expect(item).toBeVisible();
-  await expect(item).toHaveAttribute("role", "menuitem");
-  await expect(item).toHaveAttribute("href", /art-doc\/page/);
 });
