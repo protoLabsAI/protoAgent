@@ -469,8 +469,32 @@ async def _foreground_acp(
                 project=project, fresh_session=fresh_session,
             )
 
+    async def record_room(messages):
+        # The originating turn may still own this thread. Serialize the late write
+        # with turns, but do not make collection wait for it: a resume tool can itself
+        # be running under that same lock. Never replay the old ToolMessage.
+        from graph.thread_ids import resolve_thread_id
+        from langgraph.graph import START
+        from server.turn_control import _thread_lock
+
+        thread_id = resolve_thread_id(None, session)
+        try:
+            async with _thread_lock(thread_id):
+                if STATE.graph is not None:
+                    await STATE.graph.aupdate_state(
+                        {"configurable": {"thread_id": thread_id}},
+                        {"messages": messages}, as_node=START,
+                    )
+        except Exception:  # noqa: BLE001 — bookkeeping must not cost the collected reply
+            log.exception("[delegates] recording adopted ACP exchange failed")
+
     def result_text(reply):
         if isinstance(reply, Command):
+            envelopes = reply.update["messages"][1:]
+            if envelopes:
+                write = asyncio.create_task(record_room(envelopes))
+                mgr._fire_tasks.add(write)
+                write.add_done_callback(mgr._fire_tasks.discard)
             message = reply.update["messages"][0]
             if message.status == "error":
                 raise DelegateError(str(message.content))

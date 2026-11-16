@@ -1628,3 +1628,69 @@ async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_pat
     finally:
         release.set()
         await asyncio.gather(*mgr._fire_tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_adopted_acp_preserves_room_exchange_without_blocking_collection(monkeypatch, tmp_path, fails):
+    """Late room envelopes survive adoption, even while a collecting turn owns the lock."""
+    import asyncio
+    import re
+
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import START, END, MessagesState, StateGraph
+    from runtime.state import STATE
+    from server.turn_control import _thread_lock
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("turn", lambda state: {})
+    builder.add_edge(START, "turn")
+    builder.add_edge("turn", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    monkeypatch.setattr(STATE, "graph", graph)
+    monkeypatch.setattr(STATE, "thread_id_resolver", None)
+    mgr = BackgroundManager(
+        agent_name="test", invoke_url="http://unused",
+        store=BackgroundStore(str(tmp_path / "jobs.db")),
+    )
+    monkeypatch.setattr(STATE, "background_mgr", mgr)
+    release = asyncio.Event()
+    calls = []
+
+    async def dispatch(self, target, query, **kwargs):
+        calls.append(query)
+        await release.wait()
+        if fails:
+            raise DelegateError("coder failed")
+        return "original result"
+
+    monkeypatch.setattr(DelegateRegistry, "dispatch", dispatch)
+    tool = _register([{
+        "name": "coder", "type": "acp", "command": "proto", "workdir": str(tmp_path), "timeout_s": 0.01,
+    }], monkeypatch).tools[0]
+    state = {"session_id": "room-test", "messages": []}
+    config = {"configurable": {"thread_id": "a2a:room-test"}}
+    try:
+        async with _thread_lock("a2a:room-test"):
+            reply = await _invoke_delegate(tool, {"target": "coder", "query": "build once", "state": state})
+            task_id = re.search(r"still running .* on task ([^.]+)\.", reply).group(1)
+            release.set()
+            args = {"target": "coder", "query": "", "resume_task_id": task_id, "state": state, "timeout": 1}
+            result = await _invoke_delegate(tool, args)
+            assert ("coder failed" if fails else "original result") in result
+            assert not (await graph.aget_state(config)).values
+        await asyncio.gather(*mgr._fire_tasks)
+        messages = (await graph.aget_state(config)).values["messages"]
+        assert len(messages) == 2
+        assert all(m.type == "human" for m in messages)
+        assert "build once" in messages[0].content
+        assert ("coder failed" if fails else "original result") in messages[1].content
+        assert messages[0].additional_kwargs["room"]["to"] == "coder"
+        assert messages[1].additional_kwargs["room"]["from"] == "coder"
+        await _invoke_delegate(tool, args)
+        assert len((await graph.aget_state(config)).values["messages"]) == 2
+        assert len(calls) == 1
+    finally:
+        release.set()
+        await asyncio.gather(*mgr._fire_tasks, return_exceptions=True)
