@@ -35,6 +35,7 @@
             "guides/react-tauri-ui.md",
             "guides/conversations-from-others.md",
             "guides/model-connections.md",
+            "guides/model-fallback-chains.md",
             "guides/model-passthrough.md",
             "guides/command-palette.md"
           ]
@@ -314,6 +315,10 @@
     },
     "guides/model-connections.md": {
       "title": "Connect and change models",
+      "status": "current"
+    },
+    "guides/model-fallback-chains.md": {
+      "title": "Model fallback chains",
       "status": "current"
     },
     "guides/model-passthrough.md": {
