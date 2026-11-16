@@ -1,0 +1,1 @@
+- **Restore context after chat checkpoint retirement.** Chats whose checkpoints were pruned resume with their latest harvest summary and last 20 stored turns, instead of starting with an empty context.
