@@ -442,6 +442,9 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 _DIGEST_TOPIC_MAX_CHARS = 80
+# The gist is written at ≤240 chars by the generator (ADR 0132 D2); clip defensively
+# here too so a hand-written or legacy card can't blow the digest's token budget.
+_DIGEST_GIST_MAX_CHARS = 240
 _DIGEST_EXCLUDED_SURFACES = ("background", "palette", "activity")
 
 # Session ids become filenames under memory_path() — restrict to the characters
@@ -504,6 +507,8 @@ def digest_entry(summary: dict) -> dict:
 
     ``topic`` is derived from the FIRST USER message only — no assistant text,
     no message bodies (ADR 0069 D1: identity confusion + poisoning surface).
+    ``gist`` is the card's idle gist (ADR 0132 D1/D2), reasoning-stripped,
+    whitespace-collapsed and clipped; ``""`` when the card has none yet.
     """
     from graph.output_format import strip_reasoning
 
@@ -516,23 +521,32 @@ def digest_entry(summary: dict) -> dict:
             break
     if len(topic) > _DIGEST_TOPIC_MAX_CHARS:
         topic = topic[: _DIGEST_TOPIC_MAX_CHARS - 1] + "…"
+    gist = " ".join(strip_reasoning(str(summary.get("gist") or "")).split())
+    if len(gist) > _DIGEST_GIST_MAX_CHARS:
+        gist = gist[: _DIGEST_GIST_MAX_CHARS - 1] + "…"
     return {
         "session_id": sid,
         "timestamp": str(summary.get("timestamp") or "unknown"),
         "surface": _surface_for(sid),
         "topic": topic,
+        "gist": gist,
         # A bounded summary keeps only some messages; it records the full count.
         "message_count": _message_count(summary, msgs),
     }
 
 
-def _digest_line(summary: dict) -> str:
-    """One attributed line: ``session_id · timestamp · surface · topic · N msgs``."""
+def _digest_line(summary: dict, *, with_gist: bool = True) -> str:
+    """One attributed line: ``session_id · timestamp · surface · topic [· gist] · N msgs``.
+
+    The card's gist (ADR 0132 D1) renders right after the topic when present; a
+    card without one renders exactly as before, byte for byte. ``with_gist=False``
+    drops the gist so :func:`finish_digest` can shed gists before whole chats."""
     e = digest_entry(summary)
-    return (
-        f"  {e['session_id']} · {e['timestamp']} · {e['surface']} · "
-        f"{e['topic'] or '(no user message)'} · {e['message_count']} msgs"
-    )
+    parts = [e["session_id"], e["timestamp"], e["surface"], e["topic"] or "(no user message)"]
+    if with_gist and e["gist"]:
+        parts.append(e["gist"])
+    parts.append(f"{e['message_count']} msgs")
+    return "  " + " · ".join(parts)
 
 
 def format_session_summary(summary: dict) -> str:
@@ -566,10 +580,17 @@ def format_session_summary(summary: dict) -> str:
 
 class DigestEntry(NamedTuple):
     """One attributed digest line, keyed by the session it summarizes — the
-    unit ADR 0108 D9's budget shed drops (oldest / lowest-rank first)."""
+    unit ADR 0108 D9's budget shed drops (oldest / lowest-rank first).
+
+    ``gistless_line`` is the same line with its ADR 0132 gist dropped (equal to
+    ``line`` when the card had no gist); :func:`finish_digest` swaps to it to
+    shed a gist before dropping the whole chat. Defaults to ``""`` so the legacy
+    two-field construction still works — an entry with no gistless form is simply
+    never gist-trimmed."""
 
     session_id: str
     line: str
+    gistless_line: str = ""
 
 
 class DigestResult(NamedTuple):
@@ -597,16 +618,31 @@ def render_digest(entries: list[DigestEntry]) -> str:
 
 
 def finish_digest(entries: list[DigestEntry], max_tokens: int = 2000, *, dir_exists: bool = True) -> DigestResult:
-    """Token-trim (char/4, dropping from the END — oldest under ``newest``,
-    lowest-rank under ``relevant``) and render. Preserves the loader's empty
-    shapes: no memory dir → ``""``; a dir with nothing usable → ``<prior_sessions/>``."""
+    """Token-trim (char/4) and render. Preserves the loader's empty shapes: no
+    memory dir → ``""``; a dir with nothing usable → ``<prior_sessions/>``.
+
+    Over budget, GISTS go before whole chats (ADR 0132 D1): the digest stays an
+    index, so a chat's topic line is worth more than another chat's gist. Gists
+    are shed oldest-first (from the END, mirroring the keep-first drop order);
+    only once every gist is gone are chats dropped from the end — oldest under
+    ``newest``, lowest-rank under ``relevant``."""
     if not dir_exists:
         return DigestResult("", [])
     kept = list(entries)
-    while kept:
-        if max(1, len("\n".join([_DIGEST_HEADER, *(e.line for e in kept)])) // 4) <= max_tokens:
+
+    def _over(es: list[DigestEntry]) -> bool:
+        return max(1, len("\n".join([_DIGEST_HEADER, *(e.line for e in es)])) // 4) > max_tokens
+
+    # 1. Shed gists oldest-first, keeping every chat's topic line in the index.
+    for i in range(len(kept) - 1, -1, -1):
+        if not _over(kept):
             break
-        kept.pop()  # drop from the end (keep-first ordering)
+        e = kept[i]
+        if e.gistless_line and e.gistless_line != e.line:
+            kept[i] = DigestEntry(e.session_id, e.gistless_line, e.gistless_line)
+    # 2. Only now drop whole chats from the end.
+    while kept and _over(kept):
+        kept.pop()
     if not kept:
         return DigestResult("<prior_sessions/>", [])
     return DigestResult(render_digest(kept), kept)
@@ -673,7 +709,7 @@ def load_digest_pool(
             continue
         if _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
             continue
-        pool.append(DigestEntry(sid, _digest_line(summary)))
+        pool.append(DigestEntry(sid, _digest_line(summary), _digest_line(summary, with_gist=False)))
     return pool, True
 
 
@@ -725,7 +761,7 @@ def load_digest(
                     break
                 if _surface_for(str(summary.get("session_id") or "unknown")) in _DIGEST_EXCLUDED_SURFACES:
                     break
-                pairs.append(DigestEntry(sid, _digest_line(summary)))
+                pairs.append(DigestEntry(sid, _digest_line(summary), _digest_line(summary, with_gist=False)))
                 break
         if pairs:
             return finish_digest(pairs, max_tokens, dir_exists=True)
