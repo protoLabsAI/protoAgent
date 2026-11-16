@@ -21,8 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Drift judge inherits aux (#5395).** A blank drift-judge model now uses the cheap aux chain (falling back to main when aux is blank), matching Settings and the model-role status API. Explicit drift-judge chains are unchanged.
 
 ### Fixed
-- **Skip unbuildable model fallbacks (#5394).** Missing credentials or other construction failures in a backup no longer reject graph rebuilds. Surviving models retain their order, primary construction failures still surface, and model-role status reports skipped entries with redacted reasons.
-
 - **Harvest and Facts model chains set in Settings now take effect at runtime (#5393).** The
   session-end harvest and fact-extraction passes resolved an aux-backed role that read
   nothing, so `memory.harvest_model` / `memory.facts_model` — surfaced in Settings › Model
@@ -30,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (blank inherits aux) and `facts` reads `memory.facts_model` (blank inherits harvest), and
   `GET /api/config/model-roles` lists each pass once instead of alongside a dead
   `memory_harvest` / `memory_facts` duplicate.
+
+- **Skip unbuildable model fallbacks (#5394).** Missing credentials or other construction failures in a backup no longer reject graph rebuilds. Surviving models retain their order, primary construction failures still surface, and model-role status reports skipped entries with redacted reasons.
 
 ## [0.246.0] - 2026-11-16
 
