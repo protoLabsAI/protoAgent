@@ -108,10 +108,10 @@ sorts that work into four groups, with an **Overview** that lists them together:
   the one concept that now covers a time trigger, a watched condition, and a wait.
 - **Your instructions** — standing instructions you've given that are still in force.
 
-A **This chat** filter narrows the groups to the conversation you opened Work
-from. **Needs you** is the exception: it always counts everything waiting on you,
-across the agent's chats. The same groups and counts feed the chat
-[status rail](#chat) above the composer.
+Opening a group from the chat [status rail](#chat) scopes that visit to the
+current conversation. Choosing another section in Work ends that scope.
+**Needs you** is the exception: it always counts everything waiting on you,
+across the agent's chats.
 
 ### Answer a job that's waiting on you
 
@@ -126,10 +126,11 @@ question and any links it left, then act in place:
 
 ### Where a job started, and when it stalls
 
-Every job remembers the conversation that created it. An open job's detail shows
-**Started in** with a link back to that chat or thread; a job the agent spun up on
-its own reads "Started by a background job". Closed jobs drop the line — finished
-work leaves Work.
+Jobs retain their source conversation. For jobs that aren't waiting on you,
+**Started in** links to the source chat or thread when available; background
+sources read "Started by a background job". A waiting job offers **Open chat**
+when its source has turns; otherwise its **Source** field shows the available
+origin, or "Its chat was deleted" for a missing chat. Finished jobs leave Work.
 
 Under a job in **Doing now**, a muted line tells you whether it is really moving.
 `in progress · idle 5m` (the time since it was last updated, shown in minutes, or
@@ -137,9 +138,11 @@ hours for a longer gap) marks an in-progress job that nothing is currently drivi
 `stalled` means it has been left that way past the stall threshold of about
 half an hour. Both are quiet notes, not warnings.
 
-When an in-progress job goes more than half an hour with nothing driving it — no
-linked card, follow-up, running turn, or background job — the agent is reminded to
-pick it back up, up to three times. If those reminders go unheeded, the job moves to
+When an in-progress job goes more than half an hour without an update and
+nothing is driving it, the agent is reminded to pick it back up, up to three
+times. Unresolved links, pending scheduled work, active watches, running
+delegations, background jobs, and live turns can all keep a job from being
+considered stalled. If those reminders go unheeded, the job moves to
 **Needs you** for you to continue, defer, or close it.
 
 ## Change settings {#agent-settings-telemetry}
@@ -170,8 +173,8 @@ for those tasks, including incognito and deleting a chat's saved content.
 
 The focused agent's knowledge, tasks, notes, and memory are shared across its
 chats. They belong to the agent instance, rather than to a selected project.
-Each job still remembers the conversation that created it: its [Work](#work)
-detail shows **Started in** with a link back to that chat or thread.
+Jobs also retain their source conversation; [Work](#work) provides source links
+when that conversation is available.
 
 In **Settings → Tools → Filesystem → Work folders**, add the directories the
 agent can access. Each root has its own write permission. File tools resolve
