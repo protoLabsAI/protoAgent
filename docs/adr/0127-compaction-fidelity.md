@@ -51,7 +51,7 @@ The summarizer is told never to infer an approval or a revocation, and to quote 
 - The agent records one with `record_directive` (the verbatim quote, any conditions, and its scope), reads them with `list_directives`, and closes one with `revoke_directive` or `fulfil_directive`, giving a reason.
 - The operator sees and revokes them through `GET`/`DELETE /api/chat/sessions/{id}/directives` and the `/directives` chat command.
 - Every in-force directive is injected each turn under `STANDING DIRECTIVES` in `<working_state>`.
-- The agent is told to record a directive when the operator approves or instructs something that outlives the current turn, and to consult the ledger before deciding it lacks approval.
+- The agent is told to record a directive when the operator gives an instruction that binds a later turn (a gate, hold, prohibition or deferred action), and to consult the ledger before deciding it lacks approval. Answers to the agent's own design questions, facts and status are not directives: they go in the spec, issue or ADR they decide, and `conditions` carries only the trigger or stop rules the operator stated (#5367).
 
 The ledger is the system of record. The transcript is not.
 
