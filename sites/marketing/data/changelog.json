@@ -8,12 +8,12 @@
       "Inbox items carry a display-only origin (#5330).",
       "Work origin resolution (#5332).",
       "Stall reminders retain their conversation origin (#5331).",
+      "From others retention (#5334).",
+      "Tasks inherit their originating conversation (#5333).",
+      "Thread reader title tooltip (#5337).",
+      "Follow-up backoff now survives a restart (#5336).",
       "ACP delegation transcript fallback (#5335).",
       "Every way a task closes now gets the same self-improvement review, once per completion (#5325).",
-      "Follow-up backoff now survives a restart (#5336).",
-      "From others retention (#5334).",
-      "Thread reader title tooltip (#5337).",
-      "Tasks inherit their originating conversation (#5333).",
       "Align instruction chip wording in the design docs (#5328)."
     ]
   },
