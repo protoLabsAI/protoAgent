@@ -975,6 +975,17 @@ def test_model_roles_lists_every_core_role(client, monkeypatch, clear_fallbacks)
     assert [r["role"] for r in roles] == list(_ROLE_FIELDS)
 
 
+def test_model_roles_lists_harvest_and_facts_once_each(client, monkeypatch, clear_fallbacks):
+    # ADR 0133 fix: the session-memory passes are ONE role each — the status surface no longer
+    # reports duplicate `memory_harvest`/`memory_facts` aliases alongside `harvest`/`facts`.
+    _install(monkeypatch, **BASE)
+    names = [r["role"] for r in client.get("/api/config/model-roles").json()["roles"]]
+    assert names.count("harvest") == 1
+    assert names.count("facts") == 1
+    assert "memory_harvest" not in names
+    assert "memory_facts" not in names
+
+
 def test_model_roles_image_describe_unavailable_without_vision(client, monkeypatch, clear_fallbacks):
     # BASE: the main model is set, model.vision defaults off, image_describe is blank.
     _install(monkeypatch, **BASE)

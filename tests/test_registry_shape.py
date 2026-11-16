@@ -242,8 +242,8 @@ def test_subscription_chains_keep_their_routes_when_exported(provider, monkeypat
     assert layer == original
     assert to_registry_shape(doc)[0] == doc
     config = LangGraphConfig.from_dict(doc)
-    for role in ("main", "aux", "compaction", "goal_eval", "memory_select", "memory_harvest",
-                 "memory_facts", "memory_gist", "image_describe", "soul_drift_judge"):
+    for role in ("main", "aux", "compaction", "goal_eval", "memory_select", "harvest",
+                 "facts", "memory_gist", "image_describe", "soul_drift_judge"):
         assert role_chain(config, role) == expected[:-1] + (["subscription:tail"] if role == "main" else [])
         connection, _, provider_type, model = resolve_slot_target(role_chain(config, role)[0], config)
         assert (connection, provider_type, model) == ("subscription", provider, "primary")

@@ -1,8 +1,10 @@
 """ADR 0133 M3: the harvest, facts and compaction seams build their model through
 ``graph.model_roles.create_role_llm`` and fail over on a retryable provider error.
 
-Each seam inherits the aux chain (harvest → aux; facts → harvest → aux;
-compaction → aux). With ``aux = [a, b]`` and ``a`` returning a 429, every seam must answer from ``b``.
+A BLANK memory model inherits the aux chain (harvest → aux; facts → harvest → aux;
+compaction → aux). With ``aux = [a, b]`` and ``a`` returning a 429, every such seam must
+answer from ``b``. When ``memory.harvest_model`` / ``memory.facts_model`` IS set, the harvest
+and facts passes build from it instead (the ADR 0133 fix); compaction is untouched.
 """
 
 from __future__ import annotations
@@ -92,9 +94,17 @@ def test_sensitive_provider_payload_never_recorded(monkeypatch, caplog):
 
 
 @pytest.mark.parametrize("aux", ["aux", ""])
-@pytest.mark.parametrize("seam", [_default_summarizer, _default_extractor, continuation_summarizer])
-def test_scalar_memory_overrides_do_not_change_aux_passes(monkeypatch, aux, seam):
-    """Previously inactive memory settings must not redirect existing runtime passes."""
+@pytest.mark.parametrize(
+    "seam, override_model",
+    [
+        (_default_summarizer, "reserved-harvest"),  # harvest reads memory.harvest_model
+        (_default_extractor, "reserved-facts"),     # facts reads memory.facts_model
+        (continuation_summarizer, None),            # compaction is untouched (aux → main)
+    ],
+)
+def test_memory_passes_read_their_configured_model(monkeypatch, aux, seam, override_model):
+    """ADR 0133 fix: a scalar ``memory.harvest_model`` / ``memory.facts_model`` set in
+    Settings now redirects the harvest / facts pass; compaction keeps inheriting aux → main."""
     from graph.config import LangGraphConfig
 
     monkeypatch.delenv("PROTOAGENT_MODEL", raising=False)
@@ -102,7 +112,7 @@ def test_scalar_memory_overrides_do_not_change_aux_passes(monkeypatch, aux, seam
         model_name="main", aux_model=aux,
         memory_harvest_model="reserved-harvest", memory_facts_model="reserved-facts",
     )
-    expected_model = aux or "main"
+    expected_model = override_model or aux or "main"
 
     def build(config, model_name, **kwargs):
         return RunnableLambda(lambda _: AIMessage(content=f'["{model_name}"]'))

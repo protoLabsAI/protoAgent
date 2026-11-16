@@ -113,7 +113,8 @@ async def _default_extractor(transcript: str, config) -> list[str | dict[str, st
     """Aux-model fact extraction (classification-grade, not the main model)."""
     from graph.model_roles import create_role_llm
 
-    # Preserve the historical aux selection; reserved memory overrides stay inactive.
+    # The "facts" role resolves memory.facts_model (ADR 0133); a blank chain inherits
+    # harvest → aux, preserving the historical aux selection when nothing is set.
     llm = create_role_llm(config, "facts")
     resp = await llm.ainvoke([HumanMessage(content=_FACTS_PROMPT.format(transcript=transcript))])
     # text_of, not str(): a Responses provider's block list carries an opaque reasoning blob.

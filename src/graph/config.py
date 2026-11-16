@@ -221,20 +221,20 @@ def _reconcile_slot_providers(config) -> list[str]:
 # in later ADR-0133 milestones; M1 only establishes the config shape and this helper.
 
 #: Role → config attribute holding its chain; None means an inheritance-only role.
+#: The session-memory passes resolve by the SAME role name the runtime asks for
+#: (``create_role_llm(config, "harvest"/"facts")``), reading ``memory.harvest_model`` /
+#: ``memory.facts_model`` — there is ONE role per pass, so Settings and the status API
+#: list each once (no separate ``memory_harvest``/``memory_facts`` alias).
 _ROLE_FIELDS: dict[str, str | None] = {
     "main": "model_name",
     "aux": "aux_model",
-    # Runtime passes retain their historical aux selection. The reserved memory_*
-    # overrides below are separate roles, not activated by the M3 migration.
-    "harvest": None,
-    "facts": None,
+    "harvest": "memory_harvest_model",
+    "facts": "memory_facts_model",
     "compaction": "compaction_model",
     "goal_eval": "goal_eval_model",
     "memory_select": "memory_select_model",
     "soul_drift_judge": "soul_drift_judge_model",
     "image_describe": "image_describe_model",
-    "memory_harvest": "memory_harvest_model",
-    "memory_facts": "memory_facts_model",
     "memory_gist": "memory_gist_model",
 }
 
@@ -252,8 +252,6 @@ _ROLE_PARENT: dict[str, str] = {
     "compaction": "aux",
     "goal_eval": "aux",
     "memory_select": "aux",
-    "memory_harvest": "aux",
-    "memory_facts": "memory_harvest",
     "memory_gist": "aux",
 }
 
@@ -1645,12 +1643,12 @@ class LangGraphConfig:
     memory_select_model: str | list[str] = ""
     # The LLM passes behind session memory (ADR 0133 D5/D6), each a scalar or an ordered-list
     # chain. Blank by default; inheritance (role_chain): harvest → aux, facts → harvest,
-    # gist → aux. ``memory_harvest`` names the session-end conversation-harvest model
-    # (graph/conversation_harvest.py), ``memory_facts`` the fact-extraction model
-    # (graph/memory_facts.py), ``memory_gist`` the short-gist summarizer. The runtime
-    # harvest/facts passes use the aux-backed "harvest"/"facts" roles; these reserved
-    # overrides are not activated by that migration. YAML: `memory.harvest_model` / `memory.facts_model` /
-    # `memory.gist_model`.
+    # gist → aux. The runtime reads each via the matching role: the "harvest" role
+    # (session-end conversation-harvest, graph/conversation_harvest.py) resolves
+    # ``memory_harvest_model``, the "facts" role (fact extraction, graph/memory_facts.py)
+    # resolves ``memory_facts_model``, and the "memory_gist" role (short-gist summarizer)
+    # resolves ``memory_gist_model`` — so a chain set in Settings takes effect at runtime.
+    # YAML: `memory.harvest_model` / `memory.facts_model` / `memory.gist_model`.
     memory_harvest_model: str | list[str] = ""
     memory_facts_model: str | list[str] = ""
     memory_gist_model: str | list[str] = ""
