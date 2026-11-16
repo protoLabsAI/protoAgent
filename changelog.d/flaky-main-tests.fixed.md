@@ -1,0 +1,1 @@
+- **Reliable delegate change summaries and regression checks.** Preserve Git index timestamps so same-tick edits appear in delegate summaries. Make simulated restart cleanup release database operations and use explicit synchronization for socket revocation and adopted ACP collection tests.
