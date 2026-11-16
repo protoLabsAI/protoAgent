@@ -724,7 +724,7 @@ runtime:
 
 ## `routing`
 
-On a primary-model error, retry on each fallback model in order. `fallback_models` is the legacy way to write the **main** model's fallbacks; it is appended after `model.name`'s primary so `model.name` + `fallback_models` reads as the one main chain. Since [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md) **every** model role — not just the main model — takes a fallback chain: any role field (`aux_model` included) accepts an ordered list as well as a single string, and a blank role inherits its parent's whole chain (specific role → `aux_model` → main). A fallback fires only on a retryable failure (429 / quota / 5xx / timeout / connection), never on a bad request. See [Model fallback chains](../guides/model-fallback-chains.md).
+On a primary-model error, retry on each fallback model in order. `fallback_models` is the legacy way to write the **main** model's fallbacks; it is appended after the entire `model.name` chain (after its last entry when it is a list) so `model.name` + `fallback_models` reads as the one main chain. Since [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md) **every** model role — not just the main model — takes a fallback chain: any role field (`aux_model` included) accepts an ordered list as well as a single string, and a blank role inherits its parent's whole chain (specific role → `aux_model` → main). A fallback fires only on a retryable failure (429 / quota / 5xx / timeout / connection), never on a bad request. Harvest and Facts always inherit the aux chain; the reserved `memory.harvest_model` and `memory.facts_model` fields do not override those runtime passes. See [Model fallback chains](../guides/model-fallback-chains.md).
 
 ```yaml
 routing:

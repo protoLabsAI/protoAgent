@@ -14,7 +14,8 @@ refusal surfaces as-is, because trying a different model would just fail the sam
 
 ## Which roles take a chain
 
-Every core model role accepts a chain. Each appears in **Settings → Model → Model
+Every core model role uses a chain. Harvest and Facts inherit theirs rather than
+accepting an active override. Each appears in **Settings → Model → Model
 roles**, grouped the way the console shows them:
 
 | Group | Role | YAML key |
@@ -22,14 +23,21 @@ roles**, grouped the way the console shows them:
 | Main and aux | **Main** — the reasoning model that drives the turn | `model.name` |
 | Main and aux | **Auxiliary** — the cheap/fast model for lighter calls | `routing.aux_model` |
 | Memory | **Compaction** — summaries of old history near the context limit | `compaction.model` |
-| Memory | **Harvest** — the session-end conversation summary | `memory.harvest_model` |
-| Memory | **Facts** — fact extraction from a conversation | `memory.facts_model` |
+| Memory | **Harvest** — the session-end conversation summary | Inherits `routing.aux_model`; no active override |
+| Memory | **Facts** — fact extraction from a conversation | Inherits Harvest; no active override |
 | Memory | **Memory select** — choosing which memories to surface | `memory.select_model` |
 | Memory | **Chat gist** — the short carry-over summary of a chat ([ADR 0132](../adr/0132-chat-context-carryover.md)) | `memory.gist_model` |
 | Checks | **Goal eval** — the `llm` goal verifier | `goal.eval_model` |
 | Checks | **Drift judge** — the SOUL drift judge | `soul.drift.judge.model` |
 | Media | **Image describe** — describing attached or ingested images | `knowledge.image_describe_model` |
 | Subagents | **Each subagent tier** — the delegated-task models | `subagents.<name>.model` |
+
+**Harvest and Facts currently always inherit**: Facts → Harvest → aux → main.
+Although Settings exposes `memory.harvest_model` and `memory.facts_model`, these
+are reserved overrides; setting them in Settings or YAML does not change the
+runtime harvest or fact-extraction chain. To change the models those passes use,
+set `routing.aux_model`. The chain editor controls described below apply to
+active overrides; setting an own chain for Harvest or Facts has no runtime effect.
 
 Subagents collapse into one counted line in Settings, built from the agent's live
 subagent registry rather than a fixed list, so a newly added subagent appears on its own.
@@ -46,7 +54,8 @@ primary. The inheritance order is:
 
 - A blank specific role (compaction, memory select, goal eval, …) → the **aux** chain.
 - A blank **aux** → the **main** chain.
-- **Facts** → **harvest** → aux → main, so a blank facts role follows harvest.
+- **Facts** → **harvest** → aux → main always; their reserved override fields
+  do not alter this inheritance.
 
 A chain you **set** is used **exactly as listed, with no silent fall-through** to the
 main model. An aux chain of two cheap models never escalates to the expensive main model
@@ -84,7 +93,7 @@ same way the other routing settings do.
 
 ### In YAML
 
-Every role field takes either a **string** (one model — today's shape, unchanged) or an
+Every configurable role field takes either a **string** (one model — today's shape, unchanged) or an
 ordered **list** (primary first, then each fallback):
 
 ```yaml
@@ -99,7 +108,8 @@ goal:
 ```
 
 `model.name` can be a list, so the main model itself falls back. The legacy
-`routing.fallback_models` still works and is appended after `model.name`'s primary — so
+`routing.fallback_models` still works and is appended after the entire `model.name`
+chain (after its last entry when it is a list) — so
 `model.name` plus `routing.fallback_models` is the one main chain. Existing single-string
 configs load unchanged; a string is just a chain of one. Each `<id>:<model>` entry can
 name its own connection, so a chain can cross providers (your Claude subscription, then
@@ -148,7 +158,8 @@ With this config and every specific role left blank:
 - **Image describe** runs on the main chain — Opus, then `gpt-6.1-sol`, then
   `protolabs/cloud` — because its blank value inherits main, not aux.
 - Nothing silently escalates. The aux-family roles stay on the three aux models; to let
-  them reach Opus you'd add it to the aux chain or give the role its own.
+  them reach Opus you'd add it to the aux chain. Roles with active overrides can
+  also be given their own chain; Harvest and Facts always follow aux.
 
 This is the failure the chains were built for: when one cheap model hits its usage limit,
 compaction, harvest, facts, goal checks, and gists keep running on the next model in the
