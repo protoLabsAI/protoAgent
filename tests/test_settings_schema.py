@@ -19,7 +19,7 @@ from graph.settings_schema import (
     ("typo", False), (["known", "typo"], False), (["known", 1], False),
 ])
 def test_model_chain_preserves_declared_option_validation(monkeypatch, value, valid):
-    model = next(f for f in FIELDS if f.key == "model.name")
+    model = next(f for f in FIELDS if f.key == "model.name" and not f.ui_hidden)
     monkeypatch.setattr(model, "options", ["known", "backup"])
     assert validate_flat({"model.name": value})[0] is valid
 
@@ -36,13 +36,13 @@ def test_schema_groups_and_values():
     groups = build_schema(cfg, model_options=["a", "b"])
     # Grouped + ordered by domain (ADR 0048): Identity leads, then the Model domain — now
     # "Model & runtime" (agent_runtime folded in from Behavior, ADR 0033 D1 amended) /
-    # Favorite models / Routing / Caching.
-    assert [g["section"] for g in groups][:4] == ["Identity", "Model & runtime", "Favorite models", "Routing"]
+    # Favorite models / Caching; role chains have their own group.
+    assert [g["section"] for g in groups][:4] == ["Identity", "Model & runtime", "Favorite models", "Caching"]
     # The ACP runtime selector is DEPRECATED (2026-08-11) — ui_hidden, so the model
-    # section leads with the model itself; agent_runtime stays in FIELDS for legacy
+    # section leads with generation settings; agent_runtime stays in FIELDS for legacy
     # config round-trip only (delegates keep ACP; the brain doesn't).
     model_runtime = next(g for g in groups if g["section"] == "Model & runtime")
-    assert [f["key"] for f in model_runtime["fields"]][:1] == ["model.name"]
+    assert [f["key"] for f in model_runtime["fields"]][:1] == ["model.temperature"]
     assert model_runtime["category"] == "Model"
     fields = [f for g in groups for f in g["fields"]]
     # Every core FIELD is present — EXCEPT ui_hidden ones, which stay in FIELDS for
@@ -56,10 +56,10 @@ def test_schema_groups_and_values():
     assert "identity.name" not in {f["key"] for f in fields}  # ui_hidden → not in the UI
     for f in fields:
         assert {"key", "label", "type", "value", "default", "restart", "description"} <= set(f)
-    # The lead model is now an ordered-chain editor (ADR 0133) — string_list, like the
+    # The lead model is now an ordered-chain editor (ADR 0133) — model_chain, like the
     # other model-role slots — carrying the probed options as suggestions.
     model = next(f for f in fields if f["key"] == "model.name")
-    assert model["type"] == "string_list" and model["options"] == ["a", "b"]
+    assert model["type"] == "model_chain" and model["options"] == ["a", "b"]
     # The free-text model fields ALSO carry the gateway list (as datalist
     # suggestions) — they stay `string` (blank/any alias allowed), not `select`.
     transcribe = next(f for f in fields if f["key"] == "knowledge.transcribe_model")
@@ -68,10 +68,9 @@ def test_schema_groups_and_values():
     # list, so a typed legacy acp:<agent> / single alias still validates (MODEL_ROLE_CHAIN_KEYS).
     for key in ("routing.aux_model", "compaction.model", "goal.eval_model"):
         f = next(f for f in fields if f["key"] == key)
-        assert f["type"] == "string_list" and f["options"] == ["a", "b"]
-    # The fallback list carries the gateway options too (rendered as combobox rows).
-    fallback = next(f for f in fields if f["key"] == "routing.fallback_models")
-    assert fallback["type"] == "string_list" and fallback["options"] == ["a", "b"]
+        assert f["type"] == "model_chain" and f["options"] == ["a", "b"]
+    # The legacy fallback list remains writable but is hidden from the form.
+    assert "routing.fallback_models" not in {f["key"] for f in fields}
     # The /model favorites (#1957) — same ordered combobox-list treatment, models-backed.
     favorites = next(f for f in fields if f["key"] == "model.favorites")
     assert favorites["type"] == "string_list" and favorites["options"] == ["a", "b"]
@@ -235,7 +234,7 @@ def test_current_values_reflect_config():
     cfg.aux_model = "protolabs/fast"
     fields = {f["key"]: f for g in build_schema(cfg) for f in g["fields"]}
     assert fields["compaction.enabled"]["value"] is True
-    assert fields["routing.aux_model"]["value"] == "protolabs/fast"
+    assert fields["routing.aux_model"]["value"] == ["protolabs/fast"]
 
 
 def test_validate_rejects_bad_types_and_bounds():
@@ -493,3 +492,63 @@ def test_knowledge_help_names_memory_and_document_tools():
     hot_write = descriptions["knowledge.hot_write_confirm"]
     assert "memory_save and knowledge_ingest" in hot_write
     assert "memory_ingest" not in hot_write
+
+
+ROLE_FIELDS = [
+    ("main", "model.name", "Main and aux", ""),
+    ("aux", "routing.aux_model", "Main and aux", "main"),
+    ("compaction", "compaction.model", "Memory", "aux"),
+    ("harvest", "memory.harvest_model", "Memory", "aux"),
+    ("facts", "memory.facts_model", "Memory", "harvest"),
+    ("memory_select", "memory.select_model", "Memory", "aux"),
+    ("memory_gist", "memory.gist_model", "Memory", "aux"),
+    ("goal_eval", "goal.eval_model", "Checks", "aux"),
+    ("soul_drift_judge", "soul.drift.judge.model", "Checks", "aux"),
+    ("image_describe", "knowledge.image_describe_model", "Media", "main"),
+]
+
+
+def test_model_roles_schema_contract():
+    group = next(g for g in build_schema(LangGraphConfig()) if g["section"] == "Model roles")
+    assert group["category"] == "Model"
+    assert [(f["role"], f["key"], f["subhead"], f["inherits"]) for f in group["fields"]] == ROLE_FIELDS
+    assert all(f["type"] == "model_chain" for f in group["fields"])
+    legacy_labels = {"Primary model", "Auxiliary (fast) model", "Fallback models", "Summarizer model",
+                     "Verifier model", "Image description model"}
+    legacy = [f for f in FIELDS if f.label in legacy_labels]
+    assert {f.label for f in legacy} == legacy_labels
+    assert all(f.ui_hidden for f in legacy)
+
+
+@pytest.mark.parametrize("stored, expected", [("one", ["one"]), ("", []), ("  ", []),
+                                             ([], []), (["one", "two"], ["one", "two"])])
+def test_model_chain_read_write_contract(stored, expected):
+    from graph.config_io import config_to_dict
+
+    cfg = LangGraphConfig()
+    for role, key, _, _ in ROLE_FIELDS:
+        field = next(f for f in FIELDS if f.key == key and f.type == "model_chain")
+        setattr(cfg, field.attr, stored)
+    fields = {f["key"]: f for g in build_schema(cfg) for f in g["fields"]}
+    for role, key, _, _ in ROLE_FIELDS:
+        assert fields[key]["value"] == expected
+        assert isinstance(fields[key]["default"], list)
+        assert validate_flat({key: stored}) == (True, None)
+        assert validate_flat({key: [1]})[0] is False
+        nested = nest_updates({key: expected})
+        value = nested
+        for part in key.split("."):
+            value = value[part]
+        assert value == ("" if role != "main" and expected == [] else expected)
+    assert config_to_dict(cfg)["model"]["name"] == stored
+
+
+@pytest.mark.parametrize("chain", ["one", ["one", "two"]])
+def test_subagent_model_chains_keep_dynamic_names(chain):
+    from graph.config_io import config_to_dict
+
+    updates = {"subagents.custom_worker.model": chain}
+    nested = nest_updates(updates)
+    assert nested == {"subagents": {"custom_worker": {"model": chain}}}
+    cfg = LangGraphConfig.from_dict(nested)
+    assert config_to_dict(cfg)["subagents"]["custom_worker"]["model"] == chain
