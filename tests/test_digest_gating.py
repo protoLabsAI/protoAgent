@@ -647,3 +647,33 @@ def test_automated_sessions_do_not_take_chat_digest_slots(tmp_path, policy, lega
         # Explicit search still exposes durable automation summaries.
         hits = search_session_summaries("rocket launch", memory_dir=str(tmp_path), surface="activity")
         assert [hit["session_id"] for hit in hits] == ["system:activity"]
+
+
+def test_surface_gating_leaves_the_token_budget_untouched(tmp_path):
+    """ADR 0132 D3 (acceptance #2): excluding job/palette/Activity surfaces must
+    not change the delivery budget. The gate drops those sessions from the newest-N
+    pool BEFORE ``finish_digest`` runs, so the SAME ``max_tokens`` char/4 trim the
+    loader has always applied is measured over the chats alone — the big automated
+    summaries never enter the budget math, and the public loaders' default ceiling
+    is still 2000."""
+    import inspect
+
+    now = time.time()
+    for i in range(3):
+        _write(tmp_path, f"chat-{i}", "release prep", mtime=now - i)
+    # Automated summaries with bulky bodies, interleaved by mtime. If any leaked into
+    # the pool it would either take a slot or eat into the token budget below.
+    for i in range(6):
+        _write(tmp_path, f"job:{i}", "background churn " * 60, mtime=now - 0.5 - i)
+    _write(tmp_path, "system:activity", "activity noise " * 60, mtime=now + 1)
+
+    budget = 2000
+    res = load_digest("newest", memory_dir=str(tmp_path), max_tokens=budget)
+    assert {e.session_id for e in res.entries} == {"chat-0", "chat-1", "chat-2"}
+    # The char/4 estimate the cap is expressed in, measured on the header + entry
+    # lines (not the wrapper tags) exactly as finish_digest measures it.
+    assert len("\n".join(res.block.splitlines()[1:-1])) // 4 <= budget
+
+    # The exclusion is additive: it did not move either public loader's default budget.
+    assert inspect.signature(load_digest).parameters["max_tokens"].default == 2000
+    assert inspect.signature(load_prior_sessions_digest).parameters["max_tokens"].default == 2000
