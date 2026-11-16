@@ -480,7 +480,7 @@ async def test_delegate_to_background_falls_back_inline_without_manager(monkeypa
 
 
 async def test_delegate_to_forwards_timeout_override(monkeypatch):
-    """#3091: delegate_to(timeout=…) threads a per-call override into registry.dispatch."""
+    """ACP keeps a bounded continuation budget beyond the caller's wait (#5318)."""
     r = _register([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
     tool = r.tools[0]
     seen: dict = {}
@@ -491,11 +491,11 @@ async def test_delegate_to_forwards_timeout_override(monkeypatch):
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
     assert await _invoke_delegate(tool, {"target": "coder", "query": "build", "timeout": 900}) == "done"
-    assert seen["timeout"] == 900.0
+    assert seen["timeout"] == 2700.0
 
 
-async def test_delegate_to_omitted_timeout_passes_none(monkeypatch):
-    """Default timeout=0 ⇒ None down the stack ⇒ the delegate's configured timeout is used."""
+async def test_delegate_to_omitted_timeout_uses_configured_wait_budget(monkeypatch):
+    """The configured wait budget also leaves time to collect the original ACP run."""
     r = _register([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
     tool = r.tools[0]
     seen: dict = {"timeout": "unset"}
@@ -506,7 +506,7 @@ async def test_delegate_to_omitted_timeout_passes_none(monkeypatch):
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
     assert await _invoke_delegate(tool, {"target": "coder", "query": "build"}) == "done"
-    assert seen["timeout"] is None
+    assert seen["timeout"] == 3600.0
 
 
 async def test_delegate_to_background_threads_timeout(monkeypatch):
@@ -1562,3 +1562,69 @@ async def test_a2a_probe_timeout_has_a_diagnostic_name(monkeypatch):
     monkeypatch.setattr(policy, "check_url", lambda url: None)
     d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
     assert await ADAPTERS["a2a"].probe(d) == {"ok": False, "error": "ReadTimeout"}
+
+
+@pytest.mark.parametrize("adoption", ["ok", "cancel", "missing", "store_failure"])
+async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_path, adoption):
+    """#5318: one prompt survives the wait deadline; collection never sends it twice."""
+    import asyncio
+    import re
+
+    import plugins.coding_agent as pool
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+    from runtime.state import STATE
+
+    release = asyncio.Event()
+    calls = []
+    killed = []
+
+    class Client:
+        async def prompt(self, query, timeout, **kwargs):
+            calls.append(query)
+            await asyncio.wait_for(release.wait(), timeout)
+            return "original result"
+
+        def kill_now(self):
+            killed.append(True)
+
+    monkeypatch.setattr(pool, "_client_for", lambda spec: Client())
+    monkeypatch.setattr(pool, "_drop_client", lambda spec: None)
+    store = BackgroundStore(str(tmp_path / "jobs.db"))
+    mgr = BackgroundManager(agent_name="test", invoke_url="http://unused", store=store)
+    monkeypatch.setattr(STATE, "background_mgr", None if adoption == "missing" else mgr)
+    if adoption == "store_failure":
+        def fail(**kwargs):
+            raise OSError("store unavailable")
+        monkeypatch.setattr(store, "create", fail)
+    tool = _register([{
+        "name": "coder", "type": "acp", "command": "proto", "workdir": str(tmp_path), "timeout_s": 0.01,
+    }], monkeypatch).tools[0]
+    try:
+        reply = await _invoke_delegate(tool, {"target": "coder", "query": "build once"})
+        if adoption in ("missing", "store_failure"):
+            assert "could not be kept as a collectable task" in reply
+            assert "may still apply side effects" in reply
+            assert killed == [True]
+            assert not mgr._work_tasks
+            return
+        task_id = re.search(r"still running .* on task ([^.]+)\.", reply).group(1)
+        # A second short wait retains the same task and does not cancel the prompt.
+        args = {"target": "coder", "query": "", "resume_task_id": task_id}
+        assert task_id in await _invoke_delegate(tool, args)
+        assert not killed
+        if adoption == "cancel":
+            await mgr.cancel(task_id)
+            assert "canceled" in await _invoke_delegate(tool, args)
+            assert killed == [True]
+            return
+        release.set()
+        assert await _invoke_delegate(tool, {**args, "timeout": 1}) == "original result"
+        # Collection also works from the durable row once the live task is gone.
+        mgr.store = BackgroundStore(str(tmp_path / "jobs.db"))
+        assert await _invoke_delegate(tool, args) == "original result"
+        assert calls == ["build once"]
+        assert mgr.store.get(task_id).status == "completed"
+    finally:
+        release.set()
+        await asyncio.gather(*mgr._fire_tasks, return_exceptions=True)

@@ -276,7 +276,9 @@ def _build_delegate_to(registry: DelegateRegistry):
                 Leave 0 (the default) to use the configured timeout. Raise it for a
                 known-long job — a coding agent running a full TDD cycle, venv
                 setup, or a CI gate — that would otherwise exceed the delegate's
-                default (ACP coding delegates default to 1800s / 30 min).
+                default (ACP coding delegates default to 1800s / 30 min). Foreground
+                ACP calls return a collectable task on timeout; the original dispatch
+                has up to 30 additional minutes to finish. Collection sends no new prompt.
             project: coding agents only — the name of a registered project (as
                 `list_projects` shows it) to run THIS call in, instead of the coding
                 agent's configured directory. Use it to hand a focused fix in a specific
@@ -291,7 +293,10 @@ def _build_delegate_to(registry: DelegateRegistry):
                 answered), so it can fold the change in — or tell you it never got the
                 original. Leave empty for a new request.
         """
-        if not str(query).strip():
+        if not str(query).strip() and not (
+            str(resume_task_id or "").strip() and registry.get(target) is not None
+            and registry.get(target).type == "acp"
+        ):
             return "Error: `query` is empty — give the delegate something to do."
         # Normalize identity ONCE at the tool boundary: whitespace-padded ids must not
         # hash/claim differently from their trimmed twin (that would silently defeat
@@ -333,6 +338,16 @@ def _build_delegate_to(registry: DelegateRegistry):
                     scope = resolve(project)
                 except DelegateError as exc:
                     return f"Error: {exc}"
+        d = registry.get(target)
+        if d is not None and d.type == "acp" and (not background or resume_task_id):
+            try:
+                return await _foreground_acp(
+                    registry, target, query, state, timeout=timeout_s, item_id=item_id,
+                    resume_task_id=resume_task_id, project=scope, fresh_session=bool(fresh_session),
+                    summary=summary, tool_call_id=tool_call_id,
+                )
+            except Exception as exc:  # noqa: BLE001 — failed collection must not trigger a resend
+                return f"Error: ACP task could not be read: {exc}. The delegate may still apply side effects."
         if background:
             return await _spawn_background_delegation(
                 registry,
@@ -398,6 +413,104 @@ def _build_delegate_to(registry: DelegateRegistry):
 
     delegate_to.description = f"{delegate_to.description}\n\nAvailable delegates: {listing or '(none configured)'}."
     return delegate_to
+
+
+async def _foreground_acp(
+    registry, target, query, state, *, timeout, item_id, resume_task_id, project, fresh_session, summary, tool_call_id,
+):
+    """Keep the original ACP dispatch collectable after the foreground wait (#5318)."""
+    from infra import clock
+    from runtime.state import STATE
+    from tools.session import _session_id_from
+
+    from . import conversations
+
+    mgr = getattr(STATE, "background_mgr", None)
+    session = _session_id_from(state) or ""
+    budget = timeout or getattr(registry.get(target), "timeout_s", 1800)
+
+    def running(job_id):
+        return (
+            f"delegate {target!r} still running after {budget:g}s on task {job_id}. "
+            f"Collect the same run with delegate_to(target={target!r}, query='', "
+            f"resume_task_id={job_id!r}); do not re-send the work."
+        )
+
+    if resume_task_id:
+        job = mgr.store.get(resume_task_id) if mgr is not None else None
+        if (job is None or job.subagent_type != "delegate" or job.result_author != target
+                or job.origin_session != session):
+            return "Error: no collectable ACP task for this delegate and session. Do not re-send blindly."
+        try:
+            tracked = await mgr.wait_work(resume_task_id, budget)
+        except asyncio.TimeoutError:
+            return running(resume_task_id)
+        job = mgr.store.get(resume_task_id)
+        if job is None:
+            return "Error: the tracked ACP task is no longer available; the delegate may have applied side effects."
+        if job.status == "running":
+            if not tracked:
+                return (
+                    "Error: the ACP task has no live collector (the host may have restarted). "
+                    "The delegate may still apply side effects; inspect the work before retrying."
+                )
+            return running(resume_task_id)
+        return job.result if job.status == "completed" else f"Error: {job.status}: {job.result}"
+
+    async def dispatch():
+        from graph.delegate_progress import progress_sink
+
+        with progress_sink(_tool_progress_sink()), conversations.delegate_summary(summary):
+            # Preserve the whole dispatch, including managed-git finalization and diff
+            # capture, with a bounded extra 30 minutes after the foreground budget.
+            return await _dispatch_into_room(
+                registry, target, query, state, tool_call_id=tool_call_id,
+                timeout=budget + 1800, item_id=item_id or None,
+                project=project, fresh_session=fresh_session,
+            )
+
+    def result_text(reply):
+        if isinstance(reply, Command):
+            message = reply.update["messages"][0]
+            if message.status == "error":
+                raise DelegateError(str(message.content))
+            return str(message.content)
+        return str(reply)
+
+    task = asyncio.create_task(dispatch())
+    adopted = False
+    try:
+        await clock.wait_for(asyncio.shield(task), budget)
+        return task.result()
+    except asyncio.TimeoutError:
+        try:
+            if mgr is None:
+                raise RuntimeError("background manager unavailable")
+            job_id = await mgr.adopt_work(
+                task=task, result_text=result_text,
+                origin_session=session, kind="delegate", result_author=target,
+                description=f"delegate → {target}: {summary or query[:120]}", detail=query,
+                origin_incognito=bool((state or {}).get("incognito")),
+            )
+            adopted = True
+            dedupe_key = _background_dedupe_key(target, query)
+            _INFLIGHT_DELEGATIONS[dedupe_key] = job_id
+            task.add_done_callback(lambda _: _release_inflight_delegation(dedupe_key, job_id))
+            return running(job_id)
+        except Exception as exc:  # noqa: BLE001 — never promise an unstored handle
+            log.exception("[delegates] could not adopt ACP dispatch")
+            return (
+                f"Error: ACP session could not be kept as a collectable task ({exc}). "
+                "The local dispatch is being stopped, but the delegate may still apply side effects "
+                "or have already applied them. Inspect the work before retrying."
+            )
+    except Exception as exc:  # noqa: BLE001 — match the tool's error surface
+        return f"Error: {exc}"
+    finally:
+        if not adopted and not task.done():
+            task.cancel()
+        if not adopted:
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def _tool_progress_sink():
