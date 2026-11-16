@@ -444,11 +444,20 @@ async def _foreground_acp(
             f"resume_task_id={job_id!r}); do not re-send the work."
         )
 
+    def terminal(job):
+        return job.result if job.status == "completed" else f"Error: {job.status}: {job.result}"
+
     if resume_task_id:
         job = mgr.store.get(resume_task_id) if mgr is not None else None
         if (job is None or job.subagent_type != "delegate" or job.result_author != target
                 or job.origin_session != session):
             return "Error: no collectable ACP task for this delegate and session. Do not re-send blindly."
+        # Already settled (cancel() marks the row synchronously, a restart reconciles it,
+        # a normal finish flips it) → return the terminal result without waiting. Waiting on
+        # an already-canceled task's live handle raced its unwind on the Windows proactor
+        # loop and timed the tiny collection budget out, falsely reporting "still running".
+        if job.status != "running":
+            return terminal(job)
         try:
             tracked = await mgr.wait_work(resume_task_id, budget)
         except asyncio.TimeoutError:
@@ -463,7 +472,7 @@ async def _foreground_acp(
                     "The delegate may still apply side effects; inspect the work before retrying."
                 )
             return running(resume_task_id)
-        return job.result if job.status == "completed" else f"Error: {job.status}: {job.result}"
+        return terminal(job)
 
     # Adopted foreground work shares the background index. Check the authoritative
     # store before sending again, preserving the managed-git claim and force bypasses.
