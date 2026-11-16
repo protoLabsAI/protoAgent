@@ -76,7 +76,7 @@ def _register(monkeypatch, name: str, tools: list[str]) -> None:
 def _manager(tmp_path: Path, monkeypatch) -> tuple[BackgroundManager, list]:
     fired: list = []
 
-    async def _fire(self, job_id, prompt, fence, model=None):
+    async def _fire(self, job_id, prompt, fence, model=None, incognito=False):
         fired.append(fence)
 
     monkeypatch.setattr(BackgroundManager, "_fire", _fire)

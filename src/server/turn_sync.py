@@ -478,7 +478,9 @@ async def _chat_langgraph_impl(
             delegated_usage: list[dict] = []
             streamed_text = ""
             try:
-                async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
+                async with contextlib.aclosing(
+                    _chat_dispatch._pre_turn_dispatch(pre, session_id, {"incognito": bool(incognito)})
+                ) as _pre_frames:
                     async for frame in _pre_frames:
                         if frame and frame[0] == "usage":
                             # A `/<subagent>` / `/<workflow>` run's model calls (#3957) — this

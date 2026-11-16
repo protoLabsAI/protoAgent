@@ -240,6 +240,8 @@ async def run_subagent(
     ``routing.aux_model`` > the main model (#3944, #3955). Outside a turn there is
     none and the step resolves pin > aux > main, as before.
 
+    The subagent inherits the enclosing turn's incognito memory-write protection.
+
     ``profile`` names a generation profile, overriding the subagent's profile field by field.
 
     ``check_prompt_tools`` (default ``True``) refuses to start the subagent when the prompt
@@ -256,6 +258,7 @@ async def run_subagent(
     """
     from graph.agent import run_manual_subagent
     from graph.subagent_model import current_turn_model
+    from observability import tracing
 
     if extra_tools is None:
         extra_tools = list(getattr(STATE, "plugin_tools", None) or []) + list(getattr(STATE, "mcp_tools", None) or [])
@@ -273,6 +276,7 @@ async def run_subagent(
         check_prompt_tools=check_prompt_tools,
         ledger_session_id=session_id,
         profile=profile,
+        incognito=not tracing.io_allowed(),
     )
 
 
