@@ -207,6 +207,8 @@ const GATE_COOKIE = "pa_e2e_gated";
 // bearer-gated, like the real route) — EventSource can't send an Authorization
 // header, so it authenticates via `?token=` (auth.py's HMAC sse-token contract).
 const GATE_SSE_TOKEN = "e2e-sse-token";
+// The routes that accept that query token: auth.py's _SSE_QUERY_TOKEN_PATHS.
+const GATE_SSE_PATHS = ["/api/events", "/api/chat/attend"];
 // auth.py's _PUBLIC_PREFIXES, minus routes the mock doesn't serve. `/media/` is
 // exempt like the real signed-media route (#1929): an <img> can't carry a bearer;
 // the URL's signature is its credential.
@@ -1840,7 +1842,10 @@ const server = createServer(async (req, res) => {
       res.setHeader("Set-Cookie", `${GATE_COOKIE}=1; Path=/; SameSite=Lax`);
     }
     const authed = (req.headers.authorization || "") === `Bearer ${GATE_TOKEN}`;
-    const sseAuthed = pathname === "/api/events" && url.searchParams.get("token") === GATE_SSE_TOKEN;
+    // Both EventSource routes take the query token, mirroring auth.py's _SSE_QUERY_TOKEN_PATHS.
+    // Accepting it on /api/events alone 401'd every authed attendance stream (#5386); its
+    // backoff reconnects then landed at random inside the spec's "no post-auth 401s" window.
+    const sseAuthed = GATE_SSE_PATHS.includes(pathname) && url.searchParams.get("token") === GATE_SSE_TOKEN;
     if (!authed && !sseAuthed && !gateIsPublic(pathname)) {
       return sendJson(res, { detail: "Unauthorized" }, 401);
     }

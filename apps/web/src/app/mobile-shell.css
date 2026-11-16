@@ -325,6 +325,27 @@
   margin-bottom: var(--pl-space-1);
 }
 
+/* The bar is 22px tall: under the 44px touch minimum (#5389). Grow the HIT AREA, not the box,
+   so the composer doesn't move up 22px. The overlay grows UPWARD only, over the transcript's
+   bottom edge, because the status-rail chips sit right below the handle and a centred overlay
+   would take the top of their tap area. */
+.mshell-work-handle {
+  position: relative;
+}
+.mshell-work-handle::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-height: 44px;
+}
+/* The DS jump-to-latest pill sits 14px above the conversation's bottom edge, so the overlay
+   reaches its lower ~6px. Lift the pill above the overlay so a tap on it still jumps. */
+.pl-convo-wrap .pl-convo__jump {
+  z-index: 1;
+}
+
 .mshell-work-glyph {
   width: var(--pl-space-8);
   height: var(--pl-space-1);
