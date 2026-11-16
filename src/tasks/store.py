@@ -12,14 +12,16 @@ Issue shape (the fields the console + tools use):
 ``links`` (ADR 0129 Q1) ties a task to the work that delivers it — board card ids
 (``bd-…``), scheduler job ids, a directive id, PR URLs — stored as a JSON array of
 ``{ref, kind, state, reason}``. :meth:`TaskStore.resolve_link` marks a ref terminal and
-auto-closes the task once every linked item has finished, with an attributed
-``close_reason`` ("bd-c8r5h merged (#5146)"). Unlinked tasks behave exactly as before.
+auto-closes the task once every linked work item has finished, with an attributed
+``close_reason`` ("bd-c8r5h merged (#5146)"). Other HTTP(S) URLs are informational
+and do not drive or block completion. Unlinked tasks behave exactly as before.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -64,13 +66,15 @@ _VALID_TYPES = ("task", "bug", "feature", "chore", "epic")
 
 def _link_kind(ref: str) -> str:
     """Classify a link ref by shape: board card (``bd-…``), directive (``dir-…``),
-    PR URL, else a scheduler job id."""
+    GitHub PR URL, informational URL, else a scheduler job id."""
     if ref.startswith("bd-"):
         return "card"
     if ref.startswith("dir-"):
         return "directive"
-    if ref.startswith(("http://", "https://")):
+    if re.fullmatch(r"https://github\.com/[^/?#\s]+/[^/?#\s]+/pull/[0-9]+/?(?:[?#][^\s]*)?", ref):
         return "pr"
+    if ref.lower().startswith(("http://", "https://")):
+        return "url"
     return "job"
 
 
@@ -90,14 +94,27 @@ def parse_links(value: Any) -> list[dict]:
             return []
     if not isinstance(data, list):
         return []
-    return [e for e in data if isinstance(e, dict) and e.get("ref")]
+    entries = [e for e in data if isinstance(e, dict) and e.get("ref")]
+    # Older writers labelled every HTTP URL as a PR. Normalize without mutating
+    # decoded API input or rewriting the database during a read.
+    return [
+        {**e, "kind": "url"}
+        if e.get("kind") == "pr" and _link_kind(str(e["ref"])) == "url" else e
+        for e in entries
+    ]
+
+
+def _all_links_done(links: list[dict]) -> bool:
+    """Informational URLs neither block completion nor cause it on their own."""
+    work = [e for e in links if e.get("kind") != "url"]
+    return bool(work) and all(e.get("state") == "done" for e in work)
 
 
 def _close_reason(links: list[dict]) -> str:
     """The attributed close reason an all-links-done task carries —
     "bd-c8r5h merged (#5146); job-2 finished" (shared by :meth:`TaskStore.resolve_link`
     and the link-replacement path in :meth:`TaskStore.update`)."""
-    return "; ".join(f"{e['ref']} {e.get('reason') or 'done'}" for e in links)
+    return "; ".join(f"{e['ref']} {e.get('reason') or 'done'}" for e in links if e.get("kind") != "url")
 
 
 def _now() -> str:
@@ -251,7 +268,7 @@ class TaskStore:
                 continue
             seen.add(entry["ref"])
             out.append(entry)
-        return json.dumps(out) if out else ""
+        return json.dumps(parse_links(out)) if out else ""
 
     @staticmethod
     def _merge_links(old_raw: Any, links: Any) -> list[dict]:
@@ -378,7 +395,7 @@ class TaskStore:
             # The all-links-done invariant survives a replacement: when every ref the
             # caller kept has already finished, no further terminal event will ever
             # arrive — close now, attributed, exactly like resolve_link would have.
-            if merged and all(e.get("state") == "done" for e in merged) and self._row(issue_id)["status"] != "closed":
+            if _all_links_done(merged) and self._row(issue_id)["status"] != "closed":
                 self._conn.execute(
                     "UPDATE issues SET status='closed', closed_at=?, close_reason=?, updated_at=? WHERE id=?",
                     (now, _close_reason(merged), now, issue_id),
@@ -411,7 +428,7 @@ class TaskStore:
         """Mark linked item ``ref`` terminal on every open issue that links it (ADR 0129 Q1).
 
         ``reason`` is the attributed terminal fact ("merged (#5146)", "finished",
-        "fulfilled: shipped"). An issue whose links are now ALL done auto-closes with
+        "fulfilled: shipped"). An issue whose non-informational links are now ALL done auto-closes with
         ``close_reason`` built from its links ("bd-c8r5h merged (#5146)"; several join
         with "; "); one with links still open just records the resolution. Publishes
         ``task.changed`` (``closed`` / ``updated``) per affected issue, after commit —
@@ -438,7 +455,7 @@ class TaskStore:
                         hit = True
                 if not hit:
                     continue
-                if all(e.get("state") == "done" for e in links):
+                if _all_links_done(links):
                     self._conn.execute(
                         "UPDATE issues SET links=?, status='closed', closed_at=?, close_reason=?, "
                         "updated_at=? WHERE id=?",

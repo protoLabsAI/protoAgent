@@ -9,7 +9,7 @@ agent back to it). This module answers the one question every D9 consumer asks �
 
 A task is **driven** when ANY of these holds:
 
-* it has a ``links`` entry that is not yet resolved — a board card, PR, scheduler job
+* it has a non-informational ``links`` entry that is not yet resolved — a board card, PR, scheduler job
   or directive the task carries (``tasks.store`` vocabulary: a link is resolved when
   its ``state`` is ``done``);
 * a pending scheduler job (one-shot or ``wait``) belongs to the task's ``session_id``
@@ -110,7 +110,7 @@ def is_driven(task: dict, *, sources: Any) -> bool:
     alone — the session-scoped sources have nothing to match."""
     # An unresolved link is durable evidence and needs no live source — a link is
     # resolved when its state is ``done`` (tasks.store.resolve_link vocabulary).
-    if any(entry.get("state") != "done" for entry in parse_links(task)):
+    if any(entry.get("kind") != "url" and entry.get("state") != "done" for entry in parse_links(task)):
         return True
 
     session_id = str(task.get("session_id") or "").strip()
