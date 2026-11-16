@@ -346,6 +346,10 @@ class TaskStore:
                 continue
             if key == "status":
                 value = self._norm_status(str(value))
+                if value != "closed":
+                    # A reopened task starts a new lifecycle; a later update-based
+                    # close must not inherit the previous dismissal or timestamp.
+                    sets.extend(["close_reason = ''", "closed_at = NULL"])
             elif key == "issue_type":
                 value = self._norm_type(str(value))
             elif key == "priority":
