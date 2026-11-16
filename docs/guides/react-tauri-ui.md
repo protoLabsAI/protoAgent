@@ -15,7 +15,8 @@ walkthrough uses `uvx`; it does not require a globally installed `protoagent` co
 1. **Agent switcher** (top left): choose the agent you are working with.
 2. **Left rail**: open Chat, Knowledge, Memory, Docs, and installed plugin views.
 3. **Chat workspace**: switch conversation tabs, read tool results, and send messages.
-4. **Right rail**: open Work for goals, watches, tasks, and schedules, or inspect
+4. **Right rail**: open [Work](#work) — the agent's jobs, goals, follow-ups, and
+   standing instructions, grouped by what needs your attention — or inspect
    artifacts and notes beside the conversation.
 
 **Settings**, **Search commands**, and **Feed** are in the bottom-left toolbar.
@@ -52,7 +53,11 @@ See [Steering](/explanation/steering) for pending-message behavior.
   or more context. It reads that message at the next model call.
 - **Model:** choose one for this chat; see [Connect and change models](/guides/model-connections).
 - **Delegation:** a [delegate](/guides/delegates) can return a reply under its own
-  name; background work appears above the composer.
+  name.
+- **Status rail:** a strip above the composer sums up this chat's work — a **Needs
+  you** marker and a chip for each non-empty [Work](#work) group (**Doing now**,
+  **Coming up**, **Instructions**). A chip opens that group's rows; **Needs you**
+  is never limited to one chat.
 
 On desktop, a failed streaming relay can fall back to showing the completed reply.
 If a reply stalls or fails, follow [Chat fails](/guides/troubleshooting#chat-fails).
@@ -87,8 +92,58 @@ Inbox messages can come from webhooks, scripts, or other agents. A `now` item
 starts a turn immediately; `next` and `later` items wait for the agent to check
 them. Nothing in the Feed asks for action: a `now` item whose immediate delivery
 failed is retried automatically when the agent is free, and a page that genuinely
-needs you — operator-class, or out of automatic retries — appears in **Work ›
-Needs you**, where its Delivery detail lets you dismiss it.
+needs you — operator-class, or out of automatic retries — appears in
+[**Work › Needs you**](#work), where its Delivery detail lets you dismiss it.
+
+## Work
+
+Open **Work** from the right rail to see everything the agent is carrying. It
+sorts that work into four groups, with an **Overview** that lists them together:
+
+- **Needs you** — decisions and jobs waiting on your answer, goals that stopped
+  (out of steps, or judged unachievable), and pages the agent couldn't deliver.
+- **Doing now** — what the agent is actively working: a running goal, jobs in
+  progress, and running background work.
+- **Coming up** — work that hasn't started yet: not-started jobs and follow-ups,
+  the one concept that now covers a time trigger, a watched condition, and a wait.
+- **Your instructions** — standing instructions you've given that are still in force.
+
+Opening a group from the chat [status rail](#chat) scopes that visit to the
+current conversation. Choosing another section in Work ends that scope.
+**Needs you** is the exception: it always counts everything waiting on you,
+across the agent's chats.
+
+### Answer a job that's waiting on you
+
+A job parked on your decision sits in **Needs you**. Open it to read the agent's
+question and any links it left, then act in place:
+
+- **Reply** — send your answer. If the job's source conversation has no turns to
+  reply into, this starts a new chat titled `Re: <the job's title>`; otherwise
+  your reply continues the original chat.
+- **Done…** / **Dismiss…** — close the job out, with an optional reason. The
+  agent is told the outcome and your reason.
+
+### Where a job started, and when it stalls
+
+Jobs retain their source conversation. For jobs that aren't waiting on you,
+**Started in** links to the source chat or thread when available; background
+sources read "Started by a background job". A waiting job offers **Open chat**
+when its source has turns; otherwise its **Source** field shows the available
+origin, or "Its chat was deleted" for a missing chat. Finished jobs leave Work.
+
+Under a job in **Doing now**, a muted line tells you whether it is really moving.
+`in progress · idle 5m` (the time since it was last updated, shown in minutes, or
+hours for a longer gap) marks an in-progress job that nothing is currently driving;
+`stalled` means it has been left that way past the stall threshold of about
+half an hour. Both are quiet notes, not warnings.
+
+When an in-progress job goes more than half an hour without an update and
+nothing is driving it, the agent is reminded to pick it back up, up to three
+times. Unresolved links, pending scheduled work, active watches, running
+delegations, background jobs, and live turns can all keep a job from being
+considered stalled. If those reminders go unheeded, the job moves to
+**Needs you** for you to continue, defer, or close it.
 
 ## Change settings {#agent-settings-telemetry}
 
@@ -118,6 +173,8 @@ for those tasks, including incognito and deleting a chat's saved content.
 
 The focused agent's knowledge, tasks, notes, and memory are shared across its
 chats. They belong to the agent instance, rather than to a selected project.
+Jobs also retain their source conversation; [Work](#work) provides source links
+when that conversation is available.
 
 In **Settings → Tools → Filesystem → Work folders**, add the directories the
 agent can access. Each root has its own write permission. File tools resolve
