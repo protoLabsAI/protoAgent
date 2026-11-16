@@ -169,19 +169,38 @@ def _echo_app(auth):
 # ── a device-token socket ───────────────────────────────────────────────────────────────
 
 
-async def test_a_device_socket_closes_1008_within_one_interval_of_a_revoke(auth, devices, clock, ttl):
+async def test_a_device_socket_closes_1008_within_one_interval_of_a_revoke(
+    auth, devices, clock, ttl, guard, monkeypatch,
+):
+    # Drive the guard's timer, not the shared event loop's wall clock. CPU
+    # scheduling delays cannot turn a correct one-tick close into a failure.
+    ticks = asyncio.Queue()
+
+    async def next_tick(delay):
+        ready = asyncio.get_running_loop().create_future()
+        await ticks.put((delay, ready))
+        await ready
+
+    timer = SimpleNamespace(**vars(asyncio))
+    timer.sleep = next_tick
+    monkeypatch.setattr(guard, "asyncio", timer)
     device, token = _phone(devices)
     sock = Socket(_echo_app(auth), "/ws", f"token={token}")
     await sock.accepted()
     sock.send_text("hi")
     assert (await sock.next())["text"] == "hi"  # a live, working socket
 
-    loop = asyncio.get_running_loop()
+    delay, tick = await asyncio.wait_for(ticks.get(), 5)
+    assert delay == TICK
+    tick.set_result(None)
+    delay, tick = await asyncio.wait_for(ticks.get(), 5)
+    assert delay == TICK
+    assert sock.outbox.empty()  # a live device survived the first check
     devices.revoke_device(device["id"])
-    t0 = loop.time()
-    msg = await sock.until_closed(timeout=TICK * 10)
+    tick.set_result(None)
+    msg = await sock.until_closed(timeout=5)
     assert msg["code"] == 1008
-    assert loop.time() - t0 < TICK * 2.5  # one interval, plus scheduling slack
+    assert ticks.empty()  # closed at the very next check, without a second interval
     await sock.finished()  # the handler unwound
 
 

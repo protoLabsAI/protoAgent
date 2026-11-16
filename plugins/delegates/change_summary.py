@@ -129,7 +129,10 @@ def _write_tree(root: str, head: str, env: dict) -> str:
         idx_env = {**env, "GIT_INDEX_FILE": tmp_index}
         try:
             if os.path.isfile(real_index):
-                shutil.copyfile(real_index, tmp_index)  # reuse stat data → no full rehash
+                # Preserve the index timestamp: Git compares it with entry mtimes
+                # to detect racy-clean files. A fresh copy timestamp hides edits
+                # made in the same filesystem clock tick as the original index.
+                shutil.copy2(real_index, tmp_index)
             elif head:
                 _git(root, "read-tree", head, env=idx_env)
             _git(root, "add", "-A", "--", ".", env=idx_env)
