@@ -843,11 +843,15 @@ def register_operator_routes(
                         "priority": "next",
                         "needs_human": False,
                         "source": "task-outcome",
+                        "origin_session": previous.get("session_id") or None,
                         "dedup_key": f"task-outcome:{issue_id}:{previous['updated_at']}",
                     })
             # The self-improvement review is queued from the store's ``task.changed`` close
             # event (``tasks.autoclose``), the one path every close takes.
-            issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, req.reason)
+            # Keep the outcome in the existing durable close reason; legacy/done closes
+            # retain their original reason. Work recognizes the dismissed: prefix.
+            reason = f"dismissed: {req.reason or ''}".rstrip() if req.outcome == "dismissed" else req.reason
+            issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, reason)
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc

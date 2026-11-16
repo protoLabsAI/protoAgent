@@ -616,7 +616,10 @@ async def test_console_waiting_task_fields_and_outcome_inbox(store, tmp_path, mo
             body["outcome"] = outcome
         response = await client.post(url + "/close", json=body)
         assert response.status_code == 200
-        assert response.json()["issue"]["close_reason"] == body["reason"]
+        reason = f"dismissed: {body['reason']}" if outcome == "dismissed" else body["reason"]
+        assert response.json()["issue"]["close_reason"] == reason
+        listed = (await client.get("/api/tasks/issues")).json()["issues"][0]
+        assert listed["status"] == "closed" and listed["close_reason"] == reason
         # A repeated close and a non-waiting close must not page the agent again.
         assert (await client.post(url + "/close", json=body)).status_code == 200
         other = store.create("Ordinary task")
@@ -625,6 +628,7 @@ async def test_console_waiting_task_fields_and_outcome_inbox(store, tmp_path, mo
     items = inbox.list()
     assert len(items) == 1
     item = items[0]
+    assert item["origin_session"] == "chat-reply"
     assert item["priority"] == "next" and not needs_operator_attention(item)
     for text in (issue["id"], issue["title"], f"Outcome: {outcome or 'done'}", body["reason"]):
         assert text in item["text"]

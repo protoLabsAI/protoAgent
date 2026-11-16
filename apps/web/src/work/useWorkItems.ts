@@ -145,7 +145,7 @@ function mapTask(row: Task): WorkItem {
   return {
     kind: "task",
     id: row.id,
-    status: fromTask(row.status || "open"),
+    status: fromTask(row.status || "open", row.close_reason),
     title: row.title,
     meta: typeAndPriority(row),
     sessionId: row.session_id || undefined,

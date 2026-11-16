@@ -1,0 +1,1 @@
+- **Preserve dismissed task outcomes and conversations.** Work now shows dismissed tasks as dismissed, and waiting-task outcome notifications retain the task's originating conversation.

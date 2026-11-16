@@ -63,7 +63,7 @@ export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
   }
 }
 
-export type WorkStatus = "needs-you" | "running" | "waiting" | "scheduled" | "paused" | "done" | "failed" | "cancelled";
+export type WorkStatus = "needs-you" | "running" | "waiting" | "scheduled" | "paused" | "done" | "failed" | "cancelled" | "dismissed";
 export type WorkLane = "needs-you" | "doing" | "waiting" | "next" | "done";
 
 export function statusTone(status: WorkStatus): Status {
@@ -113,7 +113,8 @@ export function fromWatch(raw: string, repeat = false): WorkStatus {
   if (raw === "met" && repeat) return "waiting";
   return map("watch", raw, { active: "waiting", met: "done", expired: "cancelled", cleared: "cancelled" });
 }
-export function fromTask(raw: string): WorkStatus {
+export function fromTask(raw: string, closeReason?: string | null): WorkStatus {
+  if (raw === "closed" && closeReason?.startsWith("dismissed:")) return "dismissed";
   return map("task", raw, { in_progress: "running", blocked: "waiting", waiting: "needs-you", open: "scheduled", deferred: "paused", closed: "done" });
 }
 export function fromSchedule(job: Pick<ScheduledJob, "schedule" | "enabled" | "next_fire" | "last_fire">): WorkStatus {
