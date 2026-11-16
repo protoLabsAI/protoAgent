@@ -252,8 +252,8 @@ def _build_delegate_to(registry: DelegateRegistry):
                 instead of the full query, which stays one click away. Always set it.
             background: run the delegation detached and get the reply back on
                 completion, instead of waiting inline (default False).
-            force: send a background delegation even when an identical one (same target,
-                same query) is still running (default False). A background re-send is
+            force: send a delegation even when an identical background job (same target,
+                same query) is still running (default False). A background or ACP re-send is
                 refused by default so a delegate's side effects can't be applied twice;
                 set this only when you deliberately want a second concurrent run.
             fresh_session: ACP session policy for this dispatch. Defaults to fresh for
@@ -351,6 +351,7 @@ def _build_delegate_to(registry: DelegateRegistry):
                     registry, target, query, state, timeout=timeout_s, item_id=item_id,
                     resume_task_id=resume_task_id, project=scope, fresh_session=bool(fresh_session),
                     summary=summary, tool_call_id=tool_call_id,
+                    force=force,
                 )
             except Exception as exc:  # noqa: BLE001 — failed collection must not trigger a resend
                 return f"Error: ACP task could not be read: {exc}. The delegate may still apply side effects."
@@ -423,6 +424,7 @@ def _build_delegate_to(registry: DelegateRegistry):
 
 async def _foreground_acp(
     registry, target, query, state, *, timeout, item_id, resume_task_id, project, fresh_session, summary, tool_call_id,
+    force=False,
 ):
     """Keep the original ACP dispatch collectable after the foreground wait (#5318)."""
     from infra import clock
@@ -462,6 +464,13 @@ async def _foreground_acp(
                 )
             return running(resume_task_id)
         return job.result if job.status == "completed" else f"Error: {job.status}: {job.result}"
+
+    # Adopted foreground work shares the background index. Check the authoritative
+    # store before sending again, preserving the managed-git claim and force bypasses.
+    if not item_id and not force:
+        live = _live_background_job(mgr, _background_dedupe_key(target, query))
+        if live is not None:
+            return _duplicate_delegation_refusal(target, live)
 
     async def dispatch():
         from graph.delegate_progress import progress_sink

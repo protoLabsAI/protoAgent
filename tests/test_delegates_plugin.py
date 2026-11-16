@@ -1634,6 +1634,16 @@ async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_pat
         args = {"target": "coder", "query": "", "resume_task_id": task_id}
         assert task_id in await _invoke_delegate(tool, args)
         assert not killed
+        if adoption == "ok":
+            # Re-sending after adoption must find the original job, even in the
+            # foreground and with equivalent whitespace/case (#5318).
+            for background in (False, True):
+                duplicate = await _invoke_delegate(tool, {
+                    "target": "coder", "query": " BUILD   once ", "background": background,
+                })
+                assert "Refused:" in duplicate
+                assert task_id in duplicate
+                assert calls == ["build once"]
         if adoption == "cancel":
             await mgr.cancel(task_id)
             assert "canceled" in await _invoke_delegate(tool, args)
@@ -1649,6 +1659,11 @@ async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_pat
         assert await _invoke_delegate(tool, args) == "original result"
         assert calls == ["build once"]
         assert mgr.store.get(task_id).status == "completed"
+        # A settled job must not prevent an intentional new run of the same ask.
+        assert await _invoke_delegate(tool, {
+            "target": "coder", "query": "build once", "timeout": 1,
+        }) == "original result"
+        assert calls == ["build once", "build once"]
     finally:
         release.set()
         await asyncio.gather(*mgr._fire_tasks, return_exceptions=True)
