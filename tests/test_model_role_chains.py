@@ -84,14 +84,19 @@ def test_blank_image_describe_inherits_main_chain():
     assert role_chain(on, "image_describe") == ["vision"]
 
 
-def test_blank_drift_judge_inherits_main_not_aux():
-    # Pre-0133 the blank drift judge ran on the agent's own (main) model, so even with aux
-    # set it must keep inheriting MAIN — a single-string config behaves exactly as before.
-    cfg = _cfg(model_name=["m", "backup"], aux_model="x", soul_drift_judge_model="")
-    assert role_chain(cfg, "soul_drift_judge") == ["m", "backup"]
-    # A set chain is still exactly what's listed.
-    pinned = _cfg(model_name="m", aux_model="x", soul_drift_judge_model=["j"])
-    assert role_chain(pinned, "soul_drift_judge") == ["j"]
+@pytest.mark.parametrize(
+    "judge, aux, expected",
+    [
+        ("", ["x", "y"], ["x", "y"]),
+        ([], ["x", "y"], ["x", "y"]),
+        ("", "", ["m", "backup"]),
+        (["j", "j-backup"], ["x", "y"], ["j", "j-backup"]),
+        ("j", ["x", "y"], ["j"]),
+    ],
+)
+def test_drift_judge_inherits_aux_unless_set(judge, aux, expected):
+    cfg = _cfg(model_name=["m", "backup"], aux_model=aux, soul_drift_judge_model=judge)
+    assert role_chain(cfg, "soul_drift_judge") == expected
 
 
 def test_blank_memory_select_inherits_aux():
