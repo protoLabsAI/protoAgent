@@ -59,6 +59,23 @@ async def test_ingest_upload_dispatches_to_extract_bytes(monkeypatch):
     assert res.source == "doc.pdf" and res.source_type == "pdf" and res.title is None
 
 
+async def test_audio_ingest_survives_unbuildable_inherited_image_model(monkeypatch):
+    from graph.config import LangGraphConfig
+
+    monkeypatch.setattr("graph.llm.create_transcribe_fn", lambda config: lambda *args: "spoken words")
+
+    def unavailable(config, model_name):
+        raise ValueError("main model connection unavailable")
+
+    monkeypatch.setattr("graph.model_roles.create_llm", unavailable)
+    ctx = OpContext(knowledge_store=_FakeStore(), graph_config=LangGraphConfig(model_name="main"))
+    result = await ingest(
+        IngestSource.from_upload(b"audio", "clip.mp3", "audio/mpeg"), ctx=ctx,
+    )
+    assert result.chars == len("spoken words")
+    assert ctx.knowledge_store.docs[0][0] == "spoken words"
+
+
 async def test_ingest_missing_file_is_not_found():
     with pytest.raises(IngestError) as ei:
         await ingest(IngestSource.from_path("/no/such/file-xyz.txt"), ctx=_ctx())

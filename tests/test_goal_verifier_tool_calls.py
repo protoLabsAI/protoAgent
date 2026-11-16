@@ -139,7 +139,9 @@ async def test_goal_drive_hands_the_llm_verifier_the_turns_tool_calls(tmp_path, 
             prompts.append(msgs[-1].content)
             return _Resp()
 
-    monkeypatch.setattr("graph.llm.create_llm", lambda config, model_name=None: _LLM())
+    # The llm verifier now builds through graph.model_roles.create_role_llm, whose own
+    # create_llm binding is the live seam — patch it there, not on graph.llm.
+    monkeypatch.setattr("graph.model_roles.create_llm", lambda config, model_name=None: _LLM())
 
     turn = _haiku_turn()
     graph = _real_graph(turn[1:])  # the pass's output; its input is the first human message

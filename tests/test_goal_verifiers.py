@@ -252,7 +252,7 @@ async def test_llm_verifier_parses_json(monkeypatch):
         async def ainvoke(self, msgs, config=None):
             return _Resp()
 
-    monkeypatch.setattr("graph.llm.create_llm", lambda config, model_name=None: _LLM())
+    monkeypatch.setattr("graph.model_roles.create_role_llm", lambda config, role: _LLM())
     res = await run_verifier(
         {"type": "llm"},
         VerifyContext(config=object(), condition="ship it", last_text="shipped"),
@@ -278,7 +278,7 @@ async def test_llm_verifier_reads_block_content_and_tolerates_braces(monkeypatch
 
             return AIMessage(content=content)
 
-    monkeypatch.setattr("graph.llm.create_llm", lambda config, model_name=None: _LLM())
+    monkeypatch.setattr("graph.model_roles.create_role_llm", lambda config, role: _LLM())
     res = await run_verifier({"type": "llm"}, VerifyContext(config=object(), condition="c", last_text="t"))
     assert (res.met, res.reason) == (True, "ok")
 
@@ -382,3 +382,32 @@ def test_invoker_is_frozen_and_hashable():
     # hashable + value-equal → usable directly as a per-invoker state key
     same = VerifierInvoker(kind="watch", id="w-1", session_id="ops", interval_s=30.0)
     assert {inv: "high-water"}[same] == "high-water"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chain", [["primary", "backup"], "backup"])
+async def test_llm_verifier_falls_back_on_rate_limit(monkeypatch, chain):
+    from types import SimpleNamespace
+    from langchain_core.messages import AIMessage
+    from langchain_core.runnables import RunnableLambda
+
+    class RateLimit(Exception):
+        status_code = 429
+
+    calls = []
+
+    def build(config, model_name):
+        def invoke(messages):
+            calls.append(model_name)
+            if model_name == "primary":
+                raise RateLimit()
+            return AIMessage(content='{"met": true, "reason": "verified"}')
+        return RunnableLambda(invoke)
+
+    monkeypatch.setattr("graph.model_roles.create_llm", build)
+    result = await run_verifier(
+        {"type": "llm"},
+        VerifyContext(config=SimpleNamespace(goal_eval_model=chain)),
+    )
+    assert (result.met, result.reason) == (True, "verified")
+    assert calls == (chain if isinstance(chain, list) else [chain])

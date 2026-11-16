@@ -217,3 +217,37 @@ def test_researcher_model_parses_as_a_list_and_blank_falls_back(tmp_path):
     finally:
         if original is not None:
             SUBAGENT_REGISTRY["researcher"] = original
+
+
+def test_researcher_chain_edit_keeps_enabled_and_profile(tmp_path):
+    """Editing only the researcher chain in the ADR 0133 M7c Model-roles editor must not
+    re-enable a disabled researcher or clear its profile (bd-yoj7g regression).
+
+    ``researcher``'s pin is a typed config field, deliberately excluded from the
+    ``subagent_overrides`` map the editor round-trips, so the editor saves a model-ONLY
+    ``researcher`` member. The save write path (``apply_updates_to_yaml``) does a
+    fixed-depth merge: it writes ``subagents.researcher.model`` and leaves the stored
+    ``enabled`` / ``profile`` siblings untouched, and the loader inherits any key the
+    submitted block omits from the stored spec — so ``enabled: false`` and the profile
+    survive the chain edit instead of resetting to ``True`` / ``""``.
+    """
+    import yaml
+
+    from graph.config_io import apply_updates_to_yaml, load_yaml_doc, save_yaml_doc
+
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        yaml.safe_dump(
+            {"subagents": {"researcher": {"enabled": False, "profile": "deepthink", "model": "protolabs/old"}}}
+        )
+    )
+
+    # The editor submits the whole subagents overrides dict; researcher carries ONLY its chain.
+    doc = load_yaml_doc(p)
+    apply_updates_to_yaml(doc, {"subagents": {"researcher": {"model": ["protolabs/a", "protolabs/b"]}}})
+    save_yaml_doc(doc, p)
+
+    cfg = LangGraphConfig.from_yaml(str(p))
+    assert cfg.researcher.model == ["protolabs/a", "protolabs/b"]  # the chain IS updated
+    assert cfg.researcher.enabled is False  # a disabled researcher stays off
+    assert cfg.researcher.profile == "deepthink"  # the profile is not cleared

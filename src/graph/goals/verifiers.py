@@ -335,12 +335,9 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from graph.message_blocks import text_of
-        from graph.llm import create_llm
+        from graph.model_roles import create_role_llm
 
-        # Goal verification is classification, not the main reasoning task:
-        # eval_model override → routing.aux_model → main model.
-        model_name = getattr(ctx.config, "goal_eval_model", "") or getattr(ctx.config, "aux_model", "") or None
-        llm = create_llm(ctx.config, model_name=model_name)
+        llm = create_role_llm(ctx.config, "goal_eval")
         prompt = (
             f"GOAL: {spec.get('condition') or ctx.condition}\n\n"
             f"Recent tool calls:\n{ctx.tool_summary or '(none)'}\n\n"
