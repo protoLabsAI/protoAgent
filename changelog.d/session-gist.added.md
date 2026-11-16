@@ -1,0 +1,1 @@
+- **Idle chat gists.** Chats with at least four new messages receive a short session-card gist after two quiet minutes, using the configurable memory_gist model role. Incognito, automated sessions, and goal turns are excluded; failed generation preserves the existing card.

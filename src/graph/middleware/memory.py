@@ -125,6 +125,15 @@ def delete_session_summary(session_id: str, base: str | None = None) -> bool:
     deleting a chat while leaving its summary behind kept injecting a digest of
     a conversation the user was told "will be removed". Raises ``OSError`` only
     for real filesystem failures; missing files and escaping ids are False."""
+    from graph.session_gist import cancel, card_lock
+
+    with card_lock:
+        for path in session_file_candidates(session_id, base):
+            cancel(path)
+        return _delete_session_summary_locked(session_id, base)
+
+
+def _delete_session_summary_locked(session_id, base):
     removed = False
     for fpath in session_file_candidates(session_id, base):
         try:
@@ -240,6 +249,15 @@ def _clip_tool_args(args):
 
 
 def _persist_session(state: dict, trace_id: str) -> None:
+    """Persist a card, serializing writes against idle gist publication."""
+    from graph.session_gist import cancel, card_lock, card_path
+
+    with card_lock:
+        cancel(card_path(state))
+        _persist_session_locked(state, trace_id)
+
+
+def _persist_session_locked(state: dict, trace_id: str) -> None:
     """Write a session summary JSON file atomically.
 
     Summary schema:
@@ -252,6 +270,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
                            args/result clipped
         tool_calls_total_count — int (present when > 5 tool calls)
         final_output     — str | null, clipped
+        gist / gist_at / gist_message_count — last successful idle gist, preserved on rewrites
         timestamp        — ISO-8601 UTC string
 
     Writes atomically: temp file → os.replace to avoid partial reads.
@@ -377,6 +396,9 @@ def _persist_session(state: dict, trace_id: str) -> None:
             session_id[:80],
         )
         return
+    from graph.session_gist import preserve_gist
+
+    preserve_gist(dest, summary)
     tmp_fd = None
     tmp_path = None
     try:
@@ -765,10 +787,20 @@ class SessionSummaryMiddleware(AgentMiddleware):
     requires the knowledge middleware (on by default).
     """
 
-    def __init__(self, knowledge_store=None):
+    def __init__(self, knowledge_store=None, *, config=None):
         super().__init__()
         # Accepted for ctor compatibility; unused now that this is write-only.
         self._store = knowledge_store
+        self._config = config
+
+    def before_agent(self, state, runtime):
+        from graph.session_gist import cancel, card_path
+
+        cancel(card_path(state))
+        return None
+
+    async def abefore_agent(self, state, runtime):
+        return self.before_agent(state, runtime)
 
     def after_agent(self, state, runtime) -> dict | None:
         """Persist a session summary on the terminal turn.
@@ -792,6 +824,9 @@ class SessionSummaryMiddleware(AgentMiddleware):
 
                 trace_id = tracing.current_trace_id()
                 _persist_session(state, trace_id)
+                from graph.session_gist import schedule
+
+                schedule(state, self._config)
         return None
 
     async def aafter_agent(self, state, runtime) -> dict | None:
@@ -805,6 +840,9 @@ class SessionSummaryMiddleware(AgentMiddleware):
 
         trace_id = tracing.current_trace_id()
         _persist_session(state, trace_id)
+        from graph.session_gist import schedule
+
+        schedule(state, self._config)
         return None
 
     async def aon_session_end(self, state, runtime) -> dict | None:
