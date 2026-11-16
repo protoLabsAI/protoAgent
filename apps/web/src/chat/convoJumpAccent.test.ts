@@ -96,19 +96,21 @@ describe("Conversation jump-to-latest accent fill (ds-5j6)", () => {
     }
   });
 
-  it("adds no local .pl-convo__jump styling override beyond the hitl.css visibility hide", () => {
+  it("adds no local .pl-convo__jump styling override, only the hitl.css hide and stacking", () => {
     const jumpRules = Object.entries(SRC_CSS).flatMap(([file, css]) =>
       rules(css)
         .filter((r) => r.selector.includes(".pl-convo__jump"))
         .map((r) => ({ file, ...r })),
     );
-    // The only src rule allowed to target the class is hitl.css hiding it while a form is open; its
-    // sole declaration is `visibility` — anything touching background/color/border/box-shadow would
-    // fight the DS accent restyle.
+    // Src rules may only HIDE the class (hitl.css, `visibility`, while a form is open) or STACK it
+    // (mobile-shell.css, `z-index`, above the phone Work handle's hit-area overlay, #5389). Neither
+    // changes how it looks; anything touching background/color/border/box-shadow would fight the DS
+    // accent restyle.
+    const allowed = new Set(["visibility", "z-index"]);
     for (const rule of jumpRules) {
-      expect(propsOf(rule.body), `unexpected .pl-convo__jump properties in ${rule.file}`).toEqual([
-        "visibility",
-      ]);
+      const props = propsOf(rule.body);
+      expect(props.length, `empty .pl-convo__jump rule in ${rule.file}`).toBeGreaterThan(0);
+      expect(props.filter((p) => !allowed.has(p)), `unexpected .pl-convo__jump properties in ${rule.file}`).toEqual([]);
     }
     // And that hide rule must still exist — the class name is unchanged by ds-5j6, so the HITL
     // suppression keeps working.
