@@ -1,0 +1,1 @@
+- **Model role chain schema.** Settings now describes every core model role as an ordered chain with grouping and inheritance metadata, while preserving legacy configuration fields.
