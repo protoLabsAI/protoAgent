@@ -584,6 +584,67 @@ async def test_dismissing_the_card_never_resumes_and_stays_dismissed(tmp_path, m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("artifact_kind", ["partial", "continuation", "missing", "failed"])
+async def test_auto_resume_replaces_partial_answer_artifact(tmp_path, monkeypatch, artifact_kind):
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from a2a.server.models import TaskModel
+    from a2a_impl.stores import make_sqlite_engine
+
+    agent = "resume-artifact"
+    coord, saver, claim = await _fire_and_kill(
+        tmp_path, monkeypatch, agent, prompt="SLOW-MODEL write a long answer",
+        job_id="job-answer", ready=lambda c: len(c.views.get("SLOW-MODEL") or []) >= 2,
+        checkpointed=lambda msgs: len(msgs) >= 3 and not _dangling_tool_calls(msgs),
+    )
+    task_id = claim["task_id"]
+    answer_id = f"{task_id}-answer"
+    earlier = [{"artifactId": answer_id, "parts": [{"text": "Earlier decision leg"}]}]
+    if artifact_kind == "continuation":
+        answer_id += "-resumed-12345678"
+    partial = {"artifactId": answer_id, "parts": [{"text": "Cut off mid-sentence in the early"}]}
+    artifacts = (earlier if artifact_kind == "continuation" else []) + [partial]
+    if artifact_kind == "missing":
+        artifacts = []
+    # Model the incremental artifact writes that reached disk before process death.
+    engine = make_sqlite_engine(str(tmp_path / "a2a-tasks.db"))
+    try:
+        async with async_sessionmaker(engine)() as session:
+            await session.execute(update(TaskModel).where(TaskModel.id == task_id).values(artifacts=artifacts))
+            await session.commit()
+    finally:
+        await engine.dispose()
+    if artifact_kind == "failed":
+        async def fail_resume(self, *args, **kwargs):
+            raise RuntimeError("model unavailable during recovery")
+
+        monkeypatch.setattr(type(STATE.graph), "ainvoke", fail_resume)
+    gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
+    try:
+        await _wait_until(
+            lambda: (_occurrence(gen2.sched.path, "job-answer") or {"state": ""})["state"] == "settled",
+            message="the resumed answer settled",
+        )
+        row = _query(tmp_path / "a2a-tasks.db", "SELECT artifacts FROM tasks WHERE id = ?", (task_id,))[0]
+        saved = json.loads(row["artifacts"])
+        state, message = _task_status(tmp_path, task_id)
+        if artifact_kind == "failed":
+            assert state == "TASK_STATE_FAILED"
+            assert "model unavailable during recovery" in message
+            assert saved == artifacts
+        else:
+            assert state == "TASK_STATE_COMPLETED"
+            assert saved[-1]["artifactId"] == answer_id
+            assert saved[-1]["parts"] == [{"text": "done SLOW-MODEL"}]
+            assert message == "done SLOW-MODEL"
+            assert saved[:-1] == (earlier if artifact_kind == "continuation" else [])
+        assert coord.tool_runs["step_one"] == 1
+    finally:
+        await _shutdown(coord, gen2)
+
+
+@pytest.mark.asyncio
 async def test_auto_resume_emits_one_activity_entry(tmp_path, monkeypatch):
     import server as server_pkg
     from activity import ActivityLog

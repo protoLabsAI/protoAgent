@@ -904,7 +904,9 @@ async def finalize_interrupted_task(
     nothing) is never clobbered. Also releases the id from the restart-spared registry
     (AFTER the write, so the reaper can't race the finalize): the recovery has made its
     disposition, so the TTL/reaper backstops apply to the row again from here on.
-    Returns True when the row was updated."""
+    Completion also replaces the interrupted answer artifact: transcript readers
+    prefer artifacts over the status message. Failure/pause diagnoses leave partial
+    output intact. Returns True when the row was updated."""
     if state not in _FINALIZE_STATES:
         raise ValueError(f"finalize_interrupted_task: unsupported state {state!r}")
     now = now or datetime.now(UTC)
@@ -913,12 +915,38 @@ async def finalize_interrupted_task(
 
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     async with session_maker() as session:
-        result = await session.execute(
+        stmt = (
             update(TaskModel)
             .where(TaskModel.id == str(task_id))
             .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
-            .values(status=blob, last_updated=now)
         )
+        values = {"status": blob, "last_updated": now}
+        if state == "completed":
+            row = (await session.execute(
+                select(TaskModel.artifacts, TaskModel.last_updated).where(TaskModel.id == str(task_id))
+            )).first()
+            if row is not None:
+                artifacts = list(row.artifacts or [])
+                answer_id = f"{task_id}-answer"
+                # HITL continuations have separate answer artifacts. Replace only
+                # the latest leg, keeping earlier answers and unrelated artifacts.
+                index = next((
+                    i for i in range(len(artifacts) - 1, -1, -1)
+                    if artifacts[i].get("artifactId") == answer_id
+                    or artifacts[i].get("artifactId", "").startswith(f"{answer_id}-resumed-")
+                ), None)
+                if index is None:
+                    artifacts.append({"artifactId": answer_id, "parts": [{"text": text}]})
+                else:
+                    artifact = dict(artifacts[index])
+                    artifact["parts"] = [{"text": text}] + [
+                        part for part in artifact.get("parts", []) if "text" not in part
+                    ]
+                    artifacts[index] = artifact
+                values["artifacts"] = artifacts
+                # Don't overwrite output saved by another writer since the read.
+                stmt = stmt.where(TaskModel.last_updated == row.last_updated)
+        result = await session.execute(stmt.values(**values))
         await session.commit()
     _RESTART_SPARED_TASK_IDS.discard(str(task_id))
     return bool(result.rowcount)

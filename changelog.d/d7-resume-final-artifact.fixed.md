@@ -1,0 +1,1 @@
+- **Complete answers after scheduled-turn recovery.** A scheduled turn resumed from its checkpoint now replaces its interrupted answer artifact with the completed reply, so chat history no longer shows pre-crash partial text as a finished answer.
