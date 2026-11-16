@@ -134,6 +134,39 @@ def test_save_settings_threads_layer(monkeypatch):
     assert captured["config"] == {"nested": {"model.name": "m"}}
 
 
+@pytest.mark.parametrize("updates, expected_tail", [
+    ({"model.name": ["primary", "legacy"]}, []),
+    ({"model.name": ["primary"]}, []),
+    ({"model.name": "replacement"}, ["legacy"]),
+    ({"routing.aux_model": ["aux"]}, ["legacy"]),
+    ({"model.name": ["primary"], "routing.fallback_models": ["explicit"]}, ["explicit"]),
+])
+def test_save_main_chain_retires_legacy_tail_on_reload(monkeypatch, tmp_path, updates, expected_tail):
+    from graph.config import LangGraphConfig
+    from graph.config_io import apply_updates_to_yaml, load_yaml_doc, save_yaml_doc
+    from graph.settings_schema import build_schema
+    import runtime.state as rs
+    import server.agent_init as agent_init
+
+    path = tmp_path / "config.yaml"
+    save_yaml_doc({"model": {"name": "primary"}, "routing": {"fallback_models": ["legacy"]}}, path)
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig.from_dict(load_yaml_doc(path)))
+
+    def persist(config=None, layer="agent"):
+        doc = apply_updates_to_yaml(load_yaml_doc(path), config)
+        save_yaml_doc(doc, path)
+        return True, []
+
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", persist)
+    response = _client().post("/api/settings", json={"updates": updates}).json()
+    assert response["ok"] is True
+    reloaded = LangGraphConfig.from_dict(load_yaml_doc(path))
+    main = next(f for g in build_schema(reloaded) for f in g["fields"] if f["key"] == "model.name")
+    assert main["legacy_fallbacks"] == expected_tail
+    expected_main = updates.get("model.name", "primary")
+    assert main["value"] == ([expected_main] if isinstance(expected_main, str) else expected_main)
+
+
 def test_save_settings_defaults_to_agent_layer(monkeypatch):
     """No layer in the body ⇒ the agent leaf (today's behavior)."""
     import server.agent_init as agent_init

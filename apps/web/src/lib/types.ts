@@ -518,6 +518,7 @@ export type SettingsField = {
   role?: string;
   subhead?: string;
   inherits?: string;
+  legacy_fallbacks?: string[];
   key: string;
   label: string;
   // "text" = a scalar multiline string (#964), rendered as a textarea but saved like "string".
