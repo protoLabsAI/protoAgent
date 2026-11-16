@@ -29,6 +29,9 @@ const definitions = [
 ];
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let roles: ModelRoleStatus[], names: string[], overrides: Record<string, unknown>, fail: boolean;
+// A pin the REGISTRY reports (via /api/subagents) but that is absent from `overrides` — the
+// shape of researcher, whose chain lives on a typed config field, not in subagent_overrides.
+let registryPins: Record<string, string | string[]>;
 const buttons = () => [...document.querySelectorAll<HTMLButtonElement>("button")];
 const button = (text: string) => buttons().find((b) => b.textContent?.trim() === text)!;
 const row = (key: string) => host.querySelector(`[data-key="${key}"]`)!;
@@ -56,9 +59,10 @@ beforeEach(() => {
   vi.setSystemTime(now);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
-  roles = []; names = []; overrides = {}; fail = false;
+  roles = []; names = []; overrides = {}; fail = false; registryPins = {};
   vi.spyOn(api, "subagents").mockImplementation(async () => ({ subagents: names.map((name, i) => ({
     name, enabled: i !== 1, description: "", tools: [], default_tools: [], max_turns: 2, default_max_turns: 2,
+    model: registryPins[name],
   })) }));
   vi.stubGlobal("fetch", vi.fn(async () => {
     if (fail) throw new Error("offline");
@@ -91,6 +95,22 @@ it.each([
   expect([...list.querySelectorAll(".setting-label")].map((el) => el.textContent)).toEqual(names.map((name, i) => name + (i === 1 ? " (off)" : "")));
   // Exact registry-only rows catch accidental built-in names without pinning source text.
   expect(list.querySelectorAll('[role="group"]').length).toBe(names.length);
+});
+
+it("reads a pin from the registry when it is absent from the overrides map", async () => {
+  // researcher's chain lives on a typed config field excluded from subagent_overrides, so after
+  // a schema refetch the registry's reported `model` is the only source — without the fallback a
+  // saved chain reads as unpinned (ADR 0133 M7c review fix).
+  names = ["alpha"]; overrides = {}; registryPins = { alpha: ["two"] };
+  await mount();
+  const trigger = button("1 subagent (alpha) · has its own chain");
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  await click(trigger);
+  const list = document.getElementById(trigger.getAttribute("aria-controls")!)!;
+  const group = list.querySelector('[aria-label="alpha model chain"]')!;
+  // A set chain renders its row(s), not the empty "Set its own chain" inherit state.
+  expect([...group.querySelectorAll("button")].some((b) => b.textContent === "Set its own chain")).toBe(false);
+  expect(group.querySelectorAll("input").length).toBe(1);
 });
 
 it.each([false, true])("image status only appears with no-vision signal (%s)", async (unavailable) => {

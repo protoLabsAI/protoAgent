@@ -848,6 +848,10 @@ export type Subagent = {
   default_tools: string[];
   max_turns: number;
   default_max_turns: number;
+  // The operator's declared model pin — a scalar or an ADR 0133 fallback chain. Lets the
+  // Model-roles line read `researcher`'s chain from the registry, since its pin lives on a
+  // typed config field and is excluded from the `subagent_overrides` map (ADR 0133 M7c).
+  model?: string | string[];
 };
 
 // A live wired tool (Agent → Tools): its source (core/plugin/mcp) + the subsystem

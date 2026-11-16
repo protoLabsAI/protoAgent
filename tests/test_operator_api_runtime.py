@@ -146,3 +146,38 @@ def test_list_subagents_uses_registry_and_config_override() -> None:
     assert researcher["tools"] == ["current_time"]
     assert researcher["max_turns"] == 7
     assert "web_search" in researcher["default_tools"]
+
+
+def test_list_subagents_recovers_disabled_worker_popped_from_registry() -> None:
+    # A config `enabled: false` makes _apply_config_subagents POP the worker from the live
+    # SUBAGENT_REGISTRY; list_subagents must still report it (enabled:false) from the shipped
+    # static defaults so the Model-roles line can mark it "(off)" (ADR 0133 M7c).
+    from graph.subagents.config import SUBAGENT_REGISTRY
+
+    cfg = LangGraphConfig()
+    cfg.subagent_overrides = {"dream": {"enabled": False, "model": "aux-pin"}}
+    original = dict(SUBAGENT_REGISTRY)
+    SUBAGENT_REGISTRY.pop("dream")
+    try:
+        subagents = list_subagents(cfg)
+    finally:
+        SUBAGENT_REGISTRY.clear()
+        SUBAGENT_REGISTRY.update(original)
+
+    dream = next(item for item in subagents if item["name"] == "dream")
+    assert dream["enabled"] is False
+    assert dream["model"] == "aux-pin"
+    assert "recent_activity" in dream["default_tools"]  # described from DREAM_CONFIG, not lost
+
+
+def test_list_subagents_reports_declared_model_pin() -> None:
+    # The console reads a subagent's chain from this `model` field; researcher's pin lives on a
+    # typed config field that never lands in subagent_overrides, so it must surface here too.
+    cfg = LangGraphConfig()
+    cfg.researcher = SubagentDef(model=["fast", "slow"])
+    cfg.subagent_overrides = {"dream": {"model": "aux-only"}}
+
+    by_name = {item["name"]: item for item in list_subagents(cfg)}
+    assert by_name["researcher"]["model"] == ["fast", "slow"]
+    assert by_name["dream"]["model"] == "aux-only"
+    assert by_name["antagonist"]["model"] == ""  # no pin → blank, inherits aux

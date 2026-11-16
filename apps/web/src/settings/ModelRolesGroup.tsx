@@ -77,7 +77,12 @@ export function ModelRolesGroup({ fields, valueOf, renderRow, overrides, onOverr
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer); }, []);
   const listId = useId();
   const agents = registry.data?.subagents ?? [];
-  const ownChain = (name: string) => settingListItems(overrides[name]?.model).filter((id) => id.trim());
+  // A subagent's chain comes from its unsaved edit (`overrides`) when there is one, else from
+  // the registry's reported pin. `researcher`'s pin lives on a typed config field and never
+  // lands in `subagent_overrides`, so without the registry fallback a saved researcher chain
+  // would read as unpinned after the schema refetch (ADR 0133 M7c).
+  const ownChain = (name: string) =>
+    settingListItems(overrides[name]?.model ?? agents.find((agent) => agent.name === name)?.model).filter((id) => id.trim());
   const pinned = agents.filter((agent) => ownChain(agent.name).length).length;
   const count = agents.length;
   const summary = count === 1
