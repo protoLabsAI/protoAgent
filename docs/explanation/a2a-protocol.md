@@ -135,14 +135,35 @@ SUBMITTED → WORKING → COMPLETED
 
 `INPUT_REQUIRED` is how the template parks a turn awaiting a human answer (HITL): the executor calls `updater.requires_input()` with a `hitl-v1` DataPart describing the form, and the task sits in that state until the consumer sends a follow-up message on the same `contextId`. It is *not* terminal — it is a resumable pause, and it is deliberately preserved across restarts (see below).
 
-All terminal states fire push notifications (if configured). Terminal tasks are swept on a 24h TTL (`sweep_expired_tasks`); until then `GetTask` and `SubscribeToTask` both work.
+All terminal states fire push notifications (if configured). `GetTask` reads the
+persisted state and artifacts while the task row is retained. Retention depends
+on the context, measured from the row's last update:
+
+- Console `chat-` rows are kept until the chat is deleted (a durable tombstone).
+- Outside A2A threads eligible for **From others** are kept for 7 days.
+- `job:`, `background:`, `system:`, and `palette-` contexts have a 24-hour window.
+
+The sweep preserves `INPUT_REQUIRED` / `AUTH_REQUIRED` pauses and task IDs spared
+for pending restart recovery. Deleting a chat makes its rows eligible for the
+sweep; it does not bypass the age and pause checks. See the
+[retention table](/guides/observability#how-long-a-run-is-kept) for other stores.
 
 `SubscribeToTask` (0.3: `tasks/resubscribe`) is the reconnect mechanism. If a streaming consumer's connection drops mid-run, they call it with the task ID and get the remaining frames. This is served by the SDK's active-task registry, which streams live producer events — so it reattaches to an *in-flight* task rather than replaying a buffer of past frames. Reconnect early; a task that has already gone terminal has no remaining frames to send, and you should `GetTask` instead.
 
-**Restart survives.** Tasks are persisted to an instance-scoped SQLite `a2a-tasks.db` (push configs to `a2a-push.db`) via the SDK's `DatabaseTaskStore`. On boot, `reconcile_interrupted_tasks` flips tasks stranded in `SUBMITTED`/`WORKING` to failed — while deliberately **preserving** `INPUT_REQUIRED` and `AUTH_REQUIRED`, because those are waiting on a human, not on a dead process.
+**Restart recovery.** Tasks persist in instance-scoped SQLite `a2a-tasks.db`
+(push configs in `a2a-push.db`). On boot, interrupted interactive chat turns in
+`SUBMITTED` / `WORKING` become failed. `INPUT_REQUIRED` and `AUTH_REQUIRED` pauses
+are preserved. Tasks with accepted scheduler claims are spared that blanket
+failure and classified from their checkpoints under
+[ADR 0129 D7](/adr/0129-work-consolidation): safe work resumes on the original
+thread and task handle, at most once automatically per occurrence. Wait/watch
+continuations can resume with uncertain tool calls reported as interrupted
+rather than replayed. Otherwise, an interrupted recurring occurrence is skipped
+on its first recovery; one-shot work and an occurrence interrupted again after
+its automatic resume need an operator decision.
 
 <!-- docs-media: a2a-task-lifecycle -->
-<figure class="docs-media"><img src="/media/a2a-task-lifecycle/v1.svg" alt="A paused task is not a completed result. SUBMITTED → WORKING → COMPLETED / FAILED / CANCELED; Input needed during work → INPUT_REQUIRED → Follow up in the same context; Reconnect while running → SubscribeToTask → For terminal results: GetTask" loading="lazy" style="max-width:100%;height:auto"><figcaption>Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours.</figcaption></figure>
+<figure class="docs-media"><img src="/media/a2a-task-lifecycle/v1.svg" alt="A paused task is not a completed result. SUBMITTED → WORKING → COMPLETED / FAILED / CANCELED; Input needed during work → INPUT_REQUIRED → Follow up in the same context; Reconnect while running → SubscribeToTask → For terminal results: GetTask" loading="lazy" style="max-width:100%;height:auto"><figcaption>Input/auth pauses survive restarts. Recovery and retention depend on the kind of work; see the lifecycle rules above.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Trace propagation — not in the spec

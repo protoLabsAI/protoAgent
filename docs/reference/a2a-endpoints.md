@@ -147,12 +147,20 @@ Consumers must check `kind` before interpreting fields — without it, `@a2a-js/
 
 Returns the current state of a task. Use to poll when push notifications aren't wired.
 
-Task records are **persisted** (instance-scoped `a2a-tasks.db`, 24h TTL,
-write-through on create + every terminal transition), so `tasks/get` and
-`tasks/resubscribe` answer with the final state + artifacts even after the
-in-memory copy is evicted (1h) or the process restarts. The background *runner*
-doesn't survive a restart, so any task still non-terminal at boot is marked
-`failed` ("interrupted by server restart") rather than left hanging.
+Task records are **persisted** in instance-scoped `a2a-tasks.db`, so `tasks/get`
+can return stored state and artifacts after a restart, while the row is retained.
+Console `chat-` history stays until chat deletion; outside A2A threads eligible
+for **From others** keep 7 days; `job:`, `background:`, `system:`, and `palette-`
+contexts keep 24 hours from the row's last update. Input/auth pauses and tasks
+spared for pending restart recovery are excluded from the sweep.
+
+Interrupted interactive turns in `submitted` / `working` fail at boot; input/auth
+pauses survive. Tasks with accepted scheduler claims instead follow checkpoint
+recovery: resume safe work, skip an interrupted recurring occurrence when it
+cannot resume on its first recovery, or request an operator decision. See
+[Task lifecycle](/explanation/a2a-protocol#task-lifecycle) for the recovery limits
+and deletion rules. `tasks/resubscribe` attaches to a live producer; use
+`tasks/get` for retained terminal results.
 
 ### `tasks/resubscribe`
 
