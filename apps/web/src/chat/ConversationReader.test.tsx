@@ -1,5 +1,6 @@
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConversationReader } from "./ConversationReader";
@@ -42,6 +43,7 @@ vi.mock("../lib/api", () => ({
     listConversations: mocks.listConversations,
   },
   ApiError: mocks.ApiError,
+  currentSlug: () => "",
 }));
 vi.mock("../lib/events", () => ({
   onTopic: (topic: string, fn: (d: Record<string, unknown>) => void) => {
@@ -88,6 +90,7 @@ const turn = (over: Record<string, unknown> = {}) => ({
 
 let host: HTMLDivElement;
 let root: Root;
+let queryClient: QueryClient;
 
 beforeEach(() => {
   mocks.chatSession.mockResolvedValue({ session_id: "ctx-1", active: false, turn_count: 2, last_updated: null, last_state: "completed" });
@@ -96,18 +99,20 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  queryClient.clear();
   store.__resetForTest();
   for (const k of Object.keys(mocks.listeners)) delete mocks.listeners[k];
   vi.clearAllMocks();
 });
 
 async function renderReader(props: Partial<Parameters<typeof ConversationReader>[0]> = {}) {
-  await act(async () => root.render(h(ConversationReader, { threadId: "ctx-1", row: row(), agentName: "designSystem", ...props })));
+  await act(async () => root.render(h(QueryClientProvider, { client: queryClient }, h(ConversationReader, { threadId: "ctx-1", row: row(), agentName: "designSystem", ...props }))));
   await flush();
 }
 
@@ -321,7 +326,7 @@ describe("ConversationReader states", () => {
 
 describe("ConversationsPane opening, remembering and returning to a thread (r4)", () => {
   async function renderPane() {
-    await act(async () => root.render(h(ConversationsPane, { agentName: "designSystem" })));
+    await act(async () => root.render(h(QueryClientProvider, { client: queryClient }, h(ConversationsPane, { agentName: "designSystem" }))));
     await flush();
   }
 
@@ -358,7 +363,7 @@ describe("ConversationsPane opening, remembering and returning to a thread (r4)"
     await act(async () => root.render(h("div", null)));
 
     // Returning to the tab remounts the pane — the store still holds the open thread.
-    await act(async () => root.render(h(ConversationsPane, { agentName: "designSystem" })));
+    await act(async () => root.render(h(QueryClientProvider, { client: queryClient }, h(ConversationsPane, { agentName: "designSystem" }))));
     await flush();
     expect(host.querySelector(".conversations-list")).toBeNull();
     expect(host.querySelector(".conversation-reader__title")?.textContent).toBe("A delegation");
@@ -380,5 +385,64 @@ describe("ConversationsPane opening, remembering and returning to a thread (r4)"
       title: "A delegation",
       origin: "From Claude Code",
     });
+  });
+});
+
+
+describe("conversation jobs integration", () => {
+  const openJob = { id: "job-1", title: "Review release", status: "waiting" };
+  const closedJob = { id: "job-2", title: "Finished review", status: "closed" };
+
+  it.each(["desktop", "phone"])("places jobs after the meta line in the %s reader", async (surface) => {
+    if (surface === "phone") host.classList.add("mshell-conversations");
+    await renderReader({ row: row({ tasks: [openJob, closedJob] }) });
+    const head = host.querySelector(".conversation-reader__head")!;
+    expect(head.children).toHaveLength(3);
+    expect(head.lastElementChild?.className).toBe("thread-jobs");
+    expect(head.lastElementChild?.previousElementSibling?.className).toBe("conversation-reader__origin");
+    expect(head.querySelector(".thread-jobs__summary")?.getAttribute("aria-label"))
+      .toBe("Jobs from this thread, 1, 1 needs you");
+  });
+
+  it.each([undefined, [], [closedJob]])("keeps the two-line header without open jobs (%j)", async (tasks) => {
+    await renderReader({ row: row({ tasks }) });
+    const head = host.querySelector(".conversation-reader__head")!;
+    expect([...head.children].map((child) => child.className)).toEqual([
+      "conversation-reader__titlerow", "conversation-reader__origin",
+    ]);
+  });
+
+  it.each([
+    ["completed", []], ["completed", [openJob]],
+    ["input-required", []], ["input-required", [openJob]],
+  ] as const)("keeps the thread callout independent of jobs (%s, %j)", async (last_state, tasks) => {
+    await renderReader({ row: row({ last_state, tasks: [...tasks] }) });
+    expect(host.querySelector(".conversation-reader__needs") !== null).toBe(last_state === "input-required");
+    expect(host.querySelector(".thread-jobs") !== null).toBe(tasks.length > 0);
+  });
+
+  it("collapses jobs when switching threads and tolerates a missing row", async () => {
+    await renderReader({ row: row({ tasks: [openJob] }) });
+    await act(async () => host.querySelector<HTMLButtonElement>(".thread-jobs__summary")!.click());
+    expect(host.querySelector(".thread-jobs__list")).not.toBeNull();
+    await renderReader({ threadId: "ctx-2", row: row({ session_id: "ctx-2", tasks: [openJob] }) });
+    expect(host.querySelector(".thread-jobs__summary")?.getAttribute("aria-expanded")).toBe("false");
+    await renderReader({ row: undefined });
+    expect(host.querySelector(".thread-jobs")).toBeNull();
+  });
+
+  it.each([
+    [undefined, ""], [[], ""], [[closedJob], ""],
+    [[openJob, closedJob], "1 open job"],
+    [[openJob, { ...openJob, id: "job-3", status: "in_progress" }, closedJob], "2 open jobs"],
+  ] as const)("appends only open jobs to list metadata and accessible names (%j)", async (tasks, suffix) => {
+    mocks.listConversations.mockResolvedValue({ conversations: [row({ tasks: tasks ? [...tasks] : undefined })] });
+    await act(async () => root.render(h(QueryClientProvider, { client: queryClient }, h(ConversationsPane, { agentName: "designSystem" }))));
+    await flush();
+    const button = host.querySelector(".conversations-row__btn")!;
+    expect(button.querySelector(".conversations-row__meta")?.textContent)
+      .toBe(`From Claude Code · 2 min ago · 2 messages${suffix ? ` · ${suffix}` : ""}`);
+    expect(button.getAttribute("aria-label"))
+      .toBe(`A delegation, From Claude Code, Idle, 2 min ago${suffix ? `, ${suffix}` : ""}`);
   });
 });
