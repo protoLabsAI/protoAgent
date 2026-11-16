@@ -1,6 +1,7 @@
 # Other conversations — design spec
 
-Status: **FINAL. Revision 4 approved by Josh 2026-11-15** (relayed by Claude Code). Revision 3 shipped in v0.243.0. Revision 4 changes three things: the tab is renamed **From others** (§3.1, §5), the thread footer becomes one row (§3.4, §3.7), and the thread header keeps its structure with slimmer copy (§3.4, §3.7). The tab stays pinned first, as shipped. The transcript and the design system are unchanged; the server only adds the stored origin fields to each list row (§8, C9). §9 lists the two slices to card: C7 and C9.
+Status: **Revision 5 approved by Josh 2026-11-15** (relayed by Claude Code): §11, work from this thread, with Option A, the "· N open jobs" row text and the "Started in" wording. Revisions 1–4 are final; revision 4 shipped in v0.244.0. Revision 5 preview: artifact `a-1794779694882-24cdf5` v2 (its Option B column is not approved). §11.3 lists the three slices to card: C10a, C10b and C11.
+Revision 4 history: **FINAL. Revision 4 approved by Josh 2026-11-15** (relayed by Claude Code). Revision 3 shipped in v0.243.0. Revision 4 changes three things: the tab is renamed **From others** (§3.1, §5), the thread footer becomes one row (§3.4, §3.7), and the thread header keeps its structure with slimmer copy (§3.4, §3.7). The tab stays pinned first, as shipped. The transcript, the server and the design system are unchanged. §9 lists the two slices to card: C7 and C9.
 Surface: protoAgent console (`apps/web`): the chat tab bar (`ChatSurface.tsx`, DS `TabBar`), the session sheet (`SessionSheet.tsx`), and links from Work and Needs you.
 Preview: artifact `a-1794767154081-d26a78` v10 (Before and After, desktop 1440 and phone 390, light and dark). Its After desktop column shows the right-pin, which Josh did not approve; read the tab position from §3.1, not from the preview.
 Internal names stay: the route `#/conversations/<id>`, the reserved tab id `conversations`, `ConversationsPane.tsx`, `ConversationReader.tsx`, `conversations-store.ts`, `GET /api/conversations`, CSS class names. Only user-facing strings change.
@@ -299,8 +300,7 @@ C7 and C9 touch different files, so they can run in parallel. The one shared are
 - `apps/web/src/chat/ConversationReader.test.tsx`: update the header and footer assertions.
 - `apps/web/src/chat/chat.css`: header and footer layout.
 - `apps/web/src/app/mobile-shell.css`: phone footer row.
-- `src/operator_api/` conversations list route (the `GET /api/conversations` handler) and its test: add `caller`, `caller_kind`, `on_behalf_of` to each row from the stored `conversation_origin` (§8).
-- `apps/web/src/chat/conversations-store.ts` and/or `apps/web/src/lib/api/chat.ts`: carry the three fields on the console row type.
+- `apps/web/src/chat/conversations-store.ts` or `apps/web/src/lib/api/chat.ts`: only if the console row type lacks `caller` / `on_behalf_of` (see §8; no server change).
 
 **Acceptance criteria:**
 1. **Footer, desktop:** one row of at most 56 px (target 48 px) in the composer's slot: lock icon and "Read-only. Replies start a new chat." on the left; Copy link (ghost, small, link icon) and Continue in a new chat (primary, small) on the right. No separate sentence row.
@@ -336,5 +336,115 @@ Revision 3 (Josh, 2026-11-14), with revision 4 changes (Josh, 2026-11-15):
 4. **Badge:** the total count plus a status dot for running or needs you. (Unchanged.)
 5. **Phone:** a pinned **From others** item at the top of the session sheet. (Unchanged, renamed.)
 6. **Reader:** one-row footer on desktop and phone; header with the same structure and slimmer copy (§3.4 item 2); transcript as shipped.
+
+No questions are open for revisions 1–4.
+
+## 11. Revision 5: work from this thread (approved by Josh 2026-11-15)
+
+ADR 0131 P2c, "show the binding both ways". After ADR 0131 D2, a task's `session_id` is the conversation that caused it, even when a cron, inbox or background turn created it. Two views show that link. Preview: artifact `a-1794779694882-24cdf5` v2 (before and after, 1440 and 390, light and dark; layout check passes).
+
+Data: each `GET /api/conversations` row carries `tasks: [{id, title, status}]`, the open tasks bound to that thread (bd-j24gg, merged as protoAgent#5329, merge commit `cab64fe`). The server leaves the field out when a thread has no open tasks. "Open" below means any status except `closed`; the console also ignores a `closed` entry if one arrives.
+
+**"Jobs" and "tasks" are the same thing.** The API, the store and the code say task (`Task`, `tasks`, `task:<id>`). Work's UI says job (Work §1, the "Job" tag), so every user-facing string here says "job". Code keeps the API's names.
+
+### 11.1 Decisions
+
+1. **The reader gets one collapsed line: "Jobs from this thread · 2 · ● 1 needs you".** It sits under the meta line in the header band and is collapsed by default. It appears only when the thread has at least one open job; otherwise the header is exactly as in revision 4.
+   - The "needs you" part shows only when a job's status is `waiting`, with a `warning` `StatusDot`.
+   - Expanded, it lists one row per job: status dot, title (one line, ellipsis), status word ("waiting on you", "in progress", "not started", "blocked"). Order: waiting, in progress, blocked, not started.
+   - A row opens the job's Work detail (the Work modal on desktop, the Work sheet on phone).
+   - Open or closed is not remembered between threads; each thread opens collapsed.
+   - *Reason:* it costs one short line (measured header 81 → 115 px on desktop, 69 → 119 px on phone at 44 px touch height; transcript 79% → 73% of the pane). A band or a list that's always open would undo revision 4 (expanded with 2 jobs: 185 px). Collapsed, the line still answers "did this thread cause work, and does any of it need me?".
+   - Uses "Jobs", not "Tasks": Work calls tasks jobs (Work §1, the "Job" tag).
+2. ~~**Option B: "2 jobs ▾" at the end of the meta line, with the list in a `Popover`.**~~ **Dropped.** Josh approved Option A (item 1) as recommended, 2026-11-15. Reasons B lost: It keeps the header at two lines (86 px), but the trigger is the first thing cut when the meta line truncates on a phone, "needs you" doesn't fit in it, and a popover is one more layer to dismiss.
+3. **The needs-you `Callout` stays as it is.** It says the thread itself is waiting for an answer. A waiting job is a different fact and is shown in the jobs line. If both apply, both show.
+4. **List rows get plain text, not a marker: the meta line ends "· 2 open jobs".** No new badge, dot or icon. *Reason:* a row already has a status dot and sometimes a badge; a second status signal would compete with Running and Needs you. The text is last, so it's the first thing truncated on a narrow row, which is fine because the thread shows it. The row's accessible name gains ", 2 open jobs".
+5. **Work: every open job shows where it started, not only waiting ones.** Today the link is only in `WaitingTaskDetail` (`apps/web/src/work/sections/tasks.tsx` lines 231–246, shown in the Source field at lines 259–261). `TaskDetail`'s in-progress, not-started and blocked jobs use `taskFields()` (line 406) and show no source at all. Revision 5 adds one field, **"Started in"**, to all of them, right after Type and priority.
+6. **New wording: name the thread, not just the caller.** "Started in a conversation from Claude Code for Josh" was written when origins were often unknown. Now the origin is real, so the field shows the thread's title as a `TextLink` to `#/conversations/<id>`, then " · From Claude Code for Josh" in muted text. The title is cut at one line, with the full title in a `Tooltip`.
+   - Thread not in the From others list (outside the window, or not loaded): the link reads "Open the conversation".
+   - Source is a `chat-` session that still exists: "Started in chat &lt;chat title&gt;", which opens that chat.
+   - Source is a `job:` or `background:` id (ADR 0131 D2 should make this rare): muted "Started by a background job", as today.
+   - No source: the field is left out. No "Started in a conversation" with nowhere to go.
+   - The waiting job's Source field uses the same wording.
+7. **No design-system change.** Pieces: `Button variant="ghost" size="sm"` with `aria-expanded` / `aria-controls` for the disclosure, `StatusDot`, composite row links (protoContent#551 pattern), `TextLink`, `Tooltip`. `Accordion` exists in @protolabsai/ui but draws a full-width section header, too heavy for one header line. The system has no compact inline disclosure; I'm not proposing one for a single use.
+
+### 11.2 States and copy
+
+| State | Copy |
+|---|---|
+| No open jobs | Line not drawn. |
+| Collapsed | "Jobs from this thread · 2" + " · 1 needs you" when it applies. Accessible name "Jobs from this thread, 2, 1 needs you", `aria-expanded="false"`. |
+| Job row | "&lt;title&gt;" + status word. Accessible name "Open job: &lt;title&gt;, &lt;status word&gt;". |
+| Job no longer in Work (closed since the list loaded) | The Work detail's own not-found state. The line updates on the next list refresh. |
+| List row | Meta ends " · 1 open job" / " · 2 open jobs". |
+| Work "Started in" | "&lt;thread title&gt;" link + " · From &lt;origin&gt;"; fallbacks as §11.1 item 6. |
+
+Accessibility: the summary is a real `<button>` with `aria-expanded` and `aria-controls`; status is in words, never colour alone; 44 px targets on phone; opening a job moves focus to the Work detail's heading (WorkView already does this); closing the Work modal returns focus to the job row.
+
+### 11.3 Build slices (card-ready)
+
+Three console slices in protoAgent. The reader half needs more than 4 files, so it is split into C10a and C10b.
+
+- **Order:** C10b `depends_on` C10a. C11 shares no file with C10a or C10b and can run in parallel.
+- **API:** the server half is done. `GET /api/conversations` rows carry `tasks` on main (protoAgent#5329, merge commit `cab64fe`), so C10a needs no `depends_on` or `waits_for`.
+- **Paths** checked on protoAgent main on 2026-11-15. "(new)" marks a file the card creates. Each card lists at most 4 files, not counting its `changelog.d/` fragment.
+- **Words:** user-facing strings say "job"; code, types and tests keep the API's "task" (§11 intro).
+- **Status words** used by every slice: `waiting` → "waiting on you", `in_progress` → "in progress", `blocked` → "blocked", `open` and `deferred` → "not started". `closed` is never shown.
+
+**C10a: the jobs line component (`ThreadJobs`)**
+
+- **Files (4):**
+  - `apps/web/src/lib/api/chat.ts`: add `tasks?: { id: string; title: string; status: string }[]` to `ConversationRow`, with a doc comment naming #5329 and saying the server omits the field when a thread has no open tasks.
+  - `apps/web/src/chat/ThreadJobs.tsx` (new).
+  - `apps/web/src/chat/ThreadJobs.test.tsx` (new).
+  - `apps/web/src/chat/chat.css`.
+- **Spec:** a component `ThreadJobs({ row })` for §11.1 item 1. It renders the collapsed summary button and, when expanded, the job list. It is not mounted anywhere yet; C10b mounts it.
+- **Design notes for the coder:**
+  - Shared state to check: `conversations-store.ts` refetches only on a2a turn events, so a row's `tasks` snapshot can be stale. When the Work tasks query (`queryKeys.tasks` in `apps/web/src/lib/queries.ts`) has a loaded entry for a job's id, use that entry's status and title. If that status is `closed`, drop the job. Otherwise use the row's snapshot. Don't add a fetch.
+  - The summary is a DS `Button variant="ghost" size="sm"`. Each job row is a composite `<button type="button">` (the protoContent#551 rule: raw button only for multi-element rows, with the DS focus ring and tokens). The dots are `StatusDot`.
+- **Acceptance criteria:**
+  1. When `row.tasks` is missing, empty, or holds only `closed` entries, `ThreadJobs` renders nothing.
+  2. With 2 open tasks, one `waiting`, it renders one collapsed button. The button's visible text is "Jobs from this thread · 2 · 1 needs you", it has `aria-expanded="false"`, and its accessible name is "Jobs from this thread, 2, 1 needs you". The "needs you" part has a `warning` `StatusDot`.
+  3. With open tasks but none `waiting`, the button reads "Jobs from this thread · N" and shows no warning dot.
+  4. Activating the button sets `aria-expanded="true"`. It shows a list, which the button's `aria-controls` names, with one row per open task. Rows are ordered waiting, in progress, blocked, not started. Each row shows a status dot, the title and the status word from the table above. Activating the button again collapses the list.
+  5. Each job row's accessible name is "Open job: &lt;title&gt;, &lt;status word&gt;". Activating it calls `useUI.getState().openSurfaceModal("work", { section: "tasks", itemId: "task:<id>", filters: { thisChat: false } })`.
+  6. When the Work tasks query has a loaded task with the same id and a different status, the line uses the query's status (count, "needs you" and row word). A task the query reports as `closed` is not shown or counted.
+  7. A new mount starts collapsed (nothing is persisted).
+  8. Under a phone-width container (below 768 px, the `mobile-shell` scope the reader already uses), the summary button and each job row are at least 44 px tall.
+  9. The new CSS uses only `--pl-*` tokens, and the repo's token guard passes.
+- **Tests that fail on main:** `ThreadJobs.test.tsx` covers criteria 1–7. It fails on main because `ThreadJobs` and `ConversationRow.tasks` don't exist there.
+
+**C10b: mount the jobs line in the reader, and the list-row count** (`depends_on` C10a)
+
+- **Files (3):** `apps/web/src/chat/ConversationReader.tsx`, `apps/web/src/chat/ConversationsPane.tsx`, `apps/web/src/chat/ConversationReader.test.tsx`. The last one already imports `ConversationsPane` and covers the list.
+- **Spec:** §11.1 items 1, 3 and 4.
+- **Acceptance criteria:**
+  1. The reader renders `<ThreadJobs row={row} />` as the last child of `conversation-reader__head`, after the meta line, on desktop and phone.
+  2. With no open tasks on the row, the header holds only the title row and the meta line, as in revision 4.
+  3. The needs-you `Callout` still renders exactly when it did before, whether or not the jobs line shows.
+  4. In the From others list, a row with N open tasks ends its meta line with " · 1 open job" or " · N open jobs", after the message count. Its accessible name ends with ", 1 open job" or ", N open jobs". A row with none is unchanged.
+  5. Existing `ConversationReader.test.tsx` cases still pass. Only new cases are added.
+- **Tests that fail on main:** new cases for criteria 1, 2 and 4 (a row fixture with `tasks`). They fail on main because the reader has no jobs line and rows have no job count.
+
+**C11: "Started in" on every open job (Work)**
+
+- **Files (2):** `apps/web/src/work/sections/tasks.tsx`, `apps/web/src/work/sections/tasksSchedules.test.tsx`.
+- **Spec:** §11.1 items 5 and 6. One helper builds the source value for both `TaskDetail` (via `taskFields`) and `WaitingTaskDetail`'s Source field, so the wording can't drift. It replaces the inline `provenance` block at `tasks.tsx` lines 231–246. The thread row comes from `useConversationRow(task.session_id)`. The chat title comes from the chat store's `sessions`.
+- **Acceptance criteria:**
+  1. A job with status `open`, `deferred`, `in_progress` or `blocked` whose `session_id` is an A2A context listed in the conversations store shows a "Started in" field right after "Type and priority". The field holds the thread's title as a `TextLink` to `#/conversations/<id>`, then " · &lt;origin_label&gt;" in muted text, for example " · From Claude Code for Josh". Clicking the link calls `navigate({ kind: "conversation", contextId })`.
+  2. The link has a `Tooltip` with the full thread title, and its text is cut to one line with an ellipsis.
+  3. When the A2A context isn't in the conversations store, the field holds a `TextLink` "Open the conversation" to the same route, with no origin text.
+  4. When `session_id` is a `chat-` id found in the chat store's sessions, the field reads "Started in chat &lt;chat title&gt;". Activating it opens that chat (`openChat(session_id)`).
+  5. When `session_id` starts with `job:` or `background:`, the field is muted text "Started by a background job", with no link.
+  6. When `session_id` is empty, or is a `chat-` id not in the chat store, no "Started in" field renders. The waiting job keeps its existing "Its chat was deleted" text for a deleted chat.
+  7. A `waiting` job's Source field shows the same value as criteria 1–5 when it shows (no turns on the source). Its reply form and Send reply flow are unchanged.
+  8. A `closed` job shows no "Started in" field.
+- **Tests that fail on main:** new `tasksSchedules.test.tsx` cases for criteria 1, 3, 4, 5 and 8 on an `in_progress` job, and criterion 7's wording on a waiting job. They fail on main because `TaskDetail` shows no source at all, and the waiting provenance reads "Started in a conversation from &lt;caller&gt;".
+
+### 11.4 Decided (Josh, 2026-11-15)
+
+1. Reader jobs line: **Option A**, the collapsed line under the meta line. ~~Option B, the popover~~ is dropped (§11.1 item 2).
+2. List rows: the plain text **" · N open jobs"** at the end of the meta line.
+3. Work: **"Started in"** on every open job, worded "&lt;thread title&gt; (link) · From &lt;origin&gt;", with the fallbacks in §11.1 item 6.
 
 No questions are open.
