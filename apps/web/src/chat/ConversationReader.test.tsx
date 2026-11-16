@@ -61,7 +61,10 @@ vi.mock("./ChatStatusRail", () => ({ openWorkGroup: mocks.openWorkGroup }));
 // asserts the call without pulling the whole chat-store module graph into this suite.
 vi.mock("./chat-store", () => ({ chatStore: { continueConversation: mocks.continueConversation } }));
 vi.mock("./Markdown", () => ({ Markdown: ({ children }: { children: string }) => h("p", null, children) }));
-vi.mock("../work/tone", () => ({ relTime: () => ({ text: "2 min ago", tooltip: "12 Nov at 22:54" }) }));
+vi.mock("../work/tone", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../work/tone")>(),
+  relTime: () => ({ text: "2 min ago", tooltip: "12 Nov at 22:54" }),
+}));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

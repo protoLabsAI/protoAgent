@@ -7,6 +7,7 @@ import type { ConversationRow } from "../lib/api/chat";
 import { tasksQuery } from "../lib/queries";
 import type { Task } from "../lib/types";
 import { useUI } from "../state/uiStore";
+import { fromTask, groupFor, type WorkGroupId } from "../work/tone";
 
 // ThreadJobs — the reader's collapsed "Jobs from this thread" line (docs/design/
 // other-conversations.md §11.1 item 1, ADR 0131 P2c; build slice C10a). It renders the summary
@@ -28,7 +29,7 @@ const STATUS_META: Record<string, { word: string; tone: Status; rank: number }> 
 // §11, "'Open' means any status except closed").
 const NOT_STARTED = { word: "not started", tone: "neutral" as Status, rank: 3 };
 
-type JobView = { id: string; title: string; word: string; tone: Status; rank: number; waiting: boolean };
+type JobView = { id: string; title: string; word: string; tone: Status; rank: number; waiting: boolean; group: WorkGroupId | null };
 
 /** Resolve the row's `tasks` snapshot into the shown jobs. The snapshot can be stale —
  *  `conversations-store` refetches only on a2a turn events — so when the Work tasks query has a
@@ -43,7 +44,8 @@ export function deriveThreadJobs(row: ConversationRow, byId: Map<string, Task>):
     if (status === "closed") continue; // never shown or counted
     const title = live?.title ?? snap.title;
     const meta = STATUS_META[status] ?? NOT_STARTED;
-    jobs.push({ id: snap.id, title, word: meta.word, tone: meta.tone, rank: meta.rank, waiting: status === "waiting" });
+    const group = groupFor({ kind: "task", id: snap.id, title, meta: "", status: fromTask(status || "open"), raw: { ...snap, status } });
+    jobs.push({ id: snap.id, title, word: meta.word, tone: meta.tone, rank: meta.rank, waiting: status === "waiting", group });
   }
   // Array.prototype.sort is stable (ES2019+), so equal-rank jobs keep their snapshot order.
   jobs.sort((a, b) => a.rank - b.rank);
@@ -112,7 +114,7 @@ export function ThreadJobs({ row }: { row: ConversationRow }) {
                 aria-label={`Open job: ${job.title}, ${job.word}`}
                 onClick={() =>
                   useUI.getState().openSurfaceModal("work", {
-                    section: "tasks",
+                    section: job.group ?? "tasks",
                     itemId: `task:${job.id}`,
                     filters: { thisChat: false },
                   })

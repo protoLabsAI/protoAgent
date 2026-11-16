@@ -155,16 +155,33 @@ describe("ThreadJobs", () => {
 
   // Criterion 5.
   it("names each row and opens its Work detail on activation", () => {
-    const openSpy = vi.spyOn(useUI.getState(), "openSurfaceModal").mockImplementation(() => {});
     mount(row([{ id: "x7", title: "Release the thing", status: "in_progress" }]));
     click(summary());
     const r = rows()[0];
     expect(r.getAttribute("aria-label")).toBe("Open job: Release the thing, in progress");
     click(r);
-    expect(openSpy).toHaveBeenCalledWith("work", {
-      section: "tasks",
+    expect(useUI.getState().surfaceStates.work).toEqual({
+      section: "doing-now",
       itemId: "task:x7",
       filters: { thisChat: false },
+    });
+  });
+
+  it.each([
+    ["open", undefined, "coming-up"],
+    ["deferred", undefined, "coming-up"],
+    ["waiting", undefined, "needs-you"],
+    ["blocked", undefined, "doing-now"],
+    ["open", "waiting", "needs-you"],
+    ["waiting", "open", "coming-up"],
+  ])("opens the matching Work group for %s (cached: %s)", (status, cachedStatus, section) => {
+    mount(row([{ id: "job", title: "Job", status }]),
+      cachedStatus ? [{ id: "job", title: "Job", status: cachedStatus }] : undefined);
+    click(summary());
+    click(rows()[0]);
+    expect(useUI.getState().surfaceModal?.viewId).toBe("work");
+    expect(useUI.getState().surfaceStates.work).toMatchObject({
+      section, itemId: "task:job", filters: { thisChat: false },
     });
   });
 

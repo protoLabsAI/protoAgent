@@ -1,0 +1,1 @@
+- **Job navigation and source conversations.** Jobs from a thread now open the matching Work group. Jobs from unlisted outside conversations older than seven days show muted source text instead of a broken conversation link.

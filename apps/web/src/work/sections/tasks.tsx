@@ -29,7 +29,7 @@ import { WorkEmpty as Empty } from "../WorkEmpty";
 import { Tooltip, useToast } from "@protolabsai/ui/overlays";
 
 import { chatStore } from "../../chat/chat-store";
-import { useConversationRow, type ConversationRow } from "../../chat/conversations-store";
+import { useConversations, type ConversationRow } from "../../chat/conversations-store";
 import { navigate } from "../../app/palette/nav";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
@@ -163,9 +163,10 @@ const STARTED_IN_ORIGIN: CSSProperties = { color: "var(--pl-color-fg-muted)" };
  *  value, or null when there's nothing to point at: no source, or a `chat-` id whose chat is gone
  *  (the waiting detail keeps its own "Its chat was deleted" line for that). A `job:`/`background:`
  *  turn (ADR 0131 D2) is muted text; a live console chat and an A2A thread each link out. */
-function startedInValue({ task, convRow, chatTitle, openChat }: {
+function startedInValue({ task, convRow, conversationsReady, chatTitle, openChat }: {
   task: Task;
   convRow: ConversationRow | null;
+  conversationsReady: boolean;
   chatTitle: string | null;
   openChat?: (sessionId: string) => void | Promise<void>;
 }): ReactNode {
@@ -181,7 +182,12 @@ function startedInValue({ task, convRow, chatTitle, openChat }: {
       : null;
   }
   // A real A2A context links into its read-only thread at `#/conversations/<id>` (§4.6). Listed:
-  // name the thread (clamped, full title in a Tooltip) and its origin; not listed: a plain link.
+  // name the thread (clamped, full title in a Tooltip) and its origin. Without a row,
+  // the task's last activity is our age proxy; don't infer expiry from a failed/loading list.
+  const lastActivity = new Date(task.updated_at || task.created_at || "").getTime();
+  if (!convRow && conversationsReady && Date.now() - lastActivity > 7 * 86_400_000) {
+    return <span style={STARTED_IN_ORIGIN}>Started in a conversation that's no longer kept</span>;
+  }
   const href = `#/conversations/${source}`;
   const open = (event: MouseEvent) => { event.preventDefault(); navigate({ kind: "conversation", contextId: source }); };
   if (!convRow) return <TextLink href={href} onClick={open}>Open the conversation</TextLink>;
@@ -200,10 +206,11 @@ function startedInValue({ task, convRow, chatTitle, openChat }: {
  *  details read the same singletons and re-render when either changes. */
 function useStartedIn(task: Task, openChat?: (sessionId: string) => void | Promise<void>): ReactNode {
   const source = task.session_id ?? "";
-  const convRow = useConversationRow(source);
+  const conversations = useConversations();
+  const convRow = conversations.rows.find((row) => row.session_id === source) ?? null;
   const sessions = useSyncExternalStore(chatStore.subscribe, () => chatStore.getSnapshot().sessions);
   const chatTitle = source.startsWith("chat-") ? sessions.find((s) => s.id === source)?.title ?? null : null;
-  return startedInValue({ task, convRow, chatTitle, openChat });
+  return startedInValue({ task, convRow, conversationsReady: conversations.status === "ready" && !conversations.reason, chatTitle, openChat });
 }
 
 async function sourceHasTurns(sessionId: string): Promise<boolean> {
