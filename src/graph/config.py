@@ -263,6 +263,17 @@ def _as_chain(value) -> list[str]:
     return [text] if text else []
 
 
+def model_field_primary(value) -> str:
+    """The PRIMARY model id of a model-role field value (ADR 0133): the scalar itself, the
+    FIRST entry of a chain (a list), or "" when blank. The runtime slot readers that still
+    expect a scalar collapse a list to this — M1 is config-shape only, so the chain's
+    fallbacks are consumed by a later milestone while :func:`role_chain` already reads the
+    whole chain. Built on the ONE list normalizer (``_as_chain``) so it cannot drift from
+    how a chain is parsed."""
+    chain = _as_chain(value)
+    return chain[0] if chain else ""
+
+
 def _role_raw_chain(config, role: str) -> list[str]:
     """The chain a role declares ON ITS OWN, before inheritance. ``main`` folds in the
     legacy ``routing.fallback_models`` tail so it reads as one chain (ADR 0133 D1)."""
@@ -273,7 +284,10 @@ def _role_raw_chain(config, role: str) -> list[str]:
 
 
 def role_chain(config, role: str) -> list[str]:
-    """The ordered model chain for ``role`` (ADR 0133 D2). PURE — reads only ``config``.
+    """The ordered model chain for ``role`` (ADR 0133 D2). Reads only ``config`` and never
+    mutates it, but it is NOT side-effect-free: it emits a ``log.warning`` for each entry it
+    drops as incoherent (see below), so repeated resolution of the same incoherent config
+    logs repeatedly.
 
     A SET chain is exactly what's listed; a BLANK role inherits its parent's whole chain
     (specific role → aux → main; harvest → aux, facts → harvest, gist → aux), except a blank
@@ -306,12 +320,9 @@ def role_chain(config, role: str) -> list[str]:
             kept.append(model)
         return kept
 
-    seen: set[str] = set()
-
+    # ``_ROLE_PARENT`` is a fixed acyclic module constant, so parent resolution always
+    # terminates at ``main`` (no parent) — no cycle guard is needed.
     def _resolve(r: str) -> list[str]:
-        if r in seen:  # defensive: a malformed parent map must never loop forever
-            return []
-        seen.add(r)
         chain = _coherent(_role_raw_chain(config, r), r)
         if chain:
             return chain

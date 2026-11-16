@@ -5,7 +5,7 @@
   single model (today's shape) or an ordered list: the primary, then each fallback in turn
   (ADR 0133). `routing.fallback_models` still appends to the main chain. A blank role inherits
   its parent's whole chain (specific → aux → main; harvest → aux, facts → harvest, gist → aux),
-  except a blank image-describe model, which stays off. Config-side only; the chain editors
-  arrive in a later milestone.
-  Subscription routes survive export/import for every chain entry, and declared Settings
-  option constraints apply to each entry.
+  except a blank image-describe model, which stays off. The runtime resolves each role to its
+  primary entry for now; reading the fallbacks, and the chain editors, arrive in a later
+  milestone. A connection a chain entry names still counts as in use, so it cannot be deleted
+  out from under the chain, and subscription routes survive export/import for every entry.

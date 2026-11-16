@@ -33,13 +33,20 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.operator_api.providers")
 
 # Slots whose value may name a provider. Read from the live config to answer "is this
-# connection in use?" — the question DELETE has to get right.
+# connection in use?" — the question DELETE has to get right. MUST stay in lockstep with the
+# route-bearing model roles (`graph.config._ROUTED_SCALAR_SLOTS` / `role_chain`): a role
+# missing here lets a connection referenced ONLY by that slot be deleted, leaving a dangling
+# route. Each value is read as its ordered CHAIN (ADR 0133), so any chain entry counts.
 _SLOT_ATTRS = (
     ("model.name", "model_name"),
     ("routing.aux_model", "aux_model"),
     ("compaction.model", "compaction_model"),
     ("goal.eval_model", "goal_eval_model"),
     ("memory.select_model", "memory_select_model"),
+    ("memory.harvest_model", "memory_harvest_model"),
+    ("memory.facts_model", "memory_facts_model"),
+    ("memory.gist_model", "memory_gist_model"),
+    ("knowledge.image_describe_model", "image_describe_model"),
     ("soul.drift_judge_model", "soul_drift_judge_model"),
 )
 
@@ -48,9 +55,71 @@ _SLOT_ATTRS = (
 # and the `in_use_by` strings have always labelled it `soul.drift_judge_model`. A release
 # writes through the settings key so `apply_settings` addresses the right node.
 _SLOT_WRITE_KEYS = {"soul.drift_judge_model": "soul.drift.judge.model"}
+#: Reported slot label → the ``LangGraphConfig`` attribute it reads.
+_SLOT_ATTR_BY_LABEL = dict(_SLOT_ATTRS)
 # Stands in for "this connection's favorites dropped from the CURRENT list" until the
 # delete's write runs inside the config lock (see _delete_provider).
 _FAVORITES_OF_CURRENT = object()
+
+
+def _implicit_gateway_lead(label: str, pid: str, model_provider: str) -> bool:
+    """Whether a bare (unqualified) ``model.name`` entry implicitly runs through ``pid`` — the
+    migrated ``gateway`` connection serving a pre-registry lead under a gateway provider."""
+    return label == "model.name" and pid == "gateway" and model_provider not in {"anthropic-oauth", "openai-codex"}
+
+
+def _entry_names_pid(value: str, pid: str, *, implicit_gateway: bool) -> bool:
+    """Whether a single chain entry routes through connection ``pid``: a ``pid:``-qualified
+    value, or (only for an implicit-gateway ``model.name`` lead) a bare, unqualified model."""
+    if value.lower().startswith(f"{pid}:"):
+        return True
+    return bool(implicit_gateway and value and ":" not in value)
+
+
+def _release_chain_entries(chain: list[str], pid: str, target, *, implicit_gateway: bool) -> list[str]:
+    """Apply ONE connection-delete release to a slot's ordered chain (ADR 0133). Each entry
+    that names ``pid`` is repointed to ``target`` (a ``<provider>:<model>`` string) or, when
+    ``target`` is None, dropped; EVERY entry that did not name ``pid`` survives in order — a
+    healthy fallback is never discarded (before, the whole chain was replaced). A duplicate a
+    repoint would introduce collapses (first occurrence wins)."""
+    out: list[str] = []
+    for value in chain:
+        if _entry_names_pid(value, pid, implicit_gateway=implicit_gateway):
+            repl = None if target is None else str(target)
+        else:
+            repl = value
+        if repl is not None and repl not in out:
+            out.append(repl)
+    return out
+
+
+def _release_slot_value(cfg, label: str, pid: str, target):
+    """The new stored value for chain slot ``label`` after releasing connection ``pid`` —
+    computed against ``cfg`` so a deferred release reads the config the write lock holds.
+    Preserves scalar shape for a slot stored as a scalar; an emptied chain becomes "" (the
+    blank that inherits)."""
+    from graph.config import _as_chain
+
+    original = getattr(cfg, _SLOT_ATTR_BY_LABEL[label], "")
+    implicit_gateway = _implicit_gateway_lead(label, pid, str(getattr(cfg, "model_provider", "") or "").lower())
+    new_chain = _release_chain_entries(_as_chain(original), pid, target, implicit_gateway=implicit_gateway)
+    if not new_chain:
+        return ""
+    return new_chain if isinstance(original, (list, tuple)) else new_chain[0]
+
+
+class _SlotRelease:
+    """A chain-slot release deferred to the config the write lock holds (like
+    ``_FAVORITES_OF_CURRENT``), so a concurrent edit to the slot is not clobbered. ``target``
+    is the resolved repoint id (``<provider>:<model>``) or None to drop the ``pid`` entries."""
+
+    __slots__ = ("label", "pid", "target")
+
+    def __init__(self, label: str, pid: str, target):
+        self.label, self.pid, self.target = label, pid, target
+
+    def resolve(self, current):
+        return _release_slot_value(current, self.label, self.pid, self.target)
 
 
 class ProviderCreate(BaseModel):
@@ -138,23 +207,18 @@ def _walk_references(view: dict, pid: str) -> tuple[list[str], list[dict]]:
     entries: list[dict] = []
     for label, _attr in _SLOT_ATTRS:
         chain = view["slots"][label]
-        implicit_gateway = (
-            label == "model.name"
-            and pid == "gateway"
-            and view["model_provider"] not in {"anthropic-oauth", "openai-codex"}
-        )
+        implicit_gateway = _implicit_gateway_lead(label, pid, view["model_provider"])
         matched: list[str] = []
         for value in chain:
-            if value.lower().startswith(f"{pid}:"):
-                strings.append(f"{label}={value}")
-                matched.append(value)
-            elif implicit_gateway and value and ":" not in value:
-                # A pre-registry config's bare lead model implicitly runs through the migrated
-                # `gateway` connection. Treat that dependency exactly like the qualified
-                # `gateway:<model>` form; otherwise Settings can claim there are no connections
-                # while the legacy gateway is still serving the agent.
-                strings.append(f"{label}={value} (implicit gateway)")
-                matched.append(value)
+            if not _entry_names_pid(value, pid, implicit_gateway=implicit_gateway):
+                continue
+            # A pre-registry config's bare lead model implicitly runs through the migrated
+            # `gateway` connection. Treat that dependency exactly like the qualified
+            # `gateway:<model>` form; otherwise Settings can claim there are no connections
+            # while the legacy gateway is still serving the agent.
+            suffix = "" if value.lower().startswith(f"{pid}:") else " (implicit gateway)"
+            strings.append(f"{label}={value}{suffix}")
+            matched.append(value)
         if matched:
             # `model.name` is never clearable (explicit OR implicit-gateway lead); every
             # other slot is. A chain-of-one keeps the scalar `value` shape exactly.
@@ -348,10 +412,13 @@ def _remaining_after_releases(cfg, pid: str, releases: dict) -> list[str]:
             name = key[len("subagents.") : -len(".model")]
             sim["subagents"][name] = "" if target is None else str(target)
         elif key in sim["slots"]:
-            # Slot values are chains (lists) in the view; a release repoints or clears the
-            # WHOLE slot (chain editing arrives in a later ADR-0133 milestone), so the
-            # re-walked slot is an empty chain or a one-entry chain at the new target.
-            sim["slots"][key] = [] if target is None else [str(target)]
+            # A release repoints or drops only the entries that NAME `pid`; every healthy
+            # fallback entry survives (ADR 0133). Re-walked with the same per-entry rule the
+            # write uses, so the "any reference left?" guard matches what gets persisted.
+            implicit_gateway = _implicit_gateway_lead(key, pid, sim["model_provider"])
+            sim["slots"][key] = _release_chain_entries(
+                sim["slots"][key], pid, target, implicit_gateway=implicit_gateway
+            )
     return _walk_references(sim, pid)[0]
 
 
@@ -524,19 +591,28 @@ def register_provider_routes(app) -> None:
                 # meanwhile.
                 write_updates[write_key] = _FAVORITES_OF_CURRENT
                 continue
+            # Resolve the release target: None clears, else it must name ANOTHER registered
+            # connection. `model.name` must always resolve, so it can only be repointed.
             if target is None:
                 if key == "model.name":
                     raise HTTPException(
                         status_code=400,
                         detail="model.name is the lead model and cannot be cleared; repoint it to another connection.",
                     )
-                write_updates[write_key] = ""  # clear the slot
-                continue
-            # A repoint: the target must resolve to ANOTHER registered connection.
-            other_pid, other_model = split_slot_target(target, cfg)
-            if not other_pid or not other_model or other_pid == pid or cfg.provider_by_id(other_pid) is None:
-                raise HTTPException(status_code=400, detail=_bad_target_detail(cfg, pid, key, target))
-            write_updates[write_key] = f"{other_pid}:{other_model}"
+                resolved_target = None
+            else:
+                other_pid, other_model = split_slot_target(target, cfg)
+                if not other_pid or not other_model or other_pid == pid or cfg.provider_by_id(other_pid) is None:
+                    raise HTTPException(status_code=400, detail=_bad_target_detail(cfg, pid, key, target))
+                resolved_target = f"{other_pid}:{other_model}"
+            if entry["kind"] == "slot":
+                # A chain slot keeps every entry that did NOT name `pid`; only the matching
+                # entries are repointed/dropped. Deferred to the config the write lock holds
+                # (like favorites), so a concurrent edit to the slot is not clobbered.
+                write_updates[write_key] = _SlotRelease(key, pid, resolved_target)
+            else:
+                # A subagent model is a scalar, not a chain — repoint/clear the whole value.
+                write_updates[write_key] = resolved_target or ""
 
         # Apply the releases in memory and re-walk. Any reference the operator did NOT
         # resolve still blocks the delete, exactly as the bare (no-body) call does —
@@ -563,18 +639,19 @@ def register_provider_routes(app) -> None:
             return [e for e in _entries_from_config(current) if e["id"] != pid]
 
         def _releases(current) -> dict:
-            return {
-                key: (
-                    [
+            out: dict = {}
+            for key, value in write_updates.items():
+                if value is _FAVORITES_OF_CURRENT:
+                    out[key] = [
                         f
                         for f in (getattr(current, "model_favorites", []) or [])
                         if not str(f).lower().startswith(f"{pid}:")
                     ]
-                    if value is _FAVORITES_OF_CURRENT
-                    else value
-                )
-                for key, value in write_updates.items()
-            }
+                elif isinstance(value, _SlotRelease):
+                    out[key] = value.resolve(current)
+                else:
+                    out[key] = value
+            return out
 
         await _apply_providers(_without, {}, _releases)
         return {"ok": True, "removed": pid, "released": sorted(releases)}

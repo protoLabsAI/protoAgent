@@ -760,14 +760,14 @@ def _resolve_aux_model(config, specific: str | list[str] = "") -> str | None:
     ``specific`` override (compaction passes ``config.compaction_model``) and
     ``routing.aux_model`` are now list-capable. The PRIMARY entry of the first
     non-empty chain is used; chain-aware aux fan-out lands in a later milestone.
-    Normalizing through ``_as_chain`` is what keeps a list value from raising on the
-    old ``.strip()``."""
-    from graph.config import _as_chain
+    ``model_field_primary`` is what keeps a list value from raising on the old
+    ``.strip()``."""
+    from graph.config import model_field_primary
 
     for candidate in (specific, getattr(config, "aux_model", "")):
-        chain = _as_chain(candidate)
-        if chain:
-            return chain[0]
+        primary = model_field_primary(candidate)
+        if primary:
+            return primary
     return None
 
 

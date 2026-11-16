@@ -472,8 +472,49 @@ def test_delete_releases_a_chain_slot_by_repointing_it(client, monkeypatch):
     )
     assert r.status_code == 200
     assert r.json() == {"ok": True, "removed": "prod-gateway", "released": ["routing.aux_model"]}
-    # Repointing the slot replaces the whole chain with the new target (no chain editor yet).
-    assert seen["updates"]["routing"]["aux_model"] == "local-vllm:aux"
+    # Repointing touches ONLY the entry that named prod-gateway; the healthy local-vllm:fast
+    # primary survives, so the chain becomes [local-vllm:fast, local-vllm:aux] — a repoint
+    # never discards a fallback that pointed elsewhere.
+    assert seen["updates"]["routing"]["aux_model"] == ["local-vllm:fast", "local-vllm:aux"]
+
+
+def test_delete_clears_only_the_matching_chain_entry(client, monkeypatch):
+    _chain_fixture(monkeypatch)  # routing.aux_model = [local-vllm:fast, prod-gateway:aux]
+    seen = _apply_spy(monkeypatch, {})
+    # Clearing (target null) a chain slot drops only the prod-gateway entry; the local-vllm
+    # fallback is kept, so the slot stays a usable one-entry chain rather than being emptied.
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"routing.aux_model": None}},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "removed": "prod-gateway", "released": ["routing.aux_model"]}
+    assert seen["updates"]["routing"]["aux_model"] == ["local-vllm:fast"]
+
+
+@pytest.mark.parametrize(
+    "slot", ["memory.harvest_model", "memory.facts_model", "memory.gist_model", "knowledge.image_describe_model"]
+)
+def test_delete_sees_a_reference_from_a_newly_routed_slot(client, monkeypatch, slot):
+    # ADR 0133 added four route-bearing model roles; the delete in-use guard (`_SLOT_ATTRS`)
+    # must see each, or a connection referenced ONLY by one is reported unused and removed,
+    # leaving a dangling route.
+    section, key = slot.split(".", 1)
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:lead"},  # the lead names local-vllm, so prod is used ONLY by `slot`
+        **{section: {key: "prod-gateway:worker"}},
+    )
+    prod = next(p for p in client.get("/api/config/providers").json()["providers"] if p["id"] == "prod-gateway")
+    assert f"{slot}=prod-gateway:worker" in prod["in_use_by"]
+    r = client.delete("/api/config/providers/prod-gateway")
+    assert r.status_code == 409
+    assert f"{slot}=prod-gateway:worker" in r.json()["detail"]
 
 
 def test_delete_with_releases_that_leave_a_chain_entry_is_refused(client, monkeypatch):

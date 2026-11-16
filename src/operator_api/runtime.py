@@ -98,6 +98,8 @@ def build_runtime_status(
     recomputes it from the live config each poll, so saving a model flips it with no
     restart.
     """
+    from graph.config import model_field_primary
+
     warnings_block = [w for w in (warnings or []) if w]
     project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
 
@@ -172,7 +174,9 @@ def build_runtime_status(
             # A vision model is configured to describe attached images for a text-only chat
             # model (#1381) — the console routes images to the describe pipeline instead of
             # erroring when this is set.
-            "image_describe": bool((getattr(config, "image_describe_model", "") or "").strip()),
+            # ``knowledge.image_describe_model`` is list-capable (ADR 0133); a bare
+            # ``.strip()`` on a list would raise here and take the whole status payload down.
+            "image_describe": bool(model_field_primary(getattr(config, "image_describe_model", ""))),
         },
         "identity": {
             "name": getattr(config, "identity_name", ""),
