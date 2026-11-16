@@ -72,10 +72,13 @@ def _aux_model_name(config) -> str:
 
 
 async def continuation_summarizer(prompt: str, config) -> str:
-    """The default summarizer: one engine prompt in, the aux model's notes out."""
-    from graph.llm import create_llm
+    """The default summarizer: one engine prompt in, the compaction role's notes out."""
+    from graph.model_roles import create_role_llm
 
-    llm = create_llm(config, model_name=_aux_model_name(config))
+    # ADR 0133 M3: build the "compaction" role chain — a blank slot inherits aux → main (the
+    # primary `_aux_model_name` still resolves for the window-sizing below), falling back to
+    # the next entry only on a retryable provider error. A single-model chain is unchanged.
+    llm = create_role_llm(config, "compaction")
     resp = await llm.ainvoke([HumanMessage(content=prompt)])
     return compaction_engine.message_text(resp)
 

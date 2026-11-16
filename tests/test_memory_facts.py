@@ -306,8 +306,12 @@ def test_text_of_drops_reasoning_and_thinking_blocks():
 
 
 def test_default_extractor_parses_the_text_of_a_block_list(monkeypatch):
-    import graph.agent
-    import graph.llm
+    """ADR 0133 M3: the seam resolves its model via ``create_role_llm(config, "memory_facts")``.
+    A single-string ``aux_model`` is a one-entry chain (facts → harvest → aux), so the role
+    LLM is the built model unchanged — the text parse under test is unaffected."""
+    import graph.model_roles
+    from types import SimpleNamespace
+
     from langchain_core.messages import AIMessage
 
     from graph.memory_facts import _default_extractor
@@ -323,7 +327,6 @@ def test_default_extractor_parses_the_text_of_a_block_list(monkeypatch):
         async def ainvoke(self, messages):
             return reply
 
-    monkeypatch.setattr(graph.agent, "_resolve_aux_model", lambda config, name: "aux")
-    monkeypatch.setattr(graph.llm, "create_llm", lambda config, model_name=None: _LLM())
-    facts = asyncio.run(_default_extractor("User: we deploy on Fridays", object()))
+    monkeypatch.setattr(graph.model_roles, "create_llm", lambda config, model_name=None, **kw: _LLM())
+    facts = asyncio.run(_default_extractor("User: we deploy on Fridays", SimpleNamespace(aux_model="aux")))
     assert facts == [{"subject": "deploy-day", "content": "Deploys happen on Fridays"}]

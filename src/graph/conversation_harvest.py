@@ -656,10 +656,13 @@ _SUMMARY_PROMPT = (
 
 
 async def _default_summarizer(transcript: str, config) -> str:
-    from graph.agent import _resolve_aux_model
-    from graph.llm import create_llm
+    from graph.model_roles import create_role_llm
 
-    llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
+    # ADR 0133 M3: build the "memory_harvest" role chain — a blank slot inherits aux → main
+    # (the same primary the old create_llm(aux_model) built), and a multi-model chain falls
+    # back to the next entry only on a retryable provider error. A single-model chain is
+    # returned as create_llm's model unchanged, so single-string configs are untouched.
+    llm = create_role_llm(config, "memory_harvest")
     resp = await llm.ainvoke([HumanMessage(content=_SUMMARY_PROMPT.format(transcript=transcript))])
     # The aux model may or may not wrap output in tags; extract defensively. A Responses
     # provider returns a block LIST (a reasoning block carrying `encrypted_content`, then

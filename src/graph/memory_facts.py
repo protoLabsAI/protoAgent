@@ -111,10 +111,12 @@ def _parse_facts(raw: str) -> list[str | dict[str, str]]:
 
 async def _default_extractor(transcript: str, config) -> list[str | dict[str, str]]:
     """Aux-model fact extraction (classification-grade, not the main model)."""
-    from graph.agent import _resolve_aux_model
-    from graph.llm import create_llm
+    from graph.model_roles import create_role_llm
 
-    llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
+    # ADR 0133 M3: build the "memory_facts" role chain — a blank slot inherits harvest → aux →
+    # main (the primary the old create_llm(aux_model) built), falling back to the next entry
+    # only on a retryable provider error. A single-model chain stays byte-identical.
+    llm = create_role_llm(config, "memory_facts")
     resp = await llm.ainvoke([HumanMessage(content=_FACTS_PROMPT.format(transcript=transcript))])
     # text_of, not str(): a Responses provider's block list carries an opaque reasoning blob.
     return _parse_facts(text_of(resp))

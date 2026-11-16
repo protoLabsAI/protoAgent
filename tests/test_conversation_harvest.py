@@ -231,9 +231,14 @@ def test_harvest_extracts_facts_only_from_operator_chats(tmp_path, history_store
 def test_default_summarizer_drops_provider_reasoning_blocks(monkeypatch):
     """A Responses provider's aux reply is a block list: an opaque reasoning block
     (``encrypted_content``) and then the text. ``str()`` of that list landed in history as
-    the summary (15 such rows in the audit); only the text may."""
-    import graph.agent
-    import graph.llm
+    the summary (15 such rows in the audit); only the text may.
+
+    ADR 0133 M3: the seam resolves its model via ``create_role_llm(config, "memory_harvest")``.
+    A single-string ``aux_model`` is a one-entry chain, so the role LLM is the built model
+    unchanged — the text-extraction behaviour under test is unaffected."""
+    import graph.model_roles
+    from types import SimpleNamespace
+
     from graph.conversation_harvest import _default_summarizer
 
     reply = AIMessage(
@@ -248,9 +253,8 @@ def test_default_summarizer_drops_provider_reasoning_blocks(monkeypatch):
         async def ainvoke(self, messages):
             return reply
 
-    monkeypatch.setattr(graph.agent, "_resolve_aux_model", lambda config, name: "aux")
-    monkeypatch.setattr(graph.llm, "create_llm", lambda config, model_name=None: _LLM())
-    out = asyncio.run(_default_summarizer("User: alive?", object()))
+    monkeypatch.setattr(graph.model_roles, "create_llm", lambda config, model_name=None, **kw: _LLM())
+    out = asyncio.run(_default_summarizer("User: alive?", SimpleNamespace(aux_model="aux")))
     assert out == "User asked for a one-word reply."
 
 
