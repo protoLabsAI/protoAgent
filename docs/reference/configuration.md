@@ -441,6 +441,16 @@ telemetry:
 
 How long each part of a run is kept is listed in [Monitor traces, metrics, and logs](/guides/observability#how-long-a-run-is-kept).
 
+## `inbox`
+
+| Key | Default | What |
+|---|---|---|
+| `retention_days` | `90` | Internal config field: `inbox_retention_days`. The maintenance sweep deletes delivered inbox items older than this many days, measured from creation (`created_at`), not delivery. Pending (undelivered) items are never pruned. `0` = keep forever. |
+
+Set this as `inbox.retention_days` in YAML. It controls inbox delivery records,
+not chat transcripts or Work tasks; see the
+[retention table](/guides/observability#how-long-a-run-is-kept).
+
 ## `tracing`
 
 Langfuse deep tracing — the other half of [ADR 0006](../adr/0006-observability-and-the-self-improving-flywheel.md). Where `telemetry` is the SQL rollup (one row per turn), this is the trace *tree*: the tool calls, model calls and subagent spans inside a turn, plus the `trace_id` each telemetry row carries so the console can deep-link a turn to its trace. It is also what makes `a2a.trace` propagation pay off — a delegation nests under its caller's trace instead of opening its own.

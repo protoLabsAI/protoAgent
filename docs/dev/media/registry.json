@@ -1378,7 +1378,7 @@
       "purpose": "Visualize task transitions without duplicating the full protocol reference.",
       "brief": "Replace or accompany the text diagram with an SVG state diagram of the documented states, including input-required and terminal outcomes. Verify transitions against the implementation; retain textual state definitions.",
       "alt": "A paused task is not a completed result. SUBMITTED → WORKING → COMPLETED / FAILED / CANCELED; Input needed during work → INPUT_REQUIRED → Follow up in the same context; Reconnect while running → SubscribeToTask → For terminal results: GetTask",
-      "caption": "Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours.",
+      "caption": "Input/auth pauses survive restarts. Recovery and retention depend on the kind of work; see the lifecycle rules above.",
       "placements": [
         {
           "page": "explanation/a2a-protocol.md",

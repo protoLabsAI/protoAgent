@@ -102,7 +102,10 @@ can outlive its full transcript.
 
 | Part of a run | Store | Kept for | Setting |
 |---|---|---|---|
-| Full turn detail: messages, tool calls, the delegate reply timeline | A2A task store | Console chats: until you delete the chat. Everything else (delegations, API calls, Activity): 24 hours. A turn paused for approval is kept until it's answered. | Fixed |
+| Full turn detail: messages, tool calls, the delegate reply timeline | `a2a-tasks.db` | Console `chat-` rows: until chat deletion (tombstone). Outside A2A threads eligible for **From others**: 7 days. `job:`, `background:`, `system:`, `palette-`: 24 hours. Windows use each row's last update; input/auth pauses and tasks spared for pending restart recovery are excluded from the sweep. | Fixed; [lifecycle and deletion rules](/explanation/a2a-protocol#task-lifecycle) |
+| Work tasks (including closed tasks, distinct from A2A turns) | `tasks/issues.db` | No automatic age pruning; kept until explicitly deleted. Closing a task keeps its record. | No retention setting |
+| Inbox items | Inbox store | Delivered items: 90 days from creation. Pending items are never pruned. | [`inbox.retention_days`](/reference/configuration#inbox) (`0` = keep forever) |
+| Follow-up backoff deadline | Scheduler `jobs.db`, on the job generation | Persisted across restarts. An elapsed deadline remains recorded until cleared or the job is deleted; expiry alone does not delete it. Backoff clears when the origin chat stops waiting, the follow-up has news, or the job is edited. | Fixed hourly backoff; no retention setting |
 | Turn outcome, tokens, cost, duration, trace link | `telemetry.db` | 90 days | `telemetry.retention_days` |
 | Delegations and each run's tree | `ledger.db` | Forever | `telemetry.ledger_retention_days` |
 | Workflow runs and their step output | `workflows/.runs/*.json` | The newest 200 finished runs. Running and paused runs are never pruned. | `workflow_runs.max_runs` |

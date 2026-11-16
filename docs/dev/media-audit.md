@@ -590,7 +590,7 @@ Visualize task transitions without duplicating the full protocol reference.
 
 **Placement:** [explanation/a2a-protocol.md](../explanation/a2a-protocol.md) → Task lifecycle
 
-**Caption:** Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours.
+**Caption:** Input/auth pauses survive restarts. Recovery and retention depend on the kind of work; see the lifecycle rules above.
 
 **Alt text draft:** A paused task is not a completed result. SUBMITTED → WORKING → COMPLETED / FAILED / CANCELED; Input needed during work → INPUT_REQUIRED → Follow up in the same context; Reconnect while running → SubscribeToTask → For terminal results: GetTask
 
