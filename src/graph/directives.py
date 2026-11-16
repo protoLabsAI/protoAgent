@@ -127,6 +127,10 @@ def normalize_links(links) -> list[dict]:
             raise DirectiveError(f"link ref is {len(ref)} characters (max {MAX_LINK_CHARS})")
         if re.fullmatch(r"#\d+", ref):
             raise DirectiveError(f"GitHub ref {ref!r} names no repository — qualify it as owner/repo{ref}")
+        if ref.startswith("dir-"):
+            raise DirectiveError(
+                f"{ref!r} is a directive, not work — link the issues, PRs, cards, tasks or jobs it covers"
+            )
         if ref.lower().startswith(("http://", "https://")) and not parse_github_ref(ref):
             raise DirectiveError(f"link URL {ref!r} is not a GitHub issue/PR URL — link owner/repo#N instead")
         seen.add(ref)
