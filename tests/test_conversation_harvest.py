@@ -21,6 +21,9 @@ from graph.conversation_harvest import harvest_thread, render_transcript
 def history_store(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "kb.db")
     monkeypatch.setattr(STATE, "history_store", store)
+    # ADR 0132 D3b: harvest writes a "closed" digest record under memory_path(); pin it to
+    # a tmp dir so the suite never touches the real instance store.
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path / "memory"))
     return store
 
 
@@ -115,7 +118,7 @@ def test_harvest_thread_summarizes_into_history(tmp_path, history_store):
     kb = _FakeKnowledge()
 
     async def fake_summarizer(transcript, config):
-        assert "teal" in transcript  # got the real conversation
+        assert transcript == "User: my favorite color is teal\nAssistant: <output>noted</output>"
         return "User prefers teal."
 
     cid = asyncio.run(
@@ -132,6 +135,70 @@ def test_harvest_thread_summarizes_into_history(tmp_path, history_store):
     assert "teal" in row.content
     assert row.thread_id == "a2a:chat-1"
     assert kb.chunks == []
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_harvest_covers_long_chat_opening_and_live_tail(tmp_path, history_store, archived):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from knowledge.memories import MemoryStore
+
+    opening = "The user's launch code is ORCHID.\n" + "Earlier discussion.\n" * 2500
+    tail = "Recent discussion.\n" * 1000 + "The user chose a Friday launch."
+    assert len(opening + tail) > 60000
+    if archived:
+        history_store.add(opening, kind="archive", session_id="chat-1", namespace="chat-archive:chat-1")
+        history_store.add("Unrelated secret", kind="archive", session_id="other")
+        history_store.add("Old summary", kind="summary", session_id="chat-1")
+    messages = [HumanMessage(content=tail if archived else opening + tail)]
+    saver = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
+        "channel_values": {"messages": messages, "session_id": "chat-1", "operator_chat_turn": True},
+    })))
+    summary_inputs, fact_inputs = [], []
+
+    async def summarize(transcript, config):
+        summary_inputs.append(transcript)
+        return " ".join(word for word in ("ORCHID", "Friday") if word in transcript) or "Discussion."
+
+    async def facts(transcript, config):
+        fact_inputs.append(transcript)
+        return ["The user's launch code is ORCHID."] if "ORCHID" in transcript else []
+
+    memory = MemoryStore(tmp_path / "facts.db")
+    cid = asyncio.run(harvest_thread(
+        "a2a:chat-1", checkpointer=saver, knowledge_store=None, history_store=history_store,
+        memory_store=memory, config=SimpleNamespace(knowledge_facts=True),
+        summarizer=summarize, fact_extractor=facts, raise_on_error=True,
+    ))
+    assert history_store.get(cid).content == "ORCHID Friday"
+    assert summary_inputs[:-1] == fact_inputs
+    assert all(len(part) <= 16000 for part in summary_inputs)
+    raw = "".join(fact_inputs)
+    assert opening.strip() in raw and tail in raw
+    assert "Unrelated secret" not in raw and "Old summary" not in raw
+    assert memory.list(kind="fact")[0].content == "The user's launch code is ORCHID."
+
+
+@pytest.mark.parametrize("failure", ["archive", "part"])
+def test_harvest_does_not_save_partial_summary_on_read_or_part_failure(history_store, monkeypatch, failure):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    saver = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
+        "channel_values": {"messages": [HumanMessage(content="x" * 60000)]},
+    })))
+    if failure == "archive":
+        def fail_read(*args, **kwargs):
+            raise RuntimeError("archive unavailable")
+        monkeypatch.setattr(history_store, "list_for_session", fail_read)
+    summarizer = AsyncMock(side_effect=["First part.", RuntimeError("part unavailable")])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        asyncio.run(harvest_thread(
+            "chat", checkpointer=saver, knowledge_store=None, config=object(),
+            summarizer=summarizer, raise_on_error=True,
+        ))
+    assert history_store.stats()["summary"] == 0
 
 
 def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
@@ -596,3 +663,217 @@ def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path, history_s
     assert summary.heading.endswith(f", last active {day})")
     facts = memory.list(kind="fact", provenance="extracted")
     assert facts and facts[0].content == f"[as of {day}] The user prefers teal."
+
+
+# ── ADR 0132 D3b: a harvested chat stays in the digest, marked "closed", for 14 days ──
+
+
+def _seed_chat(db, thread, session_id, *, first="help me pick a teal theme"):
+    """One checkpointed exchange keyed to a console ``chat-`` session id, so the harvest
+    writes its closed-session digest record under that id (surface "chat")."""
+    from graph.state import ProtoAgentState
+
+    g = StateGraph(ProtoAgentState)
+    g.add_node("n", lambda s: {"messages": [AIMessage(content="<output>noted</output>")]})
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
+
+    async def main():
+        app = g.compile(checkpointer=build_sqlite_checkpointer(db))
+        await app.ainvoke(
+            {"messages": [HumanMessage(content=first)], "session_id": session_id, "operator_chat_turn": True},
+            {"configurable": {"thread_id": thread}},
+        )
+
+    asyncio.run(main())
+
+
+async def _teal_summary(transcript, config):
+    return "The user wants a teal theme. They also mentioned dark mode."
+
+
+def _harvest_teal(db, *, config=None):
+    from types import SimpleNamespace
+
+    return asyncio.run(
+        harvest_thread(
+            "a2a:chat-9",
+            checkpointer=build_sqlite_checkpointer(db),
+            knowledge_store=None,
+            config=config if config is not None else SimpleNamespace(),
+            summarizer=_teal_summary,
+        )
+    )
+
+
+def test_harvested_chat_shows_as_closed_with_gist_then_expires(tmp_path, history_store):
+    """A chat harvested with "Save a summary" stays in the digest, marked closed, with the
+    FIRST sentence of its summary as the gist — and drops out once past the 14-day window."""
+    import json
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+
+    from graph.middleware.memory import load_prior_sessions_digest, memory_path, session_filename
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db) is not None
+
+    base = memory_path()
+    block, ids = load_prior_sessions_digest(base)
+    assert "chat-9" in ids
+    assert "closed" in block
+    assert "The user wants a teal theme." in block  # the gist is the first sentence only
+    assert "dark mode" not in block
+
+    # Past the retention window → gone. Backdate the record's closed_at directly so the
+    # read-time age filter is what drops it (not the write-time prune).
+    closed_path = Path(base) / "closed" / session_filename("chat-9")
+    data = json.loads(closed_path.read_text(encoding="utf-8"))
+    data["closed_at"] = (datetime.now(UTC) - timedelta(days=15)).isoformat()
+    closed_path.write_text(json.dumps(data), encoding="utf-8")
+    block2, ids2 = load_prior_sessions_digest(base)
+    assert "chat-9" not in ids2
+    assert "closed" not in block2
+
+
+def _retirement_state(monkeypatch, db):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(STATE, "checkpointer", build_sqlite_checkpointer(db))
+    monkeypatch.setattr(STATE, "checkpoint_path", db)
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(checkpoint_harvest_enabled=True))
+    monkeypatch.setattr(STATE, "knowledge_store", None)
+    monkeypatch.setattr(STATE, "memory_store", None)
+    monkeypatch.setattr(STATE, "a2a_task_engine", None)
+
+
+@pytest.mark.parametrize("erase", [False, True], ids=["unharvested-delete", "erase-existing-summary"])
+def test_delete_route_leaves_no_closed_entry(tmp_path, history_store, monkeypatch, erase):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import operator_api.chat_routes as routes
+    from graph.middleware.memory import load_closed_pool, load_digest_pool, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    if erase:
+        assert _harvest_teal(db) is not None
+        assert load_closed_pool(memory_path(), closed_days=14)
+    _write_open_card(memory_path(), "chat-9", topic="theme", gist="Open theme discussion.")
+    _retirement_state(monkeypatch, db)
+    app = FastAPI()
+    routes.register_chat_routes(app, ui="none")
+    with TestClient(app) as client:
+        response = client.delete(f"/api/chat/sessions/chat-9?harvest=false&forget={str(erase).lower()}")
+    assert response.status_code == 200
+    assert response.json()["harvested"] is False
+    assert asyncio.run(STATE.checkpointer.aget_tuple({"configurable": {"thread_id": "a2a:chat-9"}})) is None
+    assert load_closed_pool(memory_path(), closed_days=14) == []
+    assert load_digest_pool(memory_path(), closed_days=14)[0] == []
+
+
+def test_idle_retirement_replaces_open_card_with_closed_summary(tmp_path, history_store, monkeypatch):
+    import graph.conversation_harvest as ch
+    from graph.middleware.memory import load_digest_pool, memory_path
+    from server.maintenance_loops import _retire_thread
+
+    db = str(tmp_path / "c.db")
+    # A custom thread id proves cleanup uses the checkpoint's session identity.
+    _seed_chat(db, "custom:theme", "chat-9")
+    _write_open_card(memory_path(), "chat-9", topic="theme", gist="Stale open gist.")
+    _retirement_state(monkeypatch, db)
+
+    async def summarize(thread_id, **kwargs):
+        return await harvest_thread(thread_id, summarizer=_teal_summary, **kwargs)
+
+    monkeypatch.setattr(ch, "harvest_thread", summarize)
+    assert asyncio.run(_retire_thread("custom:theme")) is not None
+    assert asyncio.run(STATE.checkpointer.aget_tuple({"configurable": {"thread_id": "custom:theme"}})) is None
+    pool, _ = load_digest_pool(memory_path(), closed_days=14)
+    assert len(pool) == 1
+    assert pool[0].session_id == "chat-9"
+    assert "closed" in pool[0].line
+    assert "The user wants a teal theme." in pool[0].line
+    assert "Stale open gist." not in pool[0].line
+
+
+def test_closed_carryover_off_writes_nothing(tmp_path, history_store):
+    """memory_closed_session_days=0 turns the carry-over off: no closed record is written."""
+    from types import SimpleNamespace
+
+    from graph.middleware.memory import load_closed_pool, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db, config=SimpleNamespace(memory_closed_session_days=0)) is not None
+    assert load_closed_pool(memory_path(), closed_days=14) == []
+
+
+def _write_open_card(base, session_id, *, topic, gist, timestamp="2026-11-16T10:00:00+00:00"):
+    """Write an OPEN session card (the normal per-turn persist) under memory_path() — a chat
+    whose live card is on disk, which the digest must prefer over any closed record for it."""
+    import json
+    import os
+
+    from graph.middleware.memory import session_filename
+
+    os.makedirs(base, exist_ok=True)
+    with open(os.path.join(base, session_filename(session_id)), "w", encoding="utf-8") as fh:
+        json.dump(
+            {
+                "session_id": session_id,
+                "messages": [{"role": "user", "content": topic}],
+                "message_count": 2,
+                "gist": gist,
+                "timestamp": timestamp,
+            },
+            fh,
+        )
+
+
+def test_resumed_harvested_chat_lists_open_while_its_live_card_exists(tmp_path, history_store):
+    """ADR 0132 D3b: the open card wins. A chat harvested (idle sweep or "Save a summary") and
+    then resumed under the same id keeps a live card, so the digest lists it OPEN — once, with
+    its live gist — and suppresses the stale closed record; it is never shown closed while live."""
+    from graph.middleware.memory import load_digest_pool, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db) is not None  # closed record, gist "The user wants a teal theme."
+
+    base = memory_path()
+    # The chat was resumed after the harvest: its live open card is back on disk, fresh gist.
+    _write_open_card(base, "chat-9", topic="back to the theme", gist="Still refining the palette.")
+
+    pool, exists = load_digest_pool(base, closed_days=14)
+    assert exists
+    sids = [e.session_id for e in pool]
+    assert sids.count("chat-9") == 1  # listed once, not double-listed as open AND closed
+    (entry,) = [e for e in pool if e.session_id == "chat-9"]
+    assert "closed" not in entry.line  # listed OPEN, not closed
+    assert "Still refining the palette." in entry.line  # the LIVE gist…
+    assert "The user wants a teal theme." not in entry.line  # …not the stale closed gist
+
+
+def test_relevant_digest_falls_back_to_newest_when_fts_finds_nothing(tmp_path, history_store, monkeypatch):
+    """ADR 0108 D9 fallback, preserved under ADR 0132 D3b: with zero FTS matches but a closed
+    record on disk, the relevant digest falls back to the newest OPEN pool (plus the closed
+    chat) — it must not collapse to only the closed chats, dropping the newest open ones."""
+    import graph.session_search as session_search
+    from graph.middleware.memory import load_digest, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db) is not None  # closed record for chat-9
+
+    base = memory_path()
+    _write_open_card(base, "chat-open", topic="an open chat about routing", gist="Routing options.")
+
+    monkeypatch.setattr(session_search, "search_session_summaries", lambda *a, **k: [])
+
+    res = load_digest(policy="relevant", query="nothing matches this", memory_dir=base, closed_days=14)
+    ids = [e.session_id for e in res.entries]
+    assert "chat-open" in ids  # the newest OPEN chat survived the fallback
+    assert "chat-9" in ids  # the closed chat still rides along, marked closed

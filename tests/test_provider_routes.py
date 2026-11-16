@@ -725,6 +725,43 @@ def test_overlay_subagent_model_pin_is_in_use_and_releasable(client, monkeypatch
     assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
 
 
+@pytest.mark.parametrize(
+    "chain,replacement,expected",
+    [
+        (["prod-gateway:sub", "local-vllm:sub-fb"], "local-vllm:sub", ["local-vllm:sub", "local-vllm:sub-fb"]),
+        (["local-vllm:fast", "prod-gateway:sub"], None, ["local-vllm:fast"]),
+    ],
+    ids=["repoint-primary", "clear-fallback"],
+)
+def test_delete_sees_and_releases_only_matching_subagent_chain_entries(client, monkeypatch, chain, replacement, expected):
+    # ADR 0133 M5: either entry protects its provider; release preserves the healthy entry.
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:lead"},
+        subagents={"researcher": {"model": chain}},
+    )
+    prod = next(p for p in client.get("/api/config/providers").json()["providers"] if p["id"] == "prod-gateway")
+    assert "subagents.researcher.model=prod-gateway:sub" in prod["in_use_by"]
+    assert {e["key"]: e for e in prod["in_use"]}["subagents.researcher.model"] == {
+        "key": "subagents.researcher.model",
+        "value": "prod-gateway:sub",
+        "kind": "subagent",
+        "clearable": True,
+    }
+    assert client.delete("/api/config/providers/prod-gateway").status_code == 409
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE", "/api/config/providers/prod-gateway", json={"releases": {"subagents.researcher.model": replacement}}
+    )
+    assert r.status_code == 200
+    assert seen["updates"]["subagents"] == {"researcher": {"model": expected}}
+    assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
+
+
 def test_delete_release_no_host_writes_providers_and_slots_in_one_save(monkeypatch):
     """No host wired: providers (minus pid) AND the released slots land in a SINGLE
     save_yaml_doc, through the same YAML-doc seam the disk fallback already uses."""

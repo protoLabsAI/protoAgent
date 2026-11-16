@@ -55,6 +55,11 @@ and downloads, see [Work with documents and files](../../docs/guides/documents-a
     expiring link in text as a fallback when no console is attached (an A2A/scheduled turn). The
     page makes no gated call: the `ask`/`send`/`openLink` bridge is refused there, and it reports
     no render verdict (the panel owns those).
+    The panel's **Open in browser** toolbar button opens the same page for the version on screen
+    (rendered kinds only; a file uses Download). The panel mints the link through the gated
+    `POST /api/plugins/artifact/artifact/<id>/page-link?version=N` before you click, so the button
+    is a plain link. That way it opens a tab from the console's plugin iframe and, in the desktop
+    app, in the system browser.
   - `pin_artifact(artifact_id, pinned?)` — **pin** a long-lived artifact (a master resume, a
     reference doc) so history eviction skips it; `pinned=False` unpins. Pins are capped by
     **Pinned artifacts** below (refused at the cap), don't count toward **Artifacts kept**, and
