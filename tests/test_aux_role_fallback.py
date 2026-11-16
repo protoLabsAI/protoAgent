@@ -1,9 +1,8 @@
 """ADR 0133 M3: the harvest, facts and compaction seams build their model through
 ``graph.model_roles.create_role_llm`` and fail over on a retryable provider error.
 
-Each seam leaves its own role slot blank, so the role inherits the aux chain
-(``memory_harvest`` → aux; ``memory_facts`` → ``memory_harvest`` → aux; ``compaction`` →
-aux). With ``aux = [a, b]`` and ``a`` returning a 429, every seam must answer from ``b``.
+Each seam inherits the aux chain (harvest → aux; facts → harvest → aux;
+compaction → aux). With ``aux = [a, b]`` and ``a`` returning a 429, every seam must answer from ``b``.
 """
 
 from __future__ import annotations
@@ -62,7 +61,7 @@ def test_harvest_summarizer_falls_back_to_second_aux_model(monkeypatch):
     out = asyncio.run(_default_summarizer("User: still alive?", config))
     assert out == "summary from b"
     assert calls == ["a", "b"]
-    record = model_roles.last_fallback("memory_harvest")
+    record = model_roles.last_fallback("harvest")
     assert record["from"] == ["a"] and record["to"] == "b"
 
 
@@ -72,7 +71,7 @@ def test_facts_extractor_falls_back_to_second_aux_model(monkeypatch):
     facts = asyncio.run(_default_extractor("User: we deploy on Fridays", config))
     assert facts == [{"subject": "deploy-day", "content": "Deploys happen on Fridays"}]
     assert calls == ["a", "b"]
-    assert model_roles.last_fallback("memory_facts")["to"] == "b"
+    assert model_roles.last_fallback("facts")["to"] == "b"
 
 
 def test_compaction_summarizer_falls_back_to_second_aux_model(monkeypatch):
@@ -89,4 +88,26 @@ def test_sensitive_provider_payload_never_recorded(monkeypatch, caplog):
     out = asyncio.run(_default_summarizer("User: still alive?", config))
     assert out == "summary from b"
     assert "sensitive provider payload" not in caplog.text
-    assert "sensitive provider payload" not in model_roles.last_fallback("memory_harvest")["reason"]
+    assert "sensitive provider payload" not in model_roles.last_fallback("harvest")["reason"]
+
+
+@pytest.mark.parametrize("aux", ["aux", ""])
+@pytest.mark.parametrize("seam", [_default_summarizer, _default_extractor, continuation_summarizer])
+def test_scalar_memory_overrides_do_not_change_aux_passes(monkeypatch, aux, seam):
+    """Previously inactive memory settings must not redirect existing runtime passes."""
+    from graph.config import LangGraphConfig
+
+    monkeypatch.delenv("PROTOAGENT_MODEL", raising=False)
+    config = LangGraphConfig(
+        model_name="main", aux_model=aux,
+        memory_harvest_model="reserved-harvest", memory_facts_model="reserved-facts",
+    )
+    expected_model = aux or "main"
+
+    def build(config, model_name, **kwargs):
+        return RunnableLambda(lambda _: AIMessage(content=f'["{model_name}"]'))
+
+    monkeypatch.setattr(model_roles, "create_llm", build)
+    result = asyncio.run(seam("User: remember this", config))
+    expected = [expected_model] if seam is _default_extractor else f'["{expected_model}"]'
+    assert result == expected
