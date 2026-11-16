@@ -42,6 +42,12 @@ log = logging.getLogger("protoagent.plugins.delegates")
 # dedup inside ``registry.dispatch`` and is left untouched.
 _INFLIGHT_DELEGATIONS: dict[str, str] = {}
 
+# How much longer an ADOPTED foreground ACP dispatch may keep running after its foreground
+# wait budget elapses (#5318). Once the operator's timeout passes, the tool returns a
+# collectable task id and the original run continues in the background for this long so its
+# managed-git finalization and diff capture complete; collection waits on that same run.
+_ADOPTED_ACP_CONTINUATION_S = 1800
+
 
 def _background_dedupe_key(target: str, query: str) -> str:
     """Stable identity for a background delegation: the target plus a sha256 of the query
@@ -462,10 +468,10 @@ async def _foreground_acp(
 
         with progress_sink(_tool_progress_sink()), conversations.delegate_summary(summary):
             # Preserve the whole dispatch, including managed-git finalization and diff
-            # capture, with a bounded extra 30 minutes after the foreground budget.
+            # capture, with a bounded continuation window after the foreground budget.
             return await _dispatch_into_room(
                 registry, target, query, state, tool_call_id=tool_call_id,
-                timeout=budget + 1800, item_id=item_id or None,
+                timeout=budget + _ADOPTED_ACP_CONTINUATION_S, item_id=item_id or None,
                 project=project, fresh_session=fresh_session,
             )
 
@@ -490,12 +496,20 @@ async def _foreground_acp(
 
     def result_text(reply):
         if isinstance(reply, Command):
-            envelopes = reply.update["messages"][1:]
+            from graph.mention_op import _room_meta
+
+            written = reply.update["messages"]
+            message = written[0]
+            # Record ONLY the lead's question half of the room exchange. The delegate's own
+            # reply (the `from=<target>` envelope) is written from this job's result by the
+            # chat drain, because adoption sets result_author=target — recording it here too
+            # would put the coder's answer in the transcript twice (#5318). The ToolMessage
+            # at [0] is never replayed: it is a terminator for the finished foreground turn.
+            envelopes = [m for m in written[1:] if _room_meta(m).get("from") != target]
             if envelopes:
                 write = asyncio.create_task(record_room(envelopes))
                 mgr._fire_tasks.add(write)
                 write.add_done_callback(mgr._fire_tasks.discard)
-            message = reply.update["messages"][0]
             if message.status == "error":
                 raise DelegateError(str(message.content))
             return str(message.content)

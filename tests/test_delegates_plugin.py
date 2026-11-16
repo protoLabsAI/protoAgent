@@ -1678,18 +1678,30 @@ async def test_adopted_acp_preserves_room_exchange_without_blocking_collection(m
             release.set()
             args = {"target": "coder", "query": "", "resume_task_id": task_id, "state": state, "timeout": 1}
             result = await _invoke_delegate(tool, args)
-            assert ("coder failed" if fails else "original result") in result
+            reply_text = "coder failed" if fails else "original result"
+            assert reply_text in result
             assert not (await graph.aget_state(config)).values
         await asyncio.gather(*mgr._fire_tasks)
+        # record_room writes ONLY the lead's question. The delegate's own reply is delivered
+        # by the chat drain (result_author=coder) — writing it here too would duplicate the
+        # coder's answer in the transcript (#5318), so it must NOT be on the thread yet.
         messages = (await graph.aget_state(config)).values["messages"]
-        assert len(messages) == 2
-        assert all(m.type == "human" for m in messages)
+        assert len(messages) == 1
+        assert messages[0].type == "human"
         assert "build once" in messages[0].content
-        assert ("coder failed" if fails else "original result") in messages[1].content
         assert messages[0].additional_kwargs["room"]["to"] == "coder"
-        assert messages[1].additional_kwargs["room"]["from"] == "coder"
-        await _invoke_delegate(tool, args)
-        assert len((await graph.aget_state(config)).values["messages"]) == 2
+        assert reply_text not in messages[0].content
+        # The drain delivers the reply exactly once, authored by the coder.
+        from server.chat import _drain_background
+
+        drained, _ = _drain_background("room-test")
+        assert len(drained) == 1
+        assert drained[0].additional_kwargs["room"]["from"] == "coder"
+        assert reply_text in drained[0].content
+        # Collecting again re-sends nothing and writes no further room messages.
+        again = await _invoke_delegate(tool, args)
+        assert reply_text in again
+        assert len((await graph.aget_state(config)).values["messages"]) == 1
         assert len(calls) == 1
     finally:
         release.set()
