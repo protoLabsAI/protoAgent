@@ -243,6 +243,19 @@ test("mobile shell: no input zooms iOS, no touch target under 44px", async ({ pa
   );
   expect(zoomers).toEqual([]);
 
+  // The Work handle mounts after the first paint; measuring before it rendered is why this check
+  // only caught its 22px bar some of the time (#5389). Wait for it, and prove its grown hit area
+  // is real: a tap 20px above the bar lands on the handle, not the transcript.
+  const handle = page.locator(".mshell-work-handle");
+  await expect(handle).toBeVisible();
+  expect(
+    await handle.evaluate((el) => {
+      const b = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top - 20);
+      return !!hit && (hit === el || el.contains(hit));
+    }),
+  ).toBe(true);
+
   // 44px is the HIG minimum. Hit areas may be expanded via an ::after overlay rather than
   // the box itself (so the composer bar doesn't reflow), so measure both.
   const small = await page.evaluate(() => {
