@@ -1,0 +1,1 @@
+- **Operator work API reference.** Document conversation discovery and caller/task fields, task activity and ask/link shapes, and inbox origin metadata.
