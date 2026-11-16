@@ -1551,7 +1551,7 @@
   }
   var $art=document.getElementById("art"), $vprev=document.getElementById("vprev"),
       $vnext=document.getElementById("vnext"), $vlabel=document.getElementById("vlabel"), $vnav=document.getElementById("vnav"),
-      $dl=document.getElementById("dl"), $del=document.getElementById("del"),
+      $dl=document.getElementById("dl"), $del=document.getElementById("del"), $open=document.getElementById("open"),
       $bar=document.getElementById("bar"), $empty=document.getElementById("empty"),
       $frame=document.getElementById("frame"), $edit=document.getElementById("edit"),
       $editor=document.getElementById("editor"), $code=document.getElementById("code"),
@@ -1740,12 +1740,15 @@
     $vnav.style.display = a.linked ? "none" : "";
     $empty.style.display="none";
     $edit.style.display = a.kind==="file" ? "none" : "";  // a file's preview isn't user-editable
+    // Open in browser is for RENDERED kinds (#4939); a file opens through Download.
+    $open.style.display = a.kind==="file" ? "none" : "";
     // Re-srcdoc only when the shown version actually changes. Keyed by ts as well as position: at
     // the max_versions cap every new version lands in the SAME slot (the trim shifts the rest down),
     // so a position-only key never re-rendered past the cap.
     var key=a.id+"@"+vi+"@"+v.ts;
     var targetPage=page && page.id===a.id && a.kind==="file" && pdfOk(v) ? page.page : 0;
     // A citation into the PDF already on screen must navigate too, even with an unchanged key.
+    if(key!==lastRendered && a.kind!=="file") openMint(a.id, vi+1);  // arm the link for what's on screen
     if(key!==lastRendered || targetPage>0){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
       renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;  // lifetime number (_store._version_key)
       // The version's STORED code links (ADR 0038 amendment) — the only targets a click in the
@@ -1761,14 +1764,14 @@
   }
 
   // ── narrow-dock toolbar ───────────────────────────────────────────────────────────────
-  // Below COMPACT_PX the secondary actions (Edit / Download / Delete) move — the SAME elements,
+  // Below COMPACT_PX the secondary actions (Edit / Open in browser / Download / Delete) move — the SAME elements,
   // so their handlers and the delete confirm keep working — into a ⋯ menu, and back when the
   // dock widens. The bar stays one clean row instead of wrapping or clipping a button.
   var COMPACT_PX = 560;
   var $acts=document.getElementById("acts"), $more=document.getElementById("more"), $menu=document.getElementById("moremenu");
-  var ACT_IDS=["edit","dl","del"];
+  var ACT_IDS=["edit","open","dl","del"];
   function setMenu(open){ $menu.classList.toggle("open", open); $more.setAttribute("aria-expanded", open?"true":"false");
-    if(open){ var f=[].slice.call($menu.querySelectorAll("button")).filter(function(b){ return b.style.display!=="none"; })[0]; if(f) f.focus(); } }
+    if(open){ var f=[].slice.call($menu.querySelectorAll("button,a")).filter(function(b){ return b.style.display!=="none"; })[0]; if(f) f.focus(); } }
   function layoutBar(){
     var compact = $bar.getBoundingClientRect().width < COMPACT_PX;
     if(compact===$bar.classList.contains("compact")) return;
@@ -1781,11 +1784,11 @@
   }
   $more.addEventListener("click", function(e){ e.stopPropagation(); setMenu(!$menu.classList.contains("open")); });
   // Picking an action closes the menu — except the first Delete click, which arms "Confirm?".
-  $menu.addEventListener("click", function(e){ var b=e.target.closest("button"); if(b && b.id!=="del") setMenu(false); });
+  $menu.addEventListener("click", function(e){ var b=e.target.closest("button,a"); if(b && b.id!=="del") setMenu(false); });
   $menu.addEventListener("keydown", function(e){
     if(e.key==="Escape"){ e.preventDefault(); setMenu(false); $more.focus(); return; }
     if(e.key!=="ArrowDown" && e.key!=="ArrowUp") return;
-    var bs=[].slice.call($menu.querySelectorAll("button")).filter(function(b){ return b.style.display!=="none"; }), i=bs.indexOf(document.activeElement);
+    var bs=[].slice.call($menu.querySelectorAll("button,a")).filter(function(b){ return b.style.display!=="none"; }), i=bs.indexOf(document.activeElement);
     e.preventDefault(); bs[(i+(e.key==="ArrowDown"?1:bs.length-1))%bs.length].focus();
   });
   document.addEventListener("click", function(e){ if(!$menu.contains(e.target) && e.target!==$more) setMenu(false); });
@@ -1927,6 +1930,46 @@
     }
     saveBlob(new Blob([v.code],{type:"text/plain"}), "artifact-"+a.id+"-v"+(vi+1)+"."+(EXT[a.kind]||"txt"));
     dlFlash("Started","Download started");
+  });
+
+  // ── Open in browser (#4939) ──────────────────────────────────────────────────────────
+  // The same signed standalone page open_artifact hands the agent, for the version on screen.
+  // The link is minted AHEAD of the click (on render, and again on hover/focus once it's close to
+  // expiring) so the button is a real <a target=_blank>: a plain link click is the one new-tab
+  // path every host honours — the console's plugin iframe (allow-popups-to-escape-sandbox) and
+  // the desktop app, whose on_new_window hands an own-origin non-console URL to the system
+  // browser. A window.open() after an awaited fetch loses the click's user activation in WebKit
+  // and gets popup-blocked, so that is only the fallback when the armed link has gone stale.
+  var openFor=null, openExp=0, openSeq=0, openFlashT=null;
+  function openClear(){ openFor=null; openExp=0; $open.removeAttribute("href"); $open.setAttribute("aria-disabled","true"); }
+  function openFresh(id, n, ms){ return openFor===id+"@"+n && openExp*1000-Date.now()>ms; }
+  async function openMint(id, n){
+    var seq=++openSeq;
+    if(openFor!==id+"@"+n) openClear();  // never leave the previous version's link on the button
+    try{ var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(id)+"/page-link?version="+n, {method:"POST"});
+      if(!r.ok) throw 0; var j=await r.json();
+      if(seq!==openSeq) return null;  // the panel moved on while this was in flight
+      if(typeof j.path!=="string" || j.path.indexOf("/plugins/artifact/media/artifact/")!==0) throw 0;
+      openFor=id+"@"+n; openExp=+j.exp||0; $open.href=ORIGIN+j.path; $open.setAttribute("aria-disabled","false");
+      return $open.href; }
+    catch(e){ if(seq===openSeq) openClear(); return null; }
+  }
+  function openRefresh(){ var a=selArt(); if(!a || a.kind==="file") return; var n=verIdx(a)+1;
+    if(!openFresh(a.id, n, 5*60*1000)) openMint(a.id, n); }
+  $open.addEventListener("pointerenter", openRefresh);
+  $open.addEventListener("focus", openRefresh);
+  $open.addEventListener("keydown", function(e){  // no href yet → Enter/Space still act like a button
+    if(!$open.hasAttribute("href") && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); $open.click(); } });
+  $open.addEventListener("click", async function(e){
+    var a=selArt(); if(!a || a.kind==="file"){ e.preventDefault(); return; }
+    var n=verIdx(a)+1;
+    if(openFresh(a.id, n, 30*1000)) return;  // the armed link opens the tab itself
+    e.preventDefault();
+    var url=await openMint(a.id, n);
+    if(url){ window.open(url, "_blank", "noopener,noreferrer"); return; }
+    clearTimeout(openFlashT); $open.textContent="Unavailable";
+    if($dlstat) $dlstat.textContent="Couldn't open this version in a browser tab";
+    openFlashT=setTimeout(function(){ $open.textContent="Open in browser"; },1800);
   });
 
   // Inline two-click confirm (no confirm() — a sandboxed plugin iframe may block modals).

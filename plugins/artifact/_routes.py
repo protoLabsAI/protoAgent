@@ -387,16 +387,21 @@ def _page_ticket_subject(art_id: str, version: int, kind: str, value: dict) -> s
     return "artifact-page:" + json.dumps([art_id, version, kind, value.get("ts"), digest], separators=(",", ":"))
 
 
-def _open_page_path(art_id: str, version: int) -> str:
-    """The signed standalone-page path for a rendered artifact version (0 = latest, resolved NOW
-    so a later edit doesn't swap what the link shows). Expires after ``_media.TTL_S`` like the
-    file open link."""
+def _open_page_grant(art_id: str, version: int) -> tuple[int, int, str]:
+    """``(version, exp, path)``: the signed standalone-page path for a rendered artifact version
+    (0 = latest, resolved NOW so a later edit doesn't swap what the link shows). Expires after
+    ``_media.TTL_S`` like the file open link."""
     from infra.media import sign_name
 
     n, art, value = _page_version(art_id, version)
     exp = int(time.time()) + _media.TTL_S
     ticket = sign_name(_page_ticket_subject(art_id, n, art["kind"], value), exp)
-    return f"/plugins/artifact/media/artifact/{quote(art_id, safe='')}/page?version={n}&exp={exp}&t={ticket}"
+    return n, exp, f"/plugins/artifact/media/artifact/{quote(art_id, safe='')}/page?version={n}&exp={exp}&t={ticket}"
+
+
+def _open_page_path(art_id: str, version: int) -> str:
+    """The signed standalone-page path alone (what ``open_artifact`` hands out)."""
+    return _open_page_grant(art_id, version)[2]
 
 
 def _script_json(payload: dict) -> str:
@@ -824,6 +829,17 @@ def _build_data_router():
             raise HTTPException(415, "not an inline image/video file")
         tok = _media.mint(art_id, n, _store._blob_path(art_id, vers[n - 1]["blob"]).name)
         return {"ticket": tok, "version": n, "path": f"/plugins/artifact/media/{quote(art_id)}?version={n}&t={tok}"}
+
+    @router.post("/artifact/{art_id}/page-link")
+    def _page_link(art_id: str, version: int = 0) -> dict:
+        """The signed standalone-page link for a RENDERED artifact version (#4939): the panel's
+        "Open in browser" button. The same grant ``open_artifact`` hands out (``_open_page_grant``):
+        bound to this version's kind + source + commit ts, expiring after ``_media.TTL_S``.
+        ``version`` is 1-based, 0/absent = the latest NOW (a later save doesn't swap what the link
+        shows). 404 for an unknown artifact/version or a ``file`` artifact (it opens through its
+        blob link, and the panel's Download already serves it)."""
+        n, exp, path = _open_page_grant(art_id, version)
+        return {"path": path, "version": n, "exp": exp}
 
     @router.delete("/artifact/{art_id}")
     @_busy_503

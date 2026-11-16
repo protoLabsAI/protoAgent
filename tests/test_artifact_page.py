@@ -235,3 +235,56 @@ def test_page_and_blob_grants_never_cross(artifact, tmp_path):  # noqa: F811
     assert c.get(f"/plugins/artifact/media/artifact/{fid}/page", params={"version": 1, "exp": exp, "t": forged}).status_code == 404
     # A page grant never downloads through the blob route.
     assert c.get(f"/plugins/artifact/media/artifact/{hid}/blob?{page.query}").status_code == 404
+
+
+# ── the panel's "Open in browser" button (#4939) ──────────────────────────────
+
+
+def _page_link(c, aid: str, version: int = 0):
+    return c.post(f"/api/plugins/artifact/artifact/{aid}/page-link" + (f"?version={version}" if version else ""))
+
+
+def test_panel_page_link_opens_the_version_it_names(artifact):  # noqa: F811
+    aid = _show(artifact, code="<p>v1</p>")
+    artifact.update_artifact.invoke({"artifact_id": aid, "old_string": "v1", "new_string": "v2"})
+    c = _client(artifact)
+    latest, v1 = _page_link(c, aid), _page_link(c, aid, 1)
+    assert latest.status_code == 200 and v1.status_code == 200
+    body = latest.json()
+    assert body["version"] == 2 and abs(body["exp"] - (time.time() + artifact._media.TTL_S)) < 30
+    assert body["path"].startswith(f"/plugins/artifact/media/artifact/{aid}/page?version=2&exp={body['exp']}&t=")
+    assert _page_payload(c.get(body["path"]).text)["code"] == "<p>v2</p>"
+    assert _page_payload(c.get(v1.json()["path"]).text)["code"] == "<p>v1</p>"
+
+
+def test_panel_page_link_refuses_files_and_unknowns(artifact, tmp_path):  # noqa: F811
+    fid = _save(artifact, tmp_path, "report.txt", b"file bytes")
+    hid = _show(artifact)
+    c = _client(artifact)
+    assert _page_link(c, fid).status_code == 404  # a file opens through Download, never as a page
+    assert _page_link(c, "nope").status_code == 404
+    assert _page_link(c, hid, 9).status_code == 404
+
+
+def test_panel_page_link_is_on_the_gated_router(artifact):  # noqa: F811
+    # It MINTS a grant, so it lives on the bearer-gated data router (/api/plugins/...), never on
+    # the public view router the page itself is served from.
+    paths = {getattr(r, "path", "") for r in artifact._routes._build_view_router().routes}
+    assert not any("page-link" in p for p in paths)
+    aid = _show(artifact)
+    assert _client(artifact).post(f"/plugins/artifact/artifact/{aid}/page-link").status_code in (404, 405)
+
+
+def test_shell_open_in_browser_button_is_a_real_link():
+    from tests.test_artifact_plugin import ROOT
+
+    html = (ROOT / "shell.html").read_text()
+    js = (ROOT / "shell.js").read_text()
+    # A DS button-styled anchor: a plain link click is the new-tab path every host honours.
+    assert '<a id="open" class="pl-btn pl-btn--sm" target="_blank" rel="noopener noreferrer"' in html
+    assert 'var ACT_IDS=["edit","open","dl","del"];' in js  # folds into the ⋯ menu when narrow
+    assert '$open.style.display = a.kind==="file" ? "none" : "";' in js
+    mint = js[js.index("async function openMint("):js.index("function openRefresh(")]
+    assert '"/page-link?version="+n, {method:"POST"}' in mint and "kit.apiFetch" in mint
+    assert 'j.path.indexOf("/plugins/artifact/media/artifact/")!==0' in mint
+    assert "if(seq!==openSeq) return null;" in mint

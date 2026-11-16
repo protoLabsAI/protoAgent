@@ -6,8 +6,9 @@ import { onServerEvent } from "../lib/events";
 // Only the currently attended chat may request a tab. Never replay these effects on mount.
 export function openArtifactEvent(data: Record<string, unknown>, session: string | null) {
   if (!session || data.session_id !== session || typeof data.path !== "string") return;
-  // This event is intentionally not a general-purpose URL opener.
-  if (!/^\/plugins\/artifact\/media\/artifact\/[A-Za-z0-9_-]+\/blob\?version=[1-9]\d*&exp=[1-9]\d*&t=[a-f0-9]{64}$/.test(data.path)) return;
+  // This event is intentionally not a general-purpose URL opener: only the two signed links
+  // open_artifact emits — a file artifact's `/blob` and a rendered artifact's standalone `/page`.
+  if (!/^\/plugins\/artifact\/media\/artifact\/[A-Za-z0-9_-]+\/(?:blob|page)\?version=[1-9]\d*&exp=[1-9]\d*&t=[a-f0-9]{64}$/.test(data.path)) return;
   window.open(apiUrl(data.path), "_blank", "noopener,noreferrer");
 }
 
