@@ -52,26 +52,28 @@ def build_directive_tools() -> list:
         """Record a standing instruction the operator gave in THIS chat.
 
         A directive changes what you may or must do on a LATER turn without being told
-        again: a gate ("cut the release once #A and #B merge"), a hold or freeze, a
-        prohibition ("don't touch prod until I say so"), or a deferred action ("open the
-        PR once the spec is back"). Test: would a later turn act differently, unprompted,
-        because of this? If not, don't record it.
+        again: a gate ("send it only after I've reviewed the draft"), a hold or pause, a
+        prohibition ("don't contact them until I say so"), a limit ("keep spend under
+        $500"), or a deferred action ("once the results are in, write up a summary").
+        Test: would a later turn act differently, unprompted, because of this? If not,
+        don't record it.
 
-        NOT directives: answers to questions you asked about a design or product ("yes,
-        private", "keep it while work is active") — write those into the spec, issue or
-        ADR they decide; facts, status, preferences or one-turn requests you carry out now.
-        A sign-off on a design is a directive only for the action it unlocks.
+        NOT directives: answers to questions you asked while shaping the work (picking an
+        option you offered, confirming a detail) — use the answer in the work itself, in
+        whatever document, plan or record you are producing; facts, status, preferences, or
+        a request you carry out this turn. An approval is a directive only for the action
+        it unlocks.
 
         `quote` is the operator's exact words — copy them, never paraphrase; it must make
         sense on its own. `conditions` holds only the trigger or stop rules the operator
-        stated ("only after both merge; on WARN/FAIL come back instead of merging") —
-        never rules, caveats or design detail of your own. `scope` names what it covers in
-        a few words. In `links`, link the issues, PRs, cards or tasks the directive covers —
-        GitHub refs as `owner/repo#N`, board card ids (`bd-…`), scheduler job ids, task ids —
-        so it closes itself: once every linked item is terminal, it is fulfilled
-        automatically. Link whenever the work is trackable; otherwise call fulfil_directive
-        the turn it is done. Recorded directives appear under STANDING DIRECTIVES in
-        <working_state> every turn, even after compaction. Returns the new directive id.
+        stated ("only after both are done; if anything fails, ask me first") — never rules
+        or caveats of your own. `scope` names what it covers in a few words. In `links`,
+        link the tracked items the directive covers — GitHub issues/PRs as `owner/repo#N`,
+        board card ids (`bd-…`), scheduler job ids, task ids — so it closes itself once
+        every linked item is finished. Link whenever the work is tracked; otherwise call
+        fulfil_directive the turn it is done. Recorded directives appear under STANDING
+        DIRECTIVES in <working_state> every turn, even after compaction. Returns the new
+        directive id.
         """
         from graph.directives import DirectiveError, directive_store
 

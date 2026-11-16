@@ -118,13 +118,13 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
         )
         lines.append(
             "- **Directives:** when the operator gives an instruction that binds a later turn "
-            "(a gate, hold, prohibition or deferred action), "
+            "(a gate, hold, prohibition, limit or deferred action), "
             + record
             + "Check STANDING DIRECTIVES"
             + (" (or `list_directives`)" if available("list_directives") else "")
             + " before deciding you lack approval"
             + (f"; close one with {close}." if close else ".")
-            + " Answers to your own design questions belong in the spec, not the ledger."
+            + " Answers to your own questions go into the work, not the ledger."
         )
     if has_memory:
         # ADR 0125 P3-D5 — mirrors the memory_save "what's worth saving" rule (one line).
