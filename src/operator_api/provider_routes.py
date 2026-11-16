@@ -122,6 +122,43 @@ class _SlotRelease:
         return _release_slot_value(current, self.label, self.pid, self.target)
 
 
+def _subagent_model_raw(cfg, name: str):
+    """The raw stored model value (scalar OR list) for subagent tier ``name``: the typed field
+    ``cfg.<name>.model`` for a typed slot, else its ``subagent_overrides`` overlay (ADR 0128
+    S1b). A typed tier is the source of truth even when an overlay also exists — the same
+    precedence :func:`_referencing_view` reads with."""
+    from graph.config import _SUBAGENT_MODEL_SLOTS
+
+    if name in _SUBAGENT_MODEL_SLOTS:
+        return getattr(getattr(cfg, name, None), "model", "")
+    overlay = (getattr(cfg, "subagent_overrides", None) or {}).get(name)
+    if overlay is None:
+        return ""
+    return overlay.get("model", "") if isinstance(overlay, dict) else getattr(overlay, "model", "")
+
+
+class _SubagentRelease:
+    """A subagent-tier (``subagents.<name>.model``) chain release deferred to the config the
+    write lock holds, like :class:`_SlotRelease`. A subagent pin is now list-capable (ADR 0133
+    M5), so only the entries naming ``pid`` are repointed/dropped; every healthy fallback entry
+    survives. Preserves scalar shape for a scalar pin; an emptied chain becomes "" (the blank
+    that reverts the tier to its base)."""
+
+    __slots__ = ("name", "pid", "target")
+
+    def __init__(self, name: str, pid: str, target):
+        self.name, self.pid, self.target = name, pid, target
+
+    def resolve(self, current):
+        from graph.config import _as_chain
+
+        original = _subagent_model_raw(current, self.name)
+        new_chain = _release_chain_entries(_as_chain(original), self.pid, self.target, implicit_gateway=False)
+        if not new_chain:
+            return ""
+        return new_chain if isinstance(original, (list, tuple)) else new_chain[0]
+
+
 class ProviderCreate(BaseModel):
     id: str
     type: str = "openai-compat"
@@ -173,12 +210,17 @@ def _referencing_view(cfg) -> dict:
     # (ADR 0128 S1b). A connection named ONLY by an overlay subagent is in use exactly as a
     # typed tier is, so the delete guard has to see it; missing it lets the connection be
     # removed, leaving a dangling reference that only fails at that subagent's dispatch.
-    subagents = {name: str(getattr(getattr(cfg, name, None), "model", "") or "") for name in _SUBAGENT_MODEL_SLOTS}
+    #
+    # A subagent pin is now list-capable too (ADR 0133 M5 — a per-tier fallback chain), so it
+    # is read as its ORDERED CHAIN (`_as_chain`) exactly like the slots above — NOT `str(...)`,
+    # which stringified `['conn:model']` to `"['conn:model']"` and hid a chain-only reference
+    # from the walk, so a connection the tier's PRIMARY still routes through could be deleted.
+    subagents = {name: _as_chain(_subagent_model_raw(cfg, name)) for name in _SUBAGENT_MODEL_SLOTS}
     for name, overlay in (getattr(cfg, "subagent_overrides", None) or {}).items():
         if name in subagents:
             continue  # a promoted typed tier is the source of truth; never double-count it
         model = overlay.get("model", "") if isinstance(overlay, dict) else getattr(overlay, "model", "")
-        subagents[name] = str(model or "")
+        subagents[name] = _as_chain(model)
 
     return {
         "slots": {label: _as_chain(getattr(cfg, attr, "")) for label, attr in _SLOT_ATTRS},
@@ -229,9 +271,17 @@ def _walk_references(view: dict, pid: str) -> tuple[list[str], list[dict]]:
         strings.append(f"model.favorites={fav}")
     if matched_favs:
         entries.append({"key": "model.favorites", "value": matched_favs, "kind": "favorite", "clearable": True})
-    for name, value in view["subagents"].items():
-        if value.lower().startswith(f"{pid}:"):
+    for name, chain in view["subagents"].items():
+        # A subagent pin is an ORDERED CHAIN too (ADR 0133 M5): test EVERY entry, so a
+        # connection named by any chain entry counts. No implicit-gateway lead here — that is
+        # only `model.name`.
+        matched = [value for value in chain if _entry_names_pid(value, pid, implicit_gateway=False)]
+        for value in matched:
             strings.append(f"subagents.{name}.model={value}")
+        if matched:
+            # A chain-of-one keeps the scalar `value` shape (today's byte-for-byte form); a
+            # longer chain collapses to ONE structured entry whose `value` is the matches.
+            value = matched[0] if len(matched) == 1 else matched
             entries.append({"key": f"subagents.{name}.model", "value": value, "kind": "subagent", "clearable": True})
     return strings, entries
 
@@ -410,7 +460,12 @@ def _remaining_after_releases(cfg, pid: str, releases: dict) -> list[str]:
             sim["favorites"] = [f for f in sim["favorites"] if not f.lower().startswith(f"{pid}:")]
         elif key.startswith("subagents.") and key.endswith(".model"):
             name = key[len("subagents.") : -len(".model")]
-            sim["subagents"][name] = "" if target is None else str(target)
+            # A subagent pin is a chain too (ADR 0133 M5): repoint/drop only the entries that
+            # name `pid`; every healthy fallback entry survives, re-walked with the same
+            # per-entry rule the write uses so the "any reference left?" guard matches disk.
+            sim["subagents"][name] = _release_chain_entries(
+                sim["subagents"].get(name, []), pid, target, implicit_gateway=False
+            )
         elif key in sim["slots"]:
             # A release repoints or drops only the entries that NAME `pid`; every healthy
             # fallback entry survives (ADR 0133). Re-walked with the same per-entry rule the
@@ -678,8 +733,12 @@ def register_provider_routes(app) -> None:
                 # (like favorites), so a concurrent edit to the slot is not clobbered.
                 write_updates[write_key] = _SlotRelease(key, pid, resolved_target)
             else:
-                # A subagent model is a scalar, not a chain — repoint/clear the whole value.
-                write_updates[write_key] = resolved_target or ""
+                # A subagent model is now list-capable too (ADR 0133 M5), so it releases like a
+                # slot: keep every entry that did NOT name `pid`, repoint/drop only the matching
+                # ones. Deferred to the config the write lock holds (a scalar pin still writes a
+                # scalar). `key` is `subagents.<name>.model`.
+                sub_name = key[len("subagents.") : -len(".model")]
+                write_updates[write_key] = _SubagentRelease(sub_name, pid, resolved_target)
 
         # Apply the releases in memory and re-walk. Any reference the operator did NOT
         # resolve still blocks the delete, exactly as the bare (no-body) call does —
@@ -714,7 +773,7 @@ def register_provider_routes(app) -> None:
                         for f in (getattr(current, "model_favorites", []) or [])
                         if not str(f).lower().startswith(f"{pid}:")
                     ]
-                elif isinstance(value, _SlotRelease):
+                elif isinstance(value, (_SlotRelease, _SubagentRelease)):
                     out[key] = value.resolve(current)
                 else:
                     out[key] = value
