@@ -22,6 +22,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 ## Use protoAgent
 
 - [Use the app](/guides/react-tauri-ui)
+- [Read conversations from others](/guides/conversations-from-others)
 - [Connect and change models](/guides/model-connections)
 - [Call a model directly](/guides/model-passthrough)
 - [Command palette (⌘⇧K)](/guides/command-palette)

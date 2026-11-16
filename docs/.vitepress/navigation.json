@@ -173,6 +173,7 @@
       "routes": [
         "/guides/use-protoagent",
         "/guides/react-tauri-ui",
+        "/guides/conversations-from-others",
         "/guides/model-connections",
         "/guides/model-passthrough",
         "/guides/command-palette",
@@ -213,6 +214,10 @@
             {
               "text": "Use the app",
               "link": "/guides/react-tauri-ui"
+            },
+            {
+              "text": "Read conversations from others",
+              "link": "/guides/conversations-from-others"
             },
             {
               "text": "Connect and change models",

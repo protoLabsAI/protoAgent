@@ -55,6 +55,10 @@
               "title": "Use the app"
             },
             {
+              "path": "guides/conversations-from-others.md",
+              "title": "Read conversations from others"
+            },
+            {
               "path": "guides/model-connections.md",
               "title": "Connect and change models"
             },
