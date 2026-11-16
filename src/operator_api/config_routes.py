@@ -963,10 +963,18 @@ def register_config_routes(app) -> None:
             return denied
         from graph.settings_schema import nest_updates, restart_keys, validate_flat
 
+        updates = dict(req.updates)
+        # The chain editor submits the complete main chain, including any retained
+        # legacy fallbacks. Clear the old tail in the same layer/transaction so a
+        # removed row cannot return on reload. Scalar clients still edit only the
+        # primary, and an explicitly supplied legacy tail remains authoritative.
+        if isinstance(updates.get("model.name"), list):
+            updates.setdefault("routing.fallback_models", [])
+
         # settings.hidden (#2172): hidden keys are absent from the schema AND refused
         # here — the UI is presentation, this is the write-side half of the lock.
         hidden = getattr(STATE.graph_config, "settings_hidden", None) or []
-        ok, err = validate_flat(req.updates, hidden=hidden)
+        ok, err = validate_flat(updates, hidden=hidden)
         if not ok:
             return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
         # Validation + restart-key reporting are this surface's; the apply itself goes through
@@ -977,7 +985,7 @@ def register_config_routes(app) -> None:
         from server.agent_init import _apply_settings_changes
 
         result = await set_config(
-            nest_updates(req.updates),
+            nest_updates(updates),
             ctx=OpContext.from_state(),
             apply_settings=lambda u: _apply_settings_changes(config=u, layer=req.layer),
         )

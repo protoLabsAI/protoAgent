@@ -2675,6 +2675,8 @@ def build_schema(
             from graph.config import _as_chain
 
             entry.update(role=f.role, subhead=f.subhead, inherits=f.inherits)
+            if f.role == "main":
+                entry["legacy_fallbacks"] = _as_chain(config.routing_fallback_models)
             entry["value"] = _as_chain(current)
             entry["default"] = _as_chain(getattr(defaults, f.attr, None))
         elif f.type == "secret":
