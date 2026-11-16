@@ -1626,17 +1626,21 @@ def create_describe_image_fn(
         return None
     llm = create_role_llm(config, "image_describe")
     explicit = bool(model_field_primary(getattr(config, "image_describe_model", "")))
-    models = llm.models if len(names) > 1 else [llm]
-    for model in models:
-        profile = getattr(model, "profile", None) or {}
-        # Explicit describe models historically assert vision support. Preserve that
-        # for unknown profiles; inherited models use the main model's vision flag.
-        supports_images = profile.get("image_inputs")
-        if supports_images is False or (
-            supports_images is None and not explicit and not getattr(config, "model_vision", False)
-        ):
-            log.warning("[image_describe] role unavailable: resolved model lacks image support")
-            return None
+    # Check vision on the PRIMARY entry only: a fallback is reached solely when the primary
+    # is rate-limited, and the role now builds fallbacks lazily (ADR 0133 M4), so reading
+    # every entry's profile here would both re-disable a list whose primary can see images
+    # and force-build backups the describe path may never use. ``_RoleLLM`` exposes its
+    # eagerly-built ``.primary``; a single-entry role already IS that model.
+    primary = getattr(llm, "primary", llm)
+    profile = getattr(primary, "profile", None) or {}
+    # An explicit describe model historically asserts vision support. Preserve that for
+    # unknown profiles; an inherited model uses the main model's vision flag.
+    supports_images = profile.get("image_inputs")
+    if supports_images is False or (
+        supports_images is None and not explicit and not getattr(config, "model_vision", False)
+    ):
+        log.warning("[image_describe] role unavailable: resolved model lacks image support")
+        return None
 
     def _describe(data: bytes, mime: str, filename: str) -> str:
         import base64

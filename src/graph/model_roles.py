@@ -117,13 +117,29 @@ class _Guarded(Runnable):
 
 
 class _Attempt(_Guarded):
-    def __init__(self, model, name, role, failures):
-        self.model, self.name, self.role, self.failures = model, name, role, failures
+    """One chain entry. Its model is resolved lazily (``resolve(index)``) so a fallback that
+    cannot even be built — a keyless connection, a bad alias — is constructed only if the
+    chain actually reaches it. A healthy primary is never blocked by an unbuildable backup
+    (ADR 0133 M4)."""
+
+    def __init__(self, role, index, name, resolve, failures):
+        self.role, self.index, self.name, self._resolve, self.failures = (
+            role, index, name, resolve, failures,
+        )
 
     @contextmanager
     def _operation(self):
         try:
-            yield self.model
+            model = self._resolve(self.index)
+        except Exception as exc:  # noqa: BLE001 — an unbuildable entry fails like a transient
+            # Only an earlier entry's failure gets us here, so treat the build error as this
+            # attempt failing: the chain falls through to the next entry, and on exhaustion
+            # the first (primary) entry's original provider error is what surfaces — the same
+            # contract as an invoke-time failure below.
+            self.failures.append((self.name, f"unbuildable: {type(exc).__name__}"))
+            raise _RetryableError(exc) from exc
+        try:
+            yield model
         except Exception as exc:
             if not retryable_error(exc):
                 raise
@@ -136,16 +152,29 @@ class _Attempt(_Guarded):
 
 
 class _RoleLLM(_Guarded):
-    def __init__(self, role, names, models):
-        self.role, self.names, self.models = role, names, models
+    def __init__(self, role, names, primary, build):
+        self.role, self.names, self.primary, self._build = role, names, primary, build
+        # index -> built model. The primary is built eagerly by create_role_llm; fallbacks
+        # are built on first reach and cached so a degraded path doesn't rebuild per call.
+        self._cache = {0: primary}
+        self._cache_lock = Lock()
+
+    def _model(self, index):
+        model = self._cache.get(index)
+        if model is not None:
+            return model
+        with self._cache_lock:
+            if index not in self._cache:
+                self._cache[index] = self._build(self.names[index])
+            return self._cache[index]
 
     @contextmanager
     def _operation(self):
         # Invocation-local state also isolates nested calls and interleaved streams.
         failures = []
         attempts = [
-            _Attempt(model, name, self.role, failures)
-            for name, model in zip(self.names, self.models, strict=True)
+            _Attempt(self.role, i, name, self._model, failures)
+            for i, name in enumerate(self.names)
         ]
         chain = attempts[0].with_fallbacks(attempts[1:], exceptions_to_handle=(_RetryableError,))
         try:
@@ -162,9 +191,20 @@ def create_role_llm(config, role: str, **kwargs):
     raise ValueError instead of silently enabling them using the main model.
     Multi-model results expose the Runnable invocation, batch and stream API.
     A streak ends when the primary successfully completes an operation.
+
+    Only the PRIMARY is built eagerly; each fallback is constructed lazily the first time
+    the chain reaches it, so a fallback that cannot be built (e.g. a keyless connection)
+    never makes a role with a healthy primary raise — matching how goal eval, memory
+    selection and image description built only the primary before ADR 0133.
     """
     names = role_chain(config, role)
     if not names:
         raise ValueError(f"model role {role!r} has no configured models")
-    models = [create_llm(config, model_name=name, **kwargs) for name in names]
-    return models[0] if len(models) == 1 else _RoleLLM(role, names, models)
+    primary = create_llm(config, model_name=names[0], **kwargs)
+    if len(names) == 1:
+        return primary
+
+    def _build(name):
+        return create_llm(config, model_name=name, **kwargs)
+
+    return _RoleLLM(role, names, primary, _build)
