@@ -220,10 +220,14 @@ def _reconcile_slot_providers(config) -> list[str]:
 # ``from_dict`` reconciles the scalar slots with). The runtime slot readers migrate onto it
 # in later ADR-0133 milestones; M1 only establishes the config shape and this helper.
 
-#: role name → the ``LangGraphConfig`` attribute that holds its declared chain.
-_ROLE_FIELDS: dict[str, str] = {
+#: Role → config attribute holding its chain; None means an inheritance-only role.
+_ROLE_FIELDS: dict[str, str | None] = {
     "main": "model_name",
     "aux": "aux_model",
+    # Runtime passes retain their historical aux selection. The reserved memory_*
+    # overrides below are separate roles, not activated by the M3 migration.
+    "harvest": None,
+    "facts": None,
     "compaction": "compaction_model",
     "goal_eval": "goal_eval_model",
     "memory_select": "memory_select_model",
@@ -243,6 +247,8 @@ _ROLE_PARENT: dict[str, str] = {
     "aux": "main",
     "image_describe": "main",
     "soul_drift_judge": "main",
+    "harvest": "aux",
+    "facts": "harvest",
     "compaction": "aux",
     "goal_eval": "aux",
     "memory_select": "aux",
@@ -277,7 +283,8 @@ def model_field_primary(value) -> str:
 def _role_raw_chain(config, role: str) -> list[str]:
     """The chain a role declares ON ITS OWN, before inheritance. ``main`` folds in the
     legacy ``routing.fallback_models`` tail so it reads as one chain (ADR 0133 D1)."""
-    chain = _as_chain(getattr(config, _ROLE_FIELDS[role], ""))
+    field = _ROLE_FIELDS[role]
+    chain = _as_chain(getattr(config, field, "")) if field is not None else []
     if role == "main":
         chain = chain + _as_chain(getattr(config, "routing_fallback_models", None))
     return chain
@@ -1633,8 +1640,8 @@ class LangGraphConfig:
     # gist → aux. ``memory_harvest`` names the session-end conversation-harvest model
     # (graph/conversation_harvest.py), ``memory_facts`` the fact-extraction model
     # (graph/memory_facts.py), ``memory_gist`` the short-gist summarizer. The runtime
-    # readers migrate onto role_chain in later ADR-0133 milestones; today they still read
-    # ``routing.aux_model`` directly. YAML: `memory.harvest_model` / `memory.facts_model` /
+    # harvest/facts passes use the aux-backed "harvest"/"facts" roles; these reserved
+    # overrides are not activated by that migration. YAML: `memory.harvest_model` / `memory.facts_model` /
     # `memory.gist_model`.
     memory_harvest_model: str | list[str] = ""
     memory_facts_model: str | list[str] = ""

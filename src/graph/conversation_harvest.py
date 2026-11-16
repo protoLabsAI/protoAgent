@@ -656,10 +656,10 @@ _SUMMARY_PROMPT = (
 
 
 async def _default_summarizer(transcript: str, config) -> str:
-    from graph.agent import _resolve_aux_model
-    from graph.llm import create_llm
+    from graph.model_roles import create_role_llm
 
-    llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
+    # Preserve the historical aux selection; reserved memory overrides stay inactive.
+    llm = create_role_llm(config, "harvest")
     resp = await llm.ainvoke([HumanMessage(content=_SUMMARY_PROMPT.format(transcript=transcript))])
     # The aux model may or may not wrap output in tags; extract defensively. A Responses
     # provider returns a block LIST (a reasoning block carrying `encrypted_content`, then
