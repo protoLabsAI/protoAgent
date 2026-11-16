@@ -519,11 +519,13 @@ def register_memory_routes(app) -> None:
             return JSONResponse({"detail": "invalid session_id"}, status_code=400)
 
         # Shared with the chat-delete flow (#2482): one deletion seam removes
-        # every name the summary may live under (encoded + legacy).
+        # every name the summary may live under (encoded + legacy). The inspector
+        # DELETE is an explicit erase, so it also drops the chat's "closed" digest
+        # record (ADR 0132 D3b).
         from graph.middleware.memory import delete_session_summary
 
         try:
-            removed = await asyncio.to_thread(delete_session_summary, session_id)
+            removed = await asyncio.to_thread(delete_session_summary, session_id, including_closed=True)
         except OSError as exc:
             log.warning("[memory] delete of summary %s failed: %s", session_id, exc)
             return JSONResponse({"detail": f"delete failed: {exc}"}, status_code=500)

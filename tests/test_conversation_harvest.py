@@ -21,6 +21,9 @@ from graph.conversation_harvest import harvest_thread, render_transcript
 def history_store(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "kb.db")
     monkeypatch.setattr(STATE, "history_store", store)
+    # ADR 0132 D3b: harvest writes a "closed" digest record under memory_path(); pin it to
+    # a tmp dir so the suite never touches the real instance store.
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path / "memory"))
     return store
 
 
@@ -596,3 +599,139 @@ def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path, history_s
     assert summary.heading.endswith(f", last active {day})")
     facts = memory.list(kind="fact", provenance="extracted")
     assert facts and facts[0].content == f"[as of {day}] The user prefers teal."
+
+
+# ── ADR 0132 D3b: a harvested chat stays in the digest, marked "closed", for 14 days ──
+
+
+def _seed_chat(db, thread, session_id, *, first="help me pick a teal theme"):
+    """One checkpointed exchange keyed to a console ``chat-`` session id, so the harvest
+    writes its closed-session digest record under that id (surface "chat")."""
+    from graph.state import ProtoAgentState
+
+    g = StateGraph(ProtoAgentState)
+    g.add_node("n", lambda s: {"messages": [AIMessage(content="<output>noted</output>")]})
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
+
+    async def main():
+        app = g.compile(checkpointer=build_sqlite_checkpointer(db))
+        await app.ainvoke(
+            {"messages": [HumanMessage(content=first)], "session_id": session_id, "operator_chat_turn": True},
+            {"configurable": {"thread_id": thread}},
+        )
+
+    asyncio.run(main())
+
+
+async def _teal_summary(transcript, config):
+    return "The user wants a teal theme. They also mentioned dark mode."
+
+
+def _harvest_teal(db, *, config=None):
+    from types import SimpleNamespace
+
+    return asyncio.run(
+        harvest_thread(
+            "a2a:chat-9",
+            checkpointer=build_sqlite_checkpointer(db),
+            knowledge_store=None,
+            config=config if config is not None else SimpleNamespace(),
+            summarizer=_teal_summary,
+        )
+    )
+
+
+def test_harvested_chat_shows_as_closed_with_gist_then_expires(tmp_path, history_store):
+    """A chat harvested with "Save a summary" stays in the digest, marked closed, with the
+    FIRST sentence of its summary as the gist — and drops out once past the 14-day window."""
+    import json
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+
+    from graph.middleware.memory import load_prior_sessions_digest, memory_path, session_filename
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db) is not None
+
+    base = memory_path()
+    block, ids = load_prior_sessions_digest(base)
+    assert "chat-9" in ids
+    assert "closed" in block
+    assert "The user wants a teal theme." in block  # the gist is the first sentence only
+    assert "dark mode" not in block
+
+    # Past the retention window → gone. Backdate the record's closed_at directly so the
+    # read-time age filter is what drops it (not the write-time prune).
+    closed_path = Path(base) / "closed" / session_filename("chat-9")
+    data = json.loads(closed_path.read_text(encoding="utf-8"))
+    data["closed_at"] = (datetime.now(UTC) - timedelta(days=15)).isoformat()
+    closed_path.write_text(json.dumps(data), encoding="utf-8")
+    block2, ids2 = load_prior_sessions_digest(base)
+    assert "chat-9" not in ids2
+    assert "closed" not in block2
+
+
+def test_unharvested_close_leaves_no_closed_entry(tmp_path, history_store):
+    """Shift+click / bulk close harvest nothing, so no closed record is written — proven at
+    the one writer: an incognito thread is skipped before the record is ever recorded."""
+    from graph.middleware.memory import load_closed_pool, memory_path
+    from graph.state import ProtoAgentState
+
+    db = str(tmp_path / "c.db")
+    g = StateGraph(ProtoAgentState)
+    g.add_node("n", lambda s: {"messages": [AIMessage(content="noted")]})
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
+
+    async def main():
+        app = g.compile(checkpointer=build_sqlite_checkpointer(db))
+        await app.ainvoke(
+            {"messages": [HumanMessage(content="secret plan")], "session_id": "chat-x", "incognito": True},
+            {"configurable": {"thread_id": "a2a:chat-9"}},
+        )
+
+    asyncio.run(main())
+
+    async def _boom(transcript, config):
+        raise AssertionError("incognito thread must not be summarized")
+
+    out = asyncio.run(
+        harvest_thread("a2a:chat-9", checkpointer=build_sqlite_checkpointer(db), knowledge_store=None,
+                       config=object(), summarizer=_boom)
+    )
+    assert out is None
+    assert load_closed_pool(memory_path(), closed_days=14) == []
+
+
+def test_erase_removes_the_closed_entry_but_save_a_summary_keeps_it(tmp_path, history_store):
+    """Erase drops an existing closed record; the ordinary "Save a summary" card cleanup
+    (including_closed=False) keeps it — that carry-over is the whole point."""
+    from graph.middleware.memory import delete_session_summary, load_closed_pool, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db) is not None
+    base = memory_path()
+    assert [e.session_id for e in load_closed_pool(base, closed_days=14)] == ["chat-9"]
+
+    # The "Save a summary" chat-delete cleanup removes the open card but KEEPS the closed record.
+    delete_session_summary("chat-9", base)
+    assert [e.session_id for e in load_closed_pool(base, closed_days=14)] == ["chat-9"]
+
+    # Erase (forget): the closed record is dropped.
+    assert delete_session_summary("chat-9", base, including_closed=True) is True
+    assert load_closed_pool(base, closed_days=14) == []
+
+
+def test_closed_carryover_off_writes_nothing(tmp_path, history_store):
+    """memory_closed_session_days=0 turns the carry-over off: no closed record is written."""
+    from types import SimpleNamespace
+
+    from graph.middleware.memory import load_closed_pool, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db, config=SimpleNamespace(memory_closed_session_days=0)) is not None
+    assert load_closed_pool(memory_path(), closed_days=14) == []

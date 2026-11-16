@@ -1652,6 +1652,11 @@ class LangGraphConfig:
     memory_gist_model: str | list[str] = ""
     memory_session_gist: bool = True
     memory_gist_idle_seconds: int = 120
+    # ADR 0132 D3b: a chat closed with "Save a summary" (or harvested by the idle sweep)
+    # stays in the prior-sessions digest, marked "closed", for this many days — its gist
+    # there is the first sentence of its harvest summary. 0 turns the carry-over off (no
+    # closed entry is kept). YAML: `memory.closed_session_days`.
+    memory_closed_session_days: int = 14
     # Session-summary file retention (the ``memory/*.json`` files behind the prior-session
     # digest and recall_session). Nothing pruned them before. The periodic maintenance
     # sweep deletes files last written more than ``session_retention_days`` ago, then the
@@ -2792,6 +2797,9 @@ class LangGraphConfig:
             ),
             memory_gist_idle_seconds=_coerce_retention(
                 memory.get("gist_idle_seconds"), cls.memory_gist_idle_seconds, "memory.gist_idle_seconds"
+            ),
+            memory_closed_session_days=_coerce_retention(
+                memory.get("closed_session_days"), cls.memory_closed_session_days, "memory.closed_session_days"
             ),
             memory_session_retention_days=_coerce_retention(
                 memory.get("session_retention_days"), cls.memory_session_retention_days, "memory.session_retention_days"
