@@ -1,0 +1,1 @@
+- **Scheduler guide reflects current Work behavior.** Clarifies that recurring jobs run in their own sessions and report to their origin chat, documents withdrawal in Work → Your instructions, and explains follow-up backoff and its persistence across restarts.

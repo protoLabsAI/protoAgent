@@ -54,9 +54,9 @@ turn, the `<working_state>` block shows its pending schedules, sorted by chat:
   automatically unless the agent cancels it with `cancel_schedule("<id>")`, and its
   full instruction (up to 1,500 characters, with a marker if it's cut). At most five
   are shown this way.
-- **Agent-wide.** Jobs not tied to any chat, such as an Activity-thread cron, and
-  recurring schedules made in other chats (they fire into Activity whichever chat is
-  open). One short line each.
+- **Agent-wide.** Jobs not tied to any chat and recurring schedules made in other
+  chats. One short line each. Recurring jobs run in their own `job:<uuid>` sessions;
+  chat-created jobs report to their origin chat, regardless of which chat is open.
 - **Other chats.** One-shot jobs that belong to another chat appear only as a count.
 
 The job whose fire started the current turn is marked `[FIRING NOW]`, so the agent
@@ -81,6 +81,8 @@ agent closes the directive with `fulfil_directive`.
 
 To see or withdraw what the agent holds:
 
+- Open **Work → Your instructions** to see the recorded instructions and approvals.
+  Open an active instruction, choose **Withdraw…**, and confirm with **Withdraw**.
 - Run `/directives` in the chat. It lists the directives in force and the closed ones, with
   who closed each and why.
 - Run `/directives revoke <id> [reason]` to withdraw one. The agent stops seeing it on its
@@ -90,7 +92,7 @@ To see or withdraw what the agent holds:
   [Operator API](/reference/operator-api#chat-sessions).
 
 Directives belong to one chat; other chats don't see them. Deleting or clearing the chat
-removes its directives. There is no console panel yet. See
+removes its directives. See
 [ADR 0127](/adr/0127-compaction-fidelity) D6 and the
 [directive tools](/reference/starter-tools#record_directive).
 
@@ -117,6 +119,18 @@ the server's A2A endpoint. It does not claim a job again while that job is firin
 Cron jobs advance to their next slot when claimed; one-shots are removed after
 successful execution. Failed one-shots remain for retry. Repeated turn failures
 are recorded and backed off rather than disabling the job permanently.
+
+### Follow-up backoff
+
+If a recurring job completes two consecutive runs with nothing new to report while
+its origin chat has a task waiting on you or a pending decision, it slows to at most
+one run per hour. When it backs off, it posts one card to that chat:
+
+> Still waiting on you. Checking hourly until something changes.
+
+Further unchanged runs do not repeat the card. Normal cadence resumes when a run
+reports something new or the chat is no longer waiting on you. The backoff survives
+server restarts. See [ADR 0129](/adr/0129-work-consolidation) S14.
 
 ### Missed-fire recovery
 
