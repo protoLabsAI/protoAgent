@@ -735,3 +735,71 @@ def test_closed_carryover_off_writes_nothing(tmp_path, history_store):
     _seed_chat(db, "a2a:chat-9", "chat-9")
     assert _harvest_teal(db, config=SimpleNamespace(memory_closed_session_days=0)) is not None
     assert load_closed_pool(memory_path(), closed_days=14) == []
+
+
+def _write_open_card(base, session_id, *, topic, gist, timestamp="2026-11-16T10:00:00+00:00"):
+    """Write an OPEN session card (the normal per-turn persist) under memory_path() — a chat
+    whose live card is on disk, which the digest must prefer over any closed record for it."""
+    import json
+    import os
+
+    from graph.middleware.memory import session_filename
+
+    os.makedirs(base, exist_ok=True)
+    with open(os.path.join(base, session_filename(session_id)), "w", encoding="utf-8") as fh:
+        json.dump(
+            {
+                "session_id": session_id,
+                "messages": [{"role": "user", "content": topic}],
+                "message_count": 2,
+                "gist": gist,
+                "timestamp": timestamp,
+            },
+            fh,
+        )
+
+
+def test_resumed_harvested_chat_lists_open_while_its_live_card_exists(tmp_path, history_store):
+    """ADR 0132 D3b: the open card wins. A chat harvested (idle sweep or "Save a summary") and
+    then resumed under the same id keeps a live card, so the digest lists it OPEN — once, with
+    its live gist — and suppresses the stale closed record; it is never shown closed while live."""
+    from graph.middleware.memory import load_digest_pool, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db) is not None  # closed record, gist "The user wants a teal theme."
+
+    base = memory_path()
+    # The chat was resumed after the harvest: its live open card is back on disk, fresh gist.
+    _write_open_card(base, "chat-9", topic="back to the theme", gist="Still refining the palette.")
+
+    pool, exists = load_digest_pool(base, closed_days=14)
+    assert exists
+    sids = [e.session_id for e in pool]
+    assert sids.count("chat-9") == 1  # listed once, not double-listed as open AND closed
+    (entry,) = [e for e in pool if e.session_id == "chat-9"]
+    assert "closed" not in entry.line  # listed OPEN, not closed
+    assert "Still refining the palette." in entry.line  # the LIVE gist…
+    assert "The user wants a teal theme." not in entry.line  # …not the stale closed gist
+
+
+def test_relevant_digest_falls_back_to_newest_when_fts_finds_nothing(tmp_path, history_store, monkeypatch):
+    """ADR 0108 D9 fallback, preserved under ADR 0132 D3b: with zero FTS matches but a closed
+    record on disk, the relevant digest falls back to the newest OPEN pool (plus the closed
+    chat) — it must not collapse to only the closed chats, dropping the newest open ones."""
+    import graph.session_search as session_search
+    from graph.middleware.memory import load_digest, memory_path
+
+    db = str(tmp_path / "c.db")
+    _seed_chat(db, "a2a:chat-9", "chat-9")
+    assert _harvest_teal(db) is not None  # closed record for chat-9
+
+    base = memory_path()
+    _write_open_card(base, "chat-open", topic="an open chat about routing", gist="Routing options.")
+
+    monkeypatch.setattr(session_search, "search_session_summaries", lambda *a, **k: [])
+
+    res = load_digest(policy="relevant", query="nothing matches this", memory_dir=base, closed_days=14)
+    ids = [e.session_id for e in res.entries]
+    assert "chat-open" in ids  # the newest OPEN chat survived the fallback
+    assert "chat-9" in ids  # the closed chat still rides along, marked closed

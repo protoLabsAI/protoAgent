@@ -197,6 +197,7 @@ def _list_sessions(active_session_id: str = "") -> tuple[list[dict], str]:
                 max_sessions=opts.prior_sessions_max,
                 max_tokens=opts.prior_sessions_max_tokens,
                 exclude_session_id=active_session_id,
+                closed_days=opts.prior_sessions_closed_days,
             )[1]
         )
     sessions: list[tuple[float, dict]] = []

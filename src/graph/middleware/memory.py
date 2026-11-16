@@ -690,7 +690,6 @@ def load_digest_pool(
     if not os.path.isdir(memory_dir):
         return [], False
     closed = load_closed_pool(memory_dir, max_sessions, closed_days=closed_days, exclude_session_id=exclude_session_id)
-    closed_ids = {e.session_id for e in closed}
     excluded_names: set[str] = set()
     if exclude_session_id and is_safe_session_id(exclude_session_id):
         try:
@@ -730,13 +729,15 @@ def load_digest_pool(
         sid = str(summary.get("session_id") or "unknown")
         if exclude_session_id and sid == exclude_session_id:
             continue
-        if sid in closed_ids:
-            continue  # the chat was harvested — it lists as "closed" below, not open
         if _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
             continue
         pool.append(DigestEntry(sid, _digest_line(summary), _digest_line(summary, with_gist=False)))
-    # Closed chats come AFTER the open ones and ride the same token budget (ADR 0132 D3b).
-    return pool + closed, True
+    # The open card wins (ADR 0132 D3b): a chat that was harvested (idle sweep or "Save a
+    # summary") and then resumed under the same id still has a live card, so it lists OPEN
+    # and its stale closed record is suppressed — never double-listed, never shown closed
+    # while live. Closed chats come AFTER the open ones and ride the same token budget.
+    open_ids = {e.session_id for e in pool}
+    return pool + [e for e in closed if e.session_id not in open_ids], True
 
 
 # ---------------------------------------------------------------------------
@@ -976,12 +977,18 @@ def load_digest(
                     break
                 pairs.append(DigestEntry(sid, _digest_line(summary), _digest_line(summary, with_gist=False)))
                 break
-        # Recently-closed chats ride the relevant digest too (ADR 0132 D3b), appended after
-        # the FTS matches; a closed chat is listed closed, never as an open match.
-        closed = load_closed_pool(base, max_sessions, closed_days=closed_days, exclude_session_id=exclude_session_id)
-        closed_ids = {e.session_id for e in closed}
-        combined = [p for p in pairs if p.session_id not in closed_ids] + closed
-        if combined:
+        # Only a NON-EMPTY FTS result short-circuits here; zero matches falls through to the
+        # newest pool below (ADR 0108 D9 — the documented empty-match fallback), so the digest
+        # never collapses to only the closed chats, dropping the newest open ones.
+        if pairs:
+            # Recently-closed chats ride the relevant digest too (ADR 0132 D3b), appended after
+            # the FTS matches. The open card wins: an FTS-matched open chat is listed open, never
+            # also as its closed record.
+            closed = load_closed_pool(
+                base, max_sessions, closed_days=closed_days, exclude_session_id=exclude_session_id
+            )
+            open_ids = {p.session_id for p in pairs}
+            combined = pairs + [e for e in closed if e.session_id not in open_ids]
             return finish_digest(combined, max_tokens, dir_exists=True)
     pool, exists = load_digest_pool(
         memory_dir, max_sessions, exclude_session_id=exclude_session_id, closed_days=closed_days
