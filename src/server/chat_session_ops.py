@@ -371,6 +371,15 @@ async def rewind_session(
             # this forget is about to clear, or learn one just after it — which is the leak
             # this call exists to close, reopened by a race.
             forget_delegate_conversations(tid)
+            # Rewind rewrites only the checkpoint (the agent's live memory); the durable
+            # A2A turns stay for the transcript. Flag the discarded turns so a later
+            # checkpoint-age prune doesn't let recovery (ADR 0132 D6) re-inject them.
+            # Best-effort and inside the lock, like the forget above.
+            from server.chat_rehydrate import mark_turns_rewound
+
+            await mark_turns_rewound(
+                session_id, content=content, occurrence=occurrence or 0, before=before
+            )
     return {**result, "message": _rewind_message(result)}
 
 

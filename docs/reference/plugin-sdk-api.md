@@ -224,6 +224,8 @@ turn — under the one precedence: the subagent's pin > the override >
 `routing.aux_model` > the main model ([#3944](https://github.com/protoLabsAI/protoAgent/issues/3944), [#3955](https://github.com/protoLabsAI/protoAgent/issues/3955)). Outside a turn there is
 none and the step resolves pin > aux > main, as before.
 
+The subagent inherits the enclosing turn's incognito memory-write protection.
+
 `profile` names a generation profile, overriding the subagent's profile field by field.
 
 `check_prompt_tools` (default `True`) refuses to start the subagent when the prompt

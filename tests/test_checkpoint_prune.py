@@ -735,3 +735,167 @@ def test_the_maintenance_pass_prunes_delivered_background_jobs(tmp_path, monkeyp
 
     remaining = {j.description for j in store.list(include_dismissed=True)}
     assert remaining == (left if left is not None else set(ids))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+@pytest.mark.parametrize("scenario", ["pruned", "no-summary", "new", "existing", "failed-recovery"])
+async def test_chat_recovers_retired_context(tmp_path, monkeypatch, driver, scenario):
+    """The next model call sees retained turns, once, on both native chat paths."""
+    from types import SimpleNamespace
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from knowledge.history import HistoryStore
+    from runtime.state import STATE
+    from server.turn_stream import _run_turn_stream
+    from server.turn_sync import _native_turn
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/tasks.db")
+    db = str(tmp_path / "chat.db")
+    saver = build_sqlite_checkpointer(db)
+    seen = []
+
+    def model(state):
+        seen.append([m.content for m in state["messages"]])
+        return {"messages": [AIMessage(content="reply")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("model", model)
+    builder.add_edge(START, "model")
+    builder.add_edge("model", END)
+    app = builder.compile(checkpointer=saver)
+    config = {"configurable": {"thread_id": "a2a:recover"}}
+    store = HistoryStore(tmp_path / "history.db")
+    store.add("We chose the blue design.", kind="summary", session_id="recover", thread_id="a2a:recover")
+    if scenario == "no-summary":
+        store.delete_session("recover")
+    for name, value in {
+        "graph": app, "checkpointer": saver, "a2a_task_engine": engine,
+        "history_store": store, "goal_controller": None, "background_mgr": None,
+    }.items():
+        monkeypatch.setattr(STATE, name, value)
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            if scenario != "new":
+                for i in range(23):
+                    # The REAL durable format: proto-JSON state + role names (what the
+                    # task store writes — see tests/test_durable_turn_transcript.py), so
+                    # this guards the production query, not a lowercase no-op.
+                    await conn.execute(TaskModel.__table__.insert(), {
+                        "id": f"turn-{i}", "context_id": "recover", "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "history": [{"role": "ROLE_USER", "parts": [{"kind": "text", "text": f"question-{i}"}]}],
+                        "artifacts": [{"parts": [{"kind": "text", "text": f"answer-{i}"}]}],
+                    })
+            # This request is already in the store when the model starts. It must
+            # neither count toward the tail nor seed a brand-new chat.
+            await conn.execute(TaskModel.__table__.insert(), {
+                "id": "current", "context_id": "recover", "kind": "task",
+                "status": {"state": "TASK_STATE_WORKING"},
+                "history": [{"role": "ROLE_USER", "parts": [{"kind": "text", "text": "next"}]}],
+                "artifacts": [],
+            })
+        if scenario != "new":
+            await app.ainvoke({"messages": [HumanMessage(content="original checkpoint")]}, config)
+            if scenario != "existing":
+                delete_thread(db, "a2a:recover")
+                assert not (await app.aget_state(config)).values
+        if scenario == "failed-recovery":
+            await app.aupdate_state(config, {"messages": [AIMessage(
+                content="Recovery read failed", additional_kwargs={"protoagent_turn_failed": True},
+            )]})
+        seen.clear()
+
+        async def run(text):
+            if driver == "stream":
+                async for _ in _run_turn_stream(text, "recover", config):
+                    pass
+            else:
+                await _native_turn(
+                    text, None, session_id="recover", config=config,
+                    usage_cb=SimpleNamespace(usage_metadata={}), state_extra={},
+                    tool_fence=None, hitl_resume=False, incognito=False,
+                )
+
+        await run("next")
+        if scenario in ("pruned", "no-summary", "failed-recovery"):
+            expected = [part for i in range(3, 23) for part in (f"question-{i}", f"answer-{i}")]
+            if scenario != "no-summary":
+                offset = 1 if scenario == "failed-recovery" else 0
+                if offset:
+                    assert seen[0][0] == "Recovery read failed"
+                assert "We chose the blue design." in seen[0][offset]
+                assert seen[0][offset + 1:] == expected + ["next"]
+            else:
+                assert seen[0] == expected + ["next"]
+        elif scenario == "new":
+            assert seen[0] == ["next"]
+        else:
+            assert seen[0] == ["original checkpoint", "reply", "next"]
+        await run("again")
+        assert seen[1] == seen[0] + ["reply", "again"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recovery_excludes_turns_discarded_by_rewind(tmp_path, monkeypatch):
+    """A rewind rewrites only the checkpoint; the durable turns stay for the transcript. Once
+    the checkpoint is pruned for age, recovery must NOT re-inject the turns the operator
+    rolled the agent's memory back past (ADR 0132 D6)."""
+    from types import SimpleNamespace
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from runtime.state import STATE
+    from server.chat_rehydrate import mark_turns_rewound, recovered_messages
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/tasks.db")
+
+    async def _pruned_state(_config):  # checkpoint gone — recovery falls through to the store
+        return SimpleNamespace(values={}, config={})
+
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
+    monkeypatch.setattr(STATE, "history_store", None, raising=False)
+    monkeypatch.setattr(STATE, "graph", SimpleNamespace(aget_state=_pruned_state), raising=False)
+    config = {"configurable": {"thread_id": "a2a:rw"}}
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for i in range(5):
+                await conn.execute(TaskModel.__table__.insert(), {
+                    "id": f"t-{i}", "context_id": "rw", "kind": "task",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "history": [{"role": "ROLE_USER", "parts": [{"kind": "text", "text": f"q{i}"}]}],
+                    "artifacts": [{"parts": [{"kind": "text", "text": f"a{i}"}]}],
+                })
+
+        # Nothing rewound yet: recovery seeds every stored turn.
+        full = [m.content for m in await recovered_messages(config, "rw")]
+        assert full == [part for i in range(5) for part in (f"q{i}", f"a{i}")]
+
+        # "Rewind to here" at q3's bubble: keep THROUGH turn 3, discard turn 4.
+        assert await mark_turns_rewound("rw", content="q3", occurrence=0, before=False) == 1
+        kept = [m.content for m in await recovered_messages(config, "rw")]
+        assert kept == [part for i in range(4) for part in (f"q{i}", f"a{i}")]
+        assert "q4" not in kept and "a4" not in kept
+
+        # Regenerate (before=True) at q2 discards the target turn too; already-flagged t-4 is
+        # not re-counted. Recovery now stops before turn 2.
+        assert await mark_turns_rewound("rw", content="q2", occurrence=0, before=True) == 2
+        kept = [m.content for m in await recovered_messages(config, "rw")]
+        assert kept == ["q0", "a0", "q1", "a1"]
+
+        # The transcript is untouched — every turn row still exists (only flagged).
+        async with engine.begin() as conn:
+            total = (await conn.execute(select(func.count()).select_from(TaskModel))).scalar()
+        assert total == 5
+    finally:
+        await engine.dispose()
