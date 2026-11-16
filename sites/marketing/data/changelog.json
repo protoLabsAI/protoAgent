@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.246.1",
+    "date": "2026-11-16",
+    "changes": [
+      "Harvest and Facts model chains set in Settings now take effect at runtime (#5393).",
+      "Drift judge inherits aux (#5395).",
+      "Skip unbuildable model fallbacks (#5394)."
+    ]
+  },
+  {
     "version": "v0.246.0",
     "date": "2026-11-16",
     "changes": [
