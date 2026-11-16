@@ -955,6 +955,9 @@ def test_model_roles_reports_chain_inherited_and_last_fallback(client, monkeypat
     # A blank aux-family role inherits the WHOLE aux chain (ADR 0133 D2), flagged inherited.
     assert roles["compaction"]["chain"] == ["prod-gateway:a", "prod-gateway:b"]
     assert roles["compaction"]["inherited"] is True and roles["compaction"]["source"] == "aux"
+    assert roles["soul_drift_judge"]["chain"] == ["prod-gateway:a", "prod-gateway:b"]
+    assert roles["soul_drift_judge"]["inherited"] is True
+    assert roles["soul_drift_judge"]["source"] == "aux"
     # No fallback has fired yet.
     assert roles["aux"]["last_fallback"] is None
 

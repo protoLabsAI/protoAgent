@@ -238,15 +238,13 @@ _ROLE_FIELDS: dict[str, str | None] = {
     "memory_gist": "memory_gist_model",
 }
 
-#: Blank roles inherit their parent's whole chain (ADR 0133 D2). Two roles inherit MAIN,
-#: not aux: ``image_describe`` because aux models may not read images while the main model
-#: usually can, and ``soul_drift_judge`` because its blank model ran on the agent's own
-#: (main) model before ADR 0133 — a single-string config with aux set must keep judging
-#: drift on main, not silently drop to the cheap aux model.
+#: Blank roles inherit their parent's whole chain (ADR 0133 D2). Image description
+#: inherits MAIN because aux models may not read images while the main model usually can.
+#: The drift judge inherits aux, like the other specific roles.
 _ROLE_PARENT: dict[str, str] = {
     "aux": "main",
     "image_describe": "main",
-    "soul_drift_judge": "main",
+    "soul_drift_judge": "aux",
     "harvest": "aux",
     "facts": "harvest",
     "compaction": "aux",
@@ -322,7 +320,7 @@ def role_chain(config, role: str) -> list[str]:
 
     A SET chain is exactly what's listed; a BLANK role inherits its parent's whole chain
     (specific role → aux → main; harvest → aux, facts → harvest, gist → aux), except blank
-    ``image_describe`` and ``soul_drift_judge`` which inherit main directly. Each entry is run
+    ``image_describe`` which inherits main directly. Each entry is run
     through the gateway-alias coherence check: one incoherent with the live provider (a bare gateway
     alias under a native-OAuth provider with no gateway key to route it) is DROPPED with a
     log line naming the role and position, and a chain EMPTIED by that drop is treated as
@@ -339,7 +337,7 @@ def resolve_role_chain(config, role: str) -> tuple[list[str], str | None]:
     ``source`` is ``role`` when the role declares its own coherent chain, the ancestor role a
     blank role inherited from (a blank ``compaction`` → ``"aux"`` → ``"main"``), or ``None``
     when nothing resolves (an empty chain — a fully-blank ``main``).
-    Blank ``image_describe`` and ``soul_drift_judge`` inherit main directly.
+    Blank ``image_describe`` inherits main directly; the drift judge inherits aux.
     The resolution, logging and
     coherence are identical to :func:`role_chain`; this is the single resolver, and the
     status surface (ADR 0133 M6) reads ``source`` to report whether a role is inherited and
@@ -1525,10 +1523,9 @@ class LangGraphConfig:
     # failure)? Both read as low retention, so only a semantic judgement separates them.
     # Off by default: non-deterministic and it costs tokens. It runs only when the
     # deterministic tier already crossed its threshold — the cheap signal decides whether
-    # to look, the judge decides what kind of drift it is. Blank model ⇒ the agent's own.
+    # to look, the judge decides what kind of drift it is. Blank model ⇒ aux → main.
     soul_drift_judge_enabled: bool = False
-    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits the MAIN chain — the
-    # agent's own model, as before ADR 0133 — not aux. Resolve via
+    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits the aux chain. Resolve via
     # ``role_chain(config, "soul_drift_judge")``.
     soul_drift_judge_model: str | list[str] = ""
 
