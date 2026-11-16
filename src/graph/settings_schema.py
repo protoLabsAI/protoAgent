@@ -2815,6 +2815,12 @@ def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> t
             elif not (isinstance(val, list) and all(isinstance(x, str) for x in val)):
                 suffix = " (or a single model string)" if key in MODEL_ROLE_CHAIN_KEYS else ""
                 return False, f"{key} must be a list of strings{suffix}"
+            # Preserve the select membership guard for model roles that declare a
+            # closed option set. Dynamic slot_models remain suggestions, as before.
+            if key in MODEL_ROLE_CHAIN_KEYS and f.options:
+                entries = [val] if isinstance(val, str) else val
+                if any(entry not in f.options for entry in entries):
+                    return False, f"{key} entries must be one of {f.options}"
         if f.type == "select" and f.options and val not in f.options:
             return False, f"{key} must be one of {f.options}"
         # `path` saves a plain string like `string` does — the picker is a rendering

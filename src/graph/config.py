@@ -648,6 +648,10 @@ _ROUTED_SCALAR_SLOTS = (
     ("routing", "aux_model"),
     ("compaction", "model"),
     ("memory", "select_model"),
+    ("memory", "harvest_model"),
+    ("memory", "facts_model"),
+    ("memory", "gist_model"),
+    ("knowledge", "image_describe_model"),
     ("goal", "eval_model"),
     ("soul", "drift", "judge", "model"),
 )
@@ -685,7 +689,11 @@ def _routed_model_refs(doc: dict) -> list[tuple[object, object]]:
     for path in _ROUTED_SCALAR_SLOTS:
         parent = _node(doc, path[:-1])
         if isinstance(parent, dict) and path[-1] in parent:
-            refs.append((parent, path[-1]))
+            value = parent[path[-1]]
+            if isinstance(value, list):
+                refs.extend((value, i) for i in range(len(value)))
+            else:
+                refs.append((parent, path[-1]))
     for path in _ROUTED_LIST_SLOTS:
         values = _node(doc, path)
         if isinstance(values, list):

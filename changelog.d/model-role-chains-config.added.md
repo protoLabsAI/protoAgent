@@ -7,3 +7,5 @@
   its parent's whole chain (specific → aux → main; harvest → aux, facts → harvest, gist → aux),
   except a blank image-describe model, which stays off. Config-side only; the chain editors
   arrive in a later milestone.
+  Subscription routes survive export/import for every chain entry, and declared Settings
+  option constraints apply to each entry.

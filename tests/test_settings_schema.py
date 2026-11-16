@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from graph.config import LangGraphConfig
 from graph.settings_schema import (
     FIELDS,
@@ -10,6 +12,23 @@ from graph.settings_schema import (
     restart_keys,
     validate_flat,
 )
+
+
+@pytest.mark.parametrize("value, valid", [
+    ("known", True), (["known", "backup"], True), ([], True),
+    ("typo", False), (["known", "typo"], False), (["known", 1], False),
+])
+def test_model_chain_preserves_declared_option_validation(monkeypatch, value, valid):
+    model = next(f for f in FIELDS if f.key == "model.name")
+    monkeypatch.setattr(model, "options", ["known", "backup"])
+    assert validate_flat({"model.name": value})[0] is valid
+
+
+def test_dynamic_model_options_remain_open_to_custom_ids():
+    # The old select guard only enforced Field.options, which is empty for
+    # model.name. Probed slot_models are suggestions, not a closed catalog.
+    assert validate_flat({"model.name": "custom:model"}) == (True, None)
+    assert validate_flat({"model.name": ["custom:model", "gateway:fallback"]}) == (True, None)
 
 
 def test_schema_groups_and_values():
