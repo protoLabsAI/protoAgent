@@ -59,6 +59,21 @@ def test_drift_judge_uses_supplied_config_and_role_fallback(models, monkeypatch,
     assert calls == (chain if isinstance(chain, list) else [chain])
 
 
+def test_blank_drift_judge_uses_main_not_aux(models, monkeypatch):
+    # A blank soul_drift_judge_model with aux set judges on MAIN (its pre-0133 model), not
+    # the cheap aux model — a single-string config behaves exactly as it did before ADR 0133.
+    verdict = dict(drift_score=0.4, identity_preserved=True, doctrine_leak=False, rationale="ok")
+    calls = models(json.dumps(verdict))
+    monkeypatch.setattr("graph.config_io.read_soul_version", lambda version: "baseline")
+    monkeypatch.setattr("graph.config_io.read_soul", lambda: "current")
+    cfg = LangGraphConfig(
+        model_name="main-model", aux_model="aux-model",
+        soul_drift_judge_enabled=True, soul_drift_judge_model="",
+    )
+    assert _judge_soul_drift(cfg, {"baseline_id": "v1"}) == verdict
+    assert calls == ["main-model"]
+
+
 @pytest.mark.parametrize("explicit", [True, False])
 def test_image_description_falls_back_and_blank_inherits_main(models, explicit):
     calls = models("a blue square", image_inputs=True)
