@@ -63,7 +63,9 @@ it.each(["agent-handoff", undefined])("opens the shared answer detail for source
     expect(detail).toBeTruthy();
     expect(detail.textContent).toContain("Can we ship?");
     expect(detail.querySelector("a")?.getAttribute("href")).toBe("https://example.com/pull/7");
-    expect(detail.textContent).toContain("Started in a conversation");
+    // Revision 5 (§11.1 item 6): an A2A context the store doesn't list links out as "Open the
+    // conversation"; with no source at all the field drops out entirely.
+    expect(detail.querySelector('a[href^="#/conversations/"]')?.textContent ?? null).toBe(source ? "Open the conversation" : null);
     const labels = [...detail.querySelectorAll("button")].map((button) => button.textContent);
     expect(labels).toEqual(expect.arrayContaining(["Send reply", "Done…", "Dismiss…"]));
     expect(labels).not.toContain("Open chat");
