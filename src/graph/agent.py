@@ -1682,8 +1682,11 @@ async def run_manual_subagent(
     turn_model: str = "",
     profile: str | None = None,
     check_prompt_tools: bool = True,
+    incognito: bool = False,
 ) -> str:
     """Run a subagent outside the lead agent's ``task`` tool.
+
+    ``incognito`` carries the calling chat's memory-write protection into the subgraph.
 
     ``ledger_session_id`` supplies a ledger-only fallback when no enclosing edge or
     run scope has a session. It never changes the tool state or telemetry session;
@@ -1780,6 +1783,7 @@ async def run_manual_subagent(
         ledger_session_id=ledger_session_id,
         turn_model=turn_model,
         profile=profile,
+        incognito=incognito,
     )
 
 

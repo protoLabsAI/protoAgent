@@ -741,6 +741,7 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
                         sub_prompt,
                         session_id=session_id,
                         turn_model=turn_model,
+                        incognito=bool((request_metadata or {}).get("incognito")),
                     )
             finally:
                 sub_q.put_nowait(_SUB_DONE)

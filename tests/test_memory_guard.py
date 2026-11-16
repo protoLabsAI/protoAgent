@@ -105,7 +105,8 @@ class _ToolFake(GenericFakeChatModel):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("incognito", [True, False])
-async def test_incognito_subagent_delegation_writes_no_memory(tmp_path, monkeypatch, incognito):
+@pytest.mark.parametrize("dispatch", ["inline", "slash"])
+async def test_incognito_subagent_delegation_writes_no_memory(tmp_path, monkeypatch, incognito, dispatch):
     """ADR 0132 S1 / ADR 0069 D3b — the subagent leak the first fix missed.
 
     A subagent the lead delegates through the in-graph ``task`` path runs in a FRESH
@@ -158,18 +159,32 @@ async def test_incognito_subagent_delegation_writes_no_memory(tmp_path, monkeypa
     )
     monkeypatch.setattr(agent_mod, "create_llm", lambda *a, **k: fake)
 
-    result = await agent_mod._run_subagent_inner(
-        config=config,
-        tool_map=tool_map,
-        available_subagents="memsaver",
-        description="save a memory",
-        prompt="save the operator's preference for concise answers",
-        subagent_type="memsaver",
-        session_id="chat-1",
-        incognito=incognito,
-    )
+    if dispatch == "inline":
+        result = await agent_mod._run_subagent_inner(
+            config=config,
+            tool_map=tool_map,
+            available_subagents="memsaver",
+            description="save a memory",
+            prompt="save the operator's preference for concise answers",
+            subagent_type="memsaver",
+            session_id="chat-1",
+            incognito=incognito,
+        )
 
-    assert "memsaver completed" in str(result)
+        assert "memsaver completed" in str(result)
+    else:
+        from runtime.state import STATE
+        from server.chat_dispatch import _PreTurn, _pre_turn_dispatch
+
+        monkeypatch.setattr(STATE, "graph_config", config)
+        monkeypatch.setattr(STATE, "goal_controller", None)
+        monkeypatch.setattr(STATE, "plugin_chat_commands", {})
+        monkeypatch.setattr(agent_mod, "get_all_tools", lambda *a, **k: list(tool_map.values()))
+        pre = _PreTurn("/memsaver save the operator preference")
+        frames = [frame async for frame in _pre_turn_dispatch(pre, "chat-1", {"incognito": incognito})]
+        assert pre.handled
+        assert frames[-1][0] == "done"
+
     # An incognito chat leaves NO memory trail — even one written by a delegated subagent;
     # a normal chat writes exactly the one profile memory the subagent saved.
     saved = memory.list()
