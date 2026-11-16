@@ -1524,14 +1524,12 @@
   gap: var(--pl-space-2);
   min-width: 0;
 }
-/* The title's Tooltip wrapper (`.pl-tip-wrap`, inline-flex) is the flex item that grows and
-   clips, so the h2 inside keeps ellipsising between ← Back and the Badge. */
-.conversation-reader__titlerow .pl-tip-wrap {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
+/* Keep the tooltip inside the focus target so opening a thread does not reveal it. */
+.conversation-reader__title .pl-tip-wrap {
+  display: inline;
 }
 .conversation-reader__title {
+  flex: 1 1 auto;
   margin: 0;
   min-width: 0;
   overflow: hidden;

@@ -144,6 +144,33 @@ describe("ConversationReader header, turns and footer", () => {
     expect(host.textContent).toContain("The agent reply.");
   });
 
+  it("opens with title focus and no tooltip, but reveals the full title on hover and keyboard focus", async () => {
+    const fullTitle = "From Claude Code: Ship the release";
+    await renderReader({ row: row({ title: fullTitle, caller: "Claude Code" }) });
+    const heading = host.querySelector<HTMLHeadingElement>("h2")!;
+    expect(document.activeElement).toBe(heading);
+    expect(heading.textContent).toBe("Ship the release");
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+    const trigger = heading.querySelector<HTMLElement>(".pl-tip-wrap")!;
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        trigger.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(fullTitle);
+      await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      await act(async () => vi.runOnlyPendingTimersAsync());
+      expect(document.querySelector('[role="tooltip"]')).toBeNull();
+      const keyboardTarget = heading.querySelector<HTMLElement>('[tabindex="0"]')!;
+      await act(async () => keyboardTarget.focus());
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(fullTitle);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("Back shows '← Back' but reads and hovers as 'Back to From others' (r2)", async () => {
     await renderReader();
     const back = [...host.querySelectorAll("button")].find(
@@ -306,6 +333,8 @@ describe("ConversationsPane opening, remembering and returning to a thread (r4)"
     await act(async () => rowBtn.click());
     await flush();
     expect(host.querySelector(".conversation-reader")).not.toBeNull();
+    expect(document.activeElement).toBe(host.querySelector("h2"));
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
 
     const back = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "← Back")!;
     await act(async () => back.click());
