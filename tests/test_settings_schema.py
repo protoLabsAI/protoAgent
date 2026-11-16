@@ -509,7 +509,8 @@ ROLE_FIELDS = [
 
 
 def test_model_roles_schema_contract():
-    group = next(g for g in build_schema(LangGraphConfig()) if g["section"] == "Model roles")
+    group = next(g for g in build_schema(LangGraphConfig(routing_fallback_models=["legacy:model"])) if g["section"] == "Model roles")
+    assert group["fields"][0]["legacy_fallbacks"] == ["legacy:model"]
     assert group["category"] == "Model"
     assert [(f["role"], f["key"], f["subhead"], f["inherits"]) for f in group["fields"]] == ROLE_FIELDS
     assert all(f["type"] == "model_chain" for f in group["fields"])
