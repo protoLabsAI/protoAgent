@@ -951,6 +951,9 @@ FIELDS: list[Field] = [
           "Generate a short gist after a chat goes quiet and has four new messages."),
     Field("memory.gist_idle_seconds", "memory_gist_idle_seconds", "Gist idle seconds", "number", "Memory",
           "Quiet time before generating a session gist.", minimum=1),
+    Field("memory.closed_session_days", "memory_closed_session_days", "Closed-chat digest days", "number", "Memory",
+          "Keep a chat closed with “Save a summary” in the prior-sessions digest, marked closed, "
+          "for this many days. 0 turns the carry-over off.", minimum=0),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
