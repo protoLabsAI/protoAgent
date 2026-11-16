@@ -48,6 +48,8 @@ from a2a.server.tasks import (
 from a2a.server.tasks.push_notification_sender import PushNotificationEvent
 from a2a.types import Task, TaskPushNotificationConfig
 
+from a2a_impl.conversation_policy import CONVERSATION_WINDOW_DAYS, listed_outside_thread
+
 log = logging.getLogger(__name__)
 
 _DEFAULT_TTL_S = 24 * 60 * 60  # 24h, matching the bespoke stores
@@ -659,8 +661,9 @@ async def sweep_expired_tasks(
     Console chat history is kept until the chat is deleted (Josh, 2026-11-11). Every device
     rebuilds a chat from these rows (ADR 0104), so sweeping them after 24h left the phone and
     the desktop each with only what it had cached locally. A ``chat-`` row is swept only once
-    its chat has a tombstone (the operator deleted it); every other context — delegations,
-    API calls, Activity — keeps the 24h TTL.
+    its chat has a tombstone (the operator deleted it). Outside threads eligible for the
+    conversations list keep at least its shared window; jobs, background, Activity and
+    palette contexts keep the 24h TTL.
 
     Restart-spared tasks (ADR 0129 D7, ``restart_spared_task_ids``) keep their pre-crash
     ``last_updated``, so a boot after long downtime — and the hourly prune loop, while a
@@ -669,6 +672,7 @@ async def sweep_expired_tasks(
     recovery finalizes them (``finalize_interrupted_task``) they age normally."""
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(seconds=ttl_s)
+    conversation_cutoff = now - timedelta(days=CONVERSATION_WINDOW_DAYS)
     from sqlalchemy import Column, MetaData, String, Table, exists, inspect, not_
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -693,6 +697,10 @@ async def sweep_expired_tasks(
             .where(TaskModel.last_updated < cutoff)
             .where(or_(state.is_(None), state.notin_(_PRESERVED_STATES)))
             .where(not_(kept_chat))
+            .where(or_(
+                not_(listed_outside_thread(TaskModel.context_id)),
+                TaskModel.last_updated < conversation_cutoff,
+            ))
         )
         spared = sorted(_RESTART_SPARED_TASK_IDS)
         if spared:

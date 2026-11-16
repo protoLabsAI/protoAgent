@@ -1,0 +1,1 @@
+- **From others retention.** Keep outside A2A conversations for the full seven-day listing window so quiet threads no longer disappear after 24 hours. Internal jobs, Activity, palette sessions, console chat deletion, and paused-task recovery retain their existing rules.
