@@ -50,10 +50,14 @@ export function saveDraftContext(sessionId: string, context: string): void {
   write("draft-context", sessionId, context);
 }
 
+export function loadDraftContext(sessionId: string): string {
+  return read("draft-context", sessionId) ?? "";
+}
+
 /** Build the agent payload without putting machine notes in the editor or display text.
  *  Keep context until the send succeeds so a failed send can be retried. */
 export function draftPayload(sessionId: string, text: string): string {
-  const context = read("draft-context", sessionId);
+  const context = loadDraftContext(sessionId);
   return context ? `${text}\n\n${context}` : text;
 }
 

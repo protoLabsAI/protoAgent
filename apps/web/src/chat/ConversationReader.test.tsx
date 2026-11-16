@@ -270,13 +270,16 @@ describe("ConversationReader header, turns and footer", () => {
   it.each(["/", "/console/agent/designSystem/"])("Copy link copies an absolute URL under %s", async (basePath) => {
     const originalUrl = window.location.href;
     window.history.replaceState(null, "", `${basePath}?ignored=true#/old-route`);
-    const writeText = vi.fn();
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    await renderReader();
-    const copy = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Copy link"))!;
-    await act(async () => copy.click());
-    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}${basePath}#/conversations/ctx-1`);
-    window.history.replaceState(null, "", originalUrl);
+    try {
+      const writeText = vi.fn();
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      await renderReader();
+      const copy = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Copy link"))!;
+      await act(async () => copy.click());
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}${basePath}#/conversations/ctx-1`);
+    } finally {
+      window.history.replaceState(null, "", originalUrl);
+    }
   });
 });
 

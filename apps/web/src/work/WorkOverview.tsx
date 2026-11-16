@@ -18,6 +18,7 @@ import type { GoalState, Task } from "../lib/types";
 import type { WorkGroup } from "./workGroups";
 import { WorkRow } from "./WorkRow";
 import { instructionRowPresentation } from "./sections/directives";
+import { activityLead } from "./sections/tasks";
 import type { WorkItems, WorkSourceKind } from "./useWorkItems";
 
 /** Source display names for the per-source failure notices — a failed SOURCE is named by
@@ -119,9 +120,12 @@ function rowPresentation(item: GroupableWorkItem, group: Exclude<WorkGroupId, "i
       // An `in_progress` job that hasn't moved for a day stays here, but says so — a muted
       // line, no warning colours: the Close/Open chat moves live on the job's detail.
       if (item.kind === "task" && item.raw) {
-        const days = taskStaleDays(item.raw as Task);
-        if (days != null) return { tag: "Job", tone: "neutral", icon: <Spinner size={16} />,
-          meta: withStatusWord(staleTaskMeta(days), item.meta) };
+        const task = item.raw as Task;
+        const days = taskStaleDays(task);
+        const lead = days != null ? staleTaskMeta(days) : activityLead(task);
+        if (lead) return { tag: "Job", tone: "neutral",
+          icon: task.activity === "stalled" ? <CirclePause size={16} /> : <Spinner size={16} />,
+          meta: withStatusWord(lead, item.meta) };
       }
       return { tag: "Job", tone: "neutral", icon: <Spinner size={16} /> };
     case "coming-up":
