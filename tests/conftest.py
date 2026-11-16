@@ -248,12 +248,15 @@ def _isolate_goal_verifier_registry(monkeypatch):
 def _isolate_subagent_registry():
     """Plugin wiring must not grow a later test's prompt roster on an xdist worker."""
     from copy import deepcopy
-    from graph.subagents.config import SUBAGENT_REGISTRY
+    from graph.subagents.config import DISABLED_SUBAGENT_DEFAULTS, SUBAGENT_REGISTRY
 
     original = deepcopy(SUBAGENT_REGISTRY)
+    disabled = deepcopy(DISABLED_SUBAGENT_DEFAULTS)
     yield
     SUBAGENT_REGISTRY.clear()
     SUBAGENT_REGISTRY.update(original)
+    DISABLED_SUBAGENT_DEFAULTS.clear()
+    DISABLED_SUBAGENT_DEFAULTS.update(disabled)
 
 
 @pytest.fixture(autouse=True)

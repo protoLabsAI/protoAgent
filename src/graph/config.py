@@ -3015,16 +3015,25 @@ class LangGraphConfig:
         for name in ("researcher",):
             if name in subagents:
                 sub = subagents[name]
+                # ``researcher`` is the one typed subagent slot, but its block round-trips as a
+                # SPARSE overlay like the ``subagent_overrides`` map below: a key the stored
+                # block omits inherits the registered spec (``base``) rather than resetting to a
+                # hardcoded default. That is what lets the ADR 0133 M7c Model-roles editor save a
+                # model-only ``researcher`` member — ``apply_updates_to_yaml`` does a fixed-depth
+                # merge, writing ``subagents.researcher.model`` and leaving its ``enabled`` /
+                # ``profile`` / ``final_profile`` siblings in place — so editing only the chain
+                # keeps a disabled researcher off and preserves its profile settings.
+                base = getattr(config, name)
                 setattr(
                     config,
                     name,
                     SubagentDef(
-                        enabled=sub.get("enabled", True),
-                        tools=sub.get("tools", getattr(config, name).tools),
-                        max_turns=sub.get("max_turns", getattr(config, name).max_turns),
-                        model=sub.get("model", getattr(config, name).model),
-                        profile=sub.get("profile", ""),
-                        final_profile=sub.get("final_profile", ""),
+                        enabled=sub.get("enabled", base.enabled),
+                        tools=sub.get("tools", base.tools),
+                        max_turns=sub.get("max_turns", base.max_turns),
+                        model=sub.get("model", base.model),
+                        profile=sub.get("profile", base.profile),
+                        final_profile=sub.get("final_profile", base.final_profile),
                     ),
                 )
 

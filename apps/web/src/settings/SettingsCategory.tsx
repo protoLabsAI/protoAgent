@@ -18,6 +18,7 @@ import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { PluginSettingsTabDescriptor, SettingsField, SettingsGroup } from "../lib/types";
 import { ModelChainInput, foldLegacyFallbacks } from "./ModelChainInput";
+import { ModelRolesGroup } from "./ModelRolesGroup";
 import { PathListPicker } from "./PathListPicker";
 import { PathPicker } from "./PathPicker";
 import { RestartNow } from "./RestartNow";
@@ -149,7 +150,7 @@ export function SettingsCategory({
       categories ? categories.includes(g.category || "Plugins") : (g.category || "Plugins") === category;
     let selected = data.groups.filter(inScope);
     if (pluginId) selected = selected.filter((g) => g.plugin_id === pluginId);  // one plugin's group (ADR 0059)
-    return selected;
+    return [...selected.filter((g) => g.section === "Model roles"), ...selected.filter((g) => g.section !== "Model roles")];
   }, [data.groups, category, categories, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const dirtyKeys = Object.keys(dirty);
@@ -424,9 +425,25 @@ export function SettingsCategory({
 
   // The fields + Test/Connect for one group — rendered inside an AccordionItem in the
   // full Settings view, or flat (no accordion) when folded into a plugin's row (ADR 0059).
+  const subagentField = data.groups.flatMap((g) => g.fields).find((f) => f.key === "subagents");
+  const renderRoleRow = (field: SettingsField, dot?: ReactNode, status?: ReactNode, inheritanceDetail?: string) => (
+    <SettingRow key={field.key} field={{ ...field, description: field.role === "main"
+      ? "Fallbacks are tried in order when a model is rate-limited, out of quota or down. A bad request is never retried."
+      : field.role === "image_describe" ? "needs a model that can read images" : "" }}
+      dot={dot} status={status} inheritanceDetail={inheritanceDetail}
+      parentChain={parentChain(field)} legacyFallbacks={field.key in dirty ? [] : field.legacy_fallbacks}
+      value={field.key in dirty ? dirty[field.key] : field.value} dirty={field.key in dirty}
+      onHost={onHost} onReset={() => reset.mutate([field.key])} resetting={reset.isPending}
+      onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))} />
+  );
   const renderGroupBody = (group: SettingsGroup, live = false) => (
     <>
-      {group.fields.filter(isVisible).map((field) => (
+      {group.section === "Model roles" ? <ModelRolesGroup fields={group.fields.filter(isVisible)}
+        valueOf={(field) => field.key in dirty ? dirty[field.key] : field.value} renderRow={renderRoleRow}
+        overrides={(dirty.subagents ?? subagentField?.value ?? {}) as Record<string, Record<string, unknown>>}
+        canEditSubagents={!!subagentField && isVisible(subagentField)}
+        auxChain={roleFields.find((f) => f.role === "aux") ? currentChain(roleFields.find((f) => f.role === "aux")!) : []}
+        onOverridesChange={(v) => setDirty((d) => ({ ...d, subagents: v }))} /> : group.fields.filter(isVisible).map((field) => (
         <SettingRow
           key={field.key}
           field={field}
@@ -587,7 +604,7 @@ export function SettingsCategory({
                   key={group.section}
                   // Open the first group by default so a panel never lands fully collapsed
                   // (the operator sees content immediately; the rest expand on demand).
-                  defaultOpen={!lead && i === 0}
+                  defaultOpen={group.section === "Model roles" || (!lead && i === 0)}
                   title={
                     <span className="settings-group-head">
                       {group.section}
@@ -634,6 +651,7 @@ function inheritance(field: SettingsField, onHost: boolean): { label: string; st
 }
 
 function SettingRow({
+  dot, status, inheritanceDetail,
   parentChain,
   legacyFallbacks,
   field,
@@ -651,6 +669,9 @@ function SettingRow({
   onCommit,
 }: {
   field: SettingsField;
+  dot?: ReactNode;
+  status?: ReactNode;
+  inheritanceDetail?: string;
   value: unknown;
   parentChain?: string[];
   legacyFallbacks?: readonly string[];
@@ -669,7 +690,7 @@ function SettingRow({
     <div className={`setting-row${dirty ? " dirty" : ""}`} data-key={field.key}>
       <div className="setting-meta">
         <label className="setting-label" htmlFor={`set-${field.key}`}>
-          {field.label}
+          {field.label} {dot}
           {/* A configured secret never echoes its value, so without a glanceable
               indicator a saved key looks identical to an empty one ("did it save?").
               Mirror the Delegates panel's "secret set" pill. */}
@@ -678,6 +699,7 @@ function SettingRow({
               change is COLLECTED in the one pending-restart banner after it saves, so the
               badge is never the only signal. */}
         </label>
+        {status}
         {field.description ? <p className="setting-desc">{field.description}</p> : null}
         {inherit ? (
           <p className="setting-inheritance">
@@ -707,7 +729,7 @@ function SettingRow({
       <div className="setting-control" onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onCommit?.();
       }}>
-        <SettingInput field={field} value={value} onChange={onChange} parentChain={parentChain} legacyFallbacks={legacyFallbacks} />
+        <SettingInput field={field} value={value} onChange={onChange} parentChain={parentChain} legacyFallbacks={legacyFallbacks} inheritanceDetail={inheritanceDetail} />
         {live && feedback ? (
           <span className={`setting-live-status setting-live-status--${feedback.tone}`} role="status">
             {feedback.text}
@@ -796,14 +818,14 @@ function StringListInput({ id, value, onChange }: { id: string; value: unknown; 
   );
 }
 
-export function SettingInput({ field, value, onChange, parentChain, legacyFallbacks = field.legacy_fallbacks }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void; parentChain?: string[]; legacyFallbacks?: readonly string[] }) {
+export function SettingInput({ field, value, onChange, parentChain, inheritanceDetail, legacyFallbacks = field.legacy_fallbacks }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void; parentChain?: string[]; legacyFallbacks?: readonly string[]; inheritanceDetail?: string }) {
   const id = `set-${field.key}`;
 
   // A model role (ADR 0133) renders the one chain control — ordered Combobox rows with
   // ↑ ↓ ✕, "+ Add fallback", and (for a blank inheriting role) the "Inherits <parent>"
   // toggletip, resolved against the current panel edits.
   if (field.type === "model_chain") {
-    return <ModelChainInput field={field} value={value} onChange={onChange} parentChain={parentChain} legacyFallbacks={legacyFallbacks} />;
+    return <ModelChainInput field={field} value={value} onChange={onChange} parentChain={parentChain} legacyFallbacks={legacyFallbacks} inheritanceDetail={inheritanceDetail} />;
   }
 
   if (field.type === "bool") {

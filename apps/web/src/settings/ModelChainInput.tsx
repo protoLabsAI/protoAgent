@@ -56,12 +56,16 @@ export function ModelChainInput({
   parentChain = [],
   // Legacy `routing.fallback_models`, folded into the main chain (§2 item 3).
   legacyFallbacks,
+  inheritanceDetail,
+  inheritedLabel,
 }: {
   field: SettingsField;
   value: unknown;
   onChange: (value: unknown) => void;
   parentChain?: string[];
   legacyFallbacks?: readonly string[];
+  inheritanceDetail?: string;
+  inheritedLabel?: string;
 }) {
   // The main chain (`model.name`) is the only role with no parent: it can't be emptied and it
   // absorbs the legacy fallbacks. Every other role may be blanked back to inheriting.
@@ -202,7 +206,7 @@ export function ModelChainInput({
         aria-label={groupLabel}
         className="model-chain model-chain--inherited"
       >
-        <InheritToggletip parent={parent} chain={parentChain} phone={phone} />
+        <InheritToggletip parent={parent} chain={parentChain} phone={phone} detail={inheritanceDetail} label={inheritedLabel} />
         <Button
           variant="ghost"
           size="sm"
@@ -403,7 +407,7 @@ export function ModelChainInput({
 // phone can reach it by tap. The native <button> is the Radix trigger (it needs a ref, which the
 // DS Button doesn't forward), styled as a ghost button; Radix toggles it on click / Enter / Space
 // / tap and closes on Escape — we return focus to it explicitly so that holds in jsdom too.
-function InheritToggletip({ parent, chain, phone }: { parent: string; chain: string[]; phone: boolean }) {
+function InheritToggletip({ parent, chain, phone, detail, label }: { parent: string; chain: string[]; phone: boolean; detail?: string; label?: string }) {
   const [open, setOpen] = useState(false);
   const popoverId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -426,12 +430,12 @@ function InheritToggletip({ parent, chain, phone }: { parent: string; chain: str
           aria-expanded={open}
           aria-controls={popoverId}
         >
-          Inherits {parent}
+          {label ?? `Inherits ${parent}`}
         </button>
       }
     >
       <div id={popoverId} className="model-chain__popover-body">
-        <p className="model-chain__popover-title">Inherits {parent}&rsquo;s chain:</p>
+        <p className="model-chain__popover-title">{detail ?? `Inherits ${parent}’s chain:`}</p>
         {chain.length ? (
           <ol className="model-chain__popover-list">
             {chain.map((model, i) => (

@@ -500,3 +500,21 @@
     opacity: 1;
   }
 }
+
+.model-role-status,
+.model-roles__registry {
+  color: var(--pl-color-fg-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.model-role-status { text-decoration: underline dotted; }
+.model-role-status-popover {
+  max-width: min(22rem, calc(100vw - var(--pl-space-8)));
+  overflow-wrap: anywhere;
+  color: var(--pl-color-fg-muted);
+}
+.model-roles section h3 { font-size: var(--pl-font-size-sm); }
+@media (max-width: 767px) {
+  .model-role-status, .model-roles__registry { min-height: 44px; min-width: 44px; }
+}

@@ -1121,6 +1121,7 @@ def _apply_config_subagents(config) -> None:
     for name, base in bases.items():
         sub = overlays.get(name, {})
         if not sub.get("enabled", True):
+            _sub.DISABLED_SUBAGENT_DEFAULTS[name] = deepcopy(base)
             registry.pop(name, None)
             _disabled_config_subagents.add(name)
             continue
@@ -1143,6 +1144,7 @@ def _apply_config_subagents(config) -> None:
             if profile and profile not in getattr(config, "model_profiles", {}):
                 warn_once("profile", profile, "Unknown model profile %r; keeping name unresolved")
         registry[name] = entry
+        _sub.DISABLED_SUBAGENT_DEFAULTS.pop(name, None)
         _disabled_config_subagents.discard(name)
 
 
