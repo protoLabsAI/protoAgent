@@ -131,6 +131,19 @@ afterEach(() => {
 });
 
 describe("useWorkItems — load, map, filter", () => {
+  it.each([
+    ["closed", "dismissed: No longer needed", "dismissed"],
+    ["closed", "dismissed:", "dismissed"],
+    ["closed", "Shipped", "done"],
+    ["closed", null, "done"],
+    ["open", "dismissed: Previous closure", "scheduled"],
+  ])("maps task %s with close reason %s to %s", async (status, close_reason, expected) => {
+    spies.tasks.mockResolvedValue({ issues: [{ id: "t1", title: "Release", status, close_reason }] });
+    const r = mount({ sessionId: "s1", thisChatOnly: false });
+    await flush();
+    expect(r.current.tasks.items[0].status).toBe(expected);
+  });
+
   it("takes every source to ready with items mapped to a WorkStatus", async () => {
     const r = mount({ sessionId: "s1", thisChatOnly: false });
     await flush();

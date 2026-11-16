@@ -1447,6 +1447,7 @@ export type Task = {
   created_at?: string;
   updated_at?: string;
   closed_at?: string | null;
+  close_reason?: string | null;
   // Whether an `in_progress` task is actually being worked (ADR 0129 D9/S12, bd-2grd8): a turn
   // is driving it ("driven"), it has gone quiet ("idle"), or the stall loop has parked it
   // ("stalled"). Set only on `in_progress` tasks; absent on older servers (treated as driven).
