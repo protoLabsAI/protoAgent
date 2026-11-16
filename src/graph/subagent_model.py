@@ -27,17 +27,16 @@ def _clean(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def pinned_subagent_model(subagent_type: str) -> str:
+def pinned_subagent_model(subagent_type: str, config: Any = None) -> str:
     """The PRIMARY of the subagent's own configured model, or ``""`` when it has none (or
     isn't a registry subagent). A list pin (an ADR 0133 chain) collapses to its first entry
-    via ``model_field_primary`` — ``_clean`` would have dropped the whole list to ``""`` and
-    silently lost the pin's precedence. The full chain is read by :func:`subagent_pin_chain`.
+    after coherence filtering when config is available. The full chain is read by :func:`subagent_pin_chain`.
     """
     try:
         from graph.config import model_field_primary
         from graph.subagents.config import SUBAGENT_REGISTRY
 
-        return model_field_primary(getattr(SUBAGENT_REGISTRY.get(subagent_type), "model", ""))
+        return model_field_primary(subagent_pin_chain(config, getattr(SUBAGENT_REGISTRY.get(subagent_type), "model", "")))
     except Exception:  # noqa: BLE001 — a lookup failure means "no pin", never a failed run
         return ""
 
@@ -117,7 +116,7 @@ def resolve_subagent_model(
     turn_model: str = "",
     *,
     include_default: bool = True,
-    pinned: str | None = None,
+    pinned: str | list[str] | None = None,
 ) -> str | None:
     """Pinned model > turn override > ``routing.aux_model`` > ``None`` (the main model).
 
@@ -133,10 +132,12 @@ def resolve_subagent_model(
     later milestone."""
     from graph.config import model_field_primary
 
-    # The pin may be a chain (an ADR 0133 list); its PRIMARY wins precedence here — the full
-    # chain is built by the dispatch path via ``subagent_pin_chain``. ``model_field_primary``
-    # reads scalar/list/None; ``_clean`` would have dropped a list pin to ``""``.
-    pin = model_field_primary(pinned) if pinned is not None else pinned_subagent_model(subagent_type)
+    # Resolve the same coherent primary as dispatch. If filtering empties the pin,
+    # inherit instead of resurrecting an alias that cannot route under this provider.
+    pin = (
+        model_field_primary(subagent_pin_chain(config, pinned))
+        if pinned is not None else pinned_subagent_model(subagent_type, config)
+    )
     for candidate in (pin, _clean(turn_model)):
         if candidate:
             return candidate

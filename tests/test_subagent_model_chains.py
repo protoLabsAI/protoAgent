@@ -90,7 +90,7 @@ def test_subagent_pin_chain_normalizes_and_drops_incoherent_entries():
 # ── dispatch: a tier pinned to [a(429), b] answers from b ────────────────────────
 
 
-def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=()):
+def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=(), config=None, turn_model=""):
     """Capture the ``model`` and fallback middleware ``_run_subagent`` hands to ``create_agent``
     (the harness shape of test_subagent_model_config.py); fake ``create_llm`` maps id→fake model."""
     seen: dict = {}
@@ -108,7 +108,7 @@ def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=()):
     monkeypatch.setattr(agent_mod, "create_agent", fake_create_agent)
     monkeypatch.setattr(agent_mod, "create_llm", lambda _c, *, model_name=None, **_k: models.get(model_name, object()))
 
-    cfg = LangGraphConfig(model_provider="openai")
+    cfg = config or LangGraphConfig(model_provider="openai")
     cfg.routing_fallback_models = list(routing_fallbacks)
     sub = SubagentConfig(name="stub", description="d", system_prompt="p", tools=["current_time"], model=pin)
     monkeypatch.setitem(SUBAGENT_REGISTRY, "stub", sub)
@@ -121,6 +121,7 @@ def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=()):
                 prompt="go",
                 subagent_type="stub",
                 description="delegation under test",
+                turn_model=turn_model,
             )
         )
     except Exception:  # noqa: BLE001 — the fake agent fails past create_agent; only the capture matters
@@ -165,6 +166,29 @@ def test_scalar_and_unpinned_tiers_use_the_global_fallbacks(monkeypatch):
         monkeypatch, pin="", models={None: sentinel, "glob": _FakeModel("glob")}, routing_fallbacks=["glob"]
     )
     assert _model is sentinel and fb._fallback_names == ["glob"]
+
+
+@pytest.mark.parametrize(
+    "pin,turn_model,aux,expected",
+    [
+        (["protolabs/a", "protolabs/b"], "claude-turn", "claude-aux", "claude-turn"),
+        (["protolabs/a", "protolabs/b"], "", "claude-aux", "claude-aux"),
+        (["protolabs/a", "protolabs/b"], "", "", None),
+        (["protolabs/a", "claude-valid"], "claude-turn", "claude-aux", "claude-valid"),
+    ],
+)
+def test_native_dispatch_inherits_when_pin_has_no_coherent_models(monkeypatch, pin, turn_model, aux, expected):
+    cfg = LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-main")
+    cfg.aux_model = aux
+    models = {expected: _FakeModel(expected or "claude-main"), "claude-backup": _FakeModel("claude-backup")}
+    model, fb = _capture_dispatch(
+        monkeypatch, pin=pin, models=models, routing_fallbacks=["claude-backup"],
+        config=cfg, turn_model=turn_model,
+    )
+    assert model is models[expected]
+    assert fb is not None and fb.models == [models["claude-backup"]]
+    # Registry-based resolution and usage attribution must agree with dispatch.
+    assert resolve_subagent_model(cfg, "stub", turn_model) == expected
 
 
 def test_researcher_model_parses_as_a_list_and_blank_falls_back(tmp_path):

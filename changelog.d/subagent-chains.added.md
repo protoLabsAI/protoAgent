@@ -8,4 +8,5 @@
   a chain of one (unchanged), and a tier with no pin inherits the aux→main chain with the main
   chain's fallbacks still applying. The Settings provider-delete guard now counts a connection
   named by any chain entry of a subagent pin as in use, and releasing it preserves the tier's
-  healthy fallbacks.
+  healthy fallbacks. Pins emptied by native-provider coherence filtering inherit the turn
+  override, auxiliary model, or main model instead of attempting an unroutable alias.
