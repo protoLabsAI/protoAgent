@@ -205,14 +205,17 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
     diagnosing), not the last fallback's.
     """
 
-    def __init__(self, *models, config: LangGraphConfig | None = None, usage_store=None):
+    def __init__(self, *models, config: LangGraphConfig | None = None, usage_store=None, names=None):
         super().__init__(*models)
         self._config = config
         self._usage_store = usage_store
-        # The configured slot names, index-aligned with ``self.models`` (both call sites build
-        # the instances from ``routing.fallback_models`` in order). The NAME is what resolves
-        # an account — a built instance has its provider prefix stripped (see resolve_account).
-        self._fallback_names = list(getattr(config, "routing_fallback_models", None) or [])
+        # The configured slot names, index-aligned with ``self.models``. The NAME is what
+        # resolves an account — a built instance has its provider prefix stripped (see
+        # resolve_account). Defaults to ``routing.fallback_models`` (the lead chain and every
+        # inherited subagent tier build their instances from it in order); a subagent tier
+        # PINNED to its OWN chain (ADR 0133 M5) passes ``names=`` so account resolution keys on
+        # THAT chain's models rather than the global fallbacks.
+        self._fallback_names = list(names if names is not None else (getattr(config, "routing_fallback_models", None) or []))
 
     def _store(self):
         if self._usage_store is not None:
@@ -593,7 +596,7 @@ def _build_middleware(
         middleware.append(AuditMiddleware())
 
     if config.memory_middleware:
-        middleware.append(SessionSummaryMiddleware(knowledge_store))
+        middleware.append(SessionSummaryMiddleware(knowledge_store, config=config))
 
     # In-history tool-result pruning (#2782, ADR 0101 D3/D4) — registered BEFORE
     # compaction on purpose: relief has an order (prune near-lossless, THEN
@@ -1337,11 +1340,14 @@ async def _run_subagent_inner(
 
     sub_model = resolve_subagent_model(config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or "")
     # ADR 0133 M5: a tier PINNED to a multi-model chain fails over across its OWN models on a
-    # retryable provider error, built through create_role_llm's machinery. The pin wins
-    # precedence (resolve_subagent_model agrees), so when it resolves to a coherent chain its
-    # primary is the model the window/telemetry below describe. Every other resolution keeps
-    # today's single model — where the tier INHERITS (no pin), the main chain's fallbacks
-    # still apply via ObservableModelFallbackMiddleware below.
+    # retryable provider error. The pin wins precedence (resolve_subagent_model agrees), so its
+    # PRIMARY is both the model the window/telemetry below describe AND the one handed to
+    # create_agent — a real BaseChatModel, so create_agent can `bind_tools` onto it for a
+    # tool-bearing subagent. The chain's FALLBACK entries ride the same
+    # ObservableModelFallbackMiddleware the lead chain uses (built from `pin_chain[1:]` below),
+    # NOT a Runnable-only chain model — that would have no `bind_tools` and fail the delegation
+    # before any 429 failover ran. Every other resolution keeps today's single model, and where
+    # the tier INHERITS (no pin) the MAIN chain's fallbacks still apply via that middleware.
     pin_chain = subagent_pin_chain(config, getattr(sub_config, "model", "") or "")
     if pin_chain:
         sub_model = pin_chain[0]
@@ -1355,12 +1361,7 @@ async def _run_subagent_inner(
         None,
     )
     profile_kwargs = {"profile": resolved_profile} if not resolved_profile.empty else {}
-    if len(pin_chain) > 1:
-        from graph.model_roles import build_chain_llm
-
-        sub_llm = build_chain_llm(config, f"subagent:{subagent_type}", pin_chain, **profile_kwargs)
-    else:
-        sub_llm = create_llm(config, model_name=sub_model, **profile_kwargs)
+    sub_llm = create_llm(config, model_name=sub_model, **profile_kwargs)
 
     # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
     # cover them too — not just the lead agent. Mirror the lead's gate so a disallowed/
@@ -1479,13 +1480,22 @@ async def _run_subagent_inner(
     # subagent's primary-model error fails the whole delegation, while the lead
     # would have transparently retried on the configured fallbacks — the failover
     # chain covered only `_build_middleware()`, never `task()`/`task_batch()`.
-    # Same observable wrapper, built from the same routing.fallback_models.
     # Appended before the provider-shape dispatcher so a cross-provider
-    # fallback retry still runs through the native-OAuth wire shaping. No-op when
-    # routing.fallback_models is empty — the subagent stack is then unchanged.
-    if config.routing_fallback_models:
-        sub_fallbacks = [create_llm(config, model_name=m, **profile_kwargs) for m in config.routing_fallback_models]
-        sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks, config=config))
+    # fallback retry still runs through the native-OAuth wire shaping.
+    #
+    # ADR 0133 M5: a tier PINNED to a multi-model chain fails over across its OWN chain
+    # (`pin_chain[1:]`) through this SAME observable wrapper — the fallbacks ride the
+    # request's tools/system prompt, so none of them needs `bind_tools`. Every other tier (a
+    # scalar pin, or an inherited tier with no pin) uses routing.fallback_models, exactly as
+    # before. The fallback names are passed so quota/account routing keys on the chain's OWN
+    # models, not the global fallbacks. No-op when the resolved fallback set is empty — the
+    # subagent stack is then unchanged.
+    sub_fallback_names = pin_chain[1:] if len(pin_chain) > 1 else list(config.routing_fallback_models or [])
+    if sub_fallback_names:
+        sub_fallbacks = [create_llm(config, model_name=m, **profile_kwargs) for m in sub_fallback_names]
+        sub_middleware.append(
+            ObservableModelFallbackMiddleware(*sub_fallbacks, config=config, names=list(sub_fallback_names))
+        )
     # Same history self-heal as the lead stack, in the same slot: a delegation
     # replays the subagent's own thread, so a rejected reasoning blob bricks it the
     # same way. See the lead chain for why this sits inside the failover wrapper.

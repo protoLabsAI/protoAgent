@@ -31,6 +31,7 @@ from server.interrupted_turns import (
     _dangling_tool_calls,
 )
 from tests.test_interrupted_turns_d7 import (
+    _let_zombies_unwind,
     _harness_hygiene,  # noqa: F401 — autouse fixture: resets module globals around each test
     _REAL_ASYNC_CLIENT,
     _TEST_POLL_S,
@@ -68,21 +69,6 @@ async def _answer(app, decision_id: str, option: str) -> httpx.Response:
         return await client.post(f"/api/decisions/{decision_id}/answer", json={"option_id": option})
 
 
-async def _let_zombies_unwind() -> None:
-    """Wait for every other task on the loop to finish before a restart revives the
-    shared saver. The killed generation's turn unwinds through ``record_failed_turn``,
-    whose write is dropped while the saver is dead — but a slow zombie still unwinding
-    when the next generation flips ``saver.dead = False`` would land that write on the
-    revived saver and rewrite the thread classification reads. A real SIGTERM takes the
-    writer with it; this is purely a harness artifact."""
-    me = asyncio.current_task()
-    for _ in range(100):
-        zombies = [t for t in asyncio.all_tasks() if t is not me and not t.done()]
-        if not zombies:
-            return
-        await asyncio.wait(zombies, timeout=0.1)
-
-
 async def _fire_and_kill(tmp_path, monkeypatch, agent: str, *, prompt, job_id, ready, checkpointed):
     """One killed first generation: boot, fire ``job_id``, wait for ``ready(coord)``, then
     SIGTERM — but only once ``checkpointed(messages)`` holds on the thread's durable
@@ -105,7 +91,6 @@ async def _fire_and_kill(tmp_path, monkeypatch, agent: str, *, prompt, job_id, r
     else:
         raise AssertionError(f"{job_id}: the blocking point never reached the checkpoint")
     await _sigterm(coord, saver, gen1)
-    await _let_zombies_unwind()
     return coord, saver, claim
 
 

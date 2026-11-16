@@ -2,9 +2,10 @@
 
 1. The subagent's own pinned model (``subagents.<name>.model``, applied onto
    ``SUBAGENT_REGISTRY`` at config load) — a deliberate per-role choice wins. A list pin is
-   an ADR 0133 fallback CHAIN: :func:`subagent_pin_chain` resolves it and the dispatch path
-   builds it into a fallback runnable (``build_chain_llm``) so the tier fails over across
-   its OWN models on a retryable error; a scalar pin is a chain of one (today's behavior).
+   an ADR 0133 fallback CHAIN: :func:`subagent_pin_chain` resolves it, the dispatch path runs
+   on its PRIMARY and wires the rest as fallbacks on the subagent's
+   ``ObservableModelFallbackMiddleware`` so the tier fails over across its OWN models on a
+   retryable error; a scalar pin is a chain of one (today's behavior).
 2. The turn's model override (the per-tab / per-request ``metadata.model`` the lead
    turn carries as ``state["model"]``) — a delegation follows the model the operator
    picked for the turn that spawned it.
@@ -49,8 +50,10 @@ def subagent_pin_chain(config: Any, pinned: Any) -> list[str]:
     ``role_chain`` applies, via ``graph.config.coherent_model_chain``. ``[]`` when the tier
     has NO pin: the dispatch then inherits the turn override → ``routing.aux_model`` → the
     main model, and the main chain's fallbacks still apply through the subagent's fallback
-    middleware. A chain of two or more is built into a fallback runnable by
-    ``graph.model_roles.build_chain_llm`` so a tier can fail over across its OWN models."""
+    middleware. A chain of two or more runs on its PRIMARY with the remaining entries wired as
+    fallbacks on the subagent's ``ObservableModelFallbackMiddleware`` (``graph.agent``), so the
+    tier can fail over across its OWN models while ``create_agent`` still binds tools onto a
+    real primary model."""
     try:
         from graph.config import coherent_model_chain
 

@@ -3,10 +3,12 @@
 ``subagents.<name>.model`` accepted a single id; it now also accepts an ordered list — the
 primary, then each fallback used only on a retryable provider error. The pin still wins the
 ``graph.subagent_model`` precedence (pin > turn override > routing.aux_model > main); a list
-pin resolves to its primary there and is built into a fallback runnable by the dispatch path
-(``build_chain_llm``), so a 429 on the primary fails over to the next model INSTEAD of
-failing the whole delegation. A scalar pin stays a chain of one (today's behavior), and a
-tier with no pin inherits the aux→main chain with the main chain's fallbacks unchanged.
+pin resolves to its PRIMARY there — the model handed to ``create_agent`` as a real
+BaseChatModel, so a tool-bearing subagent still binds its tools — and the dispatch wires the
+chain's remaining entries as fallbacks on the subagent's ``ObservableModelFallbackMiddleware``,
+so a 429 on the primary fails over to the next model INSTEAD of failing the whole delegation.
+A scalar pin stays a chain of one (today's behavior), and a tier with no pin inherits the
+aux→main chain with the main chain's fallbacks unchanged.
 """
 
 from __future__ import annotations
@@ -15,12 +17,12 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.runnables import RunnableLambda
+from langchain_core.messages import AIMessage
 
 import graph.agent as agent_mod
 from graph import model_roles
-from graph.config import LangGraphConfig, coherent_model_chain
-from graph.model_roles import _RoleLLM
+from graph.agent import ObservableModelFallbackMiddleware
+from graph.config import LangGraphConfig
 from graph.subagent_model import resolve_subagent_model, subagent_pin_chain
 from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
 
@@ -31,11 +33,32 @@ class _ProviderError(Exception):
         self.status_code = status
 
 
+class _FakeModel:
+    """A stand-in chat model: the breaker/account helpers key on ``model_name`` and the fake
+    handler on identity — a real chat client is never built in these dispatch tests."""
+
+    def __init__(self, name: str):
+        self.model_name = name
+
+
+class _Req:
+    """A minimal ModelRequest for driving the fallback middleware (as test_fallback_breaker)."""
+
+    def __init__(self, model):
+        self.model = model
+
+    def override(self, **kw):
+        return _Req(kw.get("model", self.model))
+
+
 @pytest.fixture(autouse=True)
 def _reset_diagnostics(monkeypatch):
     # The role-LLM fallback records a streak/last-fallback per role; isolate each test.
     monkeypatch.setattr(model_roles, "_last_fallbacks", {})
     monkeypatch.setattr(model_roles, "_streaks", set())
+    # A 429 never trips the primary breaker, but a prior test's unavailable-error trip would
+    # route this test's primary straight to the fallback — reset the process-wide breaker.
+    agent_mod.reset_primary_breakers()
     # OPENAI_API_KEY would make the native-provider coherence check see a gateway key;
     # PROTOAGENT_MODEL would overwrite model_name in __post_init__.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -82,23 +105,29 @@ def test_subagent_pin_chain_drops_incoherent_entries_under_native_provider():
     # per-entry (the same coherence role_chain applies), leaving the coherent tail.
     cfg = LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-main")  # api_key="" by default
     assert subagent_pin_chain(cfg, ["claude-reason", "protolabs/alias"]) == ["claude-reason"]
-    # Mirror of graph.config.coherent_model_chain, the single per-entry reader.
-    assert subagent_pin_chain(cfg, ["claude-reason", "protolabs/alias"]) == coherent_model_chain(
-        cfg, ["claude-reason", "protolabs/alias"], where="subagent.model"
-    )
+    # A chain whose EVERY entry is incoherent empties to [] → the tier inherits (no pin),
+    # exactly as a scalar incoherent pin would (not a dangling route onto an unroutable alias).
+    assert subagent_pin_chain(cfg, ["protolabs/a", "protolabs/b"]) == []
+    # The coherence drop is gated on the native-OAuth-without-gateway shape: under a gateway
+    # provider the very same aliases route fine, so the full chain is kept verbatim.
+    assert subagent_pin_chain(LangGraphConfig(model_provider="openai"), ["protolabs/a", "protolabs/b"]) == [
+        "protolabs/a",
+        "protolabs/b",
+    ]
 
 
 # ── dispatch: a tier pinned to [a(429), b] answers from b ────────────────────────
 
 
-def _capture_sub_llm(monkeypatch, *, pin, models):
-    """Drive ``_run_subagent`` far enough to capture the ``model`` (the resolved sub-LLM) it
-    hands to ``create_agent`` — the same harness shape as test_subagent_model_config.py. The
-    fake ``create_llm`` resolves each chain entry to its prepared fake model."""
+def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=()):
+    """Drive ``_run_subagent`` far enough to capture BOTH the ``model`` and the ``middleware``
+    it hands to ``create_agent`` — the same harness shape as test_subagent_model_config.py.
+    The fake ``create_llm`` resolves each model id to its prepared fake model."""
     seen: dict = {}
 
     def fake_create_agent(**kwargs):
         seen["model"] = kwargs.get("model")
+        seen["middleware"] = kwargs.get("middleware") or []
 
         class _Agent:
             async def ainvoke(self, *_a, **_kw):
@@ -110,12 +139,12 @@ def _capture_sub_llm(monkeypatch, *, pin, models):
         return models.get(model_name, object())
 
     monkeypatch.setattr(agent_mod, "create_agent", fake_create_agent)
-    # build_chain_llm lives in model_roles and calls ITS module-level create_llm, while the
-    # single-model branch calls agent's — patch both so either path resolves the fakes.
+    # The primary AND every chain fallback are built through agent's create_llm; the subagent
+    # pin no longer builds a Runnable-only chain model out of model_roles.
     monkeypatch.setattr(agent_mod, "create_llm", fake_create_llm)
-    monkeypatch.setattr(model_roles, "create_llm", fake_create_llm)
 
     cfg = LangGraphConfig(model_provider="openai")
+    cfg.routing_fallback_models = list(routing_fallbacks)
     sub = SubagentConfig(name="stub", description="d", system_prompt="p", tools=["current_time"], model=pin)
     monkeypatch.setitem(SUBAGENT_REGISTRY, "stub", sub)
     tool = SimpleNamespace(name="current_time")
@@ -130,49 +159,70 @@ def _capture_sub_llm(monkeypatch, *, pin, models):
                 description="delegation under test",
             )
         )
-    except Exception:  # noqa: BLE001 — the fake agent may fail past create_agent; only the model matters
+    except Exception:  # noqa: BLE001 — the fake agent fails past create_agent; only the capture matters
         pass
-    return seen.get("model")
+    return seen.get("model"), seen.get("middleware", [])
+
+
+def _fallback_mw(middleware):
+    return next((m for m in middleware if isinstance(m, ObservableModelFallbackMiddleware)), None)
 
 
 def test_pinned_chain_tier_fails_over_to_the_second_model(monkeypatch):
-    calls: list[str] = []
+    models = {"a": _FakeModel("a"), "b": _FakeModel("b")}
+    model, middleware = _capture_dispatch(monkeypatch, pin=["a", "b"], models=models)
 
-    def answer(name, result):
-        def run(_value):
-            calls.append(name)
-            if isinstance(result, Exception):
-                raise result
-            return result
+    # The chain's PRIMARY — a real (fake) BaseChatModel create_agent can bind_tools onto for a
+    # tool-bearing subagent — is handed to create_agent, NOT a Runnable-only chain model (the
+    # defect: a _RoleLLM has no bind_tools and would fail the delegation before any failover).
+    assert model is models["a"]
+    # The chain's TAIL rides the SAME ObservableModelFallbackMiddleware the lead chain uses,
+    # carrying its OWN names so quota/account routing keys on the chain's models.
+    fb = _fallback_mw(middleware)
+    assert fb is not None and fb.models == [models["b"]] and fb._fallback_names == ["b"]
 
-        return RunnableLambda(run)
+    # A 429 on the primary fails over to "b", which answers — driven through the real middleware.
+    order: list[str] = []
 
-    models = {"a": answer("a", _ProviderError(429)), "b": answer("b", "from-b")}
-    sub_llm = _capture_sub_llm(monkeypatch, pin=["a", "b"], models=models)
+    def handler(req):
+        order.append(req.model.model_name)
+        if req.model.model_name == "a":
+            raise _ProviderError(429)
+        return AIMessage(content="from-b")
 
-    # The pinned chain built a fallback runnable over its OWN two models…
-    assert isinstance(sub_llm, _RoleLLM)
-    assert sub_llm.names == ["a", "b"]
-    # …and a 429 on the primary fails over to the second, which answers.
-    assert sub_llm.invoke("prompt") == "from-b"
-    assert calls == ["a", "b"]
-    record = model_roles.last_fallback("subagent:stub")
-    assert record and record["from"] == ["a"] and record["to"] == "b"
-
-
-def test_scalar_pin_tier_stays_a_single_model_no_chain(monkeypatch):
-    # A scalar pin is a chain of one: the single-model branch, NOT a fallback runnable.
-    models = {"only": RunnableLambda(lambda _v: "ok")}
-    sub_llm = _capture_sub_llm(monkeypatch, pin="only", models=models)
-    assert sub_llm is models["only"]
+    out = fb.wrap_model_call(_Req(models["a"]), handler)
+    assert out.content == "from-b"
+    assert order == ["a", "b"]
 
 
-def test_unpinned_tier_stays_a_single_model(monkeypatch):
-    # No pin → inherit (empty pin chain) → the single-model branch on the resolved default
-    # (here None → the main model). The main chain's fallbacks still ride the middleware.
-    sentinel = object()
-    sub_llm = _capture_sub_llm(monkeypatch, pin="", models={None: sentinel})
-    assert sub_llm is sentinel
+def test_scalar_pin_tier_stays_a_single_model_using_the_global_fallbacks(monkeypatch):
+    # A scalar pin is a chain of one: its model is the primary, and the fallback middleware
+    # (if any) is the GLOBAL routing.fallback_models, exactly as before — NOT the pin.
+    models = {"only": _FakeModel("only"), "glob": _FakeModel("glob")}
+    model, middleware = _capture_dispatch(monkeypatch, pin="only", models=models, routing_fallbacks=["glob"])
+    assert model is models["only"]
+    fb = _fallback_mw(middleware)
+    assert fb is not None and fb.models == [models["glob"]] and fb._fallback_names == ["glob"]
+
+
+def test_unpinned_tier_inherits_and_uses_the_global_fallbacks(monkeypatch):
+    # No pin → inherit (empty pin chain) → the resolved default (here None → the main model);
+    # the MAIN chain's fallbacks (routing.fallback_models) still ride the middleware.
+    sentinel = _FakeModel("main")
+    model, middleware = _capture_dispatch(
+        monkeypatch, pin="", models={None: sentinel, "glob": _FakeModel("glob")}, routing_fallbacks=["glob"]
+    )
+    assert model is sentinel
+    assert _fallback_mw(middleware)._fallback_names == ["glob"]
+
+
+def test_pinned_chain_wins_over_the_global_fallbacks(monkeypatch):
+    # When a tier pins its OWN chain, the chain's tail is the fallback set — NOT
+    # routing.fallback_models (which still applies to every un-pinned/scalar-pinned tier).
+    models = {"a": _FakeModel("a"), "b": _FakeModel("b"), "glob": _FakeModel("glob")}
+    _model, middleware = _capture_dispatch(monkeypatch, pin=["a", "b"], models=models, routing_fallbacks=["glob"])
+    fb = _fallback_mw(middleware)
+    assert fb.models == [models["b"]] and fb._fallback_names == ["b"]
 
 
 # ── config: subagents.researcher.model accepts a list and applies without crashing ──

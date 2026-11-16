@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -244,3 +245,24 @@ async def test_dispatch_is_unchanged_when_the_coder_stays_on_its_branch(tmp_path
     assert "Warning: the coder left" not in reply
     assert "+print('fixed')" in reply  # the normal change summary is still produced
     assert _branch(root) == start
+
+
+def test_change_summary_detects_racy_same_size_edit(tmp_path):
+    root, _ = _repo_with_origin(tmp_path)
+    source = root / "app.py"
+    index = root / ".git" / "index"
+    # #5305: model stat data that cannot distinguish same-second writes.
+    _git(root, "config", "core.trustctime", "false")
+    _git(root, "config", "core.checkStat", "minimal")
+    stamp = 1_700_000_000
+    os.utime(source, (stamp, stamp))
+    _git(root, "add", "app.py")
+    os.utime(index, (stamp, stamp))
+    before = cs.snapshot(str(root))
+    original_index = index.read_bytes()
+    source.write_text("print('fixed')\n", encoding="utf-8")
+    os.utime(source, (stamp, stamp))
+
+    assert "+print('fixed')" in cs.render(before, cs.after(before))
+    assert index.read_bytes() == original_index
+    assert index.stat().st_mtime == stamp

@@ -549,3 +549,49 @@ async def test_a_federation_caller_reaches_only_its_own_tasks_and_contexts(tmp_p
     assert (await _get(handler, mine.id)).status.state == TaskState.TASK_STATE_INPUT_REQUIRED
     await router.drain()
     await store.engine.dispose()
+
+
+def _answer_stream():
+    """Every turn answers at once (no park), so turns in one context stay independent."""
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("done", f"ok: {text}")
+
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_an_operator_steer_into_a_peer_thread_keeps_the_thread_the_peers(tmp_path):
+    """#5379: an idle steer runs as an operator-owned task inside the federation peer's
+    context (server/chat.py _start_steer_turn). The peer must still be able to continue its
+    own thread, without seeing the operator's turn. A thread the operator started stays
+    closed to the peer."""
+    from a2a.types import ListTasksRequest
+    from a2a.utils.errors import InvalidParamsError, TaskNotFoundError
+
+    from a2a_impl import stores
+
+    store = stores.ReasoningCoalescingTaskStore(
+        stores.make_sqlite_engine(str(tmp_path / "t.db")), owner_resolver=stores.resolve_task_owner
+    )
+    handler, router = _handler(_answer_stream(), task_store=store)
+    fed = ServerCallContext(state={"trust_tier": "federation"})
+
+    first = await handler.on_message_send(_msg("please review", mid="p1", ctx="fed-ctx"), fed)
+    steer = await handler.on_message_send(_msg("check their assumptions", mid="s1", ctx="fed-ctx"), CALL)
+    assert steer.id != first.id
+    # The peer continues its own conversation after the steer.
+    again = await handler.on_message_send(_msg("any update?", mid="p2", ctx="fed-ctx"), fed)
+    assert again.context_id == "fed-ctx"
+    # The operator's turn stays out of the peer's reads.
+    with pytest.raises(TaskNotFoundError):
+        await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
+    listed = {t.id for t in (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks}
+    assert steer.id not in listed and first.id in listed
+
+    # A thread the operator started is still not the peer's to continue.
+    await handler.on_message_send(_msg("my own chat", mid="o1", ctx="chat-own"), CALL)
+    with pytest.raises(InvalidParamsError):
+        await handler.on_message_send(_msg("let me in", mid="p3", ctx="chat-own"), fed)
+    await router.drain()
+    await store.engine.dispose()

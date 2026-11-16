@@ -725,6 +725,83 @@ def test_overlay_subagent_model_pin_is_in_use_and_releasable(client, monkeypatch
     assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
 
 
+# ── ADR 0133 M5: a subagent tier pin is a chain too; a connection named by ANY entry is in ──
+# use. Before the fix the subagents dict stringified the pin, so `str(['conn:model'])` rendered
+# "['conn:model']" and the delete guard's startswith check missed a chain-only reference — a
+# connection the tier's PRIMARY still routed through could be deleted out from under it.
+
+
+def _subagent_chain_fixture(monkeypatch):
+    # researcher pinned to a two-model chain: prod-gateway is the PRIMARY, local-vllm only the
+    # fallback. model.name is on local-vllm, so prod is named ONLY by the subagent chain.
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:lead"},
+        subagents={"researcher": {"model": ["prod-gateway:sub", "local-vllm:sub-fb"]}},
+    )
+
+
+def test_delete_sees_a_reference_from_a_subagent_chain_pin(client, monkeypatch):
+    _subagent_chain_fixture(monkeypatch)
+    prod = next(p for p in client.get("/api/config/providers").json()["providers"] if p["id"] == "prod-gateway")
+    # The chain entry naming prod is listed; one entry matched, so it keeps the scalar shape.
+    assert "subagents.researcher.model=prod-gateway:sub" in prod["in_use_by"]
+    by_key = {e["key"]: e for e in prod["in_use"]}
+    assert by_key["subagents.researcher.model"] == {
+        "key": "subagents.researcher.model",
+        "value": "prod-gateway:sub",
+        "kind": "subagent",
+        "clearable": True,
+    }
+    # …and the bare delete is refused — not allowed through as it was when the pin stringified.
+    r = client.delete("/api/config/providers/prod-gateway")
+    assert r.status_code == 409
+    assert "subagents.researcher.model=prod-gateway:sub" in r.json()["detail"]
+
+
+def test_delete_releases_a_subagent_chain_keeping_the_healthy_fallback(client, monkeypatch):
+    _subagent_chain_fixture(monkeypatch)
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"subagents.researcher.model": "local-vllm:sub"}},
+    )
+    assert r.status_code == 200
+    # Only the prod-gateway PRIMARY is repointed; the healthy local-vllm:sub-fb fallback
+    # survives in order, so the tier stays a usable two-entry chain — a scalar release would
+    # have discarded the fallback.
+    assert seen["updates"]["subagents"] == {"researcher": {"model": ["local-vllm:sub", "local-vllm:sub-fb"]}}
+    assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
+
+
+def test_delete_clears_only_the_matching_subagent_chain_entry(client, monkeypatch):
+    # researcher = [local-vllm:fast, prod-gateway:sub]: prod named ONLY by the fallback entry.
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:lead"},
+        subagents={"researcher": {"model": ["local-vllm:fast", "prod-gateway:sub"]}},
+    )
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"subagents.researcher.model": None}},
+    )
+    assert r.status_code == 200
+    # Clearing drops only the prod-gateway fallback; the local-vllm primary is kept, so the
+    # tier stays a usable one-entry chain rather than being emptied.
+    assert seen["updates"]["subagents"] == {"researcher": {"model": ["local-vllm:fast"]}}
+
+
 def test_delete_release_no_host_writes_providers_and_slots_in_one_save(monkeypatch):
     """No host wired: providers (minus pid) AND the released slots land in a SINGLE
     save_yaml_doc, through the same YAML-doc seam the disk fallback already uses."""
