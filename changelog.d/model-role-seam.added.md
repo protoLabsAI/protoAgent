@@ -1,0 +1,1 @@
+- **Role model fallback seam.** Add shared role-model construction with fallback only for retryable provider errors, once-per-streak logging, and in-memory last-fallback diagnostics. Existing call sites remain unchanged.
