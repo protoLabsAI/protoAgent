@@ -6,7 +6,11 @@ Prepared 2026-11-15, revised 2026-11-16 (America/Los_Angeles) after the
 2026-11-16 final planning audit, both source-reading only. Code re-inspected at
 `a6ba26d10f3954bb21ee6c70c79f6373681c6bcb` (current `main`, release v0.246.1).
 Backend findings below are verified by **source inspection only, not executed**;
-runtime scenarios and cited tests were not run. Approval to review this document
+runtime scenarios and cited tests were not run. A time-boxed Phase 0 isolation
+prototype has since run separately (2026-11-16, board card bd-h6gka); its
+executed-test evidence and **REVISE** verdict are summarized under
+[Phase 0 outcome](#phase-0-outcome) below, which keeps the executed-versus-
+inspection-only distinction explicit. Approval to review this document
 is not permission to build, release, or create implementation cards. This change
 adds this proposal and its changelog fragment; it leaves runtime behavior and
 approved specifications intact.
@@ -38,6 +42,107 @@ listed as open in the [decision map](#decision-map-settled-and-open).
    boundaries. It does not authorize building. Work starts on a separate go
    from Josh, beginning with a time-boxed Phase 0 isolation prototype that ends
    in continue-or-revise.
+
+## Phase 0 outcome
+
+**Verdict: REVISE (2026-11-16).** Per decision 6, Josh gave the go for Phase 0
+only. The time-boxed isolation prototype on board card bd-h6gka ran one dispatch
+round (no revise round used) against the real A2A seams at merge commit
+`d669467b` and returned **REVISE**: the decision 2 privacy contract is **not yet
+proven** while keeping one original conversation identity. A throwaway output
+gate quarantined the tested **running-turn** steer output before the real
+executor published it — preserving `context_id` and still delivering an explicit
+intended result — but idle and parked/resume private inputs still enter SDK task
+history before any output gate, audience scheduling and authorization are not
+durable, and artifacts, tool output and checkpoint-derived content have bypass
+paths. Nothing past Phase 0 is authorized; the findings below are prototype
+evidence pending Josh's go, not approvals.
+
+The executed-test evidence came from a **throwaway Phase 0 prototype**, separate
+from this document's inspection-only findings table above. The focused run passed
+**209 tests** across the five requested files
+([test_steering.py](../../tests/test_steering.py),
+[test_steer_idle_starts_turn.py](../../tests/test_steer_idle_starts_turn.py),
+[test_a2a_hitl_parked_routing.py](../../tests/test_a2a_hitl_parked_routing.py),
+[test_a2a_stores.py](../../tests/test_a2a_stores.py),
+[test_chat_routes.py](../../tests/test_chat_routes.py)), including the new
+experimental cases. As the report notes, passing characterization tests confirm
+several leaks rather than proving privacy. The Phase 0 findings are filed as
+GitHub issues and are **cited by number** here rather than restated.
+
+**Chosen enforcement model: B (explicit deliver-to-requester), recommended.**
+The prototype compared the two models the proposal names. Under **Model A** (the
+agent labels each output's audience), an incorrectly peer-labelled private
+response reached stream, subscription, poll, push and reopened SQLite history for
+both fleet and paired-agent credentials — **executed**; labels alone cannot
+enforce the contract against a wrong model decision. Under **Model B**, the same
+test suppressed the private canary on all five tested surfaces and delivered the
+intended result with the original context ID unchanged — **executed**. B is
+recommended because ordinary output can be denied before publication and delivery
+has a distinct enforcement point. It is **not** a complete solution: the
+experimental action is an unauthenticated event, so recipient binding, scoped
+operator-relay authorization and durable delivery records remain unimplemented
+([#5400](https://github.com/protoLabsAI/protoAgent/issues/5400)).
+
+Evidence summary by surface, **marked executed versus inspection-only exactly as
+the report does**:
+
+- **Executed** (real executor, SDK handler, SQLite store and push serializer;
+  faked event source and HTTP receiver): a peer holding stream/subscription,
+  GetTask/poll, push and durable-history handles receives the operator's
+  running-turn steer and reply today
+  ([#5400](https://github.com/protoLabsAI/protoAgent/issues/5400)); Model B
+  blocks the **running sample** on stream and push and still delivers the result,
+  but does **not** block GetTask/poll or durable history across idle and
+  parked/resume states — those private inputs enter SDK history before any output
+  gate ([#5401](https://github.com/protoLabsAI/protoAgent/issues/5401)); tool
+  output and answer artifacts were exercised through the gate and are not
+  generally covered.
+- **Inspection-only** (not executed): gist, digest, harvest, facts, tracing,
+  prompt capture and fleet trace export can each carry private steering content
+  to a peer-reachable surface. The incognito suppression mechanisms are useful
+  building blocks, but a private-turn-only flag is insufficient for a
+  mixed-audience checkpoint, because a later public turn can clear it and
+  downstream reads re-expose retained private material
+  ([#5403](https://github.com/protoLabsAI/protoAgent/issues/5403)).
+
+**Decision 1 identity mechanism and its limits.** The prototype added a
+`classify_console(token, console_secret)` classifier: shared-operator,
+fleet-service and paired-agent credentials classify as **peers**; a distinct
+server-held console capability classifies as **human-console**; unknown
+credentials fail classification. The executed identity test passed, confirming
+operator rights are not equated with the console. **Limits:** the classifier is
+not installed in HTTP middleware or routes; console credential issuance,
+rotation, proxy propagation, revocation and loopback delegation are absent;
+possessing a token cannot prove a human is using it; and protection against
+agents that can reach console credentials, files or credential-management powers
+is unproven ([#5402](https://github.com/protoLabsAI/protoAgent/issues/5402)).
+
+**Two audiences in one context** was informed **negatively**: an executed test
+showed a peer follow-up and a queued private steer both reach one model input, so
+the proposed one-audience-per-turn queue rule remains unproven
+([#5400](https://github.com/protoLabsAI/protoAgent/issues/5400),
+[#5401](https://github.com/protoLabsAI/protoAgent/issues/5401)).
+
+**Prototype location (throwaway; no PR, no push, no merge).** Worktree
+`/Users/kj/dev/protoAgent-team/.worktrees/feat-bd-h6gka-phase-0-conversations-in-work-audience-i`,
+branch `feat/bd-h6gka-phase-0-conversations-in-work-audience-i`, based on
+`d669467be1ef02aa4a4440ee6e4bfbf6c6b6b072`. The prototype is
+`src/a2a_impl/phase0_audience.py` with test additions kept in the working diff;
+final evidence is `phase0-focused.log`. Exact commands as reported, in order
+(the earlier commands iterated the `-k phase0` subset to green before the full
+focused run):
+
+```sh
+.venv/bin/python -m pytest tests/test_a2a_hitl_parked_routing.py tests/test_a2a_stores.py tests/test_steering.py -k phase0 -q   # iterated to: 5 passed, 98 deselected
+.venv/bin/python -m pytest tests/test_steering.py tests/test_steer_idle_starts_turn.py tests/test_a2a_hitl_parked_routing.py tests/test_a2a_stores.py tests/test_chat_routes.py -q   # 209 passed in 10.20s
+```
+
+The prototype's live PR-overlap refresh failed on GitHub connectivity, so
+remote-main freshness at prototype time is unverified; the board overlap finding
+in [Overlap check](#overlap-check) still stands from the 2026-11-16 audit. This
+section records the Phase 0 outcome only; it creates no implementation cards and
+authorizes no build.
 
 ## Decision sources and approval boundaries
 
@@ -457,6 +562,26 @@ the only navigation that may precede it.
 | 5. Work presentation and migration | Add conversation rows (capability table), request promotion presentation, replace Open conversation / Continue in a new chat entry points per decision 5, and update the stale docs listed under migration. Depends on 4 and approved routine/completed discovery. | Desktop/phone/accessibility review plus focused integration tests; old links still resolve safely. |
 | 6. Remote and non-A2A participants | Upgrade unavailable capability rows (remote A2A, ACP coder, board coder, plugin reviewer, Discord) only as their transcripts become durable and owner guarantees are verified. | Per-type capability evidence; unsupported rows stay truthfully unavailable. |
 
+**Phase 0 outcome (2026-11-16): REVISE** — see [Phase 0 outcome](#phase-0-outcome).
+Phase 0 ended in revise, not continue, so **Phase 1 does not begin as written**.
+Before Phase 1 (audience isolation), the design must be revised to: adopt
+enforcement **Model B** (explicit deliver-to-requester) as the direction and make
+it an authenticated delivery capability with recipient binding and scoped
+operator-relay authorization, not a bare event
+([#5400](https://github.com/protoLabsAI/protoAgent/issues/5400)); handle idle and
+parked/resume private inputs that enter SDK task history before any output gate,
+rather than filtering output surfaces alone
+([#5401](https://github.com/protoLabsAI/protoAgent/issues/5401)); turn the
+decision 1 human-console identity into a real transport capability (issuance,
+rotation, revocation, proxy propagation), not a standalone classifier
+([#5402](https://github.com/protoLabsAI/protoAgent/issues/5402)); and extend
+audience exclusion to artifacts, tool output, files and the checkpoint-derived
+and observability surfaces (gist, digest, harvest, facts, tracing, prompt
+capture, fleet export) across later turns
+([#5403](https://github.com/protoLabsAI/protoAgent/issues/5403)). Every phase
+after Phase 0 still needs a further, separate go from Josh (decision 6); this
+proposal adds no implementation cards or dispatch instructions.
+
 Split each phase at its API/store/UI seam after approval rather than bundling
 backend privacy and a visual replacement into one release.
 
@@ -501,6 +626,12 @@ and applying any ADR amendments require a reviewed implementation change.
 Every product decision this proposal touches, disposed one way or the other.
 "Decided" rows cite the numbered decisions of 2026-11-16; nothing else is
 approved. Recommendations on open rows are labelled proposals, not approvals.
+Rows the 2026-11-16 Phase 0 prototype (board card bd-h6gka) informed now read
+**Phase 0 finding (pending Josh's go)** and cite the filed issue
+([#5400](https://github.com/protoLabsAI/protoAgent/issues/5400)–[#5403](https://github.com/protoLabsAI/protoAgent/issues/5403));
+these are prototype evidence still awaiting Josh's go, not approvals. Rows the
+prototype did not touch stay **Open — not informed by Phase 0 prototype**. See
+[Phase 0 outcome](#phase-0-outcome).
 
 | Decision | Status | Recommendation where open (proposal, not approval) |
 | --- | --- | --- |
@@ -510,20 +641,20 @@ approved. Recommendations on open rows are labelled proposals, not approvals.
 | v1 participant scope; unavailable rows; no copied fallback | **Decided by Josh 2026-11-16 (4)** | — |
 | ADR 0129 D8 structured controls and missing-origin fallback in v1 | **Decided by Josh 2026-11-16 (5)** | — |
 | What merging this proposal means; when work starts | **Decided by Josh 2026-11-16 (6)** | — |
-| Explicit relay permission flow and UI ("tell them the deadline moved") | Open: settled in Phase 0 | Decision 2 sets the boundary (explicit operator instruction). Identify recipient and scoped message; record the authorization separately from private steering. |
-| Nonterminal active states for retention | Open: settled in Phase 0 | Include queued/Coming up, blocked, parked, waiting and unknown recovery; release only on durable closure of all references. |
-| Stalled, never-closed linked work: closure owner; D9 nudges and Needs you parking vs release | Open: settled in Phase 0 | Give release an owner; a stall nudge is a prompt to close or continue, never an automatic release. |
-| One request producing several jobs | Open: settled in Phase 0 | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
-| What makes an incoming thread an actionable request rather than routine conversation | Open: settled in Phase 0 | Require durable work intent/evidence; do not classify every A2A thread as Work or guess from a title. |
-| Remote original capability beyond v1 (read, retention, steering) | Open: settled in Phase 0 | v1 shows remote rows unavailable (decision 4). Advertise verified owner capabilities separately; read-only where authorized; no composer until privacy and continuation are proven. |
-| Routine-thread discoverability after From others is removed | Open: settled in Phase 0 | Evaluate the preview's Started by others group in Chat; approve its eligibility and visibility before removing the old entry point. |
-| Completed work/history placement | Open: settled in Phase 0 | Keep finished work out of active counts as already designed; choose the history destination and stale return-link behavior explicitly. |
-| Closed-chat clock after last closure vs the 14-day closed-chat digest window (#5387) | Open: settled in Phase 0 | Define one truthful clock; never promise deletion while retaining data. |
-| Do traces, captured prompts and fleet trace export follow the incognito rule for private steering? | Open: settled in Phase 0 | Reuse the incognito pattern (`io_allowed`, prompt-capture skip, no exported content) for private turns. |
-| Two audiences in one context | Open: settled in Phase 0 | One audience per turn; peer turns queue until the private turn finishes. |
-| Default-private output enforceability; agent-decides-audience vs explicit deliver-to-requester | Open: settled in Phase 0 | The Phase 0 prototype's core question; prefer the explicit action if both work, as it is easier to enforce and test. |
-| Read-only Open in chat milestone | Open: settled in Phase 0 | Accept it: it ships value from phases 2–4 without waiting on isolation. |
-| Record the supersession as an ADR 0131 amendment or a new ADR | Open: settled in Phase 0 | Record it as an ADR amendment so the contract has one home. |
+| Explicit relay permission flow and UI ("tell them the deadline moved") | Phase 0 finding (pending Josh's go) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Partly informed: Model B gives a distinct delivery point, but it is an unauthenticated event; recipient binding and scoped relay authorization/UI stay unproven. Decision 2 sets the boundary (explicit operator instruction). Identify recipient and scoped message; record the authorization separately from private steering. |
+| Nonterminal active states for retention | Open — not informed by Phase 0 prototype | Include queued/Coming up, blocked, parked, waiting and unknown recovery; release only on durable closure of all references. |
+| Stalled, never-closed linked work: closure owner; D9 nudges and Needs you parking vs release | Open — not informed by Phase 0 prototype | Give release an owner; a stall nudge is a prompt to close or continue, never an automatic release. |
+| One request producing several jobs | Open — not informed by Phase 0 prototype | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
+| What makes an incoming thread an actionable request rather than routine conversation | Open — not informed by Phase 0 prototype | Require durable work intent/evidence; do not classify every A2A thread as Work or guess from a title. |
+| Remote original capability beyond v1 (read, retention, steering) | Open — not informed by Phase 0 prototype | v1 shows remote rows unavailable (decision 4). Advertise verified owner capabilities separately; read-only where authorized; no composer until privacy and continuation are proven. |
+| Routine-thread discoverability after From others is removed | Open — not informed by Phase 0 prototype | Evaluate the preview's Started by others group in Chat; approve its eligibility and visibility before removing the old entry point. |
+| Completed work/history placement | Open — not informed by Phase 0 prototype | Keep finished work out of active counts as already designed; choose the history destination and stale return-link behavior explicitly. |
+| Closed-chat clock after last closure vs the 14-day closed-chat digest window (#5387) | Open — not informed by Phase 0 prototype | Define one truthful clock; never promise deletion while retaining data. |
+| Do traces, captured prompts and fleet trace export follow the incognito rule for private steering? | Phase 0 finding (pending Josh's go) — [#5403](https://github.com/protoLabsAI/protoAgent/issues/5403), inspection-only | Inspection-informed, not executed: reuse the incognito pattern (`io_allowed`, prompt-capture skip, no exported content), but the protection must survive later turns reading the same checkpoint. |
+| Two audiences in one context | Phase 0 finding (pending Josh's go) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Informed negatively: an executed test showed both inputs reach one model input. One audience per turn; peer turns queue until the private turn finishes — rule still unproven. |
+| Default-private output enforceability; agent-decides-audience vs explicit deliver-to-requester | Phase 0 finding (pending Josh's go) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Experimentally informed: recommend Model B (explicit deliver-to-requester); the full contract is unproven (idle/parked history, artifacts, tools). Prefer the explicit action as it is easier to enforce and test. |
+| Read-only Open in chat milestone | Open — not informed by Phase 0 prototype | Accept it: it ships value from phases 2–4 without waiting on isolation. |
+| Record the supersession as an ADR 0131 amendment or a new ADR | Open — not informed by Phase 0 prototype | Record it as an ADR amendment so the contract has one home. |
 
 ## Focused validation and risks
 
