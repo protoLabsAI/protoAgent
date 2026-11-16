@@ -584,8 +584,8 @@ async def test_dismissing_the_card_never_resumes_and_stays_dismissed(tmp_path, m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("artifact_kind", ["partial", "continuation", "missing", "failed"])
-async def test_auto_resume_replaces_partial_answer_artifact(tmp_path, monkeypatch, artifact_kind):
+@pytest.mark.parametrize("artifact_kind", ["partial", "continuation", "missing", "failed", "conflict", "contended"])
+async def test_auto_resume_replaces_partial_answer_artifact(tmp_path, monkeypatch, artifact_kind, caplog):
     from sqlalchemy import update
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -620,16 +620,49 @@ async def test_auto_resume_replaces_partial_answer_artifact(tmp_path, monkeypatc
             raise RuntimeError("model unavailable during recovery")
 
         monkeypatch.setattr(type(STATE.graph), "ainvoke", fail_resume)
+    if artifact_kind in {"conflict", "contended"}:
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.sql.dml import Update
+
+        execute = AsyncSession.execute
+        conflicts = 0
+
+        async def race_completion(session, statement, *args, **kwargs):
+            nonlocal conflicts
+            # A writer advances the row after recovery read it, before its CAS.
+            if (isinstance(statement, Update) and statement.table.name == "tasks"
+                    and "artifacts" in statement.compile().params
+                    and (conflicts == 0 or artifact_kind == "contended")):
+                conflicts += 1
+                await execute(session, update(TaskModel).where(TaskModel.id == task_id).values(
+                    last_updated=datetime.now(UTC) + timedelta(seconds=conflicts),
+                    artifacts=[{"artifactId": "concurrent", "parts": [{"text": "keep me"}]}] + artifacts,
+                ))
+            return await execute(session, statement, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncSession, "execute", race_completion)
     gen2 = await _restart(tmp_path, monkeypatch, coord, saver, agent, release=True)
     try:
+        expected = "interrupted_needs_operator" if artifact_kind == "contended" else "settled"
         await _wait_until(
-            lambda: (_occurrence(gen2.sched.path, "job-answer") or {"state": ""})["state"] == "settled",
+            lambda: (_occurrence(gen2.sched.path, "job-answer") or {"state": ""})["state"] == expected,
             message="the resumed answer settled",
         )
+        if artifact_kind == "contended":
+            await _wait_until(
+                lambda: _task_status(tmp_path, task_id)[0] == "TASK_STATE_FAILED",
+                message="the quarantined task received its failure disposition",
+            )
         row = _query(tmp_path / "a2a-tasks.db", "SELECT artifacts FROM tasks WHERE id = ?", (task_id,))[0]
         saved = json.loads(row["artifacts"])
         state, message = _task_status(tmp_path, task_id)
-        if artifact_kind == "failed":
+        if artifact_kind == "contended":
+            assert state == "TASK_STATE_FAILED"
+            assert saved[1:] == artifacts
+            assert conflicts == 3
+            assert "could not record the completed resume" in caplog.text
+            assert not any(record.msg.startswith("[interrupted-turns] resumed") for record in caplog.records)
+        elif artifact_kind == "failed":
             assert state == "TASK_STATE_FAILED"
             assert "model unavailable during recovery" in message
             assert saved == artifacts
@@ -638,7 +671,11 @@ async def test_auto_resume_replaces_partial_answer_artifact(tmp_path, monkeypatc
             assert saved[-1]["artifactId"] == answer_id
             assert saved[-1]["parts"] == [{"text": "done SLOW-MODEL"}]
             assert message == "done SLOW-MODEL"
-            assert saved[:-1] == (earlier if artifact_kind == "continuation" else [])
+            if artifact_kind == "conflict":
+                assert conflicts == 1
+                assert saved[:-1] == [{"artifactId": "concurrent", "parts": [{"text": "keep me"}]}]
+            else:
+                assert saved[:-1] == (earlier if artifact_kind == "continuation" else [])
         assert coord.tool_runs["step_one"] == 1
     finally:
         await _shutdown(coord, gen2)

@@ -906,7 +906,9 @@ async def finalize_interrupted_task(
     disposition, so the TTL/reaper backstops apply to the row again from here on.
     Completion also replaces the interrupted answer artifact: transcript readers
     prefer artifacts over the status message. Failure/pause diagnoses leave partial
-    output intact. Returns True when the row was updated."""
+    output intact. Completion retries timestamp conflicts against fresh artifacts;
+    after three conflicts it returns False and retains the reaper exemption for the
+    caller to decide the disposition. Returns True when the row was updated."""
     if state not in _FINALIZE_STATES:
         raise ValueError(f"finalize_interrupted_task: unsupported state {state!r}")
     now = now or datetime.now(UTC)
@@ -914,18 +916,24 @@ async def finalize_interrupted_task(
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_maker() as session:
-        stmt = (
-            update(TaskModel)
-            .where(TaskModel.id == str(task_id))
-            .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
-        )
-        values = {"status": blob, "last_updated": now}
-        if state == "completed":
-            row = (await session.execute(
-                select(TaskModel.artifacts, TaskModel.last_updated).where(TaskModel.id == str(task_id))
-            )).first()
-            if row is not None:
+    # Retry only persistence, never the checkpoint drive or its side effects.
+    for _attempt in range(3):
+        async with session_maker() as session:
+            stmt = (
+                update(TaskModel)
+                .where(TaskModel.id == str(task_id))
+                .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
+            )
+            values = {"status": blob, "last_updated": now}
+            if state == "completed":
+                row = (await session.execute(
+                    select(TaskModel.artifacts, TaskModel.last_updated)
+                    .where(TaskModel.id == str(task_id))
+                    .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
+                )).first()
+                if row is None:
+                    _RESTART_SPARED_TASK_IDS.discard(str(task_id))
+                    return False
                 artifacts = list(row.artifacts or [])
                 answer_id = f"{task_id}-answer"
                 # HITL continuations have separate answer artifacts. Replace only
@@ -945,11 +953,14 @@ async def finalize_interrupted_task(
                     artifacts[index] = artifact
                 values["artifacts"] = artifacts
                 # Don't overwrite output saved by another writer since the read.
-                stmt = stmt.where(TaskModel.last_updated == row.last_updated)
-        result = await session.execute(stmt.values(**values))
-        await session.commit()
-    _RESTART_SPARED_TASK_IDS.discard(str(task_id))
-    return bool(result.rowcount)
+                stmt = stmt.where(TaskModel.last_updated.is_not_distinct_from(row.last_updated))
+            result = await session.execute(stmt.values(**values))
+            await session.commit()
+        if result.rowcount or state != "completed":
+            _RESTART_SPARED_TASK_IDS.discard(str(task_id))
+            return bool(result.rowcount)
+    # Keep the reaper exemption until recovery makes an explicit disposition.
+    return False
 
 
 async def reopen_restart_failed_task(
