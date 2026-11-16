@@ -437,7 +437,74 @@ def _bad_target_detail(cfg, pid: str, key: str, target) -> str:
     return f"{key}: {target!r} must be a <provider>:<model> target (e.g. 'local-vllm:qwen3-32b')."
 
 
+# ── Model-role status (ADR 0133 M6) ───────────────────────────────────────────
+#
+# Read-only, per role (the core routed roles in ``graph.config._ROLE_FIELDS`` — the chains
+# M2's seam builds; subagent tiers are reported separately via the provider ``in_use``
+# surface and fold into one Settings line in M7): the resolved chain (ADR 0133 D2), whether
+# it is inherited and from which parent, M2's last-fallback record, and — for image_describe
+# — whether any model in the resolved chain can read images. Feeds the Settings "Model roles"
+# group (M7); it writes nothing.
+
+
+def _image_describe_can_read(cfg, source: str | None) -> bool:
+    """Whether image description has a vision-capable model to run on.
+
+    The only per-model vision capability the server stores is ``config.model_vision`` — the
+    MAIN model's flag (ADR 0021, set when the lead model is image-capable). A SET
+    ``image_describe`` chain is a describe model the operator chose for exactly this (the
+    field's whole purpose — "a vision-capable gateway model"), so it reads images by
+    definition; a BLANK one inherits the MAIN chain (ADR 0133 D2 exception), so it reads
+    images only when the main model does."""
+    if source == "image_describe":
+        return True
+    return bool(getattr(cfg, "model_vision", False))
+
+
+def _role_status_list(cfg) -> list[dict]:
+    """Per-role resolved chain + inherited flag + last fallback, for the status surface."""
+    from graph import model_roles
+    from graph.config import _ROLE_FIELDS, resolve_role_chain
+
+    out: list[dict] = []
+    for role in _ROLE_FIELDS:
+        chain, source = resolve_role_chain(cfg, role)
+        status, reason = "ok", None
+        if role == "image_describe":
+            # D2 exception: a BLANK describe model inherits the MAIN chain for the status
+            # surface (M1's ``role_chain`` keeps it OFF — the runtime migration is M4 — so the
+            # inherit-main lives here, where the ADR puts it). ``resolve_role_chain("main")``
+            # already carries "main" as the source (or None when main itself is blank).
+            if not chain:
+                chain, source = resolve_role_chain(cfg, "main")
+            if not _image_describe_can_read(cfg, source):
+                status, reason = "unavailable", "no-vision"
+        entry = {
+            "role": role,
+            "chain": list(chain),
+            "inherited": source is not None and source != role,
+            "source": source,
+            "status": status,
+            "last_fallback": model_roles.last_fallback(role),
+        }
+        if reason is not None:
+            entry["reason"] = reason
+        out.append(entry)
+    return out
+
+
 def register_provider_routes(app) -> None:
+    @app.get("/api/config/model-roles")
+    async def _model_roles():
+        """Each core model role's resolved chain, inherited flag, and last fallback (ADR 0133).
+
+        Read-only status for Settings › Models (M7): the chain each role resolves to (D2),
+        whether it is set or inherited (and from which parent), the last time a fallback fired
+        for it (M2's record, reason redacted to exception type/status), and for image_describe
+        whether any resolved model can read images (`status: "unavailable"`, `reason:
+        "no-vision"` when none can)."""
+        return {"roles": _role_status_list(_config())}
+
     @app.get("/api/config/providers")
     async def _list_providers():
         """The registry, keys redacted, each entry saying whether it can actually run.

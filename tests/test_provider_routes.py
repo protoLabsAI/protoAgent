@@ -865,3 +865,108 @@ def test_a_blank_connection_key_leaves_the_stored_one_alone():
 
     _, secrets = split_secret_updates({"providers": [{"id": "gateway", "api_key": "   "}]})
     assert secrets == {}
+
+
+# ── GET /api/config/model-roles: each role's chain, inherited flag, last fallback ──
+# (ADR 0133 M6). Read-only status for Settings › Models (M7).
+
+from types import SimpleNamespace  # noqa: E402
+
+from langchain_core.runnables import RunnableLambda  # noqa: E402
+
+from graph import model_roles  # noqa: E402
+
+
+@pytest.fixture
+def clear_fallbacks(monkeypatch):
+    """M2's last-fallback registry is a process-global; isolate it per test."""
+    monkeypatch.setattr(model_roles, "_last_fallbacks", {})
+    monkeypatch.setattr(model_roles, "_streaks", set())
+
+
+class _Transient(Exception):
+    def __init__(self):
+        super().__init__("transient")
+        self.status_code = 429
+
+
+def _record_fallback(monkeypatch, role, field, primary, winner):
+    """Drive one real retryable fallback through M2's seam so it records last_fallback(role).
+
+    The record is keyed by role name alone, independent of the config the route reads — so a
+    fake-model chain here populates the record the status surface then reports for that role.
+    """
+    def _boom(_):
+        raise _Transient()
+
+    models = {primary: RunnableLambda(_boom), winner: RunnableLambda(lambda _: "ok")}
+    monkeypatch.setattr(model_roles, "create_llm", lambda config, model_name, **kw: models[model_name])
+    llm = model_roles.create_role_llm(SimpleNamespace(**{field: [primary, winner]}), role)
+    assert llm.invoke("x") == "ok"
+
+
+def test_model_roles_reports_chain_inherited_and_last_fallback(client, monkeypatch, clear_fallbacks):
+    _install(monkeypatch, **{**BASE, "routing": {"aux_model": ["prod-gateway:a", "prod-gateway:b"]}})
+    roles = {r["role"]: r for r in client.get("/api/config/model-roles").json()["roles"]}
+
+    # The main model's own chain, marked set (not inherited).
+    assert roles["main"]["chain"] == ["prod-gateway:protolabs/reasoning"]
+    assert roles["main"]["inherited"] is False and roles["main"]["source"] == "main"
+    # aux is a two-model chain, set here.
+    assert roles["aux"]["chain"] == ["prod-gateway:a", "prod-gateway:b"]
+    assert roles["aux"]["inherited"] is False and roles["aux"]["source"] == "aux"
+    # A blank aux-family role inherits the WHOLE aux chain (ADR 0133 D2), flagged inherited.
+    assert roles["compaction"]["chain"] == ["prod-gateway:a", "prod-gateway:b"]
+    assert roles["compaction"]["inherited"] is True and roles["compaction"]["source"] == "aux"
+    # No fallback has fired yet.
+    assert roles["aux"]["last_fallback"] is None
+
+    # A retryable failure makes aux answer from its fallback; the status surface reports it,
+    # reason redacted to the exception type/status (never a provider payload).
+    _record_fallback(monkeypatch, "aux", "aux_model", "prod-gateway:a", "prod-gateway:b")
+    roles = {r["role"]: r for r in client.get("/api/config/model-roles").json()["roles"]}
+    record = roles["aux"]["last_fallback"]
+    assert record["from"] == ["prod-gateway:a"] and record["to"] == "prod-gateway:b"
+    assert "prod-gateway:a" in record["reason"] and "429" in record["reason"]
+
+
+def test_model_roles_lists_every_core_role(client, monkeypatch, clear_fallbacks):
+    from graph.config import _ROLE_FIELDS
+
+    _install(monkeypatch, **BASE)
+    roles = client.get("/api/config/model-roles").json()["roles"]
+    assert [r["role"] for r in roles] == list(_ROLE_FIELDS)
+
+
+def test_model_roles_image_describe_unavailable_without_vision(client, monkeypatch, clear_fallbacks):
+    # BASE: the main model is set, model.vision defaults off, image_describe is blank.
+    _install(monkeypatch, **BASE)
+    describe = next(
+        r for r in client.get("/api/config/model-roles").json()["roles"] if r["role"] == "image_describe"
+    )
+    # A blank describe model inherits the MAIN chain (D2 exception), but the main model can't
+    # read images (model.vision off), so image description reports itself unavailable.
+    assert describe["chain"] == ["prod-gateway:protolabs/reasoning"]
+    assert describe["inherited"] is True and describe["source"] == "main"
+    assert describe["status"] == "unavailable" and describe["reason"] == "no-vision"
+
+
+def test_model_roles_image_describe_available_when_the_main_model_reads_images(client, monkeypatch, clear_fallbacks):
+    _install(monkeypatch, **{**BASE, "model": {**BASE["model"], "vision": True}})
+    describe = next(
+        r for r in client.get("/api/config/model-roles").json()["roles"] if r["role"] == "image_describe"
+    )
+    # The inherited main model reads images natively → available, no reason reported.
+    assert describe["status"] == "ok" and "reason" not in describe
+    assert describe["inherited"] is True and describe["source"] == "main"
+
+
+def test_model_roles_image_describe_available_with_its_own_chain(client, monkeypatch, clear_fallbacks):
+    _install(monkeypatch, **{**BASE, "knowledge": {"image_describe_model": "prod-gateway:vision"}})
+    describe = next(
+        r for r in client.get("/api/config/model-roles").json()["roles"] if r["role"] == "image_describe"
+    )
+    # A SET describe model is vision-capable by the field's purpose — available and not inherited.
+    assert describe["chain"] == ["prod-gateway:vision"]
+    assert describe["inherited"] is False and describe["source"] == "image_describe"
+    assert describe["status"] == "ok" and "reason" not in describe
