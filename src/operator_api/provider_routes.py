@@ -568,7 +568,8 @@ def register_provider_routes(app) -> None:
         Read-only status for Settings › Models (M7): the chain each role resolves to (D2),
         whether it is set or inherited (and from which parent), the last time a fallback fired
         for it (M2's record, reason redacted to exception type/status), and construction
-        skips (one-based chain index, model, exception type). Skips are probed live from the
+        skips (zero-based chain index — the primary is 0, the first fallback 1 — model, and
+        exception type). Skips are probed live from the
         current config, so a role with no production build site (e.g. ``aux``) still reports the
         unbuildable fallbacks its chain would drop. For image_describe, this also reports
         whether any resolved model can read images (`status: "unavailable"`, `reason:

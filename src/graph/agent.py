@@ -677,10 +677,18 @@ def _build_middleware(
 
     # Model routing / failover — retry on fallback models (same gateway).
     # Observable wrapper (#2956): the stock middleware fails over silently.
+    #
+    # Build the tail from the RESOLVED main chain, not raw `config.model_name`: when
+    # `model.name` is an ADR 0133 list, `role_chain('main')` flattens it (and folds in the
+    # legacy `routing.fallback_models` tail) into one coherence-filtered chain. The primary
+    # (index 0) is built by create_agent, so `build_fallbacks` drops unbuildable entries from
+    # `chain[1:]`, and its `main[<i>]` skip indices line up with the status surface, which
+    # reports skips over the SAME `role_chain('main')`.
+    from graph.config import role_chain
     from graph.model_roles import build_fallbacks
 
     fallback_names, fallbacks = build_fallbacks(
-        "main", [config.model_name, *(config.routing_fallback_models or [])],
+        "main", role_chain(config, "main"),
         lambda name: create_llm(config, model_name=name),
     )
     if fallbacks:
