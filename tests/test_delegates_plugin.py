@@ -321,6 +321,27 @@ async def _invoke_delegate(tool, args):
     return getattr(result, "content", result)
 
 
+async def _settle_until(predicate, *, timeout: float = 2.0):
+    """Yield the event loop until ``predicate()`` holds, then return (asserting it did).
+
+    A side effect driven by a chain of done-callbacks — an adopted dispatch task's
+    ``kill_now`` firing after its tracking job is canceled (#5318) — settles over several
+    loop iterations. The Windows proactor loop drains ready callbacks in a different order
+    than the macOS/Linux selector loop, so asserting the effect inline assumes a scheduling
+    order that doesn't hold cross-platform. Polling removes that assumption without
+    weakening what is checked.
+    """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    assert predicate(), "condition never settled"
+
+
 def test_register_no_delegates_registers_only_propose(monkeypatch):
     """An empty roster still gets propose_delegate (#2944) — the consent-gated way
     OUT of the empty-roster dead end — and nothing else."""
@@ -1616,7 +1637,10 @@ async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_pat
         if adoption == "cancel":
             await mgr.cancel(task_id)
             assert "canceled" in await _invoke_delegate(tool, args)
-            assert killed == [True]
+            # cancel() only schedules the tracking job's cancellation; the adopted dispatch
+            # task's kill_now fires a few loop hops later via a done-callback chain, and the
+            # proactor loop orders that drain differently — so wait for it, don't assume it.
+            await _settle_until(lambda: killed == [True])
             return
         release.set()
         assert await _invoke_delegate(tool, {**args, "timeout": 1}) == "original result"

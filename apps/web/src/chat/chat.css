@@ -1628,3 +1628,77 @@
   flex: none;
   gap: var(--pl-space-2);
 }
+
+/* ThreadJobs — the reader's collapsed "Jobs from this thread" disclosure (other-conversations.md
+   §11.1 item 1, slice C10a). It sits under the meta line in the header band; C10b mounts it. */
+.thread-jobs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--pl-space-1);
+  min-width: 0;
+}
+/* The summary is a DS ghost Button. Its label flows inline so "· N · K needs you" reads as one
+   line; the warning dot sits inline, centred on the text. */
+.thread-jobs__summary {
+  max-width: 100%;
+}
+.thread-jobs__summary .pl-dot {
+  vertical-align: middle;
+  margin-inline-end: var(--pl-space-0_5);
+}
+/* The expanded job list — one composite row per open job. */
+.thread-jobs__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-0_5);
+}
+.thread-jobs__row {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border: 0;
+  border-radius: var(--pl-radius-md);
+  background: transparent;
+  color: var(--pl-color-fg);
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--pl-font-size-sm);
+}
+.thread-jobs__row:hover {
+  background: var(--pl-color-bg-hover);
+}
+.thread-jobs__row:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: -2px;
+}
+.thread-jobs__row > .pl-dot {
+  flex: none;
+}
+.thread-jobs__row-title {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-jobs__row-status {
+  flex: none;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+/* Phone (< 768 px): the reader runs inside `.mshell-conversations` (mobile-shell.css), so float
+   the summary and each job row to the 44 px touch target (§11.1 item 1 / criterion 8). */
+.mshell-conversations .thread-jobs__summary {
+  min-height: 44px;
+}
+.mshell-conversations .thread-jobs__row {
+  min-height: 44px;
+}

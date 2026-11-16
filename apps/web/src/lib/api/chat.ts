@@ -173,6 +173,12 @@ export type ConversationRow = {
   caller?: string;
   caller_kind?: "person" | "agent";
   on_behalf_of?: string;
+  /** The OPEN tasks bound to this thread (ADR 0131 P2c; served by protoAgent#5329). Each is a
+   *  task whose `session_id` is this context (ADR 0131 D2: the conversation that caused it). The
+   *  server OMITS this field when the thread has no open tasks, so an absent `tasks` means "none"
+   *  — never an error. "Open" is any status except `closed`; the console drops a `closed` entry if
+   *  one still rides along. The reader's jobs line (`ThreadJobs`, §11.1) renders from this. */
+  tasks?: { id: string; title: string; status: string }[];
 };
 
 /** One session's summary + busy signal, from `GET /api/chat/sessions/{id}` (`chatApi.chatSession`).

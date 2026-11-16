@@ -15,6 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.244.1] - 2026-11-16
+
+### Changed
+- **Conversation task summaries (#5329).** Conversation list rows now include the IDs, titles, and statuses of open tasks bound to their thread, using one task-store read per request and omitting the field when there are none.
+
+- **Chat status rail uses Instructions (#5327).** The instructions chip and its accessible labels now match the terminology in Work, while retaining the number-only phone display.
+
+- **Inbox items carry a display-only origin (#5330).** Inbox rows now record the chat session that caused them (`origin_session`) plus a small origin dict (`caller`, `caller_kind`, `on_behalf_of` only), stored alongside the existing `source`/`target_session` via the store's guarded migration. `InboxStore.add` takes `origin_session=`/`origin=`, `origin_for_context` maps a fired item's `job:` execution context back to its origin session, and `POST /api/inbox` accepts and returns the fields. Provenance only — origin never routes or authorizes delivery (ADR 0131 D2/P2a).
+
+- **Work origin resolution (#5332).** Add a read-only resolver that follows inbox, scheduled-job and background-work provenance back to the conversation that caused it, with bounded hops and empty origins for unknown or unreadable records.
+
+- **Stall reminders retain their conversation origin (#5331).** Nudges carry the stalled task's conversation session so follow-up work can recover its origin; empty and job/background execution sessions are excluded.
+
+### Fixed
+- **From others retention (#5334).** Keep outside A2A conversations for the full seven-day listing window so quiet threads no longer disappear after 24 hours. Internal jobs, Activity, palette sessions, console chat deletion, and paused-task recovery retain their existing rules.
+
+- **Tasks inherit their originating conversation (#5333).** Tasks and schedules created during inbox, scheduled, or background turns now resolve their originating conversation for replies and result delivery. Unresolvable origins remain empty, while schedule execution contexts and waits retain their existing behavior.
+
+- **Thread reader title tooltip (#5337).** Opening a From others thread keeps focus on its heading without covering the meta line with a tooltip; hover and keyboard focus still reveal the full title.
+
+- **Follow-up backoff now survives a restart (#5336).** Part of #5299 (ADR 0131 P1): quiet recurring follow-up deadlines are persisted in the existing scheduler database. Elapsed deadlines are retained so the still-waiting card isn't repeated, and cleared when the operator answers or edits the job. Recreated jobs start with a fresh generation; a failed store load does not poison the registry.
+
+- **ACP delegation transcript fallback (#5335).** Delegations that end with no final reply now include an explicit incomplete marker and a bounded, redacted transcript tail with tool calls and background command IDs, including when follow-up nudges fail. Background delivery preserves the evidence and existing failure classification. Fixes #5317.
+
+- **Every way a task closes now gets the same self-improvement review, once per completion (#5325).** With self-improvement on, closing a task queues a review of the finished work. Only `task_close` and the console's close button did that. A task that closed because its linked card, PR, job or directive finished got no review, and neither did one closed through `task_update`. Re-closing a task that was already closed could also queue a second review once the first had run. Now the task store marks the moment a task actually goes from open to closed, and the review is queued from that, whichever way the task closed. The review runs in the task's own session. Closing an already-closed task queues nothing; reopening a task and closing it again counts as a new completion. Directive auto-fulfil also now sees a task closed through `task_update` as closed. Nothing changes when self-improvement is off.
+
+### Docs
+- **Align instruction chip wording in the design docs (#5328).** ADR 0129 and the chat status rail design docs now use “Instructions” for the chip and spoken labels, while the Work group remains “Your instructions”.
+
 ## [0.244.0] - 2026-11-15
 
 ### Changed
