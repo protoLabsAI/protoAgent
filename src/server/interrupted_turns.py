@@ -210,7 +210,8 @@ async def _finalize_task(task_id: str, *, state: str, text: str) -> None:
         raise RuntimeError("a2a task engine unavailable; cannot finalize task")
     from a2a_impl.stores import finalize_interrupted_task
 
-    await finalize_interrupted_task(engine, task_id, state=state, text=text)
+    if not await finalize_interrupted_task(engine, task_id, state=state, text=text):
+        raise RuntimeError(f"could not finalize interrupted task {task_id} as {state}")
 
 
 class InterruptedTurnRecovery:
@@ -410,9 +411,13 @@ class InterruptedTurnRecovery:
                 log.exception("[interrupted-turns] could not record the failed resume for task %s", task_id)
                 return False
             return True
-        await _finalize_task(
-            task_id, state="completed", text=final or "(resumed after a restart; the turn ended without reply text)"
-        )
+        try:
+            await _finalize_task(
+                task_id, state="completed", text=final or "(resumed after a restart; the turn ended without reply text)"
+            )
+        except Exception:  # noqa: BLE001 — quarantine instead of claiming an unwritten completion
+            log.exception("[interrupted-turns] could not record the completed resume for task %s", task_id)
+            return False
         log.warning("[interrupted-turns] resumed %s after a restart (task %s)", context_id, task_id)
         self._note_resumed(
             context_id=context_id, task_id=task_id, job_id=job_id, origin=origin, prompt=prompt, steps=steps,
