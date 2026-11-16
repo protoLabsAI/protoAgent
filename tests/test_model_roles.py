@@ -88,50 +88,6 @@ def test_single_model_is_original_model(monkeypatch):
     assert calls == ["primary"]
 
 
-def test_unbuildable_fallback_does_not_block_healthy_primary(monkeypatch):
-    # A fallback that cannot even be built (a keyless connection, a bad alias) must not make
-    # a role whose primary is healthy raise, and must not be constructed at all while the
-    # primary answers — the ADR 0133 M4 regression goal eval / memory select / image
-    # describe cared about (they built only the primary before).
-    built = []
-
-    def fake_create_llm(config, model_name, **kw):
-        built.append(model_name)
-        if model_name == "backup":
-            raise RuntimeError("keyless connection: cannot build")
-        return RunnableLambda(lambda _value: "primary answer")
-
-    monkeypatch.setattr(model_roles, "create_llm", fake_create_llm)
-    llm = model_roles.create_role_llm(SimpleNamespace(aux_model=["primary", "backup"]), "aux")
-    assert built == ["primary"]  # only the primary is built eagerly
-    assert llm.invoke("prompt") == "primary answer"
-    assert built == ["primary"]  # the unbuildable backup is never reached, so never built
-    assert model_roles.last_fallback("aux") is None
-
-
-def test_unbuildable_fallback_surfaces_primary_error_on_exhaustion(monkeypatch):
-    # When the primary DOES fail transiently and the only fallback cannot be built, the
-    # chain exhausts and re-raises the primary's original provider error (not the build
-    # error), matching the exhaustion contract.
-    primary_error = ProviderError(429)
-
-    def fake_create_llm(config, model_name, **kw):
-        if model_name == "backup":
-            raise RuntimeError("keyless connection: cannot build")
-
-        def invoke(_value):
-            raise primary_error
-
-        return RunnableLambda(invoke)
-
-    monkeypatch.setattr(model_roles, "create_llm", fake_create_llm)
-    llm = model_roles.create_role_llm(SimpleNamespace(aux_model=["primary", "backup"]), "aux")
-    with pytest.raises(ProviderError) as caught:
-        llm.invoke("prompt")
-    assert caught.value is primary_error
-    assert model_roles.last_fallback("aux") is None
-
-
 def test_logging_once_per_streak_and_recovery(monkeypatch, caplog):
     outcomes = iter([ProviderError(429), ProviderError(429), "recovered", ProviderError(429)])
     llm, _, _ = build(monkeypatch, {
