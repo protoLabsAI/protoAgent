@@ -15,6 +15,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.246.0] - 2026-11-16
+
+### Added
+- **Open an artifact in a browser tab from the panel (#5385).** The Artifact panel's toolbar has an **Open in browser** button for rendered artifacts (HTML, React, Markdown, Mermaid, SVG, Vega-Lite). It opens the version on screen as a standalone page in a new tab, or in your system browser on the desktop app. The link expires after 30 minutes, the same as the one the agent hands out (#4939).
+
+- **Recently closed chats stay in the prior-sessions digest (#5387).** A chat closed with "Save a summary" (or harvested by the idle sweep) now keeps a slot in the digest, marked "closed", for `memory.closed_session_days` (default 14) — its gist there is the first sentence of its harvest summary. Erase, Shift+click and bulk close leave no closed entry, and Erase removes an existing one (ADR 0132 D3b).
+
+- **Model roles accept an ordered fallback chain (#5366).** Every model-role setting — the main
+  `model.name`, `routing.aux_model`, `compaction.model`, `goal.eval_model`,
+  `memory.select_model`, `knowledge.image_describe_model`, the soul drift judge, and the new
+  `memory.harvest_model` / `memory.facts_model` / `memory.gist_model` — now accepts either a
+  single model (today's shape) or an ordered list: the primary, then each fallback in turn
+  (ADR 0133). `routing.fallback_models` still appends to the main chain. A blank role inherits
+  its parent's whole chain (specific → aux → main; harvest → aux, facts → harvest, gist → aux),
+  except blank image-describe and soul-drift-judge models, which inherit the main chain. The
+  chain editors arrive in a later milestone. A connection a chain entry names still counts as
+  in use, so it cannot be deleted out from under the chain, and subscription routes survive
+  export/import for every entry.
+
+- **Role model fallback seam (#5371).** Add shared role-model construction with fallback only for retryable provider errors, once-per-streak logging, and in-memory last-fallback diagnostics. Existing call sites remain unchanged.
+
+- **Model-role status API (#5375).** A read-only `GET /api/config/model-roles` reports, per core model role, the resolved fallback chain (ADR 0133 D2), whether it is set or inherited and from which parent, and the last fallback that fired for it (reason redacted to the exception type/status). For image description it also reports `status: "unavailable"` with `reason: "no-vision"` when no model in its resolved chain — a blank role inherits the main chain — can read images. Feeds the Settings › Models surface.
+
+- **Idle chat gists (#5376).** Chats with at least four new messages receive a short session-card gist after two quiet minutes, using the configurable memory_gist model role. Incognito, automated sessions, and goal turns are excluded; failed generation preserves the existing card.
+
+- **Model roles get a chain editor in Settings (#5384).** A `model_chain` field now renders one
+  ordered control (ADR 0133 M7b): a Combobox row per model — "Primary" then "then" — with
+  ↑ / ↓ / ✕ and a "+ Add fallback" button, and a live region that announces each reorder.
+  A blank inheriting role shows one quiet "Inherits <parent>" line whose toggletip opens a
+  popover listing the parent's full chain (including unsaved edits); "Set its own chain"
+  pre-fills that chain and "Use <parent>'s chain" clears it. The main chain can't be emptied
+  and folds any legacy `routing.fallback_models` in after its primary on the next save,
+  clearing the legacy tail in the same write so removed fallbacks stay removed after reload. An
+  entry on no connection is kept, with a "will be skipped" warning. Below 768px each row
+  becomes a card that wraps long model ids across their own lines so nothing is ever clipped.
+
+- **Model role chain schema (#5378).** Settings now describes every core model role as an ordered chain with grouping and inheritance metadata, while preserving legacy configuration fields.
+
+- **Model roles in Settings (#5388).** Group model chains by purpose, show registry-driven subagent overrides, and expose recent fallback and image availability details without blocking editing when history is unavailable.
+- **Disabled plugin subagents stay visible (#5388).** Retain registered worker metadata when config disables a worker so Settings can show its chain and off status across reloads.
+
+- **Subagent tiers accept a model fallback chain (#5382).** A subagent's pinned model
+  (`subagents.<name>.model`) now accepts an ordered list as well as a single id (ADR 0133):
+  the primary, then each fallback used only on a retryable provider error. A tier pinned to
+  `[a, b]` whose primary `a` rate-limits (429) fails over to `b` instead of failing the whole
+  delegation — the delegation runs on `a` and the chain's tail rides the same observable
+  model-fallback middleware the lead agent uses. The pin still wins the existing precedence
+  (pin → the turn's model override → `routing.aux_model` → the main model), a scalar pin stays
+  a chain of one (unchanged), and a tier with no pin inherits the aux→main chain with the main
+  chain's fallbacks still applying. The Settings provider-delete guard now counts a connection
+  named by any chain entry of a subagent pin as in use, and releasing it preserves the tier's
+  healthy fallbacks. Pins emptied by native-provider coherence filtering inherit the turn
+  override, auxiliary model, or main model instead of attempting an unroutable alias.
+
+### Changed
+- **Auxiliary model calls fail over on a flaky provider (#5377).** Conversation harvest, fact extraction and on-demand compaction now build their model through the ADR 0133 role chain (`create_role_llm`) instead of a single aux model: when the role resolves to more than one model (e.g. `routing.aux_model: [primary, backup]`), a retryable provider error — a 429, a 5xx, a connection timeout — retries the next model in the chain instead of failing the whole pass. A single-string `routing.aux_model` (today's default) is a one-entry chain and behaves exactly as before. Harvest and facts retain their historical aux selection: the reserved `memory.harvest_model` and `memory.facts_model` overrides remain inactive at these call sites. With aux blank, roles inherit the full main chain, including legacy `routing.fallback_models`.
+
+- **Prior-session digest shows each chat's gist (#5383).** A recent chat's one-to-two-sentence gist now renders inline in the `<prior_sessions>` digest, right after its topic; a chat without a gist yet reads exactly as before. The digest keeps its existing 2,000-token budget — when it runs tight, gists are shed (oldest chat first) before any chat drops out, so every recent chat keeps its index line.
+
+- **Prior-session chat context (#5363).** Reserve digest slots for operator chats and outside threads, excluding job, palette, and Activity sessions while preserving on-demand recall and the existing token budget.
+
+- **Role fallbacks for inline workflows (#5374).** Goal verification, memory selection, SOUL drift judging, and image description now build their models through role chains, so each falls back to its next entry on a rate limit or other transient error. A blank drift-judge model continues to use main even when aux is configured, and inherits main's fallbacks. Blank image description now inherits the main chain and reports itself unavailable when the resolved model can't read images.
+  Audio/video ingestion keeps its configured transcriber when the inherited image model cannot be built.
+
+### Fixed
+- **When the agent opens a rendered artifact, the tab now opens (#5385).** `open_artifact` on an HTML, React, Markdown, Mermaid, SVG or Vega-Lite artifact sent a page link the console didn't accept, so no tab opened and only the link in the reply worked. The console now opens it (#4939).
+
+- **Standing directives hold only real instructions (#5369).** The agent now records a directive only for an instruction that binds a later turn (a gate, hold, prohibition, limit or deferred action). Answers to questions the agent asked you go into the work instead of riding every turn as "from the operator", the conditions carry only rules you stated, and a directive can no longer be linked to another directive, which left it in force forever (#5367).
+
+- **Steering a peer's thread no longer locks the peer out of it (#5380).** When you steered an idle conversation that another agent started over federation, your turn was saved as yours inside their thread, and the peer's next message into its own conversation was refused with "Context … is not available to this caller". A thread now belongs to whoever started it: you can add turns, the peer can still continue it, and the peer still can't read your turns (#5379).
+
+- **Complete answers after scheduled-turn recovery (#5355).** A scheduled turn resumed from its checkpoint now replaces its interrupted answer artifact with the completed reply, so chat history no longer shows pre-crash partial text as a finished answer.
+
+- **Reliable delegate change summaries and regression checks (#5381).** Preserve Git index timestamps so same-tick edits appear in delegate summaries. Make simulated restart cleanup release database operations and use explicit synchronization for socket revocation and adopted ACP collection tests.
+
+- **From others reader polish (#5357).** Keep continuation references hidden from the composer while sending them to the agent, and copy absolute conversation links including the console base path.
+
+- **Whole-chat harvest summaries (#5390).** Retirement summaries now cover compaction archives and the full live conversation, summarizing long chats in parts before combining them. Fact extraction reads the same parts so opening facts are no longer lost to the 16,000-character tail limit.
+
+- **Incognito chats leave no memory on delete (#5364).** Deleting or clearing an incognito chat now always forgets its session's memory rows — the server forces it, whatever the request asked (ADR 0132 D5). Anything an incognito chat wrote to memory before the write-time guard landed is cleaned up too.
+
+- **Incognito memory protection (#5361).** `memory_save` and `knowledge_ingest` now refuse to save from incognito chats, including shared-profile writes, slash-command, workflow-step, and background subagents, and background ingestion, while ordinary chats retain their existing behavior.
+
+- **Job navigation and source conversations (#5358).** Jobs from a thread now open the matching Work group. Jobs from unlisted outside conversations older than seven days show muted source text instead of a broken conversation link.
+
+- **Restore context after chat checkpoint retirement (#5365).** Chats whose checkpoints were pruned resume with their latest harvest summary and last 20 stored turns, instead of starting with an empty context.
+
+- **Preserve dismissed task outcomes and conversations (#5356).** Work now shows dismissed tasks as dismissed, and waiting-task outcome notifications retain the task's originating conversation. Reopening a task clears its previous closure details so later completion does not inherit a dismissal.
+
+- **Plain task URLs no longer imply active work (#5359).** Only GitHub pull-request URLs are tracked as PRs; other URLs are informational, including previously stored links. They no longer keep tasks driven, trigger PR polling, or prevent completed linked work from closing a task.
+
+- **Work rows and detail pills reflect task activity (#5354).** Overview and Doing now show idle duration or stalled status, and stalled tasks no longer show a running spinner. Task detail pills use the same activity wording and show “not started” for jobs awaiting their start, while driven tasks retain their running presentation.
+
+### Docs
+- **Rewrite the first-schedule tutorial and re-path goal mode for today's Work flow (#5352).** The scheduling tutorial now walks the Work ▸ Coming up ▸ New flow — a free-text request, a *Check this before saving* confirm step with plain-words Repeat choices (no cron, no Job id), then Save — matching `WorkCreateDialog`. The goal-mode guide drops the removed **Goals → New goal** panel for today's entry points (the **Work: New goal…** palette command, `/goal new`, or `POST /api/goals`), with goals tracked in Work ▸ Doing now.
+
+- **From others guide (#5353).** Document the seven-day conversation list, read-only reader, per-device visibility, and links between threads, jobs, and Needs you; add the guide to app help and docs navigation.
+
+- **Model fallback chains guide (#5391).** New guide covering model fallback chains: what a chain is, which model roles take one (main, aux, compaction, harvest, facts, chat gist, memory select, goal checks, drift judge, image description, subagent tiers), how a blank role inherits its parent's whole chain, how to set a chain in Settings → Model → Model roles or in YAML, and where a fired fallback shows up. Added to app help and docs navigation; the `routing` and tuning references now reflect that every role — not just the main model — falls back (ADR 0133).
+
+- **Operator work API reference (#5348).** Document conversation discovery and caller/task fields, task activity and ask/link shapes, and inbox origin metadata.
+
+- **Retention and restart documentation (#5351).** Correct A2A history retention by context and scheduler restart recovery; document Work task retention, inbox pruning, and persisted follow-up backoff.
+
+- **Scheduler guide reflects current Work behavior (#5346).** Clarifies that recurring jobs run in their own sessions and report to their origin chat, documents withdrawal in Work → Your instructions, and explains follow-up backoff and its persistence across restarts.
+
+- **Task tool reference matches Work (#5347).** Document waiting tasks and their required ask, linked work and automatic closure, warnings for tasks with nothing driving them, and originating conversation attribution.
+
+- **Retention and device sync (#5349).** Document what is kept, where it lives, and what deleting a chat leaves behind; align the memory guides with the shipped delete-chat choices.
+
+- **Console guide covers the Work surface (#5350).** The "Use the app" guide now has a Work
+  section describing its four groups (Needs you, Doing now, Coming up, Your
+  instructions) and Overview, chat-scoped rail visits, the chat status rail and its
+  chips, answering a waiting job in place (Reply / Done… / Dismiss…), the
+  source conversation of a job, and the idle / stalled job labels with their
+  stall reminders.
+
 ## [0.245.0] - 2026-11-16
 
 ### Added

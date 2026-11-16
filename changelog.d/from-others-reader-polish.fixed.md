@@ -1,1 +1,0 @@
-- **From others reader polish.** Keep continuation references hidden from the composer while sending them to the agent, and copy absolute conversation links including the console base path.

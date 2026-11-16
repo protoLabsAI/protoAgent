@@ -1,1 +1,0 @@
-- **Prior-session chat context.** Reserve digest slots for operator chats and outside threads, excluding job, palette, and Activity sessions while preserving on-demand recall and the existing token budget.

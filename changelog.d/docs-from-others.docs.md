@@ -1,1 +1,0 @@
-- **From others guide.** Document the seven-day conversation list, read-only reader, per-device visibility, and links between threads, jobs, and Needs you; add the guide to app help and docs navigation.

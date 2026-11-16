@@ -1,1 +1,0 @@
-- **Retention and device sync.** Document what is kept, where it lives, and what deleting a chat leaves behind; align the memory guides with the shipped delete-chat choices.
