@@ -166,5 +166,18 @@ def create_role_llm(config, role: str, **kwargs):
     names = role_chain(config, role)
     if not names:
         raise ValueError(f"model role {role!r} has no configured models")
+    return build_chain_llm(config, role, names, **kwargs)
+
+
+def build_chain_llm(config, role: str, names: list[str], **kwargs):
+    """Build a fallback runnable over an EXPLICIT ordered model-id chain.
+
+    The shared core of :func:`create_role_llm` for a chain resolved OUTSIDE the
+    ``_ROLE_FIELDS`` map — a subagent tier pin (ADR 0133 M5), keyed by subagent name rather
+    than a config attribute. ``role`` is only the label the streak/last-fallback diagnostics
+    carry. A single entry returns create_llm's model unchanged; multiple entries fall back
+    across them on retryable provider errors only, exactly as a config role does. ``names``
+    must be non-empty — the caller decides what an empty chain means.
+    """
     models = [create_llm(config, model_name=name, **kwargs) for name in names]
     return models[0] if len(models) == 1 else _RoleLLM(role, names, models)

@@ -280,6 +280,32 @@ def model_field_primary(value) -> str:
     return chain[0] if chain else ""
 
 
+def coherent_model_chain(config, value, *, where: str = "model") -> list[str]:
+    """A model-role field value → its clean ordered chain, dropping any entry incoherent
+    with a native-OAuth provider (ADR 0133). The SINGLE per-entry coherence reader: a bare
+    gateway alias under a native provider with no gateway key to route it is dropped with a
+    ``log.warning`` naming ``where`` and the position, exactly as :func:`role_chain` does
+    for a config role. Exposed for a chain resolved OUTSIDE the ``_ROLE_FIELDS`` map — a
+    subagent tier pin (M5). Order preserved; blanks dropped by :func:`_as_chain`."""
+    chain = _as_chain(value)
+    if not chain or not _native_provider_without_gateway(config):
+        return chain
+    kept: list[str] = []
+    for i, model in enumerate(chain):
+        if _is_gateway_alias(model, config):
+            log.warning(
+                "[config] dropping incoherent model %r at %s[%d]: a bare gateway alias "
+                "with no gateway key to route it under native provider %r (ADR 0133)",
+                model,
+                where,
+                i,
+                getattr(config, "model_provider", ""),
+            )
+            continue
+        kept.append(model)
+    return kept
+
+
 def _role_raw_chain(config, role: str) -> list[str]:
     """The chain a role declares ON ITS OWN, before inheritance. ``main`` folds in the
     legacy ``routing.fallback_models`` tail so it reads as one chain (ADR 0133 D1)."""
@@ -323,30 +349,10 @@ def resolve_role_chain(config, role: str) -> tuple[list[str], str | None]:
     if role not in _ROLE_FIELDS:
         raise ValueError(f"unknown model role {role!r} (known: {sorted(_ROLE_FIELDS)})")
 
-    native_no_gateway = _native_provider_without_gateway(config)
-
-    def _coherent(chain: list[str], where: str) -> list[str]:
-        if not native_no_gateway:
-            return chain
-        kept: list[str] = []
-        for i, model in enumerate(chain):
-            if _is_gateway_alias(model, config):
-                log.warning(
-                    "[config] dropping incoherent model %r at %s[%d]: a bare gateway alias "
-                    "with no gateway key to route it under native provider %r (ADR 0133)",
-                    model,
-                    where,
-                    i,
-                    getattr(config, "model_provider", ""),
-                )
-                continue
-            kept.append(model)
-        return kept
-
     # ``_ROLE_PARENT`` is a fixed acyclic module constant, so parent resolution always
     # terminates at ``main`` (no parent) — no cycle guard is needed.
     def _resolve(r: str) -> tuple[list[str], str | None]:
-        chain = _coherent(_role_raw_chain(config, r), r)
+        chain = coherent_model_chain(config, _role_raw_chain(config, r), where=r)
         if chain:
             return chain, r
         if r == "image_describe":
@@ -375,7 +381,9 @@ class SubagentDef:
     max_turns: int = 30
     # Per-subagent model override (ADR 0001) — blank = routing.aux_model → main model.
     # Applied onto the registry's SubagentConfig at build (see _apply_config_subagents).
-    model: str = ""
+    # A LIST is an ADR 0133 fallback chain (primary, then each fallback on a retryable
+    # provider error); a scalar is a chain of one. Resolved by graph.subagent_model.
+    model: str | list[str] = ""
     profile: str = ""
     final_profile: str = ""
 

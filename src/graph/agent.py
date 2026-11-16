@@ -1333,9 +1333,18 @@ async def _run_subagent_inner(
     # Subagent model (#3944, graph/subagent_model.py): the subagent's own pinned
     # model → the delegating turn's model override → routing.aux_model → main model.
     from graph.generation_profile import resolve_profile
-    from graph.subagent_model import resolve_subagent_model
+    from graph.subagent_model import resolve_subagent_model, subagent_pin_chain
 
     sub_model = resolve_subagent_model(config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or "")
+    # ADR 0133 M5: a tier PINNED to a multi-model chain fails over across its OWN models on a
+    # retryable provider error, built through create_role_llm's machinery. The pin wins
+    # precedence (resolve_subagent_model agrees), so when it resolves to a coherent chain its
+    # primary is the model the window/telemetry below describe. Every other resolution keeps
+    # today's single model — where the tier INHERITS (no pin), the main chain's fallbacks
+    # still apply via ObservableModelFallbackMiddleware below.
+    pin_chain = subagent_pin_chain(config, getattr(sub_config, "model", "") or "")
+    if pin_chain:
+        sub_model = pin_chain[0]
 
     sub_profile = getattr(sub_config, "profile", "") or ""
     resolved_profile = resolve_profile(config, call=profile, subagent=sub_profile)
@@ -1346,7 +1355,12 @@ async def _run_subagent_inner(
         None,
     )
     profile_kwargs = {"profile": resolved_profile} if not resolved_profile.empty else {}
-    sub_llm = create_llm(config, model_name=sub_model, **profile_kwargs)
+    if len(pin_chain) > 1:
+        from graph.model_roles import build_chain_llm
+
+        sub_llm = build_chain_llm(config, f"subagent:{subagent_type}", pin_chain, **profile_kwargs)
+    else:
+        sub_llm = create_llm(config, model_name=sub_model, **profile_kwargs)
 
     # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
     # cover them too — not just the lead agent. Mirror the lead's gate so a disallowed/

@@ -1,7 +1,10 @@
 """Which model a subagent run uses — ONE precedence for every dispatch path (#3944).
 
 1. The subagent's own pinned model (``subagents.<name>.model``, applied onto
-   ``SUBAGENT_REGISTRY`` at config load) — a deliberate per-role choice wins.
+   ``SUBAGENT_REGISTRY`` at config load) — a deliberate per-role choice wins. A list pin is
+   an ADR 0133 fallback CHAIN: :func:`subagent_pin_chain` resolves it and the dispatch path
+   builds it into a fallback runnable (``build_chain_llm``) so the tier fails over across
+   its OWN models on a retryable error; a scalar pin is a chain of one (today's behavior).
 2. The turn's model override (the per-tab / per-request ``metadata.model`` the lead
    turn carries as ``state["model"]``) — a delegation follows the model the operator
    picked for the turn that spawned it.
@@ -24,14 +27,36 @@ def _clean(value: Any) -> str:
 
 
 def pinned_subagent_model(subagent_type: str) -> str:
-    """The subagent's own configured model, or ``""`` when it has none (or isn't
-    a registry subagent)."""
+    """The PRIMARY of the subagent's own configured model, or ``""`` when it has none (or
+    isn't a registry subagent). A list pin (an ADR 0133 chain) collapses to its first entry
+    via ``model_field_primary`` — ``_clean`` would have dropped the whole list to ``""`` and
+    silently lost the pin's precedence. The full chain is read by :func:`subagent_pin_chain`.
+    """
     try:
+        from graph.config import model_field_primary
         from graph.subagents.config import SUBAGENT_REGISTRY
 
-        return _clean(getattr(SUBAGENT_REGISTRY.get(subagent_type), "model", ""))
+        return model_field_primary(getattr(SUBAGENT_REGISTRY.get(subagent_type), "model", ""))
     except Exception:  # noqa: BLE001 — a lookup failure means "no pin", never a failed run
         return ""
+
+
+def subagent_pin_chain(config: Any, pinned: Any) -> list[str]:
+    """The subagent's OWN pinned model as a coherent fallback chain (ADR 0133 M5).
+
+    A scalar pin is a chain of one, a list pin is itself, blanks drop out, and any entry
+    incoherent with a native-OAuth provider is dropped — the same per-entry check
+    ``role_chain`` applies, via ``graph.config.coherent_model_chain``. ``[]`` when the tier
+    has NO pin: the dispatch then inherits the turn override → ``routing.aux_model`` → the
+    main model, and the main chain's fallbacks still apply through the subagent's fallback
+    middleware. A chain of two or more is built into a fallback runnable by
+    ``graph.model_roles.build_chain_llm`` so a tier can fail over across its OWN models."""
+    try:
+        from graph.config import coherent_model_chain
+
+        return coherent_model_chain(config, pinned, where="subagent.model")
+    except Exception:  # noqa: BLE001 — a resolution failure means "no pin chain", never a failed run
+        return []
 
 
 # The in-flight turn's model override, for dispatch paths that run OUTSIDE the lead
@@ -105,7 +130,10 @@ def resolve_subagent_model(
     later milestone."""
     from graph.config import model_field_primary
 
-    pin = _clean(pinned) if pinned is not None else pinned_subagent_model(subagent_type)
+    # The pin may be a chain (an ADR 0133 list); its PRIMARY wins precedence here — the full
+    # chain is built by the dispatch path via ``subagent_pin_chain``. ``model_field_primary``
+    # reads scalar/list/None; ``_clean`` would have dropped a list pin to ``""``.
+    pin = model_field_primary(pinned) if pinned is not None else pinned_subagent_model(subagent_type)
     for candidate in (pin, _clean(turn_model)):
         if candidate:
             return candidate
