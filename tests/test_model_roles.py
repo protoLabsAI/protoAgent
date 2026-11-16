@@ -255,13 +255,18 @@ def test_main_graph_compiles_with_unbuildable_fallbacks(monkeypatch, caplog, bac
     assert caught.value is error
 
 
-def test_main_chain_from_list_model_name_builds_tail_and_aligns_with_status(monkeypatch, caplog):
-    """A list-valued ``model.name`` is an ADR 0133 role chain: its TAIL entries must become
-    the lead's fallbacks (not just ``routing.fallback_models``), an unbuildable one dropped,
-    and the build-time skip index must match the status surface — both read the SAME flattened
-    ``role_chain('main')``. The rejected build keyed on raw ``config.model_name`` as one list
-    element, so a list's tail was never built and its reported indices diverged from status.
-    """
+@pytest.mark.parametrize(
+    "head, tail, legacy, expected_chain, bad_index",
+    [
+        ("primary", ["bad", "b"], [], ["primary", "bad", "b"], 1),
+        ("protolabs/reasoning", [], ["b", "bad"], ["b", "bad"], 1),
+        ("protolabs/reasoning", ["bad", "b"], [], ["bad", "b"], 0),
+    ],
+)
+def test_main_chain_from_list_model_name_builds_tail_and_aligns_with_status(
+    monkeypatch, caplog, head, tail, legacy, expected_chain, bad_index,
+):
+    """Every coherent fallback survives, even when filtering removes the configured head."""
     import graph.agent as agent
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
     from langchain_core.messages import AIMessage
@@ -269,8 +274,12 @@ def test_main_chain_from_list_model_name_builds_tail_and_aligns_with_status(monk
     from graph.config import LangGraphConfig, role_chain
 
     cfg = LangGraphConfig()
-    cfg.model_name = ["primary", "bad", "b"]  # a list chain; NO routing.fallback_models
-    cfg.routing_fallback_models = []
+    cfg.model_name = [head, *tail] if tail else head
+    cfg.routing_fallback_models = legacy
+    cfg.model_provider = "anthropic-oauth"
+    cfg.api_key = ""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg.providers = []
     model = GenericFakeChatModel(messages=iter([AIMessage(content="ok")]))
     error = ValueError("Missing credentials")
 
@@ -282,8 +291,8 @@ def test_main_chain_from_list_model_name_builds_tail_and_aligns_with_status(monk
     monkeypatch.setattr(agent, "create_llm", factory)
     monkeypatch.setattr(model_roles, "create_llm", factory)
 
-    # The resolved main chain flattens the list; the tail is what should be built as fallbacks.
-    assert role_chain(cfg, "main") == ["primary", "bad", "b"]
+    # Resolve with real coherence filtering, including removal of a bare gateway alias.
+    assert role_chain(cfg, "main") == expected_chain
 
     captured = []
     real_create = agent.create_agent
@@ -298,12 +307,12 @@ def test_main_chain_from_list_model_name_builds_tail_and_aligns_with_status(monk
 
     fallbacks = [mw for mw in captured if isinstance(mw, agent.ObservableModelFallbackMiddleware)]
     assert len(fallbacks) == 1
-    # The list TAIL became the fallbacks; the unbuildable middle entry was dropped, "b" survives.
     assert fallbacks[0].models == [model]
     assert fallbacks[0]._fallback_names == ["b"]
-    assert "[model-roles] main[1] bad skipped: ValueError" in caplog.text
+    assert f"[model-roles] main[{bad_index}] bad skipped: ValueError" in caplog.text
 
-    # The status surface probes the SAME chain, so its reported skip is at the SAME index.
-    assert model_roles.skipped_entries(cfg, role_chain(cfg, "main")) == [
-        {"index": 1, "model": "bad", "reason": "ValueError"}
-    ]
+    from operator_api.provider_routes import _role_status_list
+
+    main = next(entry for entry in _role_status_list(cfg) if entry["role"] == "main")
+    assert main["chain"] == expected_chain
+    assert main["skipped"] == [{"index": bad_index, "model": "bad", "reason": "ValueError"}]

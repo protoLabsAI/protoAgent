@@ -80,29 +80,31 @@ def _try_build(build, name: str) -> tuple[object | None, str | None]:
         return None, type(exc).__name__
 
 
-def skipped_entries(config, names: list[str], build=None) -> list[dict]:
+def skipped_entries(config, names: list[str], build=None, *, primary_name: str | None = None) -> list[dict]:
     """Which tail entries of this resolved chain cannot be built against ``config`` right now.
 
     A pure, read-only probe for the model-role status surface (ADR 0133 M6): it rebuilds each
     fallback and reports the ones that raise, mirroring the drops :func:`build_fallbacks` makes
-    at graph rebuild. The primary (index 0) is never a skip — its build failure is fatal, so a
+    at graph rebuild. The primary is never a skip — its build failure is fatal, so a
     running graph already has a buildable primary. It mutates no config and logs nothing, so it
     is correct even for a role that NO production call ever builds — ``aux`` and the blank
     aux-family roles that inherit its chain — and a repeated GET neither records diagnostics nor
     re-emits the build-time warnings. ``build`` is injectable so one status pass can memoize
     construction across the many roles that resolve to the same inherited chain; it defaults to
-    ``create_llm`` for this config.
+    ``create_llm`` for this config. ``primary_name`` has the same meaning as in
+    :func:`build_fallbacks`: a filtered-out lead primary leaves index 0 as a fallback.
     """
     builder = build or (lambda name: create_llm(config, model_name=name))
     skipped: list[dict] = []
-    for index, name in enumerate(names[1:], start=1):
+    start = 1 if primary_name is None or names[:1] == [primary_name] else 0
+    for index, name in enumerate(names[start:], start=start):
         _, reason = _try_build(builder, name)
         if reason is not None:
             skipped.append({"index": index, "model": name, "reason": reason})
     return skipped
 
 
-def build_fallbacks(role: str, names: list[str], build):
+def build_fallbacks(role: str, names: list[str], build, *, primary_name: str | None = None):
     """Build a chain's tail, dropping entries that cannot be built (ADR 0133 D6).
 
     The caller builds the primary OUTSIDE this guard, so a primary build failure stays fatal.
@@ -111,9 +113,13 @@ def build_fallbacks(role: str, names: list[str], build):
     and the returned names stay index-aligned with them. The read-only status surface reports
     the same drops via :func:`skipped_entries`, which re-probes the live config rather than
     reading any state recorded here — so a role never built in production still reports them.
+
+    Pass ``primary_name`` when the primary is built separately from the resolved chain.
+    If coherence filtering removed it, every surviving entry is a fallback, including index 0.
     """
     kept, models = [], []
-    for index, name in enumerate(names[1:], start=1):
+    start = 1 if primary_name is None or names[:1] == [primary_name] else 0
+    for index, name in enumerate(names[start:], start=start):
         model, reason = _try_build(build, name)
         if reason is None:
             kept.append(name)

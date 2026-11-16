@@ -519,7 +519,7 @@ def _image_describe_can_read(cfg, source: str | None) -> bool:
 def _role_status_list(cfg) -> list[dict]:
     """Configured chains, inheritance, build skips and last fallback for Settings."""
     from graph import model_roles
-    from graph.config import _ROLE_FIELDS, resolve_role_chain
+    from graph.config import _ROLE_FIELDS, model_field_primary, resolve_role_chain
 
     # Memoize successful fallback builds across the whole pass: the many blank aux-family
     # roles resolve to the same inherited chain, so probing each one independently would
@@ -552,7 +552,10 @@ def _role_status_list(cfg) -> list[dict]:
             "source": source,
             "status": status,
             "last_fallback": model_roles.last_fallback(role),
-            "skipped": model_roles.skipped_entries(cfg, chain, build=_probe),
+            "skipped": model_roles.skipped_entries(
+                cfg, chain, build=_probe,
+                primary_name=model_field_primary(cfg.model_name) if role == "main" else None,
+            ),
         }
         if reason is not None:
             entry["reason"] = reason
@@ -568,7 +571,7 @@ def register_provider_routes(app) -> None:
         Read-only status for Settings › Models (M7): the chain each role resolves to (D2),
         whether it is set or inherited (and from which parent), the last time a fallback fired
         for it (M2's record, reason redacted to exception type/status), and construction
-        skips (zero-based chain index — the primary is 0, the first fallback 1 — model, and
+        skips (zero-based resolved-chain index, model, and
         exception type). Skips are probed live from the
         current config, so a role with no production build site (e.g. ``aux``) still reports the
         unbuildable fallbacks its chain would drop. For image_describe, this also reports
