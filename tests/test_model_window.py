@@ -62,6 +62,25 @@ def test_resolves_window_from_model_info_and_caches(monkeypatch):
     assert calls == ["https://gw.example/v1/model/info"]
 
 
+def test_list_valued_lead_resolves_on_its_primary_entry(monkeypatch):
+    # ADR 0133: config.model_name may be a role chain (a list). The window probe is a single-
+    # model lookup, so it resolves on the chain's PRIMARY entry rather than raising on the old
+    # `.strip()`. Here the primary "protolabs/smart" is looked up; the fallback is ignored.
+    def fake_get(url, headers=None, timeout=None):
+        return _Resp(
+            200,
+            {
+                "data": [
+                    {"model_name": "protolabs/smart", "model_info": {"max_input_tokens": 196608}},
+                    {"model_name": "protolabs/fast", "model_info": {"max_input_tokens": 32768}},
+                ]
+            },
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    assert model_window.context_window_for(_cfg(model_name=["protolabs/smart", "protolabs/fast"])) == 196608
+
+
 def test_also_parses_top_level_group_info_shape(monkeypatch):
     # The grouped /model/group/info view carries the window top-level on model_group — and
     # /v1/model/info 404s on a proxy that only exposes the grouped endpoint.

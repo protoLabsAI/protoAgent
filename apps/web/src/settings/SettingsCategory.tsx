@@ -716,6 +716,16 @@ export function formatStringList(items: string[]): string {
   return items.map((s) => (s === "" ? '""' : s)).join(", ");
 }
 
+// A model-role field (ADR 0133) accepts a scalar OR a list, so an existing single-model
+// config arrives as a plain string (e.g. model.name: "protolabs/reasoning"). Coerce that to a
+// one-item chain so the options-backed string_list editor renders the configured model rather
+// than a blank row; a blank/whitespace scalar stays an empty chain. A true list keeps only its
+// string entries, exactly as the editor did before model roles became list-capable.
+export function settingListItems(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === "string");
+  return typeof value === "string" && value.trim() !== "" ? [value] : [];
+}
+
 // Swap an item with its neighbor (the ordered-list up/down buttons, #1957). Out-of-range
 // moves return the list unchanged, so the boundary buttons can no-op safely.
 export function moveListItem<T>(items: T[], index: number, delta: number): T[] {
@@ -799,7 +809,9 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   // blank row to add — so you pick models from the gateway (or type any alias),
   // ordered. Clearing a row removes it.
   if (field.type === "string_list" && field.options.length) {
-    const items = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+    // A scalar lead (model.name: "…") coerces to a one-item chain so the role renders its
+    // configured model rather than a blank row (ADR 0133); see settingListItems.
+    const items = settingListItems(value);
     const update = (i: number, v: string) => {
       const next = items.slice();
       if (v) next[i] = v;

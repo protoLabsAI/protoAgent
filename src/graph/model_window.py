@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from graph.config import LangGraphConfig, resolve_model_route
+from graph.config import LangGraphConfig, model_field_primary, resolve_model_route
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +99,10 @@ def context_window_for(config: LangGraphConfig, model_name: str | None = None, c
     # one a connection-built chat client actually talks to. Without it a wizard-written
     # config (one declared connection, legacy ``model.api_base`` left on the App default)
     # probed a host that does not exist and ran with no known window.
-    model = (model_name or config.model_name or "").strip()
+    # ``config.model_name`` may be an ADR 0133 role chain (a list); the window lookup is a
+    # single-model probe, so collapse it to the chain's primary entry. ``model_field_primary``
+    # already strips, and a passed ``model_name`` override is a plain string.
+    model = (model_name or model_field_primary(config.model_name) or "").strip()
     win = _window_on_route(resolve_model_route(config, connection), model)
     if win:
         return win

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { formatStringList, moveListItem, parseStringList } from "./SettingsCategory";
+import { formatStringList, moveListItem, parseStringList, settingListItems } from "./SettingsCategory";
 
 describe("parseStringList", () => {
   it("splits on commas", () => {
@@ -34,6 +34,27 @@ describe("formatStringList", () => {
     const text = formatStringList(items);
     expect(text).toBe('workspace, ""');
     expect(parseStringList(text)).toEqual(items);
+  });
+});
+
+// ADR 0133: an options-backed string_list role field (model.name, routing.aux_model, …) may
+// arrive as a legacy SCALAR. The editor must show the configured model, not a blank row.
+describe("settingListItems", () => {
+  it("coerces a non-empty scalar string to a one-item chain", () => {
+    expect(settingListItems("protolabs/reasoning")).toEqual(["protolabs/reasoning"]);
+  });
+  it("treats a blank or whitespace scalar as an empty chain", () => {
+    expect(settingListItems("")).toEqual([]);
+    expect(settingListItems("   ")).toEqual([]);
+  });
+  it("passes a list through, keeping only its string entries in order", () => {
+    expect(settingListItems(["a", "b"])).toEqual(["a", "b"]);
+    expect(settingListItems(["a", 1, null, "b"] as unknown)).toEqual(["a", "b"]);
+  });
+  it("is empty for null / undefined / non-string scalars", () => {
+    expect(settingListItems(null)).toEqual([]);
+    expect(settingListItems(undefined)).toEqual([]);
+    expect(settingListItems(42)).toEqual([]);
   });
 });
 

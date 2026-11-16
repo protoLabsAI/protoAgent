@@ -181,3 +181,43 @@ def test_resolve_claude_model_name_rejects_an_all_alias_list_lead():
     cfg = _cfg(model_provider="anthropic-oauth", api_key="", model_name=["protolabs/reasoning"])
     with pytest.raises(RuntimeError):
         resolve_claude_model_name(cfg)
+
+
+def test_build_codex_llm_builds_against_the_primary_of_a_list_lead(monkeypatch):
+    # openai-codex: a list-valued model.name reaches build_codex_llm as config.model_name
+    # (create_llm passes model_name=None for the lead). The builder resolves the chain's
+    # PRIMARY id, not a `.strip()` crash on the list.
+    import graph.providers.openai_codex as ocx
+    from graph.providers.oauth import CodexOAuthCreds
+
+    monkeypatch.setattr(
+        ocx,
+        "resolve_codex_oauth",
+        lambda *a, **k: CodexOAuthCreds(access_token="t", account_id="a", base_url="b", source="s"),
+    )
+    llm = ocx.build_codex_llm(_cfg(model_provider="openai-codex", model_name=["gpt-5-codex", "gpt-5"]))
+    assert llm.model_name == "gpt-5-codex"
+
+
+def test_context_window_for_probes_the_primary_of_a_list_lead(monkeypatch):
+    # graph.model_window.context_window_for is a single-model probe; a list-valued
+    # config.model_name resolves on its PRIMARY entry instead of crashing on `.strip()`.
+    import httpx
+
+    from graph import model_window
+
+    model_window.reset_window_cache()
+
+    def fake_get(url, headers=None, timeout=None):
+        class _R:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"model_name": "protolabs/smart", "model_info": {"max_input_tokens": 196608}}]}
+
+        return _R()
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    cfg = _cfg(model_name=["protolabs/smart", "protolabs/fast"])
+    assert model_window.context_window_for(cfg) == 196608
+    model_window.reset_window_cache()
