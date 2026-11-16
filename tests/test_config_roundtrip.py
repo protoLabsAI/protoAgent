@@ -223,6 +223,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "memory_harvest_model": "",
     "memory_facts_model": "",
     "memory_gist_model": "",
+    "memory_session_gist": True,
+    "memory_gist_idle_seconds": 120,
     "memory_session_retention_days": 90,
     "memory_session_max_files": 500,
     "history_retention_dry_run": True,

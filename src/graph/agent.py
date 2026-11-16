@@ -593,7 +593,7 @@ def _build_middleware(
         middleware.append(AuditMiddleware())
 
     if config.memory_middleware:
-        middleware.append(SessionSummaryMiddleware(knowledge_store))
+        middleware.append(SessionSummaryMiddleware(knowledge_store, config=config))
 
     # In-history tool-result pruning (#2782, ADR 0101 D3/D4) — registered BEFORE
     # compaction on purpose: relief has an order (prune near-lossless, THEN

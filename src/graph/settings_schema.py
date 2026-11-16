@@ -947,6 +947,10 @@ FIELDS: list[Field] = [
         options_source="slot_models",
         ui_hidden=True,
     ),
+    Field("memory.session_gist", "memory_session_gist", "Session gists", "bool", "Memory",
+          "Generate a short gist after a chat goes quiet and has four new messages."),
+    Field("memory.gist_idle_seconds", "memory_gist_idle_seconds", "Gist idle seconds", "number", "Memory",
+          "Quiet time before generating a session gist.", minimum=1),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
@@ -2671,6 +2675,8 @@ def build_schema(
             from graph.config import _as_chain
 
             entry.update(role=f.role, subhead=f.subhead, inherits=f.inherits)
+            if f.role == "main":
+                entry["legacy_fallbacks"] = _as_chain(config.routing_fallback_models)
             entry["value"] = _as_chain(current)
             entry["default"] = _as_chain(getattr(defaults, f.attr, None))
         elif f.type == "secret":

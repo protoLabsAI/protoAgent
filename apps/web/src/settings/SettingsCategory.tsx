@@ -17,7 +17,7 @@ import { api, isHostConsole } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { PluginSettingsTabDescriptor, SettingsField, SettingsGroup } from "../lib/types";
-import { ModelChainInput } from "./ModelChainInput";
+import { ModelChainInput, foldLegacyFallbacks } from "./ModelChainInput";
 import { PathListPicker } from "./PathListPicker";
 import { PathPicker } from "./PathPicker";
 import { RestartNow } from "./RestartNow";
@@ -229,6 +229,23 @@ export function SettingsCategory({
     for (const g of groups) for (const f of g.fields) m.set(f.key, f.key in dirty ? dirty[f.key] : f.value);
     return m;
   }, [groups, dirty]);
+  const roleFields = data.groups.flatMap((group) => group.fields).filter((field) => field.type === "model_chain");
+  const currentChain = (field: SettingsField, seen = new Set<string>()): string[] => {
+    if (seen.has(field.key)) return [];
+    seen.add(field.key);
+    const own = settingListItems(field.key in dirty ? dirty[field.key] : field.value).filter((id) => id.trim());
+    if (field.key === "model.name") {
+      return field.key in dirty ? own : foldLegacyFallbacks(own, field.legacy_fallbacks);
+    }
+    if (own.length) return own;
+    const parent = roleFields.find((candidate) => candidate.role === field.inherits);
+    return parent ? currentChain(parent, seen) : [];
+  };
+  const parentChain = (field: SettingsField) => {
+    const parent = roleFields.find((candidate) => candidate.role === field.inherits);
+    return parent ? currentChain(parent) : [];
+  };
+
   const isVisible = (field: SettingsField): boolean => fieldVisible(field, (k) => currentValues.get(k));
 
 
@@ -266,12 +283,17 @@ export function SettingsCategory({
   const onHost = isHostConsole();
   const save = useMutation({
     mutationFn: async () => {
-      if (!onHost) return api.saveSettings(dirty, "agent");
+      const updates = { ...dirty };
+      const main = roleFields.find((field) => field.key === "model.name");
+      if (main?.legacy_fallbacks?.length && groups.some((group) => group.fields.includes(main)) && !(main.key in updates)) {
+        updates[main.key] = currentChain(main);
+      }
+      if (!onHost) return api.saveSettings(updates, "agent");
       const scopeOf = (k: string) =>
         groups.flatMap((g) => g.fields).find((f) => f.key === k)?.scope ?? "agent";
       const hostU: Record<string, unknown> = {};
       const agentU: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(dirty)) (scopeOf(k) === "host" ? hostU : agentU)[k] = v;
+      for (const [k, v] of Object.entries(updates)) (scopeOf(k) === "host" ? hostU : agentU)[k] = v;
       const rs = await Promise.all([
         ...(Object.keys(hostU).length ? [api.saveSettings(hostU, "host")] : []),
         ...(Object.keys(agentU).length ? [api.saveSettings(agentU, "agent")] : []),
@@ -408,6 +430,8 @@ export function SettingsCategory({
         <SettingRow
           key={field.key}
           field={field}
+          parentChain={parentChain(field)}
+          legacyFallbacks={field.key in dirty ? [] : field.legacy_fallbacks}
           live={live}
           dirty={!live && field.key in dirty}
           value={live
@@ -610,6 +634,8 @@ function inheritance(field: SettingsField, onHost: boolean): { label: string; st
 }
 
 function SettingRow({
+  parentChain,
+  legacyFallbacks,
   field,
   value,
   dirty,
@@ -626,6 +652,8 @@ function SettingRow({
 }: {
   field: SettingsField;
   value: unknown;
+  parentChain?: string[];
+  legacyFallbacks?: readonly string[];
   dirty: boolean;
   onChange: (value: unknown) => void;
   onCommit?: () => void;
@@ -679,7 +707,7 @@ function SettingRow({
       <div className="setting-control" onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onCommit?.();
       }}>
-        <SettingInput field={field} value={value} onChange={onChange} />
+        <SettingInput field={field} value={value} onChange={onChange} parentChain={parentChain} legacyFallbacks={legacyFallbacks} />
         {live && feedback ? (
           <span className={`setting-live-status setting-live-status--${feedback.tone}`} role="status">
             {feedback.text}
@@ -768,15 +796,14 @@ function StringListInput({ id, value, onChange }: { id: string; value: unknown; 
   );
 }
 
-export function SettingInput({ field, value, onChange }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void }) {
+export function SettingInput({ field, value, onChange, parentChain, legacyFallbacks = field.legacy_fallbacks }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void; parentChain?: string[]; legacyFallbacks?: readonly string[] }) {
   const id = `set-${field.key}`;
 
   // A model role (ADR 0133) renders the one chain control — ordered Combobox rows with
   // ↑ ↓ ✕, "+ Add fallback", and (for a blank inheriting role) the "Inherits <parent>"
-  // toggletip. M7c resolves the parent chain + legacy fallbacks; the generic path renders
-  // the role's own chain with neither.
+  // toggletip, resolved against the current panel edits.
   if (field.type === "model_chain") {
-    return <ModelChainInput field={field} value={value} onChange={onChange} />;
+    return <ModelChainInput field={field} value={value} onChange={onChange} parentChain={parentChain} legacyFallbacks={legacyFallbacks} />;
   }
 
   if (field.type === "bool") {

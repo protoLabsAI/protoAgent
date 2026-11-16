@@ -2,14 +2,18 @@
 // the ordered rows (criterion 1), "+ Add fallback" + drop-empty (2), reorder + focus + live region
 // (3), the "Inherits <parent>" toggletip / Set-its-own-chain / Use-parent (4), the main chain's
 // legacy fold + undeletable last row (5), the unknown-model warning (6), the phone card layout (8),
-// and the no-ellipsis / wrapping-id CSS (7, 9). These all fail on main, where model_chain still
+// Layout and wrapping are covered in Playwright. These fail on main, where model_chain still
 // renders the generic combobox list.
 
 import { act } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ToastProvider } from "@protolabsai/ui/overlays";
+import { SettingsCategory } from "./SettingsCategory";
+import { settingsSchemaQuery } from "../lib/queries";
+import { api } from "../lib/api";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import settingsCss from "./settings.css?raw";
 import { ModelChainInput, foldLegacyFallbacks, splitModelId } from "./ModelChainInput";
 import type { SettingsField } from "../lib/types";
 
@@ -302,36 +306,6 @@ describe("the phone card layout (criterion 8)", () => {
   });
 });
 
-// ── criterion 9 (and the §2-item-11 / criterion-7 CSS rule) ─────────────────────────────────────
-describe("ids never clip (criterion 9), and the CSS is tokens-only (criterion 7)", () => {
-  // Every rule whose selector names the control, comments stripped (so a comment that merely
-  // MENTIONS the banned declaration can't be mistaken for a real rule using it).
-  const chainRules = settingsCss
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("}")
-    .filter((block) => block.includes("model-chain"))
-    .join("}");
-
-  it("no model-chain rule uses text-overflow: ellipsis — ids wrap instead", () => {
-    expect(/text-overflow\s*:\s*ellipsis/.test(chainRules)).toBe(false);
-    expect(chainRules).toContain("overflow-wrap: anywhere");
-  });
-
-  it("the phone layout floors buttons and comboboxes at 44px", () => {
-    expect(chainRules).toContain("min-height: 44px");
-  });
-
-  it("every id text's scrollWidth is at most its clientWidth at 390px", async () => {
-    stubMatchMedia(true);
-    await render(
-      <ModelChainInput field={field()} value={["anthropic-oauth:claude-haiku-5-5"]} onChange={vi.fn()} />,
-    );
-    const ids = qa<HTMLElement>(".model-chain__id");
-    expect(ids.length).toBeGreaterThan(0);
-    for (const el of ids) expect(el.scrollWidth).toBeLessThanOrEqual(el.clientWidth);
-  });
-});
-
 // ── pure helpers ─────────────────────────────────────────────────────────────────────────────
 describe("helpers", () => {
   it("splitModelId separates the connection prefix on the first colon", () => {
@@ -347,4 +321,56 @@ describe("helpers", () => {
     expect(foldLegacyFallbacks(["a", "b"], ["b"])).toEqual(["a", "b"]); // already present → no dupe
     expect(foldLegacyFallbacks(["a"], undefined)).toEqual(["a"]);
   });
+});
+
+it("resolves unsaved ancestors and folds legacy models when another role is saved", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(settingsSchemaQuery().queryKey, { groups: [{
+    category: "Model", section: "Model roles", fields: [
+      field({ value: ["one"], legacy_fallbacks: ["two"] }),
+      field({ key: "routing.aux_model", label: "Auxiliary", role: "aux", inherits: "main", value: [] }),
+      field({ key: "compaction.model", label: "Compaction", role: "compaction", inherits: "aux", value: [] }),
+    ],
+  }] });
+  const save = vi.spyOn(api, "saveSettings").mockResolvedValue({ ok: true, messages: [], restart_required: [] });
+  await render(<ToastProvider><QueryClientProvider client={client}>
+    <SettingsCategory category="Model" />
+  </QueryClientProvider></ToastProvider>);
+  const button = (label: string) => qa<HTMLButtonElement>("button").find((b) => text(b).includes(label));
+  const trigger = q<HTMLButtonElement>(".pl-accordion__trigger");
+  if (trigger?.getAttribute("aria-expanded") !== "true") await click(trigger);
+  expect(qa<HTMLInputElement>(".model-chain__combobox").map((i) => i.value)).toEqual(["one", "two"]);
+  await click(q('[aria-label="Compaction model chain"] .model-chain__set-own'));
+  await click(button("Save & apply"));
+  expect(save.mock.calls.some(([updates]) => JSON.stringify(updates["model.name"]) === '["one","two"]')).toBe(true);
+  await click(q('[aria-label="Main model chain"] [aria-label="Move two up"]'));
+  await click(q('[aria-label="Auxiliary model chain"] .model-chain__inherits'));
+  expect(qa(".model-chain__popover-list li").map(text)).toEqual(["two", "one"]);
+  await act(async () => q('[role="dialog"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await click(q('[aria-label="Auxiliary model chain"] .model-chain__set-own'));
+  expect(qa<HTMLInputElement>('[aria-label="Auxiliary model chain"] input').map((i) => i.value)).toEqual(["two", "one"]);
+  await click(button("Discard"));
+  expect(qa<HTMLInputElement>('[aria-label="Main model chain"] input').map((i) => i.value)).toEqual(["one", "two"]);
+  client.clear();
+});
+
+it("protects the main model while a blank fallback is being edited", async () => {
+  const onChange = vi.fn();
+  await render(<ModelChainInput field={field()} value={["one"]} onChange={onChange} />);
+  await click(q(".model-chain__add"));
+  expect(byLabel("Remove one")!.disabled).toBe(true);
+  await click(byLabel("Remove New model"));
+  expect(onChange).toHaveBeenLastCalledWith(["one"]);
+});
+
+it("phone Cancel follows its model when another row moves past it, and Add focuses the picker", async () => {
+  stubMatchMedia(true);
+  const onChange = vi.fn();
+  await render(<ModelChainInput field={field()} value={["one", "two"]} onChange={onChange} />);
+  await click(qa("button").find((b) => text(b) === "Change"));
+  await click(byLabel("Move two up"));
+  await click(qa("button").find((b) => text(b) === "Cancel"));
+  expect(onChange).toHaveBeenLastCalledWith(["two", "one"]);
+  await click(q(".model-chain__add"));
+  expect(document.activeElement).toBe(q(".model-chain__combobox"));
 });

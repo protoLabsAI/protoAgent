@@ -52,11 +52,9 @@ export function ModelChainInput({
   value,
   onChange,
   // The resolved chain of the parent role this one inherits (ADR 0133 §2 item 4) — what the
-  // "Inherits <parent>" toggletip lists and what "Set its own chain" pre-fills. M7c resolves it
-  // from the parent's current (including unsaved) value; absent → an empty chain.
+  // "Inherits <parent>" toggletip lists and what "Set its own chain" pre-fills.
   parentChain = [],
-  // Legacy `routing.fallback_models`, folded into the main chain (§2 item 3). M7c passes it; the
-  // generic SettingInput route leaves it undefined.
+  // Legacy `routing.fallback_models`, folded into the main chain (§2 item 3).
   legacyFallbacks,
 }: {
   field: SettingsField;
@@ -89,7 +87,6 @@ export function ModelChainInput({
   const lastEmitted = useRef<string[]>(persisted);
   const pendingFocus = useRef<PendingFocus>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const idBase = useId();
   const phone = useIsPhone();
 
   // Adopt an external change (Discard / Reset to inherited / a legacy fold) but never clobber the
@@ -133,6 +130,7 @@ export function ModelChainInput({
 
   const emit = (next: string[]) => {
     const clean = next.filter((model) => model.trim() !== "");
+    if (isMain && clean.length === 0) return;
     lastEmitted.current = clean;
     onChange(clean);
   };
@@ -141,12 +139,19 @@ export function ModelChainInput({
     emit(next);
   };
 
-  const setRowValue = (i: number, v: string) => update(rows.map((model, j) => (j === i ? v : model)));
+  const setRowValue = (i: number, v: string) => {
+    setEditing(true);
+    update(rows.map((model, j) => (j === i ? v : model)));
+  };
 
   const move = (i: number, delta: number, dir: "up" | "down") => {
     const next = moveListItem(rows, i, delta);
     if (next === rows) return; // boundary no-op (the buttons are disabled there anyway)
     const target = i + delta;
+    if (phoneEdit) {
+      const row = phoneEdit.row === i ? target : phoneEdit.row === target ? i : phoneEdit.row;
+      setPhoneEdit({ ...phoneEdit, row });
+    }
     update(next);
     setLive(`${rows[i].trim() || "New model"} moved to position ${target + 1}`);
     pendingFocus.current = { row: target, dir };
@@ -157,13 +162,16 @@ export function ModelChainInput({
     update(next);
     setLive(`${rows[i].trim() || "New model"} removed`);
     if (!isMain && next.filter((model) => model.trim() !== "").length === 0) setEditing(false);
-    if (phoneEdit?.row === i) setPhoneEdit(null);
+    if (phoneEdit) setPhoneEdit(phoneEdit.row === i ? null : {
+      ...phoneEdit, row: phoneEdit.row > i ? phoneEdit.row - 1 : phoneEdit.row,
+    });
   };
 
   const addFallback = () => {
     const next = [...rows, ""];
     setRows(next);
     setEditing(true);
+    if (phone) setPhoneEdit({ row: next.length - 1, original: "" });
     pendingFocus.current = { row: next.length - 1, dir: "input" };
   };
 
@@ -173,6 +181,7 @@ export function ModelChainInput({
     setRows(seed);
     setEditing(true);
     emit(seed);
+    if (phone) setPhoneEdit({ row: 0, original: seed[0] });
     pendingFocus.current = { row: 0, dir: "input" };
   };
   const useParentChain = () => {
@@ -209,7 +218,7 @@ export function ModelChainInput({
 
   // ── A set chain: one row per model ───────────────────────────────────────────────────────────
   const total = rows.length;
-  const removeDisabled = isMain && rows.length <= 1; // the main chain can't be emptied
+  const nonblankCount = rows.filter((model) => model.trim()).length;
 
   return (
     <div
@@ -220,6 +229,7 @@ export function ModelChainInput({
       className={`model-chain${phone ? " model-chain--phone" : ""}`}
     >
       {rows.map((item, i) => {
+        const removeDisabled = isMain && (rows.length <= 1 || (!!item.trim() && nonblankCount <= 1));
         const name = item.trim() || "New model";
         const positionLabel = i === 0 ? "Primary" : "then";
         const unknown = item.trim() !== "" && options.length > 0 && !options.includes(item);
