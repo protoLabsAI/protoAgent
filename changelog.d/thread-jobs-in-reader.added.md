@@ -1,1 +1,0 @@
-- **Jobs from other conversations.** Show linked open jobs beneath the conversation reader's metadata and append open-job counts to From others list rows and their accessible names.
