@@ -107,14 +107,26 @@ def test_blank_memory_select_inherits_aux():
 
 def test_memory_passes_default_inheritance():
     cfg = _cfg(model_name="m", aux_model="aux")
-    assert role_chain(cfg, "memory_harvest") == ["aux"]
-    assert role_chain(cfg, "memory_facts") == ["aux"]  # facts → harvest(blank) → aux
+    assert role_chain(cfg, "harvest") == ["aux"]
+    assert role_chain(cfg, "facts") == ["aux"]  # facts → harvest(blank) → aux
     assert role_chain(cfg, "memory_gist") == ["aux"]
+
+
+def test_harvest_reads_its_own_field():
+    # The runtime "harvest" role resolves memory.harvest_model (the chain Settings writes),
+    # not the aux fallback — the ADR 0133 fix that made the Harvest chain take effect.
+    cfg = _cfg(model_name="m", aux_model="aux", memory_harvest_model=["h1", "h2"])
+    assert role_chain(cfg, "harvest") == ["h1", "h2"]
+
+
+def test_facts_reads_its_own_field():
+    cfg = _cfg(model_name="m", aux_model="aux", memory_facts_model=["f1", "f2"])
+    assert role_chain(cfg, "facts") == ["f1", "f2"]
 
 
 def test_memory_facts_inherits_harvest_not_aux_directly():
     cfg = _cfg(model_name="m", aux_model="aux", memory_harvest_model=["h1", "h2"])
-    assert role_chain(cfg, "memory_facts") == ["h1", "h2"]
+    assert role_chain(cfg, "facts") == ["h1", "h2"]
     # gist still inherits aux, not harvest.
     assert role_chain(cfg, "memory_gist") == ["aux"]
 

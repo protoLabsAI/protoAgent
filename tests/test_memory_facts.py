@@ -306,9 +306,10 @@ def test_text_of_drops_reasoning_and_thinking_blocks():
 
 
 def test_default_extractor_parses_the_text_of_a_block_list(monkeypatch):
-    """ADR 0133 M3: the seam resolves its model via ``create_role_llm(config, "memory_facts")``.
-    A single-string ``aux_model`` is a one-entry chain (facts → harvest → aux), so the role
-    LLM is the built model unchanged — the text parse under test is unaffected."""
+    """ADR 0133: the seam resolves its model via ``create_role_llm(config, "facts")`` (which
+    reads ``memory.facts_model``). A single-string ``aux_model`` is a one-entry chain
+    (facts → harvest → aux), so the role LLM is the built model unchanged — the text parse
+    under test is unaffected."""
     import graph.model_roles
     from types import SimpleNamespace
 
@@ -330,3 +331,46 @@ def test_default_extractor_parses_the_text_of_a_block_list(monkeypatch):
     monkeypatch.setattr(graph.model_roles, "create_llm", lambda config, model_name=None, **kw: _LLM())
     facts = asyncio.run(_default_extractor("User: we deploy on Fridays", SimpleNamespace(aux_model="aux")))
     assert facts == [{"subject": "deploy-day", "content": "Deploys happen on Fridays"}]
+
+
+def _facts_extractor_builds(monkeypatch, cfg):
+    """Run the fact-extraction seam with a fake gateway, returning the model ids it built."""
+    import graph.model_roles
+    from langchain_core.messages import AIMessage
+
+    from graph.memory_facts import _default_extractor
+
+    built: list[str] = []
+
+    class _LLM:
+        def __init__(self, name):
+            self.name = name
+
+        async def ainvoke(self, messages, config=None, **kwargs):
+            built.append(self.name)
+            return AIMessage(content='[{"subject": "x", "content": "y"}]')
+
+    monkeypatch.setattr(graph.model_roles, "_last_fallbacks", {})
+    monkeypatch.setattr(graph.model_roles, "_streaks", set())
+    monkeypatch.setattr(graph.model_roles, "create_llm", lambda config, model_name=None, **kw: _LLM(model_name))
+    facts = asyncio.run(_default_extractor("User: we deploy on Fridays", cfg))
+    assert facts == [{"subject": "x", "content": "y"}]
+    return built
+
+
+def test_facts_pass_builds_from_memory_facts_model(monkeypatch):
+    """ADR 0133 fix: the fact-extraction pass resolves its model from ``memory.facts_model``
+    — the chain Settings writes — not the aux fallback. Pre-fix the "facts" role read nothing
+    and inherited aux, so this would build ``aux`` instead of ``f1``."""
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(aux_model="aux", memory_harvest_model="", memory_facts_model=["f1"])
+    assert _facts_extractor_builds(monkeypatch, cfg) == ["f1"]
+
+
+def test_blank_facts_inherits_harvest(monkeypatch):
+    """A blank ``memory.facts_model`` inherits the harvest chain (ADR 0133 D6), not aux."""
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(aux_model="aux", memory_harvest_model=["h1"], memory_facts_model="")
+    assert _facts_extractor_builds(monkeypatch, cfg) == ["h1"]
