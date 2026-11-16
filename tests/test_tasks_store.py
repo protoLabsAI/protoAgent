@@ -56,6 +56,24 @@ def test_close_sets_terminal_fields(store):
     assert out["status"] == "closed" and out["closed_at"] and out["close_reason"] == "obsolete"
 
 
+@pytest.mark.parametrize("status", ["open", "in_progress", "blocked", "waiting", "deferred", "bogus", "closed", None])
+def test_reopening_clears_previous_dismissal_before_update_close(store, status):
+    issue = store.create("Release")
+    closed = store.close(issue["id"], reason="dismissed: No longer needed")
+    updated = store.update(issue["id"], status=status, title="Reconsidered release")
+    if status in ("closed", None):
+        # Editing a closed task must preserve its recorded outcome.
+        assert updated["close_reason"] == closed["close_reason"]
+        assert updated["closed_at"] == closed["closed_at"]
+    else:
+        assert not updated["close_reason"]
+        assert updated["closed_at"] is None
+        completed = store.update(issue["id"], status="closed")
+        assert completed["status"] == "closed"
+        assert not completed["close_reason"]
+        assert store.get(issue["id"])["close_reason"] == completed["close_reason"]
+
+
 def test_update_and_close_unknown_raise(store):
     with pytest.raises(KeyError):
         store.update("task-999", status="open")
@@ -616,7 +634,10 @@ async def test_console_waiting_task_fields_and_outcome_inbox(store, tmp_path, mo
             body["outcome"] = outcome
         response = await client.post(url + "/close", json=body)
         assert response.status_code == 200
-        assert response.json()["issue"]["close_reason"] == body["reason"]
+        reason = f"dismissed: {body['reason']}" if outcome == "dismissed" else body["reason"]
+        assert response.json()["issue"]["close_reason"] == reason
+        listed = (await client.get("/api/tasks/issues")).json()["issues"][0]
+        assert listed["status"] == "closed" and listed["close_reason"] == reason
         # A repeated close and a non-waiting close must not page the agent again.
         assert (await client.post(url + "/close", json=body)).status_code == 200
         other = store.create("Ordinary task")
@@ -625,6 +646,7 @@ async def test_console_waiting_task_fields_and_outcome_inbox(store, tmp_path, mo
     items = inbox.list()
     assert len(items) == 1
     item = items[0]
+    assert item["origin_session"] == "chat-reply"
     assert item["priority"] == "next" and not needs_operator_attention(item)
     for text in (issue["id"], issue["title"], f"Outcome: {outcome or 'done'}", body["reason"]):
         assert text in item["text"]

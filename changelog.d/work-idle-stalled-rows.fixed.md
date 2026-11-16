@@ -1,0 +1,1 @@
+- **Work rows and detail pills reflect task activity.** Overview and Doing now show idle duration or stalled status, and stalled tasks no longer show a running spinner. Task detail pills use the same activity wording and show “not started” for jobs awaiting their start, while driven tasks retain their running presentation.
