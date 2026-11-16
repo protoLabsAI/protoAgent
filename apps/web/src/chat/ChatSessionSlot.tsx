@@ -93,7 +93,7 @@ import {
 } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { watchGoalKickoff, type GoalKickoffWatch } from "./goalKickoffWatch";
-import { loadDraft, loadScroll, saveDraft, saveScroll } from "./scratchState";
+import { loadDraft, loadDraftContext, loadScroll, saveDraft, saveDraftContext, saveScroll } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { markUserScroll } from "./streamFollow";
 import { composerPlaceholder } from "./composerPlaceholder";
@@ -819,7 +819,7 @@ export function ChatSessionSlot({
     const nativeImgs = readyNativeAttachments(attachments);
     const piped = attachments.filter((a) => a.status === "ready" && a.context);
     if (nativeImgs.length === 0 && piped.length === 0) {
-      void runTurn(text);
+      void runTurn(text, { composer: true });
       return;
     }
     const images = readyNativeImages(attachments);
@@ -833,7 +833,7 @@ export function ChatSessionSlot({
     const pipedNames = piped.filter((a) => !a.native).map((a) => a.name);
     const { bubble, durable, previews } = sentAttachments(text, nativeImgs, pipedNames);
     setAttachments([]);
-    void runTurn(bubble, { sendAs: sent, images, attachments: previews, display: durable });
+    void runTurn(bubble, { composer: true, sendAs: sent, images, attachments: previews, display: durable });
   }
 
   // ↑ on an empty composer: pull the newest queued steer OUT of the turn and back into the
@@ -986,7 +986,7 @@ export function ChatSessionSlot({
       return;
     }
     chatStore.updateMessages(session.id, snap.messages.slice(0, i));
-    void runTurn(user.content, { hidden: true });
+    void runTurn(user.content, { hidden: true, continuationContext: user.continuationContext });
   }
 
   // Fork the conversation at a message: open a NEW tab/session seeded with the
@@ -1094,6 +1094,8 @@ export function ChatSessionSlot({
   async function runTurn(
     content: string,
     opts: {
+      composer?: boolean;
+      continuationContext?: string;
       attachments?: ChatMessage["attachments"];
       hidden?: boolean;
       sendAs?: string;
@@ -1127,11 +1129,16 @@ export function ChatSessionSlot({
     if (!opts.hidden) repinTranscript();
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
     // is what the user bubble shows.
-    const sent = opts.sendAs ?? content;
+    // Only the operator composer consumes draft context; regenerate reuses its own turn.
+    const continuationContext = opts.hitlResume ? "" : (opts.continuationContext
+      ?? (opts.composer ? loadDraftContext(session.id) : ""));
+    const payload = opts.sendAs ?? content;
+    const sent = continuationContext ? `${payload}\n\n${continuationContext}` : payload;
     const userMessage: ChatMessage = {
       id: messageId(),
       role: "user",
       content,
+      ...(continuationContext ? { continuationContext } : {}),
       createdAt: Date.now(),
       status: "done",
       ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
@@ -1309,6 +1316,7 @@ export function ChatSessionSlot({
     };
     const clearWatchdog = () => watchdog.stop();
 
+    let failed = false;
     try {
       endLocalTurn = beginLocalTurn(session.id);
       bumpWatchdog();
@@ -1332,6 +1340,7 @@ export function ChatSessionSlot({
           setStatusMessage(m);
         },
         onFailed: (detail) => {
+          failed = true;
           reveal.flush(); // settle what streamed before the error overwrites the bubble
           // The turn failed terminally (e.g. the model 401'd on a bad key).
           // Surface it as an errored assistant message + an actionable hint,
@@ -1683,6 +1692,8 @@ export function ChatSessionSlot({
         // keeps; a hidden send drew no bubble, so it carries none.
         thumbnails: opts.hidden ? undefined : opts.attachments,
       });
+      // The reference has reached the agent. Failed sends retain it for retry.
+      if (opts.composer && !opts.hitlResume && !failed && !controller.signal.aborted) saveDraftContext(session.id, "");
       // Stream returned: reveal any withheld tail NOW, before the reconcile
       // below — flushing after it would append the tail on top of the
       // canonical replace and double that text. (Redundant after onDone, which

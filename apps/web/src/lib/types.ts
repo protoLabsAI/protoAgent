@@ -1204,6 +1204,8 @@ export type QueuedSteer = ConsumedSteer & {
 };
 
 export type ChatMessage = {
+  /** Hidden reference retained on an outgoing turn so regenerate can resend it. */
+  continuationContext?: string;
   /** Bounded image previews only (small data URLs, longest edge ≤ 320px); originals travel
    *  via the API, never here. A visible attachment send carries these into the turn's durable
    *  history alongside its `display` text (ADR 0104, bd-62xi), so a chat rebuilt in another
