@@ -1313,7 +1313,10 @@ def register_chat_routes(app, ui: str) -> None:
         try:
             from graph.middleware.memory import delete_session_summary
 
-            await asyncio.to_thread(delete_session_summary, session_id)
+            # ADR 0132 D3b: "Save a summary" keeps the chat's "closed" digest record; only
+            # an Erase (forget) drops it — Shift+click / bulk close harvest nothing, so they
+            # have none to drop. Forced-forget incognito deletes drop it too.
+            await asyncio.to_thread(delete_session_summary, session_id, including_closed=forget)
         except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
             log.warning("[chat] session-summary cleanup failed for %s: %s", session_id, exc)
         # The durable-turn reader indexes the A2A task store by context_id. Record

@@ -19,7 +19,7 @@
   #bar{display:none;align-items:center;gap:6px;padding:6px 10px;
     border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);font-size:12px}
   /* One row at any width: the picker shrinks first, and below ~560px the secondary actions
-     (Edit / Download / Delete) fold into a ⋯ menu instead of wrapping or clipping. */
+     (Edit / Open in browser / Download / Delete) fold into a ⋯ menu instead of wrapping or clipping. */
   #bar .pl-btn{white-space:nowrap;flex:none}
   #art{flex:1 1 90px;min-width:60px}
   #vnav,#acts{display:flex;align-items:center;gap:2px;flex:none}
@@ -34,6 +34,8 @@
     border:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);box-shadow:0 6px 18px rgba(0,0,0,.3)}
   #moremenu.open{display:flex}
   #moremenu .pl-btn{justify-content:flex-start;width:100%;text-align:left}
+  #open{text-decoration:none}
+  #open[aria-disabled="true"]{opacity:.5}
   #vnav{display:flex;align-items:center;gap:2px}
   #vlabel{min-width:48px;text-align:center;color:var(--pl-color-fg-muted);font-variant-numeric:tabular-nums}
   #vnav button[disabled]{opacity:.4;cursor:default}
@@ -96,6 +98,7 @@
     <button id="links" class="pl-btn pl-btn--sm" type="button" title="Code links in this diagram" aria-haspopup="true" aria-expanded="false" aria-controls="linkpanel" style="display:none">Links <span id="linkn" class="badge"></span></button>
     <span id="acts">
       <button id="edit" class="pl-btn pl-btn--sm" type="button" title="Edit the source">Edit</button>
+      <a id="open" class="pl-btn pl-btn--sm" target="_blank" rel="noopener noreferrer" title="Open this version in a browser tab" tabindex="0" aria-disabled="true" style="display:none">Open in browser</a>
       <button id="dl" class="pl-btn pl-btn--sm" type="button" title="Download this version">Download</button>
       <button id="del" class="pl-btn pl-btn--sm" type="button" title="Delete this artifact">Delete</button>
     </span>
