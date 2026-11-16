@@ -390,3 +390,99 @@ def test_settle_failed_retirement_keeps_the_marker_when_it_cannot_tell(tmp_path)
 
     assert settle_failed_retirement(store, marker, thread_ids=["a2a:s1"]) == "kept"  # no checkpoint store
     assert store.forget_pending_markers()
+
+
+# --- ADR 0132 D5 (S2): deleting/clearing an incognito chat always forgets its rows --------
+#
+# The route forces forget=true when the chat was OPENED incognito, read from the per-message
+# privacy stamp the executor keeps on the opening turn (`_is_private_history`). These exercise
+# the whole DELETE /api/chat/sessions/{id} path, not just the forget helper above.
+
+
+def _incognito_delete_client(monkeypatch, tmp_path, *, opening_history):
+    """A chat-routes TestClient over a real KnowledgeStore (seeded with a chat's memory rows and
+    another chat's row that must survive) and a real A2A task store whose opening turn carries
+    ``opening_history`` — an incognito stamp, or not. ``_retire_thread`` is faked (no checkpoints)."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("archive", domain="conversation", namespace="chat-archive:sX", source="a2a:sX")
+    store.add_chunk("summary", domain="conversation", source="a2a:sX", source_type="harvest")
+    store.add_chunk("fact", domain="fact", source="a2a:sX", source_type="extracted")
+    store.add_chunk("another chat's fact", domain="fact", source="a2a:s9", source_type="extracted")
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/tasks.db")
+
+    async def _seed_engine():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                {
+                    "id": "t1",
+                    "context_id": "sX",
+                    "kind": "task",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [],
+                    "history": opening_history,
+                    "last_updated": datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc),
+                },
+            )
+
+    asyncio.run(_seed_engine())
+
+    async def _fake_retire(_thread_id, *, harvest=None, cascade=True):
+        return None
+
+    async def _fake_chat(message, session_id, **_kw):
+        return [{"role": "assistant", "content": "ok"}]
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    monkeypatch.setattr(cr, "chat", _fake_chat)
+    monkeypatch.setattr(cr, "agent_name", lambda: "protoagent")
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    monkeypatch.setattr(rs.STATE, "thread_id_resolver", None, raising=False)
+
+    app = FastAPI()
+    cr.register_chat_routes(app, ui="none")
+    return TestClient(app), store
+
+
+def test_delete_incognito_session_forgets_even_when_forget_is_false(monkeypatch, tmp_path):
+    """An incognito chat (its opening turn stamped ``incognito``) deleted with ``forget=false``
+    still forgets its source-session memory rows — the server forces it (ADR 0132 D5), so rows
+    an incognito chat wrote before the S1 guard are cleaned up too. FAILS on main, where
+    ``forget=false`` leaves them."""
+    private_opening = [{"role": "ROLE_USER", "metadata": {"incognito": True}, "parts": [{"text": "secret"}]}]
+    c, store = _incognito_delete_client(monkeypatch, tmp_path, opening_history=private_opening)
+
+    body = c.delete("/api/chat/sessions/sX?forget=false").json()
+
+    assert body["deleted"] is True and body["forgotten"] == 3
+    assert _contents(store) == ["another chat's fact"]  # the chat's own rows are gone
+
+
+def test_delete_non_incognito_session_honours_forget_false(monkeypatch, tmp_path):
+    """A normal (non-incognito) chat deleted with ``forget=false`` keeps its memory rows — the
+    forcing is scoped to incognito chats only, so the request is honoured as before."""
+    normal_opening = [{"role": "ROLE_USER", "metadata": {}, "parts": [{"text": "hello"}]}]
+    c, store = _incognito_delete_client(monkeypatch, tmp_path, opening_history=normal_opening)
+    before = _contents(store)
+
+    body = c.delete("/api/chat/sessions/sX?forget=false").json()
+
+    assert body["deleted"] is True and body["forgotten"] == 0
+    assert _contents(store) == before  # nothing forgotten unless asked

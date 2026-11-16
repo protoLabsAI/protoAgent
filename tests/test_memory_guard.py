@@ -105,7 +105,7 @@ class _ToolFake(GenericFakeChatModel):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("incognito", [True, False])
-@pytest.mark.parametrize("dispatch", ["inline", "slash"])
+@pytest.mark.parametrize("dispatch", ["inline", "slash", "sdk"])
 async def test_incognito_subagent_delegation_writes_no_memory(tmp_path, monkeypatch, incognito, dispatch):
     """ADR 0132 S1 / ADR 0069 D3b — the subagent leak the first fix missed.
 
@@ -180,10 +180,25 @@ async def test_incognito_subagent_delegation_writes_no_memory(tmp_path, monkeypa
         monkeypatch.setattr(STATE, "goal_controller", None)
         monkeypatch.setattr(STATE, "plugin_chat_commands", {})
         monkeypatch.setattr(agent_mod, "get_all_tools", lambda *a, **k: list(tool_map.values()))
-        pre = _PreTurn("/memsaver save the operator preference")
-        frames = [frame async for frame in _pre_turn_dispatch(pre, "chat-1", {"incognito": incognito})]
-        assert pre.handled
-        assert frames[-1][0] == "done"
+        if dispatch == "sdk":
+            import asyncio
+
+            from graph import sdk
+            from observability import tracing
+
+            # Workflow steps copy the turn context into their own tasks. Exercise
+            # the real SDK, subgraph and memory tool against the live store.
+            async with tracing.trace_session("chat-1", incognito=incognito):
+                result = await asyncio.create_task(sdk.run_subagent(
+                    "memsaver", "save the operator preference", description="save a memory",
+                    extra_tools=[],
+                ))
+            assert "memsaver completed" in result
+        else:
+            pre = _PreTurn("/memsaver save the operator preference")
+            frames = [frame async for frame in _pre_turn_dispatch(pre, "chat-1", {"incognito": incognito})]
+            assert pre.handled
+            assert frames[-1][0] == "done"
 
     # An incognito chat leaves NO memory trail — even one written by a delegated subagent;
     # a normal chat writes exactly the one profile memory the subagent saved.
