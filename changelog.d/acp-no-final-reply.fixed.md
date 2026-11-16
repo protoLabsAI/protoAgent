@@ -1,0 +1,1 @@
+- **ACP delegation transcript fallback.** Delegations that end with no final reply now include an explicit incomplete marker and a bounded, redacted transcript tail with tool calls and background command IDs, including when follow-up nudges fail. Background delivery preserves the evidence and existing failure classification. Fixes #5317.
