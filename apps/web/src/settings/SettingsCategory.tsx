@@ -17,6 +17,7 @@ import { api, isHostConsole } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { PluginSettingsTabDescriptor, SettingsField, SettingsGroup } from "../lib/types";
+import { ModelChainInput } from "./ModelChainInput";
 import { PathListPicker } from "./PathListPicker";
 import { PathPicker } from "./PathPicker";
 import { RestartNow } from "./RestartNow";
@@ -770,6 +771,14 @@ function StringListInput({ id, value, onChange }: { id: string; value: unknown; 
 export function SettingInput({ field, value, onChange }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void }) {
   const id = `set-${field.key}`;
 
+  // A model role (ADR 0133) renders the one chain control — ordered Combobox rows with
+  // ↑ ↓ ✕, "+ Add fallback", and (for a blank inheriting role) the "Inherits <parent>"
+  // toggletip. M7c resolves the parent chain + legacy fallbacks; the generic path renders
+  // the role's own chain with neither.
+  if (field.type === "model_chain") {
+    return <ModelChainInput field={field} value={value} onChange={onChange} />;
+  }
+
   if (field.type === "bool") {
     return (
       <Switch
@@ -807,8 +816,8 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   // A string_list backed by gateway options (e.g. routing.fallback_models)
   // renders as a list of datalist comboboxes — one per value plus a trailing
   // blank row to add — so you pick models from the gateway (or type any alias),
-  // ordered. Clearing a row removes it.
-  if ((field.type === "string_list" || field.type === "model_chain") && field.options.length) {
+  // ordered. Clearing a row removes it. (model_chain is handled above.)
+  if (field.type === "string_list" && field.options.length) {
     // A scalar lead (model.name: "…") coerces to a one-item chain so the role renders its
     // configured model rather than a blank row (ADR 0133); see settingListItems.
     const items = settingListItems(value);
@@ -851,7 +860,7 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
       </div>
     );
   }
-  if (field.type === "string_list" || field.type === "model_chain") {
+  if (field.type === "string_list") {
     return <StringListInput id={id} value={value} onChange={onChange} />;
   }
   if (field.type === "text") {
