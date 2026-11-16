@@ -302,6 +302,23 @@ async def test_background_delegation_delivers_incomplete_transcript(tmp_path, mo
         assert "follow-up nudges" in text
 
 
+@pytest.mark.parametrize("kind", ["agent_message_chunk", "tool_call", "tool_call_update"])
+async def test_updates_capture_transcript_when_client_lacks_tail(tmp_path, kind):
+    # #5317: older field-only fixtures bypass __init__ and have no transcript state.
+    client = _client(tmp_path, "coder", _EMPTY_END_TURN)
+    del client._transcript_tail
+    del client._turn_background_pending
+    assert client.transcript_tail() == ""
+    await client._handle_update({"update": {
+        "sessionUpdate": kind,
+        "toolCallId": "last-command",
+        "title": "Bash",
+        "content": {"type": "text", "text": "Starting command"},
+    }})
+    assert kind in client.transcript_tail()
+    assert "last-command" in client.transcript_tail()
+
+
 async def test_transcript_is_bounded_redacted_and_reset_between_dispatches(tmp_path, monkeypatch):
     updates = []
     for n in range(20):

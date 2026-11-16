@@ -1310,8 +1310,8 @@ class AcpClient:
 
     def transcript_tail(self) -> str:
         """Bounded, redacted evidence from this dispatch, including follow-up rounds."""
-        lines = list(self._transcript_tail)
-        if self._turn_background_pending:
+        lines = list(getattr(self, "_transcript_tail", ()))
+        if getattr(self, "_turn_background_pending", None):
             lines.append("Pending background command ids: " + self._evidence_text(
                 ", ".join(sorted(self._turn_background_pending)), 2000
             ))
@@ -1323,6 +1323,9 @@ class AcpClient:
         update = params.get("update") or {}
         kind = update.get("sessionUpdate")
         if kind in ("agent_message_chunk", "tool_call", "tool_call_update"):
+            if not hasattr(self, "_transcript_tail"):
+                # Match the other evidence hooks for __new__-built clients.
+                self._transcript_tail = deque(maxlen=12)
             # Keep both ends of each event: arguments tend to lead, command ids and
             # completion notices tend to trail. Redact structured keys before slicing.
             safe = self._safe_tool_input(update)
@@ -2360,7 +2363,7 @@ class AcpClient:
         # there books the last successful run's tool calls and session id as its own
         # (#3040); the clearing has to happen before the first await that can fail.
         self._reset_timeout_evidence()
-        self._transcript_tail.clear()
+        self._transcript_tail = deque(maxlen=12)
         self._answer = ""
         self._text_after_tool = False
         self._last_chunk = ""

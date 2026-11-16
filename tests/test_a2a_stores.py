@@ -112,8 +112,12 @@ async def test_task_record_survives_restart(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_task_ttl_sweep_evicts_old_rows(tmp_path):
-    """sweep_expired_tasks drops rows older than the TTL, keeps fresh ones."""
+@pytest.mark.parametrize("context_id,retained", [
+    ("cc-test-thread", True), ("54a210fa-5593-484f-91d7-24ae5dd62b12", True),
+    ("job:test", False), ("background:test", False), ("system:activity", False), ("palette-test", False),
+])
+async def test_task_ttl_sweep_evicts_old_rows(tmp_path, context_id, retained):
+    """Outside threads survive two days and expire at eight; internal rows retain the 24h TTL."""
     from datetime import UTC, datetime, timedelta
 
     from a2a.types import a2a_pb2
@@ -123,8 +127,8 @@ async def test_task_ttl_sweep_evicts_old_rows(tmp_path):
     engine = make_sqlite_engine(db)
     store = DatabaseTaskStore(engine)
     await store.initialize()
-    await store.save(a2a_pb2.Task(id="fresh", context_id="c"), ctx)
-    await store.save(a2a_pb2.Task(id="stale", context_id="c"), ctx)
+    await store.save(a2a_pb2.Task(id="fresh", context_id=context_id), ctx)
+    await store.save(a2a_pb2.Task(id="stale", context_id=context_id), ctx)
 
     # Backdate "stale" well past the 24h TTL directly in the table.
     from sqlalchemy import update
@@ -138,9 +142,13 @@ async def test_task_ttl_sweep_evicts_old_rows(tmp_path):
         await session.execute(update(TaskModel).where(TaskModel.id == "stale").values(last_updated=old))
         await session.commit()
 
-    deleted = await sweep_expired_tasks(engine)
-    assert deleted == 1
-    assert await store.get("stale", ctx) is None
+    now = datetime.now(UTC)
+    deleted = await sweep_expired_tasks(engine, now=now)
+    assert deleted == (0 if retained else 1)
+    assert (await store.get("stale", ctx) is not None) == retained
+    if retained:
+        assert await sweep_expired_tasks(engine, now=now + timedelta(days=6)) == 1
+        assert await store.get("stale", ctx) is None
     assert await store.get("fresh", ctx) is not None
     await engine.dispose()
 
@@ -151,7 +159,7 @@ async def test_task_ttl_sweep_keeps_console_chats_until_deleted(tmp_path, delete
     """Console chat history stays on the server until the chat is deleted (Josh 2026-11-11):
     phone and desktop rebuild a chat from these rows, so a 24h sweep made them diverge for
     anything older than a day. A deleted (tombstoned) chat's rows still leave on the TTL, and
-    every non-chat context (delegations, API, Activity) keeps the 24h sweep."""
+    outside conversations expire after their listing window."""
     from datetime import UTC, datetime, timedelta
 
     from a2a.server.models import TaskModel
@@ -185,7 +193,7 @@ async def test_task_ttl_sweep_keeps_console_chats_until_deleted(tmp_path, delete
 
     assert await store.get("old-chat", ctx) is not None  # a month-old console chat survives
     assert await store.get("fresh-chat", ctx) is not None
-    assert await store.get("old-api", ctx) is None  # non-chat contexts keep the 24h TTL
+    assert await store.get("old-api", ctx) is None  # beyond the conversations window
     gone = await store.get("old-gone", ctx)
     if deleted_chats:
         assert gone is None  # a deleted chat's rows still leave on the TTL
@@ -195,7 +203,8 @@ async def test_task_ttl_sweep_keeps_console_chats_until_deleted(tmp_path, delete
 
 
 @pytest.mark.asyncio
-async def test_task_ttl_sweep_preserves_hitl_pauses(tmp_path):
+@pytest.mark.parametrize("state", ["TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED"])
+async def test_task_ttl_sweep_preserves_hitl_pauses(tmp_path, state):
     """A resumable input_required/auth_required pause must NOT be TTL-swept even
     when stale — its LangGraph checkpoint can still resume (a non-HITL stale task
     on the same sweep is still evicted)."""
@@ -213,13 +222,13 @@ async def test_task_ttl_sweep_preserves_hitl_pauses(tmp_path):
     await store.save(a2a_pb2.Task(id="paused", context_id="c"), ctx)
     await store.save(a2a_pb2.Task(id="dead", context_id="c"), ctx)
 
-    old = datetime.now(UTC) - timedelta(hours=48)
+    old = datetime.now(UTC) - timedelta(days=8)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     async with sm() as session:
         await session.execute(
             update(TaskModel)
             .where(TaskModel.id == "paused")
-            .values(last_updated=old, status={"state": "TASK_STATE_INPUT_REQUIRED"})
+            .values(last_updated=old, status={"state": state})
         )
         await session.execute(
             update(TaskModel)
@@ -819,8 +828,8 @@ async def test_restart_spared_tasks_exempt_from_sweep_and_reaper_until_finalized
     store, engine = await _fresh_task_store(tmp_path)
     ctx = _ctx()
     # Both are far past every TTL/reaper window; only "spared" is under D7 recovery.
-    await _seed_task(store, engine, ctx, "spared", state="TASK_STATE_WORKING", age_s=90_000, now=now)
-    await _seed_task(store, engine, ctx, "doomed", state="TASK_STATE_WORKING", age_s=90_000, now=now)
+    await _seed_task(store, engine, ctx, "spared", state="TASK_STATE_WORKING", age_s=8 * 86400, now=now)
+    await _seed_task(store, engine, ctx, "doomed", state="TASK_STATE_WORKING", age_s=8 * 86400, now=now)
     stores.mark_restart_spared_tasks({"spared"})
     try:
         assert await sweep_expired_tasks(engine, now=now) == 1  # "doomed" kept today's TTL
@@ -1193,3 +1202,12 @@ def test_reasoning_mime_constant_matches_executor():
     from a2a_impl import executor
 
     assert stores._REASONING_MIME == executor.REASONING_MIME
+
+
+def test_conversation_list_and_sweep_share_retention_policy():
+    from a2a_impl import conversation_policy
+    from operator_api import chat_routes
+
+    assert chat_routes._CONVERSATION_EXCLUDE_PREFIXES is conversation_policy.CONVERSATION_EXCLUDE_PREFIXES
+    assert chat_routes._CONVERSATION_WINDOW_DAYS == stores.CONVERSATION_WINDOW_DAYS
+    assert chat_routes.listed_outside_thread is stores.listed_outside_thread
