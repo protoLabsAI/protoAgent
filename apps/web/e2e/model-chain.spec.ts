@@ -7,7 +7,13 @@ test("model chain ids wrap at 390px and phone controls retain touch targets", as
       { key: "model.name", label: "Main", role: "main", inherits: "", value: [id] },
       { key: "routing.aux_model", label: "Auxiliary", role: "aux", inherits: "main", value: [] },
     ].map((field) => ({ ...field, type: "model_chain", section: "Model roles",
-      options: [id], restart: false, scope: "agent", source: "agent" })),
+      subhead: "Main and aux", options: [id], restart: false, scope: "agent", source: "agent" })),
+  }] } }));
+  await page.route("**/api/config/model-roles", (route) => route.fulfill({ json: { roles: [{
+    role: "aux", chain: [id], inherited: true, source: "main", status: "ok",
+    last_fallback: { time: new Date(Date.now() - 7200000).toISOString(), from: [id],
+      to: "connection:extremely-long-winning-model-identifier-that-must-wrap-at-phone-width",
+      reason: `${id}: RateLimitError (429)` },
   }] } }));
   await page.goto("/app/");
   await page.getByTestId("settings-widget").click();
@@ -40,6 +46,17 @@ test("model chain ids wrap at 390px and phone controls retain touch targets", as
   const inherited = page.getByRole("group", { name: "Auxiliary model chain", exact: true });
   expect((await popover.boundingBox())!.width).toBeLessThanOrEqual((await inherited.boundingBox())!.width);
   await page.keyboard.press("Escape");
+  const fallback = page.getByRole("button", { name: "fell back 2h ago", exact: true });
+  expect((await fallback.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await fallback.click();
+  const statusPopover = page.locator(".model-role-status-popover");
+  await expect(statusPopover).toContainText(id);
+  expect(await statusPopover.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const bounds = (await statusPopover.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  await page.keyboard.press("Escape");
+  await expect(fallback).toBeFocused();
   await main.getByRole("button", { name: "Change", exact: true }).click();
   expect((await main.getByRole("combobox").boundingBox())!.height).toBeGreaterThanOrEqual(44);
 });

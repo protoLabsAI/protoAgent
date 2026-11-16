@@ -1,0 +1,1 @@
+- **Model roles in Settings.** Group model chains by purpose, show registry-driven subagent overrides, and expose recent fallback and image availability details without blocking editing when history is unavailable.

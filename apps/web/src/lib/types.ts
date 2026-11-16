@@ -524,7 +524,7 @@ export type SettingsField = {
   // "text" = a scalar multiline string (#964), rendered as a textarea but saved like "string".
   // "path" = a filesystem path: same string value, rendered with a Browse… picker over the
   // SERVER's filesystem (the console often configures a machine it isn't running on).
-  type: "string" | "text" | "number" | "bool" | "select" | "string_list" | "model_chain" | "secret" | "path";
+  type: "string" | "text" | "number" | "bool" | "select" | "string_list" | "model_chain" | "dict" | "secret" | "path";
   // Whether a "path" field ends on a folder or a file. Emitted for every field; only read
   // when type is "path".
   path_kind?: "dir" | "file";

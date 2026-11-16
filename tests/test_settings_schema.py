@@ -512,8 +512,9 @@ def test_model_roles_schema_contract():
     group = next(g for g in build_schema(LangGraphConfig(routing_fallback_models=["legacy:model"])) if g["section"] == "Model roles")
     assert group["fields"][0]["legacy_fallbacks"] == ["legacy:model"]
     assert group["category"] == "Model"
-    assert [(f["role"], f["key"], f["subhead"], f["inherits"]) for f in group["fields"]] == ROLE_FIELDS
-    assert all(f["type"] == "model_chain" for f in group["fields"])
+    chains = [f for f in group["fields"] if f["type"] == "model_chain"]
+    assert [(f["role"], f["key"], f["subhead"], f["inherits"]) for f in chains] == ROLE_FIELDS
+    assert [f["key"] for f in group["fields"] if f["type"] != "model_chain"] == ["subagents"]
     legacy_labels = {"Primary model", "Auxiliary (fast) model", "Fallback models", "Summarizer model",
                      "Verifier model", "Image description model"}
     legacy = [f for f in FIELDS if f.label in legacy_labels]
@@ -553,3 +554,16 @@ def test_subagent_model_chains_keep_dynamic_names(chain):
     assert nested == {"subagents": {"custom_worker": {"model": chain}}}
     cfg = LangGraphConfig.from_dict(nested)
     assert config_to_dict(cfg)["subagents"]["custom_worker"]["model"] == chain
+
+
+def test_registry_override_editor_reads_preserves_and_respects_locked_config():
+    overrides = {"alpha": {"model": ["one", "two"], "tools": ["example"], "max_turns": 9}}
+    cfg = LangGraphConfig(subagent_overrides=overrides)
+    fields = {f["key"]: f for g in build_schema(cfg) for f in g["fields"]}
+    assert fields["subagents"]["section"] == "Model roles"
+    assert fields["subagents"]["value"] == overrides
+    assert validate_flat({"subagents": overrides}) == (True, None)
+    assert nest_updates({"subagents": overrides}) == {"subagents": overrides}
+    cfg.settings_hidden = ["subagents"]
+    assert not any(f["key"] == "subagents" for g in build_schema(cfg) for f in g["fields"])
+    assert validate_flat({"subagents": overrides}, hidden=cfg.settings_hidden)[0] is False
