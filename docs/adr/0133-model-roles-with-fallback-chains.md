@@ -37,9 +37,18 @@ compaction_model: [anthropic-oauth:claude-haiku-5-5, openai-codex:gpt-6-luna]
 goal_eval_model: anthropic-oauth:claude-sonnet-5-5   # a string is a chain of one
 ```
 
-Existing configs load unchanged. `routing.fallback_models` stays as the main model's fallbacks: `model.name` plus `routing.fallback_models` is the main chain.
+Existing configs load unchanged.
 
-### D2 — Blank inherits a whole chain; a set chain is exactly what's listed
+**The main model is a chain too.** `model.name` accepts a list the same way, so the main model itself falls back to the next model when it is rate- or usage-limited:
+
+```yaml
+model:
+  name: [anthropic-oauth:claude-opus-5-5, openai-codex:gpt-6.1-sol]
+```
+
+`routing.fallback_models` keeps working as the legacy way to write the main model's fallbacks: `model.name` plus `routing.fallback_models` is the main chain. Today it is empty (`[]`) on every fleet agent, so no agent has a main-model fallback yet.
+
+### D2 — Blank inherits a whole chain; a set chain is exactly what's listed (confirmed by Josh 2026-11-15)
 
 - A blank role inherits its parent's **entire chain**. Specific roles inherit the aux chain, and a blank aux inherits the main chain. This is today's inheritance rule, applied to chains.
 - A set chain is **exactly** what's listed. Nothing is appended implicitly: an aux chain of two cheap models never silently escalates to the expensive main model. To get that, list it. Same rule as the board's coder ladders.
@@ -94,5 +103,5 @@ ADR 0132's gist slice (S4) builds its model through `create_role_llm(config, "me
 ## Consequences
 
 - A provider outage on a cheap model stops taking down compaction, harvest, facts, goal checks and gists, which is the 11-13 failure.
-- Fleet configs can express "Haiku, then Sonnet" (or "Claude, then Codex") per role. Updating the fleet's YAML is an operator step after M3/M4 ship, not part of this ADR.
+- Fleet configs can express a chain per role. Josh's chosen fleet aux chain (2026-11-15; Codex usage is available again after a midweek reset): `routing.aux_model: [anthropic-oauth:claude-haiku-5-5, openai-codex:gpt-6-luna, protolabs/fast]`. Specific roles left blank inherit it. Applying it to the fleet is an operator step once M3/M4 ship. A main-model chain per agent is the operator's call, not part of this ADR.
 - One seam replaces about six ad-hoc resolvers, which makes future roles cheap to add.
