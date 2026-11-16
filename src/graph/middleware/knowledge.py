@@ -418,7 +418,9 @@ class KnowledgeMiddleware(AgentMiddleware):
         # spare entry is what refills the digest when the caller's own summary is
         # dropped from the pool. Trimmed back to max_sessions in _cached_digest,
         # AFTER that filter, so the refill happens on the path production uses.
-        pool, exists = load_digest_pool(memory_path or _memory_path(), max_sessions + 1)
+        pool, exists = load_digest_pool(
+            memory_path or _memory_path(), max_sessions + 1, closed_days=opts.prior_sessions_closed_days
+        )
         # Stash the PRE-TRIM, UNFILTERED pool: _cached_digest re-filters and
         # re-renders per call while the disk read stays TTL-cached.
         self._prior_sessions_pool = list(pool)
@@ -456,6 +458,7 @@ class KnowledgeMiddleware(AgentMiddleware):
                 exclude_session_id=exclude_session_id,
                 max_sessions=opts.prior_sessions_max,
                 max_tokens=opts.prior_sessions_max_tokens,
+                closed_days=opts.prior_sessions_closed_days,
             )
         now = time.monotonic()
         # A caps change (settings save) also invalidates: the pool is READ at

@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
-import { SettingsCategoryPanel } from "./SettingsCategory";
+import { SettingInput, SettingsCategoryPanel } from "./SettingsCategory";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -60,4 +60,22 @@ describe("SettingsCategoryPanel lead content", () => {
     expect(triggers[1].getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("[data-testid=connections-content]")).not.toBeNull();
   });
+});
+
+
+it("renders model chains as ordered lists and emits reordered arrays", async () => {
+  const onChange = vi.fn();
+  await act(async () => {
+    root.render(h(SettingInput, {
+      field: {
+        key: "model.name", label: "Main", type: "model_chain", section: "Model roles",
+        options: ["one", "two"], restart: false, scope: "host", source: "agent",
+      },
+      value: ["one", "two"], onChange,
+    }));
+  });
+  const down = container.querySelector<HTMLButtonElement>('[aria-label="Move one down"]');
+  expect(down).not.toBeNull();
+  act(() => down!.click());
+  expect(onChange).toHaveBeenCalledWith(["two", "one"]);
 });

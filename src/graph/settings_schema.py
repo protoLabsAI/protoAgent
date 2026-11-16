@@ -28,7 +28,7 @@ class Field:
     key: str  # dotted YAML path, e.g. "model.temperature"
     attr: str  # LangGraphConfig attribute holding the value
     label: str
-    type: str  # string|text|number|bool|select|string_list|secret|path
+    type: str  # string|text|number|bool|select|string_list|model_chain|secret|path
     section: str
     description: str = ""
     restart: bool = False  # True = needs a full process restart (not hot-reload)
@@ -71,6 +71,9 @@ class Field:
     # refused a write to it at the config write path — see `credential_plane_keys`, which
     # also matches whole sections by prefix (`CREDENTIAL_PLANE_SECTIONS`).
     credential_plane: bool = False
+    role: str = ""
+    subhead: str = ""
+    inherits: str = ""
 
 
 # ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for the
@@ -82,6 +85,27 @@ ACP_MODEL_OPTIONS = acp_runtime_options()
 # OAuth-subscription providers. Dynamic (options_source="providers"), so validate_flat
 # does NOT enforce it — a custom gateway provider label still saves.
 _PROVIDER_OPTIONS = ["openai", "anthropic-oauth", "openai-codex"]
+
+# Model-role slots that accept a SCALAR (a chain of one) or an ordered LIST (ADR 0133 D1).
+# They render as ``model_chain`` but — unlike a genuine list field
+# such as routing.fallback_models / model.favorites — a bare string stays valid on save, so a
+# legacy scalar value still round-trips through the write path. ``validate_flat`` and the
+# config drift guard both key off this set. Blank defaults stay strings (no behavior change);
+# the config layer resolves the real chain via ``graph.config.role_chain``.
+MODEL_ROLE_CHAIN_KEYS: frozenset[str] = frozenset(
+    {
+        "model.name",
+        "soul.drift.judge.model",
+        "routing.aux_model",
+        "compaction.model",
+        "goal.eval_model",
+        "memory.select_model",
+        "memory.harvest_model",
+        "memory.facts_model",
+        "memory.gist_model",
+        "knowledge.image_describe_model",
+    }
+)
 
 
 # Ordered registry. Section order here is the order the UI renders groups in.
@@ -123,9 +147,11 @@ FIELDS: list[Field] = [
         "model.name",
         "model_name",
         "Primary model",
-        "select",
+        "string_list",
         "Model & runtime",
-        "The main reasoning model. Names its connection, like every other slot (ADR 0106).",
+        "The main reasoning model, or an ordered fallback chain (ADR 0133) — the primary, then "
+        "each fallback in turn (the legacy routing.fallback_models tail still appends). A single "
+        "entry is the ordinary case. Names its connection, like every other slot (ADR 0106).",
         # Qualified, cross-connection options — the lead model is no longer special
         # (ADR 0106). It used to draw from `models`, the bare list of ONE provider's ids,
         # because the main model belonged to `model.provider` by definition; now it can
@@ -171,13 +197,6 @@ FIELDS: list[Field] = [
         "secret",
         "Model & runtime",
         "Superseded by Connections (ADR 0106) — set a connection's key there.",
-        ui_hidden=True,
-    ),
-    # Like model.profiles, this structured map uses YAML/config API until Settings
-    # has a dict editor; exposing a text input would corrupt the mapping on save.
-    Field(
-        "subagents", "subagent_overrides", "Subagent overrides", "dict", "Model & runtime",
-        "Partial overrides for registered subagents, including profile and final_profile (ADR 0128).",
         ui_hidden=True,
     ),
     Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
@@ -381,11 +400,11 @@ FIELDS: list[Field] = [
         "routing.aux_model",
         "aux_model",
         "Auxiliary (fast) model",
-        "string",
+        "string_list",
         "Routing",
-        "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the "
-        "main model. Prefix another provider to send these calls there instead — "
-        "e.g. gateway:protolabs/fast, openai-codex:gpt-5.6-sol.",
+        "Cheap/fast alias for summarization, goal-verification, and subagents — a single model or "
+        "an ordered fallback chain (ADR 0133). Blank = use the main model. Prefix another provider "
+        "to send these calls there instead — e.g. gateway:protolabs/fast, openai-codex:gpt-5.6-sol.",
         options_source="slot_models",
         scope="host",
     ),
@@ -450,9 +469,9 @@ FIELDS: list[Field] = [
         "compaction.model",
         "compaction_model",
         "Summarizer model",
-        "string",
+        "string_list",
         "Compaction",
-        "Blank = routing.aux_model, then the main model.",
+        "A single model or an ordered fallback chain (ADR 0133). Blank = routing.aux_model, then the main model.",
         options_source="slot_models",
     ),
     # In-history tool-result pruning (#2782, ADR 0101 D3) — same category as
@@ -513,9 +532,9 @@ FIELDS: list[Field] = [
         "goal.eval_model",
         "goal_eval_model",
         "Verifier model",
-        "string",
+        "string_list",
         "Goal mode",
-        "Blank = routing.aux_model, then the main model.",
+        "A single model or an ordered fallback chain (ADR 0133). Blank = routing.aux_model, then the main model.",
         options_source="slot_models",
     ),
     # ── Watches ──────────────────────────────────────────────────────────────
@@ -877,12 +896,57 @@ FIELDS: list[Field] = [
         "memory.select_model",
         "memory_select_model",
         "Memory selection model",
-        "string",
+        "string_list",
         "Memory",
-        "Model for memory selection. Falls back to routing.aux_model, then the main model. "
+        "Model for memory selection — a single model or an ordered fallback chain (ADR 0133). "
+        "Falls back to routing.aux_model, then the main model. "
         "Whole-store selection stays off when this resolves to the main model.",
         options_source="slot_models",
     ),
+    # Session-memory LLM passes (ADR 0133 D5/D6) — each a single model or an ordered fallback
+    # chain. ui_hidden for now: they round-trip through config_to_dict / the YAML writer so the
+    # config shape is live, but the dedicated editor lands with the rest of the role-chain UI
+    # (M7). Inheritance (role_chain): harvest → aux, facts → harvest, gist → aux.
+    Field(
+        "memory.harvest_model",
+        "memory_harvest_model",
+        "Memory harvest model",
+        "string_list",
+        "Memory",
+        "Model for the session-end conversation-harvest pass — a single model or an ordered "
+        "fallback chain (ADR 0133). Blank = routing.aux_model, then the main model.",
+        options_source="slot_models",
+        ui_hidden=True,
+    ),
+    Field(
+        "memory.facts_model",
+        "memory_facts_model",
+        "Memory facts model",
+        "string_list",
+        "Memory",
+        "Model for the session-end fact-extraction pass — a single model or an ordered fallback "
+        "chain (ADR 0133). Blank = memory.harvest_model, then routing.aux_model, then the main model.",
+        options_source="slot_models",
+        ui_hidden=True,
+    ),
+    Field(
+        "memory.gist_model",
+        "memory_gist_model",
+        "Memory gist model",
+        "string_list",
+        "Memory",
+        "Model for the short session-gist summary — a single model or an ordered fallback chain "
+        "(ADR 0133). Blank = routing.aux_model, then the main model.",
+        options_source="slot_models",
+        ui_hidden=True,
+    ),
+    Field("memory.session_gist", "memory_session_gist", "Session gists", "bool", "Memory",
+          "Generate a short gist after a chat goes quiet and has four new messages."),
+    Field("memory.gist_idle_seconds", "memory_gist_idle_seconds", "Gist idle seconds", "number", "Memory",
+          "Quiet time before generating a session gist.", minimum=1),
+    Field("memory.closed_session_days", "memory_closed_session_days", "Closed-chat digest days", "number", "Memory",
+          "Keep a chat closed with “Save a summary” in the prior-sessions digest, marked closed, "
+          "for this many days. 0 turns the carry-over off.", minimum=0),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
@@ -947,14 +1011,15 @@ FIELDS: list[Field] = [
         "knowledge.image_describe_model",
         "image_describe_model",
         "Image description model",
-        "string",
+        "string_list",
         "Knowledge",
         "Vision-capable gateway model used to DESCRIBE attached images when the chat model "
-        "can't see them (text-only). The screenshot is sent to this model; its description + "
-        "any transcribed text is inlined as context. Blank disables image attachments on "
-        "non-vision models (they error with a clear message). Needs a vision model (e.g. "
-        "protolabs/smart); the chat model can stay text-only.",
-        options_source="models",
+        "can't see them (text-only) — a single model or an ordered fallback chain (ADR 0133). "
+        "The screenshot is sent to this model; its description + any transcribed text is inlined "
+        "as context. Blank inherits the main model chain; image description is unavailable "
+        "when the resolved models cannot read images. "
+        "Needs a vision model (e.g. protolabs/smart); the chat model can stay text-only.",
+        options_source="slot_models",
         restart=True,
     ),
     Field(
@@ -2182,6 +2247,43 @@ for _f in FIELDS:
     if _f.key in _KNOWLEDGE_SUBSECTION:
         _f.section = _KNOWLEDGE_SUBSECTION[_f.key]
 
+# Legacy declarations still round-trip; the role editor owns their UI.
+for _f in FIELDS:
+    if _f.key in MODEL_ROLE_CHAIN_KEYS or _f.key == "routing.fallback_models":
+        _f.ui_hidden = True
+
+_MODEL_ROLES = (
+    ("main", "model.name", "model_name", "Main", "Main and aux", ""),
+    ("aux", "routing.aux_model", "aux_model", "Auxiliary", "Main and aux", "main"),
+    ("compaction", "compaction.model", "compaction_model", "Compaction", "Memory", "aux"),
+    ("harvest", "memory.harvest_model", "memory_harvest_model", "Harvest", "Memory", "aux"),
+    ("facts", "memory.facts_model", "memory_facts_model", "Facts", "Memory", "harvest"),
+    ("memory_select", "memory.select_model", "memory_select_model", "Memory select", "Memory", "aux"),
+    ("memory_gist", "memory.gist_model", "memory_gist_model", "Chat gist", "Memory", "aux"),
+    ("goal_eval", "goal.eval_model", "goal_eval_model", "Goal eval", "Checks", "aux"),
+    ("soul_drift_judge", "soul.drift.judge.model", "soul_drift_judge_model", "Drift judge", "Checks", "aux"),
+    ("image_describe", "knowledge.image_describe_model", "image_describe_model", "Image describe", "Media", "main"),
+)
+_legacy_fields = {f.key: f for f in FIELDS}
+FIELDS.extend(
+    Field(
+        key, attr, label, "model_chain", "Model roles",
+        "Models to try in order." if not parent else f"Models to try in order; blank inherits {parent}.",
+        options_source="slot_models",
+        scope=_legacy_fields[key].scope if key in _legacy_fields else "agent",
+        role=role, subhead=subhead, inherits=parent,
+    )
+    for role, key, attr, label, subhead, parent in _MODEL_ROLES
+)
+
+# Registry overrides are consumed only by the specialized Model roles editor.
+FIELDS.append(
+    Field(
+        "subagents", "subagent_overrides", "Subagent overrides", "dict", "Model roles",
+        "Partial overrides for registered subagents, including profile and final_profile (ADR 0128).",
+    )
+)
+
 _BY_KEY = {f.key: f for f in FIELDS}
 _SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
 _HOST_KEYS = {f.key for f in FIELDS if getattr(f, "scope", "agent") == "host"}
@@ -2291,7 +2393,7 @@ def is_secret_key(key: str) -> bool:
 # "the golden test went red". Add a Field per knob instead; that is the fix in nearly every
 # case. If you do add one, say here why the shape defeats Field.
 SETTINGS_EXEMPT_SECTIONS: tuple[str, ...] = (
-    "subagents",  # subagents.researcher — nested per-subagent dicts, emitted by config_io §B
+    "subagents",  # nested per-subagent dicts, emitted by config_io §B
     "plugins",  # plugins.* install/enable knobs, emitted by config_io §B
     "lifecycle_hooks",  # ADR 0074 — a LIST of hook dicts
     "projects",  # ADR 0095 — a LIST of managed-project dicts
@@ -2391,6 +2493,7 @@ _SECTION_CATEGORY = {
     # connection, sampling, and cache. The runtime lives here, not in Behavior, because it
     # decides whether the model config is even required (create_llm's ACP-only fallback).
     "Model & runtime": "Model",
+    "Model roles": "Model",
     "Model passthrough": "Model",
     "Favorite models": "Model",  # /model quick-switch pins (#1957)
     "Routing": "Model",
@@ -2572,7 +2675,15 @@ def build_schema(
             # the result into every field whose options come from "models".
             "options_source": f.options_source,
         }
-        if f.type == "secret":
+        if f.type == "model_chain":
+            from graph.config import _as_chain
+
+            entry.update(role=f.role, subhead=f.subhead, inherits=f.inherits)
+            if f.role == "main":
+                entry["legacy_fallbacks"] = _as_chain(config.routing_fallback_models)
+            entry["value"] = _as_chain(current)
+            entry["default"] = _as_chain(getattr(defaults, f.attr, None))
+        elif f.type == "secret":
             entry["value"] = ""
             entry["is_set"] = bool(current)
         else:
@@ -2746,8 +2857,20 @@ def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> t
                     f"/<subagent> runs report progress every {PROGRESS_MIN_INTERVAL_S:g}s, so a "
                     "shorter window would stop them mid-work"
                 )
-        if f.type == "string_list" and not (isinstance(val, list) and all(isinstance(x, str) for x in val)):
-            return False, f"{key} must be a list of strings"
+        if f.type in {"string_list", "model_chain"}:
+            # A model-role chain (ADR 0133) accepts a SCALAR (a chain of one) or a list; a
+            # genuine list field accepts only a list. Either way every entry must be a string.
+            if key in MODEL_ROLE_CHAIN_KEYS and isinstance(val, str):
+                pass
+            elif not (isinstance(val, list) and all(isinstance(x, str) for x in val)):
+                suffix = " (or a single model string)" if key in MODEL_ROLE_CHAIN_KEYS else ""
+                return False, f"{key} must be a list of strings{suffix}"
+            # Preserve the select membership guard for model roles that declare a
+            # closed option set. Dynamic slot_models remain suggestions, as before.
+            if key in MODEL_ROLE_CHAIN_KEYS and f.options:
+                entries = [val] if isinstance(val, str) else val
+                if any(entry not in f.options for entry in entries):
+                    return False, f"{key} entries must be one of {f.options}"
         if f.type == "select" and f.options and val not in f.options:
             return False, f"{key} must be one of {f.options}"
         # `path` saves a plain string like `string` does — the picker is a rendering
@@ -2780,6 +2903,8 @@ def nest_updates(updates: dict[str, Any]) -> dict[str, Any]:
     for key, val in updates.items():
         if key in _SECRET_KEYS and (val is None or val == ""):
             continue  # leave an existing secret untouched
+        if key in MODEL_ROLE_CHAIN_KEYS and key != "model.name" and val == []:
+            val = ""  # clearing a role restores inheritance
         cursor = nested
         parts = key.split(".")
         for part in parts[:-1]:

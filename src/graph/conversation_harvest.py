@@ -43,7 +43,7 @@ def resolve_memory_store(store=_DEFAULT_MEMORY_STORE):
     return store
 
 
-# Cap the transcript fed to the summarizer (keep the most recent tail).
+# Bound each harvest model input; long conversations are processed in parts.
 _MAX_TRANSCRIPT_CHARS = 16000
 
 
@@ -656,10 +656,11 @@ _SUMMARY_PROMPT = (
 
 
 async def _default_summarizer(transcript: str, config) -> str:
-    from graph.agent import _resolve_aux_model
-    from graph.llm import create_llm
+    from graph.model_roles import create_role_llm
 
-    llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
+    # The "harvest" role resolves memory.harvest_model (ADR 0133); a blank chain inherits
+    # aux, preserving the historical aux selection when nothing is set.
+    llm = create_role_llm(config, "harvest")
     resp = await llm.ainvoke([HumanMessage(content=_SUMMARY_PROMPT.format(transcript=transcript))])
     # The aux model may or may not wrap output in tags; extract defensively. A Responses
     # provider returns a block LIST (a reasoning block carrying `encrypted_content`, then
@@ -667,6 +668,37 @@ async def _default_summarizer(transcript: str, config) -> str:
     # keeps the text parts only.
     text = text_of(resp)
     return extract_output(text).strip() or text.strip()
+
+
+def _transcript_parts(transcript: str) -> list[str]:
+    """Split without dropping text, preferring complete transcript lines."""
+    parts = []
+    while len(transcript) > _MAX_TRANSCRIPT_CHARS:
+        end = transcript.rfind("\n", 0, _MAX_TRANSCRIPT_CHARS)
+        if end <= 0:
+            end = transcript.rfind(" ", 0, _MAX_TRANSCRIPT_CHARS)
+        end = end + 1 if end > 0 else _MAX_TRANSCRIPT_CHARS
+        parts.append(transcript[:end])
+        transcript = transcript[end:]
+    if transcript:
+        parts.append(transcript)
+    return parts
+
+
+async def _summarize_parts(parts: list[str], config, summarizer) -> str:
+    """Summarize every part, then combine; bound reduction inputs too."""
+    summaries = []
+    for part in parts:
+        summary = await summarizer(part, config)
+        if not summary.strip():
+            raise ValueError("harvest summarizer returned an empty part summary")
+        summaries.append(summary)
+    combined = "\n\n".join(summaries)
+    if len(combined) > _MAX_TRANSCRIPT_CHARS:
+        if len(combined) >= sum(map(len, parts)):
+            raise ValueError("harvest part summaries did not shrink")
+        return await _summarize_parts(_transcript_parts(combined), config, summarizer)
+    return await summarizer(combined, config)
 
 
 def facts_allowed(thread_id: str, channel_values: dict) -> bool:
@@ -691,6 +723,26 @@ def _as_of(tup) -> str:
     """``YYYY-MM-DD`` of the thread's last checkpoint (its last activity), or ``""``."""
     ts = str(((getattr(tup, "checkpoint", None) or {}).get("ts")) or "")
     return ts[:10] if re.match(r"\d{4}-\d{2}-\d{2}", ts) else ""
+
+
+def _first_sentence(text: str, *, max_chars: int = 240) -> str:
+    """The first sentence of a harvest summary — the gist of its closed digest entry
+    (ADR 0132 D3b). Whitespace is collapsed, then everything up to the first sentence
+    terminator is taken (the whole thing when there is none), clipped defensively."""
+    collapsed = " ".join(str(text or "").split())
+    match = re.match(r".+?[.!?](?=\s|$)", collapsed)
+    sentence = (match.group(0) if match else collapsed).strip()
+    return sentence[: max_chars - 1] + "…" if len(sentence) > max_chars else sentence
+
+
+def _first_user_text(messages: list) -> str:
+    """The first operator line of a transcript — the digest topic of a closed entry."""
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            content = text_of(m).strip()
+            if content:
+                return content[:240]
+    return ""
 
 
 async def harvest_thread(
@@ -746,32 +798,64 @@ async def harvest_thread(
             log.info("[harvest] thread %s is incognito — skipping harvest", thread_id)
             return None
         messages = channel_values.get("messages", [])
-        transcript = render_transcript(messages)
+        import asyncio
+
+        session_id = str(channel_values.get("session_id") or thread_id)
+        archives = await asyncio.to_thread(history_store.list_for_session, session_id, kinds=["archive"])
+        transcript = "\n\n".join(
+            [entry.content for entry in archives] + [render_transcript(messages, max_chars=None)]
+        )
         if not transcript.strip():
             return None
-        summary = await summarizer(transcript, config)
+        parts = _transcript_parts(transcript)
+        summary = (
+            await summarizer(transcript, config)
+            if len(parts) == 1
+            else await _summarize_parts(parts, config, summarizer)
+        )
         if not summary.strip():
             return None
         # Date what we store to when the conversation happened, not when it retired. The
         # TTL sweep retires threads weeks after their last turn. Undated, an August
         # "the user runs model X" landed as a present-tense fact stamped with the harvest
         # day (2026-09-10) and was recalled as the current setup.
+        gist = _first_sentence(summary)  # the closed-entry gist — before the [as of] prefix
         as_of = _as_of(tup)
         if as_of:
             summary = f"[as of {as_of}] {summary}"
-        import asyncio
-
         entry_id = await asyncio.to_thread(
             history_store.add,
             summary,
             kind="summary",
-            session_id=str(channel_values.get("session_id") or thread_id),
+            session_id=session_id,
             thread_id=thread_id,
             heading=f"Conversation summary ({thread_id}" + (f", last active {as_of})" if as_of else ")"),
             span_end=as_of or None,
             namespace=namespace,
         )
         log.info("[harvest] summarized thread %s into history (entry %s)", thread_id, entry_id)
+
+        # ADR 0132 D3b: keep a "closed" digest record so a chat harvested with "Save a
+        # summary" (or by the idle sweep) stays in the prior-sessions digest, marked
+        # closed, for memory_closed_session_days — its gist is this summary's first
+        # sentence. Best-effort and isolated: a bookkeeping-file failure must never fail
+        # the harvest (nor re-raise under raise_on_error — the summary already landed).
+        try:
+            closed_days = int(getattr(config, "memory_closed_session_days", 14) or 0)
+            if closed_days > 0:
+                from graph.middleware.memory import record_closed_session
+
+                await asyncio.to_thread(
+                    record_closed_session,
+                    session_id,
+                    topic=_first_user_text(messages),
+                    gist=gist,
+                    closed_at=_now_iso(),
+                    message_count=len(messages),
+                    closed_days=closed_days,
+                )
+        except Exception:  # noqa: BLE001 — the closed-digest record is best-effort
+            log.warning("[harvest] could not record the closed-session entry for %s", thread_id, exc_info=True)
 
         # Semantic facts — the second half of the session-end pass (ADR 0021). ADR 0125
         # P2-D3: extracted facts now land in the core MemoryStore, never in chunks. With no
@@ -794,7 +878,8 @@ async def harvest_thread(
                 }
                 if fact_extractor is not None:
                     kwargs["extractor"] = fact_extractor
-                await extract_and_store_facts(transcript, **kwargs)
+                for part in parts:
+                    await extract_and_store_facts(part, **kwargs)
 
         return entry_id
     except Exception:

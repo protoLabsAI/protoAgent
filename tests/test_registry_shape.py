@@ -213,3 +213,37 @@ def test_an_unregistered_prefix_is_part_of_the_model_id():
     """`bedrock:anthropic.claude` is a model id, not a route — the grammar's own rule."""
     doc, _, _ = to_registry_shape({"model": {"provider": "anthropic-oauth", "name": "bedrock:anthropic.claude"}})
     assert doc["model"]["name"] == "anthropic-oauth:bedrock:anthropic.claude"
+
+
+@pytest.mark.parametrize("provider", ["anthropic-oauth", "openai-codex"])
+def test_subscription_chains_keep_their_routes_when_exported(provider, monkeypatch):
+    from graph.config import LangGraphConfig, role_chain
+    from graph.llm import resolve_slot_target
+
+    monkeypatch.delenv("PROTOAGENT_MODEL", raising=False)
+    chain = [" primary ", "fallback", "prod:other", "protolabs/fast", ""]
+    layer = {
+        "providers": [{"id": "subscription", "type": provider}, GW,
+                      {"id": "prod", "type": "openai-compat"}],
+        "model": {"provider": provider, "name": chain.copy()},
+        "routing": {"aux_model": chain.copy(), "fallback_models": ["tail"]},
+        "compaction": {"model": chain.copy()},
+        "goal": {"eval_model": chain.copy()},
+        "memory": {key: chain.copy() for key in ("select_model", "harvest_model", "facts_model", "gist_model")},
+        "knowledge": {"image_describe_model": chain.copy()},
+        "soul": {"drift": {"judge": {"model": chain.copy()}}},
+    }
+    original = copy.deepcopy(layer)
+    doc, _, aliases = to_registry_shape(layer)
+    expected = ["subscription:primary", "subscription:fallback", "prod:other", "protolabs/fast", ""]
+    assert doc["model"]["name"] == expected
+    assert "provider" not in doc["model"]
+    assert aliases["provider"] == "subscription"
+    assert layer == original
+    assert to_registry_shape(doc)[0] == doc
+    config = LangGraphConfig.from_dict(doc)
+    for role in ("main", "aux", "compaction", "goal_eval", "memory_select", "harvest",
+                 "facts", "memory_gist", "image_describe", "soul_drift_judge"):
+        assert role_chain(config, role) == expected[:-1] + (["subscription:tail"] if role == "main" else [])
+        connection, _, provider_type, model = resolve_slot_target(role_chain(config, role)[0], config)
+        assert (connection, provider_type, model) == ("subscription", provider, "primary")

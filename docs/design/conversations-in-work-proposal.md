@@ -1,21 +1,53 @@
 # Conversations in Work: original chats, private steering, retained history
 
 Status: **proposal for team review; not implementation authorization.**
-Prepared 2026-11-15 (America/Los_Angeles). Code inspected at
-`d9eadcc05d8cbadd6c5d79a656a978a7c69168eb`. Backend findings below are verified by
-source inspection only; runtime scenarios and cited tests were **not executed**.
-Keep the proposal PR open under **merge hold**; do not auto-merge. Approval to
-review this document is not permission to build, release, or create implementation
-cards. This change adds this proposal and its required changelog fragment; it
-leaves runtime behavior and approved specifications intact.
+Prepared 2026-11-15, revised 2026-11-16 (America/Los_Angeles) after the
+2026-11-16 steelman review (read against `main` at `d05f32262`) and the
+2026-11-16 final planning audit, both source-reading only. Code re-inspected at
+`a6ba26d10f3954bb21ee6c70c79f6373681c6bcb` (current `main`, release v0.246.1).
+Backend findings below are verified by **source inspection only, not executed**;
+runtime scenarios and cited tests were not run. Approval to review this document
+is not permission to build, release, or create implementation cards. This change
+adds this proposal and its changelog fragment; it leaves runtime behavior and
+approved specifications intact.
+
+## Decisions recorded 2026-11-16
+
+Decided by Josh, 2026-11-16. These six answers are settled; the rest of this
+document is written to be consistent with them, and every other question is
+listed as open in the [decision map](#decision-map-settled-and-open).
+
+1. **Who "the operator" is.** For private steering, "the operator" is the
+   human's own console session only. Any agent, including one with operator
+   rights (the fleet service token, paired agent devices), is treated as a peer.
+2. **Privacy contract.** Steering text and the turns it triggers are never
+   delivered on peer channels (stream, poll, push, history, tool output). The
+   agent may act on what it was told and deliver intended results. Relaying
+   anything else needs an explicit operator instruction.
+3. **Deleting a chat.** × on a chat tab still deletes the chat, as today. Work
+   then shows that original as unavailable. The retention invariant is
+   reworded: **no automatic retention sweep deletes a linked original while any
+   linked work is active.**
+4. **v1 scope.** The proposal carries a participant capability table; v1 covers
+   the requester row plus originals stored on this host. Coder, reviewer and
+   remote rows show as unavailable until their transcripts are durable. No
+   copied fallback.
+5. **ADR 0129 D8.** v1 keeps the structured decision controls and the
+   missing-origin fallback. Removing them is a later, separate decision.
+6. **What merging means.** Merging accepts the direction and the audience
+   boundaries. It does not authorize building. Work starts on a separate go
+   from Josh, beginning with a time-boxed Phase 0 isolation prototype that ends
+   in continue-or-revise.
 
 ## Decision sources and approval boundaries
 
 The operator approved the direction in the proposal request: put progress and
 related conversations in Work, remove the standalone From others tab, open the
-original conversation, remove the duplicate Answer in chat action, keep steering
-and its private responses operator-only, and retain original history while linked
+original conversation, keep one conversation action per row, keep steering and
+its private responses operator-only, and retain original history while linked
 work is active. The agent may still deliver intended work results to peers.
+The six decisions above refine that direction; decisions 1 and 2 define what
+"operator-only" and "private" mean precisely.
 
 The supplied design references are **spec `a-1794812909598-cd8b26` v2** and
 **preview `a-1794812482334-68d817` v4**. These are artifact references, not durable
@@ -25,27 +57,46 @@ readiness, authorization, privacy, retention, or actual-device acceptance.
 
 | Evidence category | What it establishes |
 | --- | --- |
-| Operator-approved direction | Work-to-original-Chat navigation; one Open in chat action per available related conversation, including Needs you; private steering and private responses; active-work history retention. |
+| Operator-approved direction | Work-to-original-Chat navigation; one Open in chat action per available related conversation, including Needs you; private steering and private responses; active-work history retention. Refined by the six decisions of 2026-11-16 above. |
 | Existing accepted design | [ADR 0129](../adr/0129-work-consolidation.md) defines four Work groups, job identity and execution ownership, recovery, and answer-in-place. [ADR 0131](../adr/0131-work-knows-its-conversation.md) commits P1/P2, extends existing stores, and treats origin as provenance, not authority. Its P3–P5 remain subject to later decisions. |
 | Existing layout approval | [work-view.md](./work-view.md) supplies row, rail, inspector, phone, focus and failure rules. [work-consolidation.md](./work-consolidation.md) replaces its old group structure with Needs you, Doing now, Coming up and Your instructions. |
 | Historical conversation approval | [other-conversations.md](./other-conversations.md), revisions 1–5, describes the pinned read-only From others tab, Continue in a new chat, and links between threads and jobs. That approval remains recorded; this proposal explicitly replaces that interaction rather than claiming it meets the new contract. |
-| Newer accepted architecture | [ADR 0130](../adr/0130-server-authoritative-live-sync.md) makes server state and resync authoritative. [ADR 0132](../adr/0132-chat-context-carryover.md) covers memory/digests and checkpoint recovery, not full-history preservation or private peer conversations. [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md) covers model chains, not conversation audiences. |
-| Preview proposals, not separately confirmed decisions | Routine threads in a Started by others group in the Chat list; the preview's completed-work presentation; unknown output audience defaulting to private. These need the product or technical decisions below. |
+| Newer accepted architecture | [ADR 0130](../adr/0130-server-authoritative-live-sync.md) makes server state and resync authoritative. [ADR 0132](../adr/0132-chat-context-carryover.md) covers memory, gists, digests and checkpoint recovery, not full-history preservation or private peer conversations. [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md) covers model chains, not conversation audiences. |
+| Review evidence on record | The 2026-11-16 steelman review confirmed the code claims in the findings table against `main` at `d05f32262` and added the operator-tier, ownership, ×-delete and v1-scope findings folded in below. The 2026-11-16 final planning audit added the participant-capability, derived-content, observability, read-only-milestone, prototype and two-audience gaps, and verified the live board. Both are inspection-only. |
+| Preview proposals, not separately confirmed decisions | Routine threads in a Started by others group in the Chat list; the preview's completed-work presentation; unknown output audience defaulting to private. These remain open in the decision map. |
 
-The existing four-group design already says finished work leaves active Work.
-That does not approve the preview's specific destination for completed history
-or routine conversations. Likewise, visual approval of a Needs you row does not
-silently amend ADR 0129 D8's reply-in-place fallback for missing origins. The
-approved new flow has **no Work conversation composer**. Before implementation,
-reviewers must explicitly reconcile that replacement with D8, preserving native
-structured decision controls and a truthful recovery path for unavailable chats.
-This document does not edit D8 or authorize removing its current behavior.
+### Lineage and supersession
+
+This proposal **supersedes** the interaction design of From others revision 5
+([#5339](https://github.com/protoLabsAI/protoAgent/pull/5339)) — the pinned
+read-only tab — and the shipped Continue in a new chat flow (C4,
+[#5301](https://github.com/protoLabsAI/protoAgent/pull/5301)) together with its
+guide ([#5353](https://github.com/protoLabsAI/protoAgent/pull/5353)). It
+**builds on** ADR 0131 P2c (`GET /api/conversations` rows list their open
+tasks, [#5329](https://github.com/protoLabsAI/protoAgent/pull/5329)), the Work
+"Started in" provenance line
+([#5342](https://github.com/protoLabsAI/protoAgent/pull/5342)), and board cards
+recording the conversation that caused them (bd-edo5o,
+[projectBoard-plugin #777](https://github.com/protoLabsAI/projectBoard-plugin/pull/777),
+merged). Whether the supersession is recorded as an ADR 0131 amendment or a new
+ADR is open (settled in Phase 0). The historical approval of revision 5 stays
+recorded; nothing here claims the old behavior meets the new contract.
+
+### ADR 0129 D8 boundary
+
+Visual approval of a Needs you row does not silently amend ADR 0129 D8's
+answer-in-place contract. Decision 5 settles the v1 boundary: **v1 keeps D8's
+structured decision controls (Reply / Done / Dismiss) and the missing-origin
+fallback.** Removing them is a later, separate decision, taken in its own
+review. The approved new flow adds no Work conversation composer; the single
+Open in chat action replaces conversation-opening controls, not D8's decision
+controls.
 
 ## The proposed experience
 
 Work answers what is happening and which conversations explain it. Main Chat is
-where the operator reads and steers the owning agent. No fork, copied history,
-summary-seeded new chat, or new Work composer satisfies this proposal.
+where the human operator reads and steers the owning agent. No fork, copied
+history, summary-seeded new chat, or new Work composer satisfies this proposal.
 
 ### Work list, requests and promotion
 
@@ -53,7 +104,7 @@ Keep the four Work groups and their shared counts. Actionable incoming requests
 may appear as Work items before a task, job or board card exists. Show the request,
 its state, and **Asked by** with the original requester and known provenance.
 An automated conversation alone does not establish that there is actionable work;
-request eligibility remains an open product decision.
+request eligibility remains an open product decision (settled in Phase 0).
 
 When a request becomes a task/job/card, promote it **in place**. Preserve its
 logical Work identity, Asked by, original conversation links and navigation
@@ -93,11 +144,56 @@ finishes while Chat is open, keep the conversation and an honest finished detail
 on return; do not switch to unrelated work or resurrect an active count.
 
 The composer names the **owning agent**, not the requester or peer. It explains
-that operator steering and the agent's private responses stay private. This
-promise must not ship until the audience boundary is proven. Sending a new turn
-within the same original context is allowed; minting a replacement conversation
-is not. A parked decision must use its matching guarded resume path, not a new
-prompt that bypasses the interrupt.
+the decision 2 contract: steering from the human operator's console, and the
+turns it triggers, are never delivered on peer channels; the agent may act on
+what it was told and deliver intended results. This promise must not ship until
+the audience boundary is proven. Sending a new turn within the same original
+context is allowed; minting a replacement conversation is not. A parked decision
+must use its matching guarded resume path, not a new prompt that bypasses the
+interrupt.
+
+### Participant capability table and v1 scope
+
+Not every related conversation has an original that main Chat can open. The
+rows below ground decision 4's v1 scope. "Unavailable" rows still show role,
+participant, state and provenance; they have no Open action and never fall back
+to a copied history.
+
+| Participant type | Example row | Durable original on this host | Full history | Steerable | Private steering possible | v1 behavior |
+| --- | --- | --- | --- | --- | --- | --- |
+| Local A2A requester (session on this host) | Requester · Claude Code for Josh | Yes — A2A task store turns | Yes, subject to retention | After audience isolation ships | To be proven in Phase 0/1 | **Open in chat** |
+| This agent's own chat (operator-started) | Your instruction | Yes | Yes | Already today's chat | Not applicable (no peer) | **Open in chat** |
+| Remote A2A thread (owned by another agent's host) | Requester · remote fleet member | No — lives on the owner's host | No | No | Unproven; needs owner-side guarantees | Unavailable |
+| ACP coder | Coder · Codex | No — the adapter keeps only a `transcript_tail` ([acp_adapter.py](../../plugins/delegates/acp_adapter.py), line 380), in process | No | No | No | Unavailable |
+| Board coder | Coder · Claude | No — evidence is the board card and PR, not an A2A session | No | No | No | Unavailable; board/PR links stay as progress evidence |
+| Plugin reviewer | Reviewer · Vera | No — runs as a plugin, not a persisted conversation | No | No | No | Unavailable |
+| Discord requester | Requester · Discord thread | No — the original is a public Discord thread | Discord-side only | Replying there is public | **Never** — the channel is public | Unavailable for Open in chat; Asked by and provenance still shown |
+
+Decision 4: v1 covers the requester row plus originals stored on this host.
+Coder, reviewer and remote rows show as unavailable until their transcripts are
+durable. No copied fallback. Upgrading any row from unavailable requires the
+capability to be real first (durable transcript, owner routing, audience
+guarantee), then a reviewed change — not a UI toggle.
+
+### What this replaces in today's console
+
+There is no current control labelled "Answer in chat"; that label never
+shipped. Today's controls, named so the replacement is reviewable:
+
+- **Open conversation** in the Needs you rail section
+  ([NeedsYouSection.tsx](../../apps/web/src/chat/NeedsYouSection.tsx), line 119);
+  for non-chat threads it opens the read-only reader (C6b).
+- **Continue in a new chat** in the reader
+  ([ConversationReader.tsx](../../apps/web/src/chat/ConversationReader.tsx),
+  line 290), backed by `chatStore.continueConversation`
+  ([chat-store.ts](../../apps/web/src/chat/chat-store.ts), line 1613), which
+  creates a new session and seeds a draft.
+- The D8 **Reply** form and the **Started in chat …** provenance line
+  ([tasks.tsx](../../apps/web/src/work/sections/tasks.tsx), lines 230 and 180).
+
+The proposal replaces the first two with one **Open in chat** action per
+available row. Per decision 5, the D8 structured controls and missing-origin
+fallback stay in v1. "Started in" remains as provenance.
 
 ### Desktop, phone and accessibility
 
@@ -137,7 +233,7 @@ keyboard order, reduced motion, 390px layout and 400% zoom without sideways scro
 | First load | Skeleton rows with a loading announcement. Do not flash zero counts or claim there are no conversations. |
 | Refresh fails | Keep last-known rows, mark them stale and offer Retry. A failed source does not blank other Work groups. Revalidate authorization and capability before send. |
 | Opening fails or owner is offline | Keep Work selection and any existing draft; show a scoped failure and retry the same original. Do not create a replacement chat. |
-| Original no longer stored | Show an unavailable row with no Open action and explain the known loss. No copied fallback. This is for lost, unavailable or remote data, not permission to age out an actively linked original. |
+| Original no longer stored | Show an unavailable row with no Open action and explain the known loss. No copied fallback. Covers lost, unavailable and remote data, and a chat the operator deleted with × (decision 3): the delete still happens as today, and Work then shows the original as unavailable. |
 | Permission denied | Explain lack of access without disclosing protected transcript content; do not route through another agent or weaker transport. |
 | Partial transcript | Label it partial, distinguish paging from actual loss, and load older retained turns where supported. A 50-turn initial page is not the whole history. |
 | Missing checkpoint | Reading retained history may remain possible, but steering is non-resumable until original checkpoint binding/recovery is verified. Do not present empty or summary-only context as full continuity. |
@@ -151,54 +247,101 @@ in a new chat as a fallback.
 
 ## Current code: findings and limits
 
-All findings here are **inspection-only, unexecuted** at the checkout above.
-The supplied earlier inspection at `3371584f0` is context, not test evidence.
+All findings here are **inspection-only, unexecuted**, re-verified at
+`a6ba26d10f3954bb21ee6c70c79f6373681c6bcb` (current `main`, v0.246.1). The
+2026-11-16 steelman review independently confirmed the earlier version of this
+table against `main` at `d05f32262`; rows added since then come from that review
+and the final planning audit, re-checked here. Line numbers are as of this
+inspection and will drift.
 
 | Area and source | Finding and implication |
 | --- | --- |
-| Running steering: [chat_routes.py](../../src/operator_api/chat_routes.py), [server/chat.py](../../src/server/chat.py), [middleware/steering.py](../../src/graph/middleware/steering.py) | POST `/api/chat/sessions/{session_id}/steer` calls `steer_or_start_turn`. A running or parked session queues input. Middleware drains it into a `HumanMessage` before the next model call and emits `steer_consumed` with queued text. This continues the original session, but does not make that text private. |
-| Peer delivery: [executor.py](../../src/a2a_impl/executor.py) | The `steer_consumed` handler publishes its payload through the task updater and mirrors it to the progress hook. `_flush_text` and terminal artifact emission also publish the answer. Removing text from the consumed event alone leaves answer and persisted-history exposure paths. |
-| Idle and completion races: [server/chat.py](../../src/server/chat.py) | `_session_turn_idle` checks activity and pending interrupts under a thread lock. `_start_steer_turn` sends a loopback `SendMessage` with the same `contextId` and a new task; duplicate message IDs join the started task. Failed starts requeue. This is not a copied chat, but it does not prove privacy or restart-safe audience selection. |
-| Checkpoint binding: [thread_ids.py](../../src/graph/thread_ids.py), [hitl_routing.py](../../src/a2a_impl/hitl_routing.py) | Default checkpoint identity is `a2a:<session_id>`, but plugins can resolve it from request metadata. Idle checks resolve with no metadata; the loopback includes selected turn settings, not arbitrary original metadata. Same context alone therefore does not prove same checkpoint under custom resolvers. Parked routing and ownership must be validated together. |
-| Ownership: [stores.py](../../src/a2a_impl/stores.py), [hitl_routing.py](../../src/a2a_impl/hitl_routing.py) | Task owners partition operator and federation callers; operators can also read federation tasks. `check_context_owner` rejects foreign-context continuation for nonoperators. This is task-level protection, not a per-message boundary between private operator responses and peer deliverables on an existing task. |
-| Existing open helper: [openSourceChat.ts](../../apps/web/src/work/openSourceChat.ts), [sessionHydration.ts](../../apps/web/src/chat/sessionHydration.ts) | The helper hydrates durable turns for the same ID, restores dismissed sessions, pushes reopen when dismissed, selects Chat and returns false on failure. Reuse these seams. The helper accepts a session ID, not an owner-agent/context pair; it is not sufficient for remote routing. Hydration starts with `SESSION_TURN_LIMIT = 50` and needs full-history paging and speaker/audience review. |
+| Running steering: [chat_routes.py](../../src/operator_api/chat_routes.py), [server/chat.py](../../src/server/chat.py), [middleware/steering.py](../../src/graph/middleware/steering.py) | POST `/api/chat/sessions/{session_id}/steer` (line 2044) calls `steer_or_start_turn` (chat.py line 1009). A running or parked session queues input. Middleware drains it into a `HumanMessage` (steering.py line 119) before the next model call and emits `steer_consumed` with the queued text (lines 56, 71). This continues the original session, but does not make that text private. |
+| Peer delivery: [executor.py](../../src/a2a_impl/executor.py) | The `steer_consumed` handler (line 1479) publishes its payload through the task updater and mirrors it to the progress hook. `_flush_text` (line 1182) and terminal artifact emission also publish the answer. A steer made while the turn is running folds into the peer's own task, whose output is the peer's reply. Removing text from the consumed event alone leaves answer and persisted-history exposure paths. |
+| Operator-tier peers: [auth.py](../../src/a2a_impl/auth.py) | `_classify_token` (line 481) grants the **operator** tier at full scope to the fleet service token (ADR 0089) and to paired devices (ADR 0087); an agent device gets full scope (ADR 0121 D4). Most example participant roles (Claude Code for Josh, other fleet agents) therefore sit in the same `OPERATOR_OWNER` group as the console: they can `GetTask` the operator's steer turn, and an agent device can read `/api/chat/sessions/{id}` directly. Decision 1 requires a new identity distinction — the human's console versus an agent with operator rights — before audience filtering means anything; filtering output surfaces alone cannot separate them. |
+| Idle and completion races: [server/chat.py](../../src/server/chat.py) | `_session_turn_idle` (line 964) checks activity and pending interrupts under a thread lock. `_start_steer_turn` (line 883) sends a loopback `SendMessage` with the same `contextId` and a new task using `self_invocation_headers`; duplicate message IDs join the started task. Failed starts requeue. This is not a copied chat, but it does not prove privacy or restart-safe audience selection. |
+| Idle steer vs peer ownership — **fixed**: [stores.py](../../src/a2a_impl/stores.py) | Issue [#5379](https://github.com/protoLabsAI/protoAgent/issues/5379) (an idle steer locked the federation peer out of its own thread) is **fixed** by [PR #5380](https://github.com/protoLabsAI/protoAgent/pull/5380) (commit `f9eea3c2`, issue closed 2026-11-16). Current behavior: `context_foreign` (line 501) assigns a conversation to whoever **started** it — the owner of its first-created task (SQLite rowid order). An operator steer into a peer's idle thread keeps the thread the peer's: the peer's next message is accepted, owner-scoped reads still hide the operator's turns from the peer, and an operator-started context stays closed to federation callers. Non-SQLite dialects keep the stricter any-foreign-task rule. Covered by [test_a2a_hitl_parked_routing.py](../../tests/test_a2a_hitl_parked_routing.py) (not run here). Thread ownership is settled; the privacy of the operator's turns on other surfaces is not. |
+| Checkpoint binding: [thread_ids.py](../../src/graph/thread_ids.py), [hitl_routing.py](../../src/a2a_impl/hitl_routing.py) | Default checkpoint identity is `a2a:<session_id>` (line 31), but plugins can resolve it from request metadata. Idle checks resolve with no metadata; the loopback includes selected turn settings, not arbitrary original metadata. Same context alone therefore does not prove same checkpoint under custom resolvers. Parked routing and ownership must be validated together. |
+| Ownership partitions: [stores.py](../../src/a2a_impl/stores.py), [hitl_routing.py](../../src/a2a_impl/hitl_routing.py) | Task owners partition operator and federation callers; operators can also read federation tasks. `check_context_owner` (line 477) rejects foreign-context continuation for non-operators. This is task-level protection, not a per-message boundary between private operator responses and peer deliverables on an existing task — and per the auth finding above, "operator" currently includes agents. |
+| Derived content: [session_gist.py](../../src/graph/session_gist.py) | The gist writer skips only `background:`, `job:`, `palette-` and `system:` session prefixes, and incognito turns (around line 85) — so A2A peer threads get gists. Merged ADR 0132 work reads full conversations: [#5376](https://github.com/protoLabsAI/protoAgent/pull/5376) adds a gist per chat, [#5383](https://github.com/protoLabsAI/protoAgent/pull/5383) shows gists in the digest, [#5387](https://github.com/protoLabsAI/protoAgent/pull/5387) keeps closed chats in the digest for 14 days, [#5390](https://github.com/protoLabsAI/protoAgent/pull/5390) makes harvest summaries and facts cover the whole chat. Private steering text could therefore reach a gist, digest entry, harvested summary or fact, which a later peer-visible turn can draw on. Gist, digest, harvest and facts are audience boundaries, not an afterthought. |
+| Observability: [tracing.py](../../src/observability/tracing.py), [prompt_capture.py](../../src/graph/middleware/prompt_capture.py), [trace_export.py](../../src/observability/trace_export.py) | Traces record prompts and tool input/output; `io_allowed` (line 1018) suppresses content inside an incognito turn. Prompt capture stores prompts and skips incognito sessions (line 125). `telemetry.fleet_trace_export` can ship traces off the machine. Whether private steering follows the incognito rule on these surfaces is open (settled in Phase 0); until decided, they count as peer-reachable output surfaces. |
+| Existing open helper: [openSourceChat.ts](../../apps/web/src/work/openSourceChat.ts), [sessionHydration.ts](../../apps/web/src/chat/sessionHydration.ts) | The helper hydrates durable turns for the same ID, restores dismissed sessions, pushes reopen when dismissed, selects Chat and returns false on failure. Reuse these seams. The helper accepts a session ID, not an owner-agent/context pair; it is not sufficient for remote routing. Hydration starts with `SESSION_TURN_LIMIT = 50` (line 589) and needs full-history paging and speaker/audience review. |
 | Chat index and registration: [chat_routes.py](../../src/operator_api/chat_routes.py), [session_registry.py](../../src/server/session_registry.py) | Turn-based session discovery filters `chat-%`; the server-held registry also supports explicit registration and reopen. Opening a non-chat original locally is not a durable discoverability contract. Register explicitly opened originals and verify resync, fresh-device and restart behavior; do not expose every job/system session by removing the prefix filter globally. |
-| Incompatible continuation: [chat-store.ts](../../apps/web/src/chat/chat-store.ts), [ConversationReader.tsx](../../apps/web/src/chat/ConversationReader.tsx) | `continueConversation` calls `createSession` and seeds a draft in a new chat. The reader offers Continue in a new chat. Neither implements the approved original-chat flow. |
-| Current Needs you: [tasks.tsx](../../apps/web/src/work/sections/tasks.tsx) | Waiting-task details contain a Reply form and source-history checks, while shared provenance renders Started in. Replacing the conversation reply flow requires explicit D8 reconciliation; this documentation changes none of it. |
-| Origin and work: [tools/session.py](../../src/tools/session.py), [tasks/store.py](../../src/tasks/store.py) | `origin_session_for` follows durable inbox/scheduler/background causes with bounded recursion and empty-on-unknown behavior. Tasks persist `session_id` and links; links normalize reference/kind/state/reason and can close tasks when resolved. Origin is not a unique work ID or a list of role-labelled original child transcripts. One conversation can cause multiple tasks. |
-| Delegation continuity: [conversations.py](../../plugins/delegates/conversations.py) | `_CONTEXTS` and `_PENDING` are process-local bounded `OrderedDict`s (512 entries). They cannot be the durable source of related-thread links or retention references. A caller's `origin_session` is not the delegated child's transcript identity. |
-| Retention: [conversation_policy.py](../../src/a2a_impl/conversation_policy.py), [stores.py](../../src/a2a_impl/stores.py) | The shared outside-conversation window is seven days. `sweep_expired_tasks` works on individual task timestamps, preserves console chats until tombstoned, and protects paused/restart-spared tasks. Excluded job/background/system/palette contexts normally retain the 24-hour TTL. These rules do not establish a complete linked-conversation active-work keep. |
-| Pruned checkpoints: [chat_rehydrate.py](../../src/server/chat_rehydrate.py) | Merged #5365 supplies summary-plus-recent-turn recovery for an aged-out checkpoint. It does not prove every original turn is retained, private responses are isolated, or a metadata-dependent remote original is safely resumable. |
+| Incompatible continuation: [chat-store.ts](../../apps/web/src/chat/chat-store.ts), [ConversationReader.tsx](../../apps/web/src/chat/ConversationReader.tsx) | `continueConversation` (line 1613) calls `createSession` and seeds a draft in a new chat. The reader offers Continue in a new chat (line 290). Neither implements the approved original-chat flow. |
+| Current Needs you: [NeedsYouSection.tsx](../../apps/web/src/chat/NeedsYouSection.tsx), [tasks.tsx](../../apps/web/src/work/sections/tasks.tsx) | Needs you offers **Open conversation** (line 119); non-chat threads open the read-only reader (C6b). Waiting-task details carry the D8 Reply form (line 230) and the shared **Started in chat …** provenance (line 180). Per decision 5, v1 keeps the structured decision controls and missing-origin fallback. |
+| Origin and work: [tools/session.py](../../src/tools/session.py), [tasks/store.py](../../src/tasks/store.py) | `origin_session_for` (line 34) follows durable inbox/scheduler/background causes with bounded recursion and empty-on-unknown behavior. Tasks persist `session_id` and links; links normalize reference/kind/state/reason and can close tasks when resolved. Origin is not a unique work ID or a list of role-labelled original child transcripts. One conversation can cause multiple tasks. Board cards now record the conversation that caused them (bd-edo5o, [projectBoard-plugin #777](https://github.com/protoLabsAI/projectBoard-plugin/pull/777)); that is provenance groundwork this design should reuse, not a work-identity store. |
+| Delegation continuity: [conversations.py](../../plugins/delegates/conversations.py), [acp_adapter.py](../../plugins/delegates/acp_adapter.py) | `_CONTEXTS` and `_PENDING` are process-local bounded `OrderedDict`s (`_MAX_ENTRIES = 512`, lines 127–134). They cannot be the durable source of related-thread links or retention references. An ACP coder's transcript exists only as the adapter's `transcript_tail` (line 380). A caller's `origin_session` is not the delegated child's transcript identity. |
+| Retention: [conversation_policy.py](../../src/a2a_impl/conversation_policy.py), [stores.py](../../src/a2a_impl/stores.py) | The shared outside-conversation window is seven days (`CONVERSATION_WINDOW_DAYS = 7`, line 9). `sweep_expired_tasks` works on individual task timestamps, preserves console chats until tombstoned, and protects paused/restart-spared tasks. Excluded job/background/system/palette contexts normally retain the 24-hour TTL. These rules do not yet implement decision 3's sweep invariant for linked originals. |
+| Pruned checkpoints: [chat_rehydrate.py](../../src/server/chat_rehydrate.py) | Merged [#5365](https://github.com/protoLabsAI/protoAgent/pull/5365) supplies summary-plus-recent-turn recovery for an aged-out checkpoint. It does not prove every original turn is retained, private responses are isolated, or a metadata-dependent remote original is safely resumable. |
 
 ## Required backend contracts, proposed for implementation review
 
 ### Private input and private response audiences
 
 Preserve one original conversation identity, with server-enforced audience-aware
-reads and delivery. Private steering and its private agent responses must be
-operator-only even when a peer already holds the running task's stream, poll
-handle or push subscription. The agent may send the intended work result to the
-peer without forwarding private instructions, acknowledgements or discussion.
+reads and delivery. The contract is decision 2: **steering text and the turns it
+triggers are never delivered on peer channels — stream, poll, push, history,
+tool output. The agent may act on what it was told and deliver intended
+results. Relaying anything else needs an explicit operator instruction.** This
+wording is deliberately met-able: the agent is allowed to use what it was told;
+what is forbidden is delivering the private exchange itself.
 
-Enforce this at every output surface: streaming frames, GetTask/poll results,
-push callbacks, durable task history, transcript reads, progress events, tool
-outputs, artifacts, exports, and memory/search recall that can reach another
-audience. Client-side hiding and a prompt telling the model to be discreet are
-insufficient. Model output can quote private input, so filtering only input events
-is insufficient too. Persist audience decisions and separate deliverable output
-from private conversational responses within the existing storage architecture.
+Decision 1 defines the protected party: the human's own console session. An
+agent holding operator-tier credentials (fleet service token, paired agent
+device) is a peer for this contract, even though today's auth ladder classifies
+it as operator. Phase 0/1 therefore needs an identity concept that separates
+the human operator from agents with operator rights; filtering output surfaces
+alone cannot do it.
+
+Enforce the boundary at every output surface: streaming frames, GetTask/poll
+results, push callbacks, durable task history, transcript reads, progress
+events, tool outputs, artifacts, exports — and the derived and observability
+surfaces below. Client-side hiding and a prompt telling the model to be
+discreet are insufficient. Model output can quote private input, so filtering
+only input events is insufficient too. Persist audience decisions and separate
+deliverable output from private conversational responses within the existing
+storage architecture.
 
 The DS recommendation to default unknown output audiences to private is a
 **proposal requiring technical validation**, including how authorized peer work
-results still finish normally. It is not a claim that today's transport supports
-this. Prove behavior for running, idle, parked, resume, completion races, retry,
-restart, and subscribers established before the steer. Do not use a side thread
-to obtain privacy at the cost of losing the original identity.
+results still finish normally. The Phase 0 prototype compares two enforcement
+models — the agent deciding each output's audience, versus an explicit
+"deliver to requester" action — and the explicit action is the easier one to
+enforce and test. Prove behavior for running, idle, parked, resume, completion
+races, retry, restart, and subscribers established before the steer. Do not use
+a side thread to obtain privacy at the cost of losing the original identity.
 
-Explicit relay such as “tell them the deadline moved” is a separate permission
-and UI decision. Recommendation: make the intended recipient and exact relay
-scope clear, authorize that delivery, and record it without disclosing unrelated
-private exchanges. Do not infer permission to forward the entire steering turn.
+Explicit relay such as "tell them the deadline moved" is permitted by decision 2
+only as an explicit operator instruction. The permission flow and UI are still
+open (settled in Phase 0). Recommendation: make the intended recipient and exact
+relay scope clear, authorize that delivery, and record it without disclosing
+unrelated private exchanges. Do not infer permission to forward the entire
+steering turn.
+
+### Derived content, memory and observability boundaries
+
+Audience enforcement must also cover content derived from the conversation:
+
+- **Gist, digest, harvest and facts.** Per the findings table, peer threads get
+  gists, digests show them, closed chats stay in the digest for 14 days, and
+  harvest summaries and facts cover the whole chat. Each of these is an
+  audience boundary: a private steer must not surface in a gist, digest entry,
+  harvested summary or extracted fact that a peer-visible turn can later use
+  verbatim.
+- **Tracing, prompt capture and fleet trace export.** Whether private steering
+  follows the incognito rule (`io_allowed` suppressing content; prompt capture
+  skipping; export carrying no private content) is open: **settled in Phase 0.**
+  Until settled, treat these as peer-reachable surfaces in every isolation test.
+- **Memory and search recall** that can reach another audience remain in scope,
+  as before.
+
+### Two audiences in one context
+
+If a peer sends a follow-up while the operator's steer is waiting in the same
+context, one model reply could answer both. The rule is open (settled in
+Phase 0). Recommendation, labelled as a proposal: **one audience per turn** —
+peer turns queue until the private turn finishes, and vice versa — so no single
+model call mixes audiences. The validation scenarios below include this case.
 
 ### Identity, provenance and persistence
 
@@ -226,20 +369,30 @@ proxy must preserve authorization, checkpoint metadata and audience guarantees.
 
 ### Active-work retention
 
-**Approved invariant:** preserve the full linked original history while **any**
-linked work remains active. After the last linked work closes, apply normal
-closed-chat retention. A recent tail, summary or active task row is not a substitute
-for the earlier conversation. Retain the original transcript/archive chain and
-the checkpoint, ownership and links needed for safe continuation; do not rely on
-browser caches or delegation memory.
+**Invariant (decision 3): no automatic retention sweep deletes a linked
+original while any linked work is active.** An explicit operator delete — × on
+a chat tab — still deletes the chat, as today; Work then shows that original as
+unavailable, keeping the row's role, state and provenance. After the last
+linked work closes, normal closed-chat retention applies. A recent tail,
+summary or active task row is not a substitute for the earlier conversation.
+Retain the original transcript/archive chain and the checkpoint, ownership and
+links needed for safe continuation; do not rely on browser caches or delegation
+memory.
 
-Recommended policy, still to decide: treat every nonterminal work state as active,
-including queued/Coming up, blocked, waiting/Needs you, parked and unresolved
-acceptance/recovery. Hold references conservatively when a store cannot establish
-closure. Reconcile durable references before pruning on restart. A shared original
-stays retained until all linked jobs close, even if its last message is older than
-seven days. A task turn ending, tab closing, request promotion, or one child closing
-must not release the other references.
+Recommended policy, still to decide (settled in Phase 0): treat every
+nonterminal work state as active, including queued/Coming up, blocked,
+waiting/Needs you, parked and unresolved acceptance/recovery. Hold references
+conservatively when a store cannot establish closure. Reconcile durable
+references before pruning on restart. A shared original stays retained until
+all linked jobs close, even if its last message is older than seven days. A
+task turn ending, request promotion, or one child closing must not release the
+other references.
+
+Linked work that stalls and is never closed would hold its original forever.
+Who closes it — and how ADR 0129 D9's stall nudges and Needs you parking
+interact with retention release — is open (settled in Phase 0). The sweep
+invariant protects against automatic deletion; it must not quietly become
+unbounded growth with no owner.
 
 Apply the keep to the **entire original**, including older terminal task rows,
 compaction archives and required checkpoint state. Coordinate task TTL and
@@ -247,45 +400,65 @@ checkpoint pruning (see [checkpoint_prune.py](../../src/graph/checkpoint_prune.p
 protecting only the latest task would still lose the opening request. Persist
 terminal release and reconcile idempotently so restart cannot release early or
 keep abandoned references forever. Release makes the history eligible for normal
-policy, not an instruction to delete it immediately.
+policy, not an instruction to delete it immediately. The closed-chat clock after
+release must be reconciled with the ADR 0132 S6 14-day closed-chat digest
+window ([#5387](https://github.com/protoLabsAI/protoAgent/pull/5387)); that
+reconciliation is open (settled in Phase 0).
 
-The precise closed-chat clock, explicit erase behavior while work is active, and
-remote retention guarantees need agreement with existing close/delete semantics.
-Do not promise deletion and silently retain data, or silently delete active work's
-history. A remote owner unable to guarantee the keep needs a capability limitation
-and design revision before that state is advertised as supported.
+Do not promise deletion and silently retain data. A remote owner unable to
+guarantee the keep needs a capability limitation and design revision before
+that state is advertised as supported — in v1, remote rows are unavailable
+(decision 4).
 
-## Overlap check and proposed small phases
+## Overlap check
 
-Live GitHub reads during preparation found [#5365](https://github.com/protoLabsAI/protoAgent/pull/5365)
-**merged** at `2026-11-16T07:21:45Z` (November 15 locally); its merge is this
-inspected base (`d9eadcc05d8cbadd6c5d79a656a978a7c69168eb`).
-[#5366](https://github.com/protoLabsAI/protoAgent/pull/5366)
-(model chains) and [#5363](https://github.com/protoLabsAI/protoAgent/pull/5363)
-(prior-session digest filtering) were the open PRs returned. They are separate
-work, but recovery, privacy and session discovery changes must be checked against
-their final state before implementation. Do not treat the older report that
-#5365 was open as current.
+Refreshed 2026-11-16 against current `main` (v0.246.1).
 
-Live board status was **not verified**: no board tool was exposed, and the bounded
-read-only probe of `127.0.0.1:7870/api/plugins/project_board/status` could not
-connect. Therefore this is not a “no overlap” conclusion. Recheck the live board,
-ADR 0131 P2 work and open PRs before assigning implementation. No cards are created
-by this proposal.
+Merged since the first inspection, all relevant and folded in above:
+[#5365](https://github.com/protoLabsAI/protoAgent/pull/5365) (checkpoint
+recovery), [#5363](https://github.com/protoLabsAI/protoAgent/pull/5363) (digest
+filtering), [#5366](https://github.com/protoLabsAI/protoAgent/pull/5366) (model
+chains), [#5376](https://github.com/protoLabsAI/protoAgent/pull/5376),
+[#5383](https://github.com/protoLabsAI/protoAgent/pull/5383),
+[#5387](https://github.com/protoLabsAI/protoAgent/pull/5387) and
+[#5390](https://github.com/protoLabsAI/protoAgent/pull/5390) (ADR 0132 S4–S7:
+gists, digest gists, 14-day closed chats, whole-chat harvest — all read full
+conversations and are named as audience boundaries above), and
+[#5380](https://github.com/protoLabsAI/protoAgent/pull/5380) (the #5379
+ownership fix).
+
+Open pull requests at this inspection are dependency updates only; none touches
+conversations, Work or From others. The live board was checked by the
+2026-11-16 planning audit: **no open card overlaps this proposal**; the open
+cards were ADR 0133 model-chain fixes. bd-ia8cj shipped as ADR 0132 S6
+(#5387). bd-edo5o
+([projectBoard-plugin #777](https://github.com/protoLabsAI/projectBoard-plugin/pull/777),
+merged) makes board cards record the conversation that caused them and is cited
+in the identity section as provenance groundwork. Recheck the board and open
+PRs again when implementation is assigned; no cards are created by this
+proposal.
+
+## Proposed small phases
+
+Per decision 6, work starts on a separate go from Josh, beginning with Phase 0.
+These are review-sized phases, not implementation cards or dispatch
+instructions. Full interactive navigation (a composer on an opened original)
+still depends on audience isolation; the optional read-only milestone below is
+the only navigation that may precede it.
 
 | Proposed phase | Small deliverable and dependency | Exit evidence |
 | --- | --- | --- |
-| 0. Resolve contracts | Agree open product decisions, D8 amendment boundary, remote capability and audience model. Refresh board/PR overlap. | Explicit scope approval and named unsupported states; no implementation inferred from visual sign-off. |
-| 1. Audience isolation | Implement and persist private input/response versus peer deliverable audiences in existing transport/store seams. Depends on 0; precedes interactive navigation. | Adversarial stream/poll/push/history tests with preexisting peer handles; authorized result delivery still works. |
+| 0. Contracts and isolation prototype | Settle every "Open: settled in Phase 0" row in the decision map. Run a **time-boxed isolation prototype** on the real A2A seams comparing two enforcement models: the agent deciding each output's audience, versus an explicit deliver-to-requester action. GetTask returns whole task history and the peer protocol has no private-message notion, so isolation may prove infeasible as designed. Refresh board/PR overlap. | The prototype ends in an explicit **continue-or-revise** decision. Named unsupported states; no implementation inferred from visual sign-off. |
+| 1. Audience isolation | Introduce the human-operator identity (decision 1) and enforce the decision 2 contract in existing transport/store seams, including derived content (gist/digest/harvest/facts) and observability per the Phase 0 ruling. Depends on Phase 0 deciding "continue"; precedes any steering from Work-opened originals. Named scenario: after a private steer, the peer still continues its own thread (ownership already fixed by #5380; privacy of the operator's turns remains to prove). | Adversarial stream/poll/push/history/tool-output tests with preexisting peer handles, including peers holding operator-tier credentials; authorized result delivery still works. |
 | 2. Durable work relationships | Add request correlation, role-labelled original links and idempotent promotion to existing stores. Can be designed with 1; no interactive UI enabled. | Retry/restart/multiple-job fixtures prove identity, provenance and counts; owner authorization rejects forged links. |
-| 3. Retention and continuation | Protect all linked originals; reconcile references and closure; validate checkpoint metadata binding and #5365 interaction. Depends on 2. | Full-history and shared-link tests across TTL boundaries and restarts; missing checkpoint fails safely. |
-| 4. Original-chat navigation | Extend openSourceChat/hydration/registry with owner routing, durable reopen, capability checks and return-to-Work state. Depends on 1–3. | Fresh-client, reconnect, owner switch, missing data and parked-resume scenarios pass without a new chat. |
-| 5. Work presentation and migration | Add conversation rows/request promotion presentation, replace From others entry points and retire duplicate conversation actions. Depends on 4 and approved routine/completed discovery. | Desktop/phone/accessibility review plus focused integration tests; old links still resolve safely. |
-| 6. Controlled rollout | Pilot on supported local owners, then separately qualified remote owners. | Operational evidence for private delivery, correct counts, durable reopen and retention; explicit release approval. |
+| 3. Retention and continuation | Implement the decision 3 sweep invariant for all linked originals; reconcile references and closure; validate checkpoint metadata binding and #5365 interaction; apply the Phase 0 stall-release rule. Depends on 2. | Full-history and shared-link tests across TTL boundaries and restarts; missing checkpoint fails safely; × delete shows unavailable in Work. |
+| 4. Original-chat navigation | Extend openSourceChat/hydration/registry with owner routing, durable reopen, capability checks and return-to-Work state. Depends on 2–3; the composer additionally depends on 1. | Fresh-client, reconnect, owner switch, missing data and parked-resume scenarios pass without a new chat. |
+| Optional milestone: read-only Open in chat | Open the original in main Chat with the composer disabled. Depends **only on phases 2–4**: isolation matters only once the operator can send. Accept or reject this milestone in Phase 0. Removing From others still waits for a routine-thread home. | Read-only open preserves identity, history and return-to-Work; no send path exists. |
+| 5. Work presentation and migration | Add conversation rows (capability table), request promotion presentation, replace Open conversation / Continue in a new chat entry points per decision 5, and update the stale docs listed under migration. Depends on 4 and approved routine/completed discovery. | Desktop/phone/accessibility review plus focused integration tests; old links still resolve safely. |
+| 6. Remote and non-A2A participants | Upgrade unavailable capability rows (remote A2A, ACP coder, board coder, plugin reviewer, Discord) only as their transcripts become durable and owner guarantees are verified. | Per-type capability evidence; unsupported rows stay truthfully unavailable. |
 
-These are review-sized phases, not implementation cards or dispatch instructions.
-Split each at its API/store/UI seam after approval rather than bundling backend
-privacy and a visual replacement into one release.
+Split each phase at its API/store/UI seam after approval rather than bundling
+backend privacy and a visual replacement into one release.
 
 ### Migration, rollout and rollback
 
@@ -301,6 +474,15 @@ Chat registry; do not register every hidden/system session. Removing the standal
 From others tab must wait for an approved route to routine conversations, including
 unopened ones, so discoverability is not lost during migration.
 
+These recently landed docs describe the superseded interaction and go stale when
+implementation ships; revise them in the same change:
+the From others guide ([#5353](https://github.com/protoLabsAI/protoAgent/pull/5353)),
+the operator API reference rows for `/api/conversations` and the task/inbox
+fields ([#5348](https://github.com/protoLabsAI/protoAgent/pull/5348)),
+the retention pages ([#5349](https://github.com/protoLabsAI/protoAgent/pull/5349),
+[#5351](https://github.com/protoLabsAI/protoAgent/pull/5351)) and the console
+guide's Work section ([#5350](https://github.com/protoLabsAI/protoAgent/pull/5350)).
+
 Roll out behind capability/feature gating, with operator-authenticated, bounded,
 redacted, read-only diagnostics. Measure original-open failures, unexpected new
 identities, promotion duplicates/count mismatches, retention holds/releases and
@@ -314,20 +496,34 @@ and use read-only presentation for affected originals. Never restore a copied-ch
 fallback or expose private responses through the old reader. Retiring the old UI
 and applying any ADR amendments require a reviewed implementation change.
 
-## Open decisions for the team
+## Decision map: settled and open
 
-| Question that remains open | Recommendation for review, not approval |
-| --- | --- |
-| How does an operator explicitly authorize relay to a peer, and what does the UI show? | Identify recipient and scoped message/result; record explicit permission separately from private steering. |
-| Which nonterminal states count as active for retention? | Include queued/Coming up, blocked, parked, waiting and unknown recovery; release only on durable closure of all references. |
-| Can one request produce several jobs? | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
-| What makes an incoming thread an actionable request rather than routine conversation? | Require durable work intent/evidence; do not classify every A2A thread as Work or guess from a title. |
-| Can a remote original be read, retained and safely steered? | Advertise verified owner capabilities separately; allow read-only where authorized, with no composer until privacy and continuation are proven. |
-| Where are routine threads discoverable after From others is removed? | Evaluate the preview's Started by others group in Chat; approve its eligibility and visibility before removing the old entry point. |
-| Where does completed work/history appear? | Keep finished work out of active counts as already designed; choose the history destination and stale return-link behavior explicitly. |
-| How does the new no-Work-composer flow replace D8 when origin/history is missing? | Keep structured decision controls; design a recovery state without fabricated chats. Amend the approved contract in a later review before removing the current fallback. |
-| How do last-closure retention, explicit erase and existing tab close semantics interact? | Define the retention clock and truthful erase UX; coordinate active-work protection with ADR 0132 memory/incognito rules. |
-| Is default-private output technically enforceable without blocking intended results? | Prototype and test audience selection in the original session; revise the design if the backend cannot meet both obligations. |
+Every product decision this proposal touches, disposed one way or the other.
+"Decided" rows cite the numbered decisions of 2026-11-16; nothing else is
+approved. Recommendations on open rows are labelled proposals, not approvals.
+
+| Decision | Status | Recommendation where open (proposal, not approval) |
+| --- | --- | --- |
+| Who "the operator" is for private steering | **Decided by Josh 2026-11-16 (1)** | — |
+| Privacy contract: what is never delivered, what the agent may do | **Decided by Josh 2026-11-16 (2)** | — |
+| × tab delete vs retention; sweep invariant wording | **Decided by Josh 2026-11-16 (3)** | — |
+| v1 participant scope; unavailable rows; no copied fallback | **Decided by Josh 2026-11-16 (4)** | — |
+| ADR 0129 D8 structured controls and missing-origin fallback in v1 | **Decided by Josh 2026-11-16 (5)** | — |
+| What merging this proposal means; when work starts | **Decided by Josh 2026-11-16 (6)** | — |
+| Explicit relay permission flow and UI ("tell them the deadline moved") | Open: settled in Phase 0 | Decision 2 sets the boundary (explicit operator instruction). Identify recipient and scoped message; record the authorization separately from private steering. |
+| Nonterminal active states for retention | Open: settled in Phase 0 | Include queued/Coming up, blocked, parked, waiting and unknown recovery; release only on durable closure of all references. |
+| Stalled, never-closed linked work: closure owner; D9 nudges and Needs you parking vs release | Open: settled in Phase 0 | Give release an owner; a stall nudge is a prompt to close or continue, never an automatic release. |
+| One request producing several jobs | Open: settled in Phase 0 | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
+| What makes an incoming thread an actionable request rather than routine conversation | Open: settled in Phase 0 | Require durable work intent/evidence; do not classify every A2A thread as Work or guess from a title. |
+| Remote original capability beyond v1 (read, retention, steering) | Open: settled in Phase 0 | v1 shows remote rows unavailable (decision 4). Advertise verified owner capabilities separately; read-only where authorized; no composer until privacy and continuation are proven. |
+| Routine-thread discoverability after From others is removed | Open: settled in Phase 0 | Evaluate the preview's Started by others group in Chat; approve its eligibility and visibility before removing the old entry point. |
+| Completed work/history placement | Open: settled in Phase 0 | Keep finished work out of active counts as already designed; choose the history destination and stale return-link behavior explicitly. |
+| Closed-chat clock after last closure vs the 14-day closed-chat digest window (#5387) | Open: settled in Phase 0 | Define one truthful clock; never promise deletion while retaining data. |
+| Do traces, captured prompts and fleet trace export follow the incognito rule for private steering? | Open: settled in Phase 0 | Reuse the incognito pattern (`io_allowed`, prompt-capture skip, no exported content) for private turns. |
+| Two audiences in one context | Open: settled in Phase 0 | One audience per turn; peer turns queue until the private turn finishes. |
+| Default-private output enforceability; agent-decides-audience vs explicit deliver-to-requester | Open: settled in Phase 0 | The Phase 0 prototype's core question; prefer the explicit action if both work, as it is easier to enforce and test. |
+| Read-only Open in chat milestone | Open: settled in Phase 0 | Accept it: it ships value from phases 2–4 without waiting on isolation. |
+| Record the supersession as an ADR 0131 amendment or a new ADR | Open: settled in Phase 0 | Record it as an ADR amendment so the contract has one home. |
 
 ## Focused validation and risks
 
@@ -337,6 +533,7 @@ Existing test files inspected or located as validation seams, **not run**:
 | --- | --- |
 | [test_steer_idle_starts_turn.py](../../tests/test_steer_idle_starts_turn.py) | Idle start, running/parked queues, duplicate IDs, completion races, failure/requeue and loopback context. Add audience persistence and process-restart cases. |
 | [test_steering.py](../../tests/test_steering.py) | Queue/drain and middleware injection. Add private responses and safe intended-result delivery, not just event redaction. |
+| [test_a2a_hitl_parked_routing.py](../../tests/test_a2a_hitl_parked_routing.py) | The #5380 ownership rule: a steered peer thread stays the peer's; owner-scoped reads hide operator turns. Extend with operator-tier agent credentials (decision 1) and non-SQLite dialect behavior. |
 | [test_chat_routes.py](../../tests/test_chat_routes.py) | Operator routes, session history and listing seams. Add owner authorization, explicit original registration and private history reads. |
 | [test_work_origin.py](../../tests/test_work_origin.py) | Durable cause resolution, bounds/cycles and missing origins. Add related child transcript provenance and idempotent request promotion. |
 | [test_a2a_stores.py](../../tests/test_a2a_stores.py) | TTL, paused/restart preservation and durable stores. Add all-linked-active references, terminal release, seven-day edges and partial transcript loss. |
@@ -345,14 +542,18 @@ Existing test files inspected or located as validation seams, **not run**:
 
 Required missing scenarios before enabling interaction:
 
-1. A peer holds stream, poll and push handles before private steering. Neither the
-   steering text nor private response appears on any peer surface, including
-   artifacts, history or tool output; the intended result still reaches the peer.
+1. A peer holds stream, poll and push handles before private steering — including
+   a peer presenting operator-tier credentials (fleet service token, agent
+   device; decision 1). Neither the steering text nor private response appears
+   on any peer surface, including artifacts, history or tool output; the
+   intended result still reaches the peer.
 2. Operator history reads succeed; unauthorized peer reads and forged owner/context
    links fail. Equal context IDs on different agents never share caches or transport.
 3. Exercise running, idle, parked, resume, completion race and process restart with
    a metadata-dependent thread resolver. Verify the same checkpoint identity,
-   message deduplication and audience after each transition.
+   message deduplication and audience after each transition. After an idle steer,
+   the peer continues its own thread (the #5380 rule) and sees none of the
+   operator's turns.
 4. Missing checkpoint, unavailable remote owner, partial history and a failed read
    produce distinct honest states. No path creates a chat or sends a replacement
    prompt. Recovery through #5365 does not hide missing earlier turns.
@@ -361,16 +562,27 @@ Required missing scenarios before enabling interaction:
    progress remain correct; a stale local tab is not counted as persistence proof.
 6. Retry promotion across a crash and stale refresh; keep one identity and count.
    Test two jobs from one request separately once that count policy is approved.
-   Coder/reviewer links must reach their own original transcripts.
+   Coder/reviewer links must reach their own original transcripts (or stay
+   truthfully unavailable, per the capability table).
 7. Keep an old original with two linked jobs across the seven-day boundary and
    multiple restarts. Close one job, then the last; verify complete history remains
    until release, and ordinary retention only becomes eligible afterward. Include
    queued/blocked/parked states once decided, archived spans and old terminal turns.
-8. Verify desktop rail/expanded and phone navigation, single action per row,
-   keyboard/focus return, light/dark, draft retention and loading/failure states.
-   Preserve real tap regression coverage: a passing click or emulated iPhone test
-   does not establish physical-device WebKit acceptance. Verify selection,
-   Escape/reopen and focus after asynchronous agent/model switching.
+   An × delete during active work deletes as today and renders the Work row
+   unavailable (decision 3).
+8. Two audiences in one context: a peer follow-up arrives while an operator steer
+   is queued (and the reverse). No single model reply mixes audiences; the chosen
+   Phase 0 rule (for example, one audience per turn with peer turns queued) holds
+   across park/resume and restart.
+9. Derived content and observability: after a private steer, gists, digest
+   entries, harvested summaries, extracted facts, traces, captured prompts and
+   fleet trace exports carry no private steering content to a peer-reachable
+   surface, per the Phase 0 ruling on the incognito rule.
+10. Verify desktop rail/expanded and phone navigation, single action per row,
+    keyboard/focus return, light/dark, draft retention and loading/failure states.
+    Preserve real tap regression coverage: a passing click or emulated iPhone test
+    does not establish physical-device WebKit acceptance. Verify selection,
+    Escape/reopen and focus after asynchronous agent/model switching.
 
 Target console scenarios in [work-view.spec.ts](../../apps/web/e2e/work-view.spec.ts),
 [work-mobile-layout.spec.ts](../../apps/web/e2e/work-mobile-layout.spec.ts),
@@ -381,31 +593,45 @@ the relevant specs. Future changes should run targeted pytest, Vitest related
 files, and those Playwright specs; no full local e2e run is required by this
 proposal. This documentation-only change adds no behavioral tests.
 
-The largest risk is a convincing private UI over a shared output channel. Next
-are false continuity from a bounded transcript or wrong checkpoint, premature
-retention release, duplicate work after promotion, and losing routine threads
-when removing their only entry point. The phase gates address those risks before
-the visual replacement ships. Retention also grows storage; monitor size without
-silently weakening active-work protection. Missing isolation evidence is a gate
-on readiness, not proof of a new defect in every consumer.
+The largest risk is a convincing private UI over a shared output channel — made
+sharper by the fact that today's auth ladder puts agents in the operator tier.
+Next are private content resurfacing through derived artifacts (gist, digest,
+harvest, facts, traces), false continuity from a bounded transcript or wrong
+checkpoint, premature retention release, unbounded retention from stalled work,
+duplicate work after promotion, and losing routine threads when removing their
+only entry point. The phase gates address those risks before the visual
+replacement ships. Retention also grows storage; monitor size without silently
+weakening the sweep invariant. Missing isolation evidence is a gate on
+readiness, not proof of a new defect in every consumer.
 
 ## Team-review checklist
 
 - [ ] Confirm the approved original-Chat flow and single Open in chat action,
   including Needs you; no copied-chat fallback or Work conversation composer.
+- [ ] Confirm the participant capability table and decision 4's v1 scope:
+  requester row plus originals stored on this host; read-only and unavailable
+  types named.
 - [ ] Confirm Asked by/requester provenance, role-labelled related originals and
   promotion without duplicate identity/counts; decide multi-job semantics.
 - [ ] Resolve routine-thread eligibility/discovery and completed-history placement.
-- [ ] Approve the explicit relay contract and technically validate private input,
-  private responses and intended peer-result delivery on every output surface.
-- [ ] Agree active-state, last-closure, erase and remote-retention semantics.
-- [ ] Resolve D8 replacement and remote/missing-checkpoint limitations explicitly;
-  request a design revision for states that cannot meet the invariants.
+- [ ] Confirm the decision 1/2 privacy contract and validate it on every output
+  surface, with gist, digest, harvest, facts, tracing, prompt capture and fleet
+  trace export covered as audience boundaries.
+- [ ] Confirm the Phase 0 isolation prototype has a time limit, compares
+  agent-decided audiences against an explicit deliver-to-requester action, and
+  ends in continue-or-revise.
+- [ ] Agree the rule for two audiences in one context.
+- [ ] Accept or reject the read-only Open in chat milestone.
+- [ ] Agree active-state, last-closure and stalled-work retention semantics,
+  consistent with decision 3's sweep invariant and today's × delete.
+- [ ] Confirm decision 5's D8 boundary: structured controls and missing-origin
+  fallback stay in v1; any removal is a separate later decision.
 - [ ] Accept additive migration/rollback on existing stores, durable original
-  registration, owner authorization and server-authoritative resync.
-- [ ] Refresh the live board and PR overlap check before any implementation cards.
+  registration, owner authorization, server-authoritative resync, and the
+  stale-docs list.
+- [ ] Re-check the live board and open PRs when implementation is assigned; the
+  2026-11-16 check found no overlapping open work.
 - [ ] Review focused backend evidence plus desktop/phone/accessibility acceptance;
   do not confuse inspection, mocked tests or visual approval with runtime proof.
-- [ ] Keep this proposal under merge hold until explicit review disposition.
-  Separately approve specification amendments, implementation scope and release;
-  none is authorized by this document.
+  Per decision 6, merging accepts direction and audience boundaries only;
+  building starts on a separate go from Josh, with Phase 0 first.

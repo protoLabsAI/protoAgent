@@ -116,7 +116,7 @@ def session_file_candidates(session_id: str, base: str | None = None) -> list[st
     return safe
 
 
-def delete_session_summary(session_id: str, base: str | None = None) -> bool:
+def delete_session_summary(session_id: str, base: str | None = None, *, including_closed: bool = False) -> bool:
     """Remove every file *session_id*'s summary may live under (encoded +
     legacy). True when something was removed.
 
@@ -124,7 +124,25 @@ def delete_session_summary(session_id: str, base: str | None = None) -> bool:
     shared by the memory-inspector DELETE and the chat-delete flow (#2482):
     deleting a chat while leaving its summary behind kept injecting a digest of
     a conversation the user was told "will be removed". Raises ``OSError`` only
-    for real filesystem failures; missing files and escaping ids are False."""
+    for real filesystem failures; missing files and escaping ids are False.
+
+    ``including_closed`` (ADR 0132 D3b) also drops the chat's "closed" digest
+    record — the Erase path. "Save a summary" keeps that record (it is the whole
+    point of the carry-over), so the chat-delete cleanup passes ``including_closed``
+    only when the operator chose to forget; Erase and the memory-inspector DELETE
+    pass it true."""
+    from graph.session_gist import cancel, card_lock
+
+    with card_lock:
+        for path in session_file_candidates(session_id, base):
+            cancel(path)
+        removed = _delete_session_summary_locked(session_id, base)
+    if including_closed:
+        removed = delete_closed_session(session_id, base) or removed
+    return removed
+
+
+def _delete_session_summary_locked(session_id, base):
     removed = False
     for fpath in session_file_candidates(session_id, base):
         try:
@@ -240,6 +258,15 @@ def _clip_tool_args(args):
 
 
 def _persist_session(state: dict, trace_id: str) -> None:
+    """Persist a card, serializing writes against idle gist publication."""
+    from graph.session_gist import cancel, card_lock, card_path
+
+    with card_lock:
+        cancel(card_path(state))
+        _persist_session_locked(state, trace_id)
+
+
+def _persist_session_locked(state: dict, trace_id: str) -> None:
     """Write a session summary JSON file atomically.
 
     Summary schema:
@@ -252,6 +279,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
                            args/result clipped
         tool_calls_total_count — int (present when > 5 tool calls)
         final_output     — str | null, clipped
+        gist / gist_at / gist_message_count — last successful idle gist, preserved on rewrites
         timestamp        — ISO-8601 UTC string
 
     Writes atomically: temp file → os.replace to avoid partial reads.
@@ -377,6 +405,9 @@ def _persist_session(state: dict, trace_id: str) -> None:
             session_id[:80],
         )
         return
+    from graph.session_gist import preserve_gist
+
+    preserve_gist(dest, summary)
     tmp_fd = None
     tmp_path = None
     try:
@@ -420,6 +451,10 @@ def _persist_session(state: dict, trace_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 _DIGEST_TOPIC_MAX_CHARS = 80
+# The gist is written at ≤240 chars by the generator (ADR 0132 D2); clip defensively
+# here too so a hand-written or legacy card can't blow the digest's token budget.
+_DIGEST_GIST_MAX_CHARS = 240
+_DIGEST_EXCLUDED_SURFACES = ("background", "palette", "activity")
 
 # Session ids become filenames under memory_path() — restrict to the characters
 # real ids use (``:`` included — e.g. ``background:job``) so a crafted id can't
@@ -456,7 +491,7 @@ def _surface_for(session_id: str) -> str:
     if session_id.startswith("job:"):
         # ADR 0129 execution sessions (``job:<execution_uuid>``): background work,
         # never an operator chat. Unlike ADR 0070 ``background:`` workers these ARE
-        # durable sessions, so their summaries persist and list in the digest.
+        # durable sessions, so their summaries persist for on-demand recall.
         return "background"
     if session_id == "system:activity":
         return "activity"
@@ -481,6 +516,8 @@ def digest_entry(summary: dict) -> dict:
 
     ``topic`` is derived from the FIRST USER message only — no assistant text,
     no message bodies (ADR 0069 D1: identity confusion + poisoning surface).
+    ``gist`` is the card's idle gist (ADR 0132 D1/D2), reasoning-stripped,
+    whitespace-collapsed and clipped; ``""`` when the card has none yet.
     """
     from graph.output_format import strip_reasoning
 
@@ -493,23 +530,38 @@ def digest_entry(summary: dict) -> dict:
             break
     if len(topic) > _DIGEST_TOPIC_MAX_CHARS:
         topic = topic[: _DIGEST_TOPIC_MAX_CHARS - 1] + "…"
+    gist = " ".join(strip_reasoning(str(summary.get("gist") or "")).split())
+    if len(gist) > _DIGEST_GIST_MAX_CHARS:
+        gist = gist[: _DIGEST_GIST_MAX_CHARS - 1] + "…"
     return {
         "session_id": sid,
         "timestamp": str(summary.get("timestamp") or "unknown"),
         "surface": _surface_for(sid),
         "topic": topic,
+        "gist": gist,
         # A bounded summary keeps only some messages; it records the full count.
         "message_count": _message_count(summary, msgs),
     }
 
 
-def _digest_line(summary: dict) -> str:
-    """One attributed line: ``session_id · timestamp · surface · topic · N msgs``."""
+def _digest_line(summary: dict, *, with_gist: bool = True, closed: bool = False) -> str:
+    """One attributed line: ``session_id · timestamp · surface [· closed] · topic [· gist] · N msgs``.
+
+    The card's gist (ADR 0132 D1) renders right after the topic when present; a
+    card without one renders exactly as before, byte for byte. ``with_gist=False``
+    drops the gist so :func:`finish_digest` can shed gists before whole chats.
+
+    ``closed`` (ADR 0132 D3b) inserts a ``closed`` marker after the surface for a
+    recently-closed chat; its ``timestamp`` is the chat's ``closed_at``."""
     e = digest_entry(summary)
-    return (
-        f"  {e['session_id']} · {e['timestamp']} · {e['surface']} · "
-        f"{e['topic'] or '(no user message)'} · {e['message_count']} msgs"
-    )
+    parts = [e["session_id"], e["timestamp"], e["surface"]]
+    if closed:
+        parts.append("closed")
+    parts.append(e["topic"] or "(no user message)")
+    if with_gist and e["gist"]:
+        parts.append(e["gist"])
+    parts.append(f"{e['message_count']} msgs")
+    return "  " + " · ".join(parts)
 
 
 def format_session_summary(summary: dict) -> str:
@@ -543,10 +595,17 @@ def format_session_summary(summary: dict) -> str:
 
 class DigestEntry(NamedTuple):
     """One attributed digest line, keyed by the session it summarizes — the
-    unit ADR 0108 D9's budget shed drops (oldest / lowest-rank first)."""
+    unit ADR 0108 D9's budget shed drops (oldest / lowest-rank first).
+
+    ``gistless_line`` is the same line with its ADR 0132 gist dropped (equal to
+    ``line`` when the card had no gist); :func:`finish_digest` swaps to it to
+    shed a gist before dropping the whole chat. Defaults to ``""`` so the legacy
+    two-field construction still works — an entry with no gistless form is simply
+    never gist-trimmed."""
 
     session_id: str
     line: str
+    gistless_line: str = ""
 
 
 class DigestResult(NamedTuple):
@@ -574,16 +633,31 @@ def render_digest(entries: list[DigestEntry]) -> str:
 
 
 def finish_digest(entries: list[DigestEntry], max_tokens: int = 2000, *, dir_exists: bool = True) -> DigestResult:
-    """Token-trim (char/4, dropping from the END — oldest under ``newest``,
-    lowest-rank under ``relevant``) and render. Preserves the loader's empty
-    shapes: no memory dir → ``""``; a dir with nothing usable → ``<prior_sessions/>``."""
+    """Token-trim (char/4) and render. Preserves the loader's empty shapes: no
+    memory dir → ``""``; a dir with nothing usable → ``<prior_sessions/>``.
+
+    Over budget, GISTS go before whole chats (ADR 0132 D1): the digest stays an
+    index, so a chat's topic line is worth more than another chat's gist. Gists
+    are shed oldest-first (from the END, mirroring the keep-first drop order);
+    only once every gist is gone are chats dropped from the end — oldest under
+    ``newest``, lowest-rank under ``relevant``."""
     if not dir_exists:
         return DigestResult("", [])
     kept = list(entries)
-    while kept:
-        if max(1, len("\n".join([_DIGEST_HEADER, *(e.line for e in kept)])) // 4) <= max_tokens:
+
+    def _over(es: list[DigestEntry]) -> bool:
+        return max(1, len("\n".join([_DIGEST_HEADER, *(e.line for e in es)])) // 4) > max_tokens
+
+    # 1. Shed gists oldest-first, keeping every chat's topic line in the index.
+    for i in range(len(kept) - 1, -1, -1):
+        if not _over(kept):
             break
-        kept.pop()  # drop from the end (keep-first ordering)
+        e = kept[i]
+        if e.gistless_line and e.gistless_line != e.line:
+            kept[i] = DigestEntry(e.session_id, e.gistless_line, e.gistless_line)
+    # 2. Only now drop whole chats from the end.
+    while kept and _over(kept):
+        kept.pop()
     if not kept:
         return DigestResult("<prior_sessions/>", [])
     return DigestResult(render_digest(kept), kept)
@@ -594,20 +668,28 @@ def load_digest_pool(
     max_sessions: int = 10,
     *,
     exclude_session_id: str = "",
+    closed_days: int = 0,
 ) -> tuple[list[DigestEntry], bool]:
     """The newest-``max_sessions`` digest entries (pre token-trim) and whether
-    the memory dir exists at all.
+    the memory dir exists at all. Automated surfaces are excluded before the
+    newest-N cut so they cannot crowd out chats and outside threads.
 
     ``exclude_session_id`` (ADR 0108 D9, #3186): the ACTIVE session's own
     summary — persisted on every terminal turn since ADR 0069 D4 — must never
     appear as a "prior" session in its own thread. It is skipped BEFORE the
     newest-N cut (by filename, plus a post-parse id check for files whose name
     doesn't match their content), so the pool refills with the next-newest.
-    Never raises."""
+
+    ``closed_days`` (ADR 0132 D3b): when positive, recently-closed chats
+    (harvested with "Save a summary" or by the idle sweep) are appended AFTER the
+    open chats, each marked "closed", for that many days. A session that is still
+    open takes precedence over its closed record — the open card wins, so the
+    idle sweep harvesting a still-live tab never double-lists it. Never raises."""
     if memory_dir is None:
         memory_dir = memory_path()
     if not os.path.isdir(memory_dir):
         return [], False
+    closed = load_closed_pool(memory_dir, max_sessions, closed_days=closed_days, exclude_session_id=exclude_session_id)
     excluded_names: set[str] = set()
     if exclude_session_id and is_safe_session_id(exclude_session_id):
         try:
@@ -636,7 +718,9 @@ def load_digest_pool(
     except OSError:
         return [], False
     pool: list[DigestEntry] = []
-    for _, fpath in files[:max_sessions]:
+    for _, fpath in files:
+        if len(pool) >= max_sessions:
+            break
         try:
             with open(fpath, encoding="utf-8") as fh:
                 summary = json.load(fh)
@@ -645,8 +729,201 @@ def load_digest_pool(
         sid = str(summary.get("session_id") or "unknown")
         if exclude_session_id and sid == exclude_session_id:
             continue
-        pool.append(DigestEntry(sid, _digest_line(summary)))
-    return pool, True
+        if _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
+            continue
+        pool.append(DigestEntry(sid, _digest_line(summary), _digest_line(summary, with_gist=False)))
+    # The open card wins (ADR 0132 D3b): a chat that was harvested (idle sweep or "Save a
+    # summary") and then resumed under the same id still has a live card, so it lists OPEN
+    # and its stale closed record is suppressed — never double-listed, never shown closed
+    # while live. Closed chats come AFTER the open ones and ride the same token budget.
+    open_ids = {e.session_id for e in pool}
+    return pool + [e for e in closed if e.session_id not in open_ids], True
+
+
+# ---------------------------------------------------------------------------
+# Closed-chat digest records (ADR 0132 D3b)
+# ---------------------------------------------------------------------------
+#
+# A chat closed with "Save a summary" (or harvested by the idle sweep) leaves a small
+# record under ``memory_path()/closed/`` so the digest keeps listing it, marked "closed",
+# for ``memory.closed_session_days`` days. It is deliberately a SEPARATE file from the
+# session card: the card is deleted with the chat, while the closed record outlives it
+# (until the retention window lapses, or an Erase forgets it). The record is a minimal
+# session-summary dict — topic (as the single stored user message), gist (the first
+# sentence of the harvest summary), message_count, and ``closed_at`` — so it renders
+# through the same ``digest_entry`` / ``_digest_line`` path as an open card, just with the
+# ``closed`` marker.
+
+_CLOSED_SUBDIR = "closed"
+
+
+def _closed_dir(base: str | None = None) -> str:
+    return os.path.join(base if base is not None else memory_path(), _CLOSED_SUBDIR)
+
+
+def _closed_within(closed_at, closed_days: int, *, now: float | None = None) -> bool:
+    """Is a closed record still inside its retention window? A missing or unparseable
+    ``closed_at`` is treated as EXPIRED — a malformed record is dropped rather than shown
+    forever (it could never age out otherwise)."""
+    if closed_days <= 0:
+        return False
+    import time
+    from datetime import datetime
+
+    try:
+        stamp = datetime.fromisoformat(str(closed_at or "")).timestamp()
+    except (TypeError, ValueError):
+        return False
+    return (now if now is not None else time.time()) - stamp <= closed_days * 86400
+
+
+def record_closed_session(
+    session_id: str,
+    *,
+    topic: str,
+    gist: str,
+    closed_at: str,
+    message_count: int = 0,
+    closed_days: int = 14,
+    base: str | None = None,
+) -> bool:
+    """Write the chat's "closed" digest record (ADR 0132 D3b). Best-effort: returns True
+    when a record was written, False (with a log) otherwise — a harvest must never fail
+    because this bookkeeping file could not be written.
+
+    Skipped when the carry-over is off (``closed_days <= 0``), the id is unsafe, or the
+    session is an automated surface the digest never lists (background/palette/activity):
+    only real chats get a closed record. Writing also prunes expired/malformed records in
+    the same dir, so the folder stays bounded (the 2026-11 session-summary bloat lesson)."""
+    if closed_days <= 0 or not is_safe_session_id(session_id):
+        return False
+    if _surface_for(session_id) in _DIGEST_EXCLUDED_SURFACES:
+        return False
+    cdir = _closed_dir(base)
+    dest = os.path.join(cdir, session_filename(session_id))
+    if not contained_in(cdir, dest):  # never write outside the memory dir (#2340)
+        return False
+    summary = {
+        "session_id": session_id,
+        "messages": [{"role": "user", "content": topic or ""}],
+        "message_count": int(message_count or 0),
+        "gist": gist or "",
+        "timestamp": closed_at,
+        "closed_at": closed_at,
+    }
+    tmp_path = None
+    try:
+        os.makedirs(cdir, exist_ok=True)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=cdir, suffix=".tmp")
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(summary, fh, indent=2, default=str)
+        os.replace(tmp_path, dest)
+        tmp_path = None
+    except OSError as exc:
+        log.warning("[memory] could not record closed session %s: %s", session_id[:80], exc)
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        return False
+    _prune_closed(cdir, closed_days)
+    return True
+
+
+def _prune_closed(cdir: str, closed_days: int) -> None:
+    """Drop expired or unreadable closed records from *cdir*. Best-effort, never raises."""
+    try:
+        names = [n for n in os.listdir(cdir) if n.endswith(".json")]
+    except OSError:
+        return
+    for name in names:
+        fpath = os.path.join(cdir, name)
+        drop = False
+        try:
+            with open(fpath, encoding="utf-8") as fh:
+                summary = json.load(fh)
+            drop = not _closed_within(summary.get("closed_at"), closed_days)
+        except (OSError, json.JSONDecodeError, ValueError):
+            drop = True  # malformed — remove it
+        if drop:
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
+
+
+def delete_closed_session(session_id: str, base: str | None = None) -> bool:
+    """Remove *session_id*'s closed record (the Erase path, ADR 0132 D3b). True when a
+    file was removed. Covers the encoded + legacy names, like :func:`delete_session_summary`."""
+    cdir = _closed_dir(base)
+    removed = False
+    for fpath in session_file_candidates(session_id, cdir):
+        try:
+            os.remove(fpath)
+            removed = True
+        except FileNotFoundError:
+            continue
+        except OSError:
+            log.warning("[memory] could not delete closed session %s", session_id[:80], exc_info=True)
+    return removed
+
+
+def load_closed_pool(
+    memory_dir: str | None = None,
+    max_closed: int = 10,
+    *,
+    closed_days: int = 14,
+    exclude_session_id: str = "",
+) -> list[DigestEntry]:
+    """The newest closed-chat digest entries still inside the retention window, each
+    marked "closed" (ADR 0132 D3b). ``[]`` when the carry-over is off, nothing is closed,
+    or the dir is absent. Mirrors :func:`load_digest_pool`'s per-surface exclusion and
+    active-session skip. Never raises."""
+    if closed_days <= 0:
+        return []
+    cdir = _closed_dir(memory_dir)
+    if not os.path.isdir(cdir):
+        return []
+    excluded_names: set[str] = set()
+    if exclude_session_id and is_safe_session_id(exclude_session_id):
+        try:
+            excluded_names = {os.path.basename(p) for p in session_file_candidates(exclude_session_id, cdir)}
+        except Exception:  # noqa: BLE001 — the post-parse id check still guards
+            excluded_names = set()
+    try:
+        files: list[tuple[float, str]] = []
+        for fname in os.listdir(cdir):
+            if not fname.endswith(".json") or fname in excluded_names:
+                continue
+            fpath = os.path.join(cdir, fname)
+            try:
+                files.append((os.path.getmtime(fpath), fpath))
+            except OSError:
+                continue
+        files.sort(reverse=True)  # newest first
+    except OSError:
+        return []
+    pool: list[DigestEntry] = []
+    for _, fpath in files:
+        if len(pool) >= max_closed:
+            break
+        try:
+            with open(fpath, encoding="utf-8") as fh:
+                summary = json.load(fh)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        sid = str(summary.get("session_id") or "unknown")
+        if exclude_session_id and sid == exclude_session_id:
+            continue
+        if _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
+            continue
+        if not _closed_within(summary.get("closed_at"), closed_days):
+            continue
+        pool.append(
+            DigestEntry(sid, _digest_line(summary, closed=True), _digest_line(summary, with_gist=False, closed=True))
+        )
+    return pool
 
 
 def load_digest(
@@ -657,6 +934,7 @@ def load_digest(
     memory_dir: str | None = None,
     max_sessions: int = 10,
     max_tokens: int = 2000,
+    closed_days: int = 14,
 ) -> DigestResult:
     """The prior-sessions digest under a ``context.prior_sessions`` policy
     (ADR 0108 D9). ``newest`` = the newest-N pool; ``relevant`` = the FTS-ranked
@@ -676,6 +954,7 @@ def load_digest(
                 memory_dir=memory_dir,
                 limit=max_sessions,
                 exclude_session_id=exclude_session_id,
+                exclude_surfaces=_DIGEST_EXCLUDED_SURFACES,
             )
         except Exception:  # noqa: BLE001 — no FTS5 / no terms / index error → newest
             log.debug("[memory] relevant digest unavailable — falling back to newest", exc_info=True)
@@ -684,7 +963,7 @@ def load_digest(
         pairs: list[DigestEntry] = []
         for m in matches:
             sid = str(m.get("session_id") or "")
-            if not sid or not is_safe_session_id(sid):
+            if not sid or not is_safe_session_id(sid) or _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
                 continue
             for fpath in session_file_candidates(sid, base):
                 if not os.path.isfile(fpath):
@@ -694,11 +973,26 @@ def load_digest(
                         summary = json.load(fh)
                 except (OSError, json.JSONDecodeError, ValueError):
                     break
-                pairs.append(DigestEntry(sid, _digest_line(summary)))
+                if _surface_for(str(summary.get("session_id") or "unknown")) in _DIGEST_EXCLUDED_SURFACES:
+                    break
+                pairs.append(DigestEntry(sid, _digest_line(summary), _digest_line(summary, with_gist=False)))
                 break
+        # Only a NON-EMPTY FTS result short-circuits here; zero matches falls through to the
+        # newest pool below (ADR 0108 D9 — the documented empty-match fallback), so the digest
+        # never collapses to only the closed chats, dropping the newest open ones.
         if pairs:
-            return finish_digest(pairs, max_tokens, dir_exists=True)
-    pool, exists = load_digest_pool(memory_dir, max_sessions, exclude_session_id=exclude_session_id)
+            # Recently-closed chats ride the relevant digest too (ADR 0132 D3b), appended after
+            # the FTS matches. The open card wins: an FTS-matched open chat is listed open, never
+            # also as its closed record.
+            closed = load_closed_pool(
+                base, max_sessions, closed_days=closed_days, exclude_session_id=exclude_session_id
+            )
+            open_ids = {p.session_id for p in pairs}
+            combined = pairs + [e for e in closed if e.session_id not in open_ids]
+            return finish_digest(combined, max_tokens, dir_exists=True)
+    pool, exists = load_digest_pool(
+        memory_dir, max_sessions, exclude_session_id=exclude_session_id, closed_days=closed_days
+    )
     return finish_digest(pool, max_tokens, dir_exists=exists)
 
 
@@ -714,8 +1008,8 @@ def load_prior_sessions(
     framing header plus one line per session (id, timestamp, surface, topic,
     message count) — instead of verbatim message bodies; the full summary is
     retrievable on demand via the ``recall_session`` tool, which renders it
-    with :func:`format_session_summary`. Reads up to ``max_sessions`` newest
-    JSON files and drops oldest-first to fit ``max_tokens`` (char/4
+    with :func:`format_session_summary`. Selects up to ``max_sessions`` newest
+    eligible summaries and drops oldest-first to fit ``max_tokens`` (char/4
     approximation). ``memory_dir`` defaults to the writer's resolved
     ``memory_path()``. Never raises.
     """
@@ -728,13 +1022,17 @@ def load_prior_sessions_digest(
     max_tokens: int = 2000,
     *,
     exclude_session_id: str = "",
+    closed_days: int = 14,
 ) -> tuple[str, list[str]]:
     """:func:`load_prior_sessions` plus the session ids the digest ended up
     carrying (post token-trim), in digest order — the attribution the per-turn
     injection record needs (ADR 0069 D6) without re-parsing the block.
     ``exclude_session_id`` (ADR 0108 D9) keeps the active session's own summary
-    out of its digest — see :func:`load_digest_pool`."""
-    pool, exists = load_digest_pool(memory_dir, max_sessions, exclude_session_id=exclude_session_id)
+    out of its digest — see :func:`load_digest_pool`. ``closed_days`` (ADR 0132
+    D3b) appends recently-closed chats, marked closed, after the open ones."""
+    pool, exists = load_digest_pool(
+        memory_dir, max_sessions, exclude_session_id=exclude_session_id, closed_days=closed_days
+    )
     res = finish_digest(pool, max_tokens, dir_exists=exists)
     return res.block, [e.session_id for e in res.entries]
 
@@ -756,10 +1054,20 @@ class SessionSummaryMiddleware(AgentMiddleware):
     requires the knowledge middleware (on by default).
     """
 
-    def __init__(self, knowledge_store=None):
+    def __init__(self, knowledge_store=None, *, config=None):
         super().__init__()
         # Accepted for ctor compatibility; unused now that this is write-only.
         self._store = knowledge_store
+        self._config = config
+
+    def before_agent(self, state, runtime):
+        from graph.session_gist import cancel, card_path
+
+        cancel(card_path(state))
+        return None
+
+    async def abefore_agent(self, state, runtime):
+        return self.before_agent(state, runtime)
 
     def after_agent(self, state, runtime) -> dict | None:
         """Persist a session summary on the terminal turn.
@@ -783,6 +1091,9 @@ class SessionSummaryMiddleware(AgentMiddleware):
 
                 trace_id = tracing.current_trace_id()
                 _persist_session(state, trace_id)
+                from graph.session_gist import schedule
+
+                schedule(state, self._config)
         return None
 
     async def aafter_agent(self, state, runtime) -> dict | None:
@@ -796,6 +1107,9 @@ class SessionSummaryMiddleware(AgentMiddleware):
 
         trace_id = tracing.current_trace_id()
         _persist_session(state, trace_id)
+        from graph.session_gist import schedule
+
+        schedule(state, self._config)
         return None
 
     async def aon_session_end(self, state, runtime) -> dict | None:

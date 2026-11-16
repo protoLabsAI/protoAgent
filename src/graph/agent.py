@@ -205,14 +205,17 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
     diagnosing), not the last fallback's.
     """
 
-    def __init__(self, *models, config: LangGraphConfig | None = None, usage_store=None):
+    def __init__(self, *models, config: LangGraphConfig | None = None, usage_store=None, names=None):
         super().__init__(*models)
         self._config = config
         self._usage_store = usage_store
-        # The configured slot names, index-aligned with ``self.models`` (both call sites build
-        # the instances from ``routing.fallback_models`` in order). The NAME is what resolves
-        # an account — a built instance has its provider prefix stripped (see resolve_account).
-        self._fallback_names = list(getattr(config, "routing_fallback_models", None) or [])
+        # The configured slot names, index-aligned with ``self.models``. The NAME is what
+        # resolves an account — a built instance has its provider prefix stripped (see
+        # resolve_account). Defaults to ``routing.fallback_models`` (the lead chain and every
+        # inherited subagent tier build their instances from it in order); a subagent tier
+        # PINNED to its OWN chain (ADR 0133 M5) passes ``names=`` so account resolution keys on
+        # THAT chain's models rather than the global fallbacks.
+        self._fallback_names = list(names if names is not None else (getattr(config, "routing_fallback_models", None) or []))
 
     def _store(self):
         if self._usage_store is not None:
@@ -593,7 +596,7 @@ def _build_middleware(
         middleware.append(AuditMiddleware())
 
     if config.memory_middleware:
-        middleware.append(SessionSummaryMiddleware(knowledge_store))
+        middleware.append(SessionSummaryMiddleware(knowledge_store, config=config))
 
     # In-history tool-result pruning (#2782, ADR 0101 D3/D4) — registered BEFORE
     # compaction on purpose: relief has an order (prune near-lossless, THEN
@@ -674,9 +677,20 @@ def _build_middleware(
 
     # Model routing / failover — retry on fallback models (same gateway).
     # Observable wrapper (#2956): the stock middleware fails over silently.
-    if config.routing_fallback_models:
-        fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
-        middleware.append(ObservableModelFallbackMiddleware(*fallbacks, config=config))
+    #
+    # The lead builds the configured primary separately. Coherence filtering may remove
+    # that name, in which case ALL surviving entries remain fallbacks, including index 0.
+    # Keep the resolved chain's indices so skip diagnostics agree with Settings.
+    from graph.config import model_field_primary, role_chain
+    from graph.model_roles import build_fallbacks
+
+    fallback_names, fallbacks = build_fallbacks(
+        "main", role_chain(config, "main"),
+        lambda name: create_llm(config, model_name=name),
+        primary_name=model_field_primary(config.model_name),
+    )
+    if fallbacks:
+        middleware.append(ObservableModelFallbackMiddleware(*fallbacks, config=config, names=fallback_names))
 
     # Self-heal the other thread-bricking history defect (ADR 0097): a replayed
     # encrypted-reasoning blob the provider cannot verify — a cross-issuer replay
@@ -752,13 +766,30 @@ def provider_shape_middleware(config) -> list:
     return out
 
 
-def _resolve_aux_model(config, specific: str = "") -> str | None:
-    """Pick the model for an auxiliary call: a specific override, else the
-    shared ``routing.aux_model`` fast alias, else None (→ the main model)."""
+def _resolve_aux_model(config, specific: str | list[str] = "") -> str | None:
+    """Pick the PRIMARY model for an auxiliary call: a specific override, else the
+    shared ``routing.aux_model`` fast alias, else None (→ the main model).
+
+    DEPRECATED (ADR 0133 M3): this collapses a role to its FIRST entry and drops the
+    fallback tail, so it can never fail over. The harvest / facts / compaction seams now
+    build their model through ``graph.model_roles.create_role_llm(config, role)``, which
+    resolves the whole role chain and retries the next entry on a retryable provider error.
+    Kept as a thin shim for the remaining single-model callers — the automatic-compaction
+    middleware summarizer and ``create_aux_llm`` (which still want a scalar name to pass to
+    ``create_llm``), and compaction's window-sizing, which needs just the primary id. New
+    code should call ``create_role_llm`` (or ``graph.config.role_chain``), not this.
+
+    Either candidate may be a scalar or an ADR 0133 role chain (a list) — both the
+    ``specific`` override (compaction passes ``config.compaction_model``) and
+    ``routing.aux_model`` are list-capable. The PRIMARY entry of the first non-empty chain
+    is used. ``model_field_primary`` is what keeps a list value from raising on the old
+    ``.strip()``."""
+    from graph.config import model_field_primary
+
     for candidate in (specific, getattr(config, "aux_model", "")):
-        cleaned = (candidate or "").strip()
-        if cleaned:
-            return cleaned
+        primary = model_field_primary(candidate)
+        if primary:
+            return primary
     return None
 
 
@@ -1316,9 +1347,21 @@ async def _run_subagent_inner(
     # Subagent model (#3944, graph/subagent_model.py): the subagent's own pinned
     # model → the delegating turn's model override → routing.aux_model → main model.
     from graph.generation_profile import resolve_profile
-    from graph.subagent_model import resolve_subagent_model
+    from graph.subagent_model import resolve_subagent_model, subagent_pin_chain
 
     sub_model = resolve_subagent_model(config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or "")
+    # ADR 0133 M5: a tier PINNED to a multi-model chain fails over across its OWN models on a
+    # retryable provider error. The pin wins precedence (resolve_subagent_model agrees), so its
+    # PRIMARY is both the model the window/telemetry below describe AND the one handed to
+    # create_agent — a real BaseChatModel, so create_agent can `bind_tools` onto it for a
+    # tool-bearing subagent. The chain's FALLBACK entries ride the same
+    # ObservableModelFallbackMiddleware the lead chain uses (built from `pin_chain[1:]` below),
+    # NOT a Runnable-only chain model — that would have no `bind_tools` and fail the delegation
+    # before any 429 failover ran. Every other resolution keeps today's single model, and where
+    # the tier INHERITS (no pin) the MAIN chain's fallbacks still apply via that middleware.
+    pin_chain = subagent_pin_chain(config, getattr(sub_config, "model", "") or "")
+    if pin_chain:
+        sub_model = pin_chain[0]
 
     sub_profile = getattr(sub_config, "profile", "") or ""
     resolved_profile = resolve_profile(config, call=profile, subagent=sub_profile)
@@ -1448,13 +1491,27 @@ async def _run_subagent_inner(
     # subagent's primary-model error fails the whole delegation, while the lead
     # would have transparently retried on the configured fallbacks — the failover
     # chain covered only `_build_middleware()`, never `task()`/`task_batch()`.
-    # Same observable wrapper, built from the same routing.fallback_models.
     # Appended before the provider-shape dispatcher so a cross-provider
-    # fallback retry still runs through the native-OAuth wire shaping. No-op when
-    # routing.fallback_models is empty — the subagent stack is then unchanged.
-    if config.routing_fallback_models:
-        sub_fallbacks = [create_llm(config, model_name=m, **profile_kwargs) for m in config.routing_fallback_models]
-        sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks, config=config))
+    # fallback retry still runs through the native-OAuth wire shaping.
+    #
+    # ADR 0133 M5: a tier PINNED to a multi-model chain fails over across its OWN chain
+    # (`pin_chain[1:]`) through this SAME observable wrapper — the fallbacks ride the
+    # request's tools/system prompt, so none of them needs `bind_tools`. Every other tier (a
+    # scalar pin, or an inherited tier with no pin) uses routing.fallback_models, exactly as
+    # before. The fallback names are passed so quota/account routing keys on the chain's OWN
+    # models, not the global fallbacks. No-op when the resolved fallback set is empty — the
+    # subagent stack is then unchanged.
+    sub_fallback_names = pin_chain[1:] if len(pin_chain) > 1 else list(config.routing_fallback_models or [])
+    from graph.model_roles import build_fallbacks
+
+    sub_fallback_names, sub_fallbacks = build_fallbacks(
+        f"subagent:{subagent_type}", [sub_model, *sub_fallback_names],
+        lambda name: create_llm(config, model_name=name, **profile_kwargs),
+    )
+    if sub_fallbacks:
+        sub_middleware.append(
+            ObservableModelFallbackMiddleware(*sub_fallbacks, config=config, names=list(sub_fallback_names))
+        )
     # Same history self-heal as the lead stack, in the same slot: a delegation
     # replays the subagent's own thread, so a rejected reasoning blob bricks it the
     # same way. See the lead chain for why this sits inside the failover wrapper.

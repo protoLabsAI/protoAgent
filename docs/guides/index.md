@@ -24,6 +24,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 - [Use the app](/guides/react-tauri-ui)
 - [Read conversations from others](/guides/conversations-from-others)
 - [Connect and change models](/guides/model-connections)
+- [Model fallback chains](/guides/model-fallback-chains)
 - [Call a model directly](/guides/model-passthrough)
 - [Command palette (⌘⇧K)](/guides/command-palette)
 - [Create and work with files and documents](/guides/documents-and-files)

@@ -14,7 +14,7 @@ are config flags in `config/langgraph-config.yaml`. This page is the map.
 | Programmatic tool calling | `execute_code.*` | off | One script composes many tools in a single turn |
 | Prompt / prefix caching | `prompt_cache.*` | on (Anthropic-gated) | Cache the stable system+tools prefix across turns |
 | Cache warming | `prompt_cache.warm.*` | off | Keep the cached prefix warm for sporadic, latency-sensitive traffic |
-| Provider failover | `routing.fallback_models` | none | Retry on fallback models when the primary errors |
+| Provider failover | any model-role chain (`model.name`, `routing.aux_model`, …) | none | Every model role falls back down its own chain when the primary is rate-limited, out of quota, or down ([fallback chains](../guides/model-fallback-chains.md)) |
 | Iteration budget | `model.max_iterations`, subagent `max_turns` | 2000 / per-subagent | Stop runaway loops |
 
 ## Context compaction
@@ -70,6 +70,16 @@ Each path resolves **specific override → `routing.aux_model` → main model**,
 you can still pin an individual path: `compaction.model`, `goal.eval_model`, or
 a per-subagent `model` (in `graph/subagents/config.py`) — e.g. keep a
 heavy-reasoning subagent on the main model while the rest run on the fast alias.
+
+Every one of these roles — and the main model itself — now takes an ordered
+**fallback chain**, not just a single model ([ADR 0133](../adr/0133-model-roles-with-fallback-chains.md)):
+any role field accepts a list (primary, then each fallback) as well as a string,
+`aux_model` included, and a blank role inherits its parent's **whole** chain
+(specific role → aux → main). Failover is no longer the main model's alone: when a
+cheap aux model is rate-limited, compaction, harvest, facts, and goal checks retry
+down the aux chain instead of all failing at once. See
+[Model fallback chains](../guides/model-fallback-chains.md) for the full role list,
+inheritance rules, and where a fired fallback shows up.
 
 ## Programmatic tool calling (`execute_code`)
 

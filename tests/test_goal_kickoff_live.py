@@ -89,8 +89,11 @@ def _install(monkeypatch, model_messages, *, judge_met: bool, max_iters: int = 1
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", GoalController(cfg, GoalStore(str(_tmp()))), raising=False)
-    # The goal's llm verifier reaches out via graph.llm.create_llm — fake its verdict.
+    # The goal's llm verifier builds its model through the "goal_eval" role (ADR 0133 M4),
+    # which resolves graph.model_roles.create_llm — fake its verdict there. graph.llm.create_llm
+    # stays faked too for any direct create_llm caller on the turn.
     monkeypatch.setattr("graph.llm.create_llm", lambda *a, **k: _FakeJudge(judge_met))
+    monkeypatch.setattr("graph.model_roles.create_llm", lambda *a, **k: _FakeJudge(judge_met))
 
 
 def _tmp():

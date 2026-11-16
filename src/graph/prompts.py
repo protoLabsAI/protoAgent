@@ -111,14 +111,20 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
     if has_directives:
         # ADR 0127 D6 — the directive ledger, not the transcript, is the record of approvals.
         close = " or ".join(f"`{n}`" for n in ("fulfil_directive", "revoke_directive") if available(n))
-        record = "`record_directive` their exact words and conditions. " if available("record_directive") else ""
+        record = (
+            "`record_directive` their exact words, linking the work it covers. "
+            if available("record_directive")
+            else ""
+        )
         lines.append(
-            "- **Directives:** when the operator approves or instructs something beyond this turn, "
+            "- **Directives:** when the operator gives an instruction that binds a later turn "
+            "(a gate, hold, prohibition, limit or deferred action), "
             + record
             + "Check STANDING DIRECTIVES"
             + (" (or `list_directives`)" if available("list_directives") else "")
             + " before deciding you lack approval"
             + (f"; close one with {close}." if close else ".")
+            + " Answers to your own questions go into the work, not the ledger."
         )
     if has_memory:
         # ADR 0125 P3-D5 — mirrors the memory_save "what's worth saving" rule (one line).

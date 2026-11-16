@@ -785,13 +785,33 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
                 )
         else:
             _HARVEST_FAILURES.pop(thread_id, None)
+    # Harvest can run on a live chat; remove its open card only after retirement.
+    # Resolve the harvest's session identity before deleting the checkpoint.
+    retired_session_id = None
+    if chunk_id is not None:
+        try:
+            tup = await STATE.checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
+            if tup is not None:
+                retired_session_id = str(tup.checkpoint.get("channel_values", {}).get("session_id") or thread_id)
+        except Exception:
+            log.warning("[retire] could not resolve session card for %s", thread_id, exc_info=True)
+    checkpoints_deleted = False
     if STATE.checkpoint_path:
         await asyncio.to_thread(delete_thread, STATE.checkpoint_path, thread_id, cascade=cascade)
+        checkpoints_deleted = True
     elif STATE.checkpointer is not None and hasattr(STATE.checkpointer, "delete_thread"):
         try:
             STATE.checkpointer.delete_thread(thread_id)
+            checkpoints_deleted = True
         except Exception:
             log.exception("[retire] in-memory delete_thread failed for %s", thread_id)
+    if checkpoints_deleted and retired_session_id is not None:
+        try:
+            from graph.middleware.memory import delete_session_summary
+
+            await asyncio.to_thread(delete_session_summary, retired_session_id)
+        except Exception:
+            log.warning("[retire] session-summary cleanup failed for %s", thread_id, exc_info=True)
     # The trajectory outlives checkpoint PRUNING but not thread RETIREMENT
     # (ADR 0102 D3) — same lifetime as the thread's own existence.
     try:
@@ -832,7 +852,7 @@ def _judge_soul_drift(cfg, report: dict) -> dict | None:
         current = read_soul()
         if not baseline or not current:
             return None
-        verdict = judge_soul_drift(baseline, current, model=(getattr(cfg, "soul_drift_judge_model", "") or None))
+        verdict = judge_soul_drift(baseline, current, config=cfg)
     except Exception:  # noqa: BLE001 — never break the pass over the optional tier
         log.exception("[soul-drift] semantic tier failed")
         return None

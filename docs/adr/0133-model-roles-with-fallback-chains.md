@@ -18,8 +18,8 @@ Today only the **main model** (and the subagents built from it) has a fallback c
 | Harvest summary and fact extraction | none (→ aux → main) | `graph/conversation_harvest.py` ~659, `graph/memory_facts.py` ~114 |
 | Goal verification (llm verifier) | `goal_eval_model` (→ aux → main) | `graph/goals/verifiers.py` ~341 (inline) |
 | Memory selection | `memory_select_model` (→ aux → main) | `graph/projection.py` ~341 (inline) |
-| SOUL drift judge | `soul_drift_judge_model` | `server/maintenance_loops.py` |
-| Image description | `image_describe_model` | `graph/multimodal.py`, `middleware/multimodal_tool.py` |
+| SOUL drift judge | `soul_drift_judge_model` (→ main) | `server/maintenance_loops.py`, `graph/soul_judge.py` |
+| Image description | `image_describe_model` (→ main) | `graph/multimodal.py`, `middleware/multimodal_tool.py` |
 | Subagent tiers | `subagents.<name>.model` | `graph/subagent_model.py` |
 
 On 2026-11-13 this bit us. protoEngineer's aux was Codex only. When Codex hit its usage limit, every compaction summary, fact extraction and goal check failed with a 429, and compaction paused 240 s per three failures, all with nothing to fall back to.
@@ -53,7 +53,15 @@ model:
 - A blank role inherits its parent's **entire chain**. Specific roles inherit the aux chain, and a blank aux inherits the main chain. This is today's inheritance rule, applied to chains.
 - A set chain is **exactly** what's listed. Nothing is appended implicitly: an aux chain of two cheap models never silently escalates to the expensive main model. To get that, list it. Same rule as the board's coder ladders.
 
-**Exceptions to "blank inherits" (keep today's behaviour):** a blank `image_describe_model` stays **off**. Aux may not be able to read images, so it never inherits. A blank `soul_drift_judge_model` and a blank `memory_select_model` inherit the aux chain.
+**Exceptions to "blank inherits":**
+- A blank `image_describe_model` inherits the **main** chain, not aux. Aux models may not read images, while the main model usually can (Josh, 2026-11-16, changing today's "blank = off"). If the resolved model can't read images, image description reports itself unavailable instead of failing on each call.
+- A blank `soul_drift_judge_model` inherits the **aux** chain, falling through to main when aux is blank. This changes the pre-0133 behavior where a blank drift judge used the agent's own main model; an explicitly configured judge chain remains unchanged.
+- A blank `memory_select_model` inherits the aux chain (its pre-0133 behavior: `memory_select_model` → `aux_model` → main).
+
+**Settings decisions (Josh, 2026-11-16), from the designSystem mockup:**
+- All roles sit in one "Model roles" group.
+- Subagents collapse into one counted line, **built dynamically from the agent's actual subagent registry**, never a fixed list.
+- The last-fallback line stays for 24 hours.
 
 ### D3 — One seam builds every role's model
 

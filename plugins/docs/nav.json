@@ -63,6 +63,10 @@
               "title": "Connect and change models"
             },
             {
+              "path": "guides/model-fallback-chains.md",
+              "title": "Model fallback chains"
+            },
+            {
               "path": "guides/model-passthrough.md",
               "title": "Call a model directly"
             },

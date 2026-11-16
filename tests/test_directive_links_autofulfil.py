@@ -321,3 +321,11 @@ def test_record_directive_tool_links_roundtrip(store):
     # A ref the auto-fulfil paths could never resolve is refused, and records nothing.
     assert tool.invoke({"quote": "q", "links": ["#879"], "state": state}).startswith("Error:")
     assert len(store.list("s1")) == 1
+
+
+def test_record_rejects_a_directive_id_as_a_link(store):
+    # #5367: an agent linked dir-355afe to dir-fbfcab; the ref was stored as a "job" that
+    # never finishes, so the directive could never fulfil itself.
+    with pytest.raises(DirectiveError, match="is a directive, not work"):
+        store.record("s1", "q", links=["bd-abc", "dir-fbfcab"])
+    assert store.list("s1") == []

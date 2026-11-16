@@ -36,21 +36,24 @@ from graph.projection import ProjectionOptions, compose_projected_context
 # ---------------------------------------------------------------------------
 
 
-def _summary(session_id: str, topic: str) -> dict:
-    return {
+def _summary(session_id: str, topic: str, *, gist: str = "") -> dict:
+    summary = {
         "session_id": session_id,
         "trace_id": f"trace-{session_id}",
         "messages": [{"role": "user", "content": topic}],
         "final_output": f"done: {topic}",
         "timestamp": "2026-08-28T12:00:00+00:00",
     }
+    if gist:
+        summary["gist"] = gist
+    return summary
 
 
-def _write(memory_dir: Path, session_id: str, topic: str, *, mtime: float | None = None) -> None:
+def _write(memory_dir: Path, session_id: str, topic: str, *, mtime: float | None = None, gist: str = "") -> None:
     from graph.middleware.memory import session_filename
 
     path = memory_dir / session_filename(session_id)
-    path.write_text(json.dumps(_summary(session_id, topic)), encoding="utf-8")
+    path.write_text(json.dumps(_summary(session_id, topic, gist=gist)), encoding="utf-8")
     if mtime is not None:
         os.utime(path, (mtime, mtime))
 
@@ -618,3 +621,147 @@ def test_load_memory_defaults_the_exclusion_to_the_ambient_session(tmp_path, mon
     monkeypatch.setattr(tracing, "current_session_id", lambda: "mine")
     assert "mine" not in mw.load_memory(memory_path=str(tmp_path))
     assert "mine" in mw.load_memory(memory_path=str(tmp_path), exclude_session_id="")
+
+
+@pytest.mark.parametrize("policy", ["newest", "relevant"])
+@pytest.mark.parametrize("legacy_names", [False, True])
+def test_automated_sessions_do_not_take_chat_digest_slots(tmp_path, policy, legacy_names):
+    from graph.middleware.memory import session_filename
+    from graph.session_search import search_session_summaries
+
+    for i in range(3):
+        _write(tmp_path, f"chat-{i}", "rocket launch", mtime=100 + i)
+    _write(tmp_path, "a2a:outside", "rocket launch", mtime=90)
+    automated = [f"job:{i}" if i % 2 else f"palette-{i}" for i in range(10)]
+    automated += ["system:activity", "background:legacy"]
+    for i, sid in enumerate(automated):
+        _write(tmp_path, sid, "rocket launch", mtime=200 + i)
+        if legacy_names:
+            (tmp_path / session_filename(sid)).rename(tmp_path / f"{sid}.json")
+    if policy == "relevant" and not _fts_available(tmp_path):
+        pytest.skip("SQLite FTS5 unavailable")
+
+    result = load_digest(policy, query="rocket launch", memory_dir=str(tmp_path))
+    assert {e.session_id for e in result.entries} == {"chat-0", "chat-1", "chat-2", "a2a:outside"}
+    assert all(sid not in result.block for sid in automated)
+    if policy == "newest":
+        assert [e.session_id for e in result.entries] == ["chat-2", "chat-1", "chat-0", "a2a:outside"]
+    else:
+        # Explicit search still exposes durable automation summaries.
+        hits = search_session_summaries("rocket launch", memory_dir=str(tmp_path), surface="activity")
+        assert [hit["session_id"] for hit in hits] == ["system:activity"]
+
+
+def test_surface_gating_leaves_the_token_budget_untouched(tmp_path):
+    """ADR 0132 D3 (acceptance #2): excluding job/palette/Activity surfaces must
+    not change the delivery budget. The gate drops those sessions from the newest-N
+    pool BEFORE ``finish_digest`` runs, so the SAME ``max_tokens`` char/4 trim the
+    loader has always applied is measured over the chats alone — the big automated
+    summaries never enter the budget math, and the public loaders' default ceiling
+    is still 2000."""
+    import inspect
+
+    now = time.time()
+    for i in range(3):
+        _write(tmp_path, f"chat-{i}", "release prep", mtime=now - i)
+    # Automated summaries with bulky bodies, interleaved by mtime. If any leaked into
+    # the pool it would either take a slot or eat into the token budget below.
+    for i in range(6):
+        _write(tmp_path, f"job:{i}", "background churn " * 60, mtime=now - 0.5 - i)
+    _write(tmp_path, "system:activity", "activity noise " * 60, mtime=now + 1)
+
+    budget = 2000
+    res = load_digest("newest", memory_dir=str(tmp_path), max_tokens=budget)
+    assert {e.session_id for e in res.entries} == {"chat-0", "chat-1", "chat-2"}
+    # The char/4 estimate the cap is expressed in, measured on the header + entry
+    # lines (not the wrapper tags) exactly as finish_digest measures it.
+    assert len("\n".join(res.block.splitlines()[1:-1])) // 4 <= budget
+
+    # The exclusion is additive: it did not move either public loader's default budget.
+    assert inspect.signature(load_digest).parameters["max_tokens"].default == 2000
+    assert inspect.signature(load_prior_sessions_digest).parameters["max_tokens"].default == 2000
+
+
+# ---------------------------------------------------------------------------
+# ADR 0132 S5 — the digest renders each chat's gist (D1)
+# ---------------------------------------------------------------------------
+
+
+def test_digest_renders_a_cards_gist_after_the_topic(tmp_path):
+    """A card with a gist shows it right after the topic; a card without one
+    renders exactly as today — the topic line, byte for byte, no gist segment."""
+    now = time.time()
+    _write(
+        tmp_path,
+        "chat-withgist",
+        "plan the launch",
+        gist="Rocket launch set for Friday; the range is booked and checklists are green.",
+        mtime=now,
+    )
+    _write(tmp_path, "chat-plain", "budget review", mtime=now - 60)
+
+    res = load_digest("newest", memory_dir=str(tmp_path))
+    lines = {e.session_id: e.line for e in res.entries}
+
+    # Gist renders in the `topic · gist · N msgs` slot.
+    assert lines["chat-withgist"] == (
+        "  chat-withgist · 2026-08-28T12:00:00+00:00 · chat · plan the launch · "
+        "Rocket launch set for Friday; the range is booked and checklists are green. · 1 msgs"
+    )
+    # No gist → the pre-S5 shape unchanged.
+    assert lines["chat-plain"] == "  chat-plain · 2026-08-28T12:00:00+00:00 · chat · budget review · 1 msgs"
+    assert res.block.count("Rocket launch") == 1
+
+
+def test_gist_is_whitespace_collapsed_and_clipped_on_the_line(tmp_path):
+    """A card's gist is single-line (newlines collapsed) and bounded so one card
+    cannot blow the digest budget, matching the generator's 240-char cap."""
+    from graph.middleware.memory import _DIGEST_GIST_MAX_CHARS, digest_entry
+
+    e = digest_entry(_summary("chat-x", "topic", gist="line one\n\n  line two\t" + "z" * 300))
+    assert "\n" not in e["gist"] and "  " not in e["gist"]
+    assert e["gist"].startswith("line one line two z")
+    assert len(e["gist"]) == _DIGEST_GIST_MAX_CHARS and e["gist"].endswith("…")
+
+
+def test_ten_chats_with_240_char_gists_fit_the_budget(tmp_path):
+    """ADR 0132 D1 (acceptance): the digest's existing 2,000-token budget holds
+    10 chats each with a full 240-char gist — no chat and no gist is dropped."""
+    now = time.time()
+    gist = "g" * 240
+    for i in range(10):
+        _write(tmp_path, f"chat-{i:02d}", f"topic {i}", gist=gist, mtime=now - i)
+
+    res = load_digest("newest", memory_dir=str(tmp_path), max_tokens=2000)
+    assert len(res.entries) == 10  # every chat kept
+    assert all(gist in e.line for e in res.entries)  # every gist kept in full
+    # Within budget, measured the char/4 way finish_digest measures it (header + lines).
+    assert len("\n".join(res.block.splitlines()[1:-1])) // 4 <= 2000
+
+
+def test_gists_are_trimmed_before_whole_chats_are_dropped(tmp_path):
+    """Over budget, gists are shed (oldest first) before any chat is dropped: the
+    digest stays an index, so a chat's topic line outranks another chat's gist."""
+    now = time.time()
+    gist = "g" * 240
+    for i in range(5):  # chat-0 newest … chat-4 oldest
+        _write(tmp_path, f"chat-{i}", f"topic {i}", gist=gist, mtime=now - i)
+
+    pool, _ = load_digest_pool(str(tmp_path), 10)  # newest-first, gist + gistless lines
+    gistless_core = "\n".join([_DIGEST_HEADER, *(e.gistless_line for e in pool)])
+    gist_extra = len(pool[0].line) - len(pool[0].gistless_line)  # per-gist bytes (uniform here)
+
+    # A budget that fits every topic line plus exactly the two newest gists.
+    cap = (len(gistless_core) + 2 * gist_extra) // 4
+    res = load_digest("newest", memory_dir=str(tmp_path), max_tokens=cap)
+
+    assert [e.session_id for e in res.entries] == ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4"]  # none dropped
+    kept_gists = [e.session_id for e in res.entries if gist in e.line]
+    assert kept_gists == ["chat-0", "chat-1"]  # oldest gists shed first, newest kept
+    assert len("\n".join(res.block.splitlines()[1:-1])) // 4 <= cap
+
+    # A budget that fits only the bare topic lines sheds every gist but keeps all 5 chats.
+    bare = max(1, len(gistless_core) // 4)
+    res_bare = load_digest("newest", memory_dir=str(tmp_path), max_tokens=bare)
+    assert [e.session_id for e in res_bare.entries] == ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4"]
+    assert gist not in res_bare.block  # all gists gone, no chat lost

@@ -329,3 +329,192 @@
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
 }
+
+/* ── Model role chain control (ADR 0133 M7b) ──────────────────────────────────
+   One ordered chain of model Comboboxes per role, or — for a blank inheriting
+   role — the quiet "Inherits <parent>" toggletip. Tokens only, and NOTHING here
+   uses text-overflow: ellipsis or clips a model id: ids wrap instead (§2 item 11,
+   criterion 9). See docs/design/model-chains-settings.md. */
+.model-chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.model-chain__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.model-chain__position {
+  flex: 0 0 auto;
+  min-width: 3.5rem;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+.model-chain__combobox {
+  flex: 1 1 auto;
+  min-width: 22ch; /* desktop input is at least 22 characters wide (§2 item 11) */
+}
+.model-chain__controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+}
+.model-chain__warning {
+  flex-basis: 100%;
+  margin: var(--pl-space-0_5) 0 0;
+  color: var(--pl-color-status-warning);
+}
+.model-chain__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pl-space-2);
+  margin-top: var(--pl-space-1);
+}
+
+/* Inheriting role: the "Inherits <parent>" toggletip + the quiet "Set its own chain". */
+.model-chain--inherited {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pl-space-2);
+}
+.model-chain__inherits {
+  text-decoration: underline dotted;
+  text-underline-offset: var(--pl-space-0_5);
+}
+/* Desktop: hidden until the row is hovered or focused, but ALWAYS in tab order (opacity,
+   never display/visibility). Phone and (hover: none) devices always show it (below). */
+.model-chain__set-own {
+  opacity: 0;
+  transition: opacity var(--pl-motion-fast) var(--pl-motion-ease);
+}
+.model-chain--inherited:hover .model-chain__set-own,
+.model-chain--inherited:focus-within .model-chain__set-own {
+  opacity: 1;
+}
+@media (hover: none) {
+  .model-chain__set-own {
+    opacity: 1;
+  }
+}
+
+/* The toggletip popover lists one FULL id per line and wraps — never clips (§2 item 11). */
+.model-chain__popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  max-width: 22rem;
+}
+.model-chain__popover--phone .model-chain__popover-body {
+  max-width: 16rem;
+}
+.model-chain__popover-title,
+.model-chain__popover-empty {
+  margin: 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+.model-chain__popover-list {
+  margin: 0;
+  padding-left: var(--pl-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-0_5);
+}
+
+/* Every model id wraps rather than clipping — the §2 item 11 rule, pinned by criterion 9. */
+.model-chain__id {
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-xs);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.model-chain__id-prefix {
+  color: var(--pl-color-fg-muted);
+}
+.model-chain__id-name {
+  color: var(--pl-color-fg);
+}
+
+/* Visually hidden live region (the console ships no sr-only utility). */
+.model-chain__live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Phones (below 768px): each chain row becomes a card. The id wraps across its own lines and
+   the controls sit on their own line underneath, so a control can never squeeze the id. Every
+   button and combobox is at least 44px tall. (§2 item 11, criteria 7-9) */
+@media (max-width: 767px) {
+  .model-chain__row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--pl-space-1_5);
+    padding: var(--pl-space-2_5);
+    border: 1px solid var(--pl-color-border);
+    border-radius: var(--pl-radius-md);
+    background: var(--pl-color-bg-raised);
+  }
+  .model-chain__id-lines {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .model-chain__id {
+    font-size: var(--pl-font-size-sm);
+  }
+  .model-chain__controls {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .model-chain__phone-edit {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pl-space-1_5);
+  }
+  .model-chain__phone-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--pl-space-2);
+  }
+  .model-chain .pl-btn,
+  .model-chain__combobox,
+  .model-chain__inherits,
+  .model-chain__set-own {
+    min-height: 44px;
+  }
+  .model-chain__set-own {
+    opacity: 1;
+  }
+}
+
+.model-role-status,
+.model-roles__registry {
+  color: var(--pl-color-fg-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.model-role-status { text-decoration: underline dotted; }
+.model-role-status-popover {
+  max-width: min(22rem, calc(100vw - var(--pl-space-8)));
+  overflow-wrap: anywhere;
+  color: var(--pl-color-fg-muted);
+}
+.model-roles section h3 { font-size: var(--pl-font-size-sm); }
+@media (max-width: 767px) {
+  .model-role-status, .model-roles__registry { min-height: 44px; min-width: 44px; }
+}

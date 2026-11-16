@@ -214,6 +214,11 @@ class ProjectionOptions:
     # for options built directly.
     prior_sessions_max: int = 10
     prior_sessions_max_tokens: int = 2000
+    # ADR 0132 D3b: how long a chat closed with "Save a summary" (or harvested by the
+    # idle sweep) keeps a slot in the digest, marked "closed" (`memory.closed_session_days`).
+    # 0 turns the carry-over off. Unlike the counts above, 0 is a valid value here, so it is
+    # floored at 0 rather than reverted to the default.
+    prior_sessions_closed_days: int = 14
     # ADR 0060 amendment: the tool names bound to the graph this projection feeds. When
     # known, a skill-index row whose declared ``tools:`` aren't all bound carries
     # ``missing_tools="a,b"`` so the model sees the gap BEFORE loading the skill. None =
@@ -279,6 +284,14 @@ class ProjectionOptions:
                 n = default
             if n != getattr(self, attr):
                 object.__setattr__(self, attr, n)
+        # Closed-chat days: 0 is a real value ("carry-over off"), so it is floored at 0, not
+        # reverted to the default. A non-numeric value is the caller's bug → the default.
+        try:
+            closed = max(0, int(self.prior_sessions_closed_days))
+        except (TypeError, ValueError):
+            closed = type(self).prior_sessions_closed_days
+        if closed != self.prior_sessions_closed_days:
+            object.__setattr__(self, "prior_sessions_closed_days", closed)
 
     @classmethod
     def from_config(cls, config, *, model_name: str | None = None) -> ProjectionOptions:
@@ -334,11 +347,21 @@ class ProjectionOptions:
                         "window for the model, so delivery is unbounded",
                         budget_pct,
                     )
-        from graph.llm import create_llm, split_slot_target
+        from copy import copy
 
-        main_model = model_name or getattr(config, "model_name", "")
-        select_model = (str(getattr(config, "memory_select_model", "") or "").strip()
-                        or str(getattr(config, "aux_model", "") or "").strip() or main_model)
+        from graph.config import model_field_primary
+        from graph.llm import split_slot_target
+        from graph.model_roles import create_role_llm, resolve_chain
+
+        # Each of these is list-capable (ADR 0133); route on the primary entry. `str(list)`
+        # here would make a chain's Python repr ("['x', 'y']") the whole select-model id.
+        main_model = model_field_primary(model_name) or model_field_primary(getattr(config, "model_name", ""))
+        role_config = config
+        if model_name:
+            role_config = copy(config)
+            role_config.model_name = model_name
+        select_chain = resolve_chain(role_config, "memory_select")
+        select_model = select_chain[0] if select_chain else main_model
         # Provider-qualified and bare spellings of the same model must not
         # accidentally enable the expensive path. Treat equal bare names
         # conservatively even when they route through different connections.
@@ -350,7 +373,7 @@ class ProjectionOptions:
             whole_store_weak_score=float(getattr(config, "memory_whole_store_weak_score", cls.whole_store_weak_score)),
             select_model_name=select_model,
             main_model_name=main_model,
-            select_model_factory=None if same_model else lambda: create_llm(config, model_name=select_model),
+            select_model_factory=None if same_model else lambda: create_role_llm(role_config, "memory_select"),
             top_k=_int_or_default(getattr(config, "knowledge_top_k", cls.top_k), cls.top_k),
             prior_sessions_policy=_coerce_prior_sessions_policy(
                 getattr(config, "context_prior_sessions", cls.prior_sessions_policy)
@@ -364,6 +387,9 @@ class ProjectionOptions:
             # config carrying a string (or nonsense) can't raise out of the options build.
             prior_sessions_max=getattr(config, "memory_max_sessions", cls.prior_sessions_max),
             prior_sessions_max_tokens=getattr(config, "memory_max_tokens", cls.prior_sessions_max_tokens),
+            prior_sessions_closed_days=getattr(
+                config, "memory_closed_session_days", cls.prior_sessions_closed_days
+            ),
         )
 
 
@@ -507,6 +533,7 @@ def compose_projected_context(
             exclude_session_id=_active_session_id(state),
             max_sessions=opts.prior_sessions_max,
             max_tokens=opts.prior_sessions_max_tokens,
+            closed_days=opts.prior_sessions_closed_days,
         )
         if not digest:
             digest_entries, digest_ids = [], []
@@ -1103,6 +1130,7 @@ def _load_digest(
     exclude_session_id: str = "",
     max_sessions: int = 10,
     max_tokens: int = 2000,
+    closed_days: int = 14,
 ) -> tuple[str, list, list[str]]:
     """The prior-sessions digest as ``(block, entries, session_ids)``.
 
@@ -1141,6 +1169,7 @@ def _load_digest(
                 exclude_session_id=exclude_session_id,
                 max_sessions=max_sessions,
                 max_tokens=max_tokens,
+                closed_days=closed_days,
             )
         if hasattr(out, "block") and hasattr(out, "entries"):
             entries = list(out.entries or [])

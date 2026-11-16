@@ -128,7 +128,7 @@ _SKILLS = [
 _DIGEST = (
     "<prior_sessions>\n"
     "  <!-- digest -->\n"
-    "- s1 · 2026-08-20 · chat · release prep · 12 msgs\n"
+    "- s1 · 2026-08-20 · chat · release prep · cutting 0.42: CI is green, the tag from main is next · 12 msgs\n"
     "- s2 · 2026-08-19 · a2a · notes · 4 msgs\n"
     "</prior_sessions>"
 )

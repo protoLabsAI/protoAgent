@@ -1121,6 +1121,7 @@ def _apply_config_subagents(config) -> None:
     for name, base in bases.items():
         sub = overlays.get(name, {})
         if not sub.get("enabled", True):
+            _sub.DISABLED_SUBAGENT_DEFAULTS[name] = deepcopy(base)
             registry.pop(name, None)
             _disabled_config_subagents.add(name)
             continue
@@ -1129,15 +1130,21 @@ def _apply_config_subagents(config) -> None:
         changes["max_turns"] = sub.get("max_turns") or base.max_turns
         # Preserve the researcher's historical empty-value fallbacks.
         if name == "researcher":
+            from graph.config import model_field_primary
+
+            # A blank scalar/empty chain falls back to the base pin; a set scalar OR an ADR
+            # 0133 list chain is kept verbatim (never `.strip()`-ed — that crashes on a list).
+            sub_model = sub.get("model")
             changes.update(
                 tools=list(sub.get("tools") or base.tools),
-                model=(sub.get("model") or "").strip() or base.model,
+                model=sub_model if model_field_primary(sub_model) else base.model,
             )
         entry = replace(deepcopy(base), **changes)
         for profile in (entry.profile, entry.final_profile):
             if profile and profile not in getattr(config, "model_profiles", {}):
                 warn_once("profile", profile, "Unknown model profile %r; keeping name unresolved")
         registry[name] = entry
+        _sub.DISABLED_SUBAGENT_DEFAULTS.pop(name, None)
         _disabled_config_subagents.discard(name)
 
 

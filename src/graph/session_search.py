@@ -246,6 +246,7 @@ def search_session_summaries(
     limit: int = 5,
     surface: str | None = None,
     exclude_session_id: str = "",
+    exclude_surfaces: tuple[str, ...] = (),
 ) -> list[dict]:
     """Search persisted session content and return bounded attributed excerpts.
 
@@ -270,6 +271,10 @@ def search_session_summaries(
         if selected_surface:
             clauses.append("files.surface = ?")
             params.append(selected_surface)
+        if exclude_surfaces:
+            placeholders = ", ".join("?" for _ in exclude_surfaces)
+            clauses.append(f"files.surface NOT IN ({placeholders})")
+            params.extend(exclude_surfaces)
         if exclude_session_id:
             clauses.append("files.session_id != ?")
             params.append(exclude_session_id)

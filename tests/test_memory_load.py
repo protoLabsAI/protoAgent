@@ -454,6 +454,10 @@ def test_digest_surface_classification(tmp_path):
 
     result = load_prior_sessions(str(tmp_path))
     for sid, surface in cases:
+        assert digest_entry(_sample_session(sid))["surface"] == surface
+        if surface in {"activity", "palette"}:
+            assert sid not in result
+            continue
         line = next(ln for ln in result.split("\n") if sid in ln)
         assert f" {surface} " in line.replace("·", " "), f"{sid} classified wrong: {line}"
     assert "background:job-7" not in result

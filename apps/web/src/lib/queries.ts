@@ -666,3 +666,18 @@ export function usageQuery(provider: string) {
     refetchIntervalInBackground: false,
   });
 }
+
+export type ModelRoleStatus = {
+  role: string; chain: string[]; inherited: boolean; source: string | null;
+  status: string; reason?: string;
+  last_fallback: { time: string; from: string[]; to: string; reason: string } | null;
+};
+// Settings invalidation refreshes config-derived status after saves and resets.
+export const modelRoleStatusQuery = () => queryOptions({
+  queryKey: [...queryKeys.settings, "model-roles"],
+  queryFn: () => request<{ roles: ModelRoleStatus[] }>("/api/config/model-roles"),
+  // Optional history must fail quietly instead of using the shell cold-start retry loop.
+  retry: false,
+  refetchOnMount: "always",
+  refetchInterval: 30000,
+});

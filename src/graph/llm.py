@@ -25,7 +25,14 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import Field
 
 from graph import image_limits, llm_limiter
-from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, ModelRoute, Provider, resolve_model_route
+from graph.config import (
+    PROVIDER_TYPE_OPENAI_COMPAT,
+    LangGraphConfig,
+    ModelRoute,
+    Provider,
+    model_field_primary,
+    resolve_model_route,
+)
 from graph.generation_profile import ResolvedProfile
 from graph.providers.identity import tag_model_provider
 
@@ -961,7 +968,9 @@ GATEWAY_SLOT = "gateway"
 _LEGACY_SLOT_PROVIDERS = (GATEWAY_SLOT, "anthropic-oauth", "openai-codex")
 
 
-def split_slot_target(model_name: str | None, config: LangGraphConfig | None = None) -> tuple[str, str]:
+def split_slot_target(
+    model_name: "str | list[str] | None", config: LangGraphConfig | None = None
+) -> tuple[str, str]:
     """``"openai-codex:gpt-5.6-sol"`` → ``("openai-codex", "gpt-5.6-sol")``.
 
     ``("", name)`` when unqualified, which keeps every existing slot value meaning
@@ -971,8 +980,14 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     `bedrock:anthropic.claude` stays a model name because no such provider is
     registered. Provider ids cannot contain a colon or slash, so the split stays
     unambiguous however many are registered (`acp:` is handled separately, upstream).
+
+    ``model_name`` may be an ADR 0133 role chain (a list) — ``config.model_name`` and the
+    other role slots are now list-capable — in which case its PRIMARY entry is routed (the
+    runtime consumes only the primary until later milestones; ``graph.config.role_chain``
+    reads the whole chain). ``model_field_primary`` collapses scalar/list/None to one id, so
+    a list never reaches the ``.strip()`` below.
     """
-    raw = (model_name or "").strip()
+    raw = model_field_primary(model_name)
     prefix, sep, rest = raw.partition(":")
     if not sep:
         return "", raw
@@ -1077,7 +1092,10 @@ def _build_llm_kwargs(config: LangGraphConfig, connection: Provider | None = Non
     kwargs: dict = {
         "base_url": route.base_url,
         "api_key": route.api_key,
-        "model": config.model_name,
+        # The default-route model id; a list-valued ``model.name`` (ADR 0133) collapses to
+        # its primary entry, which is the model the default route runs until a later
+        # milestone consumes the chain. An explicit ``model_name`` overrides it below.
+        "model": model_field_primary(config.model_name),
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
         # Bound a hung/slow gateway: a per-call timeout + transient-retry cap so a
@@ -1267,6 +1285,13 @@ def create_llm(
     ``max_tokens`` / ``thinking`` / ``reasoning_effort`` / ``chat_template_kwargs`` for
     THIS build; ``None`` or an empty profile leaves the call byte-identical to today.
     """
+    # A model-role value may be an ADR 0133 chain (a list): an aux/goal/compaction/subagent
+    # slot passed as ``model_name``, or (below, when unset) ``config.model_name`` itself.
+    # Collapse to the PRIMARY entry here so every downstream ``.strip()``, profile probe and
+    # provider dispatch sees a scalar — the runtime consumes only the primary until a later
+    # milestone reads the chain. ``model_field_primary`` turns a blank/empty chain into "",
+    # which ``or None`` restores to the "no override → use config.model_name" sentinel.
+    model_name = model_field_primary(model_name) or None
     # Apply the generation profile first, as a dataclasses.replace view of the config, so
     # the dispatch below and every provider builder read the profiled values from `config`
     # unchanged (ADR 0128 S2a). Empty/None is a no-op, so a profile-less call is unaffected.
@@ -1327,8 +1352,10 @@ def create_llm(
         if slot_provider:
             # Report the value we actually resolved, not the (absent) argument — an
             # error reading "slot model None names the 'prod-gateway' connection" tells
-            # the operator nothing about which setting to go and fix.
-            model_name = getattr(config, "model_name", "")
+            # the operator nothing about which setting to go and fix. The PRIMARY entry is
+            # what was resolved (a list ``model.name`` routes on its primary), so name it
+            # rather than the whole chain's repr.
+            model_name = model_field_primary(getattr(config, "model_name", ""))
     if slot_provider:
         # Dispatch on the registered connection's TYPE (ADR 0106). An id no longer
         # implies a kind — `prod-gateway` and `local-vllm` are both openai-compat — so
@@ -1590,12 +1617,26 @@ def create_describe_image_fn(
     Lets a TEXT-only chat model "see" an attached image: the bytes are sent to the configured
     vision model (``knowledge.image_describe_model``) as an OpenAI ``image_url`` block, and its
     description + transcribed text is inlined as context by the attachment pipeline — the same
-    shape as ``create_transcribe_fn`` does for audio. Returns ``None`` when no describe model is
-    configured (images then stay unsupported on non-vision models, with a clear error)."""
-    model = (getattr(config, "image_describe_model", "") or "").strip()
-    if not model:
+    shape as ``create_transcribe_fn`` does for audio. Blank inherits the main chain.
+    Returns ``None`` when the resolved chain cannot read images."""
+    from graph.model_roles import create_role_llm, resolve_chain
+
+    names = resolve_chain(config, "image_describe")
+    if not names:
         return None
-    llm = create_llm(config, model_name=model)
+    explicit = bool(model_field_primary(getattr(config, "image_describe_model", "")))
+    # Availability mirrors the M6 status surface (provider_routes._image_describe_can_read), so
+    # a role Settings reports "ok" always yields a describe fn and one it reports "unavailable"
+    # never does. An EXPLICIT describe model is vision-capable by the field's purpose; a BLANK
+    # one inherits the MAIN chain (ADR 0133 D2) and reads images only when the main model does
+    # (config.model_vision, ADR 0021). Decide from config and build NOTHING when it cannot —
+    # a text-only agent with a blank describe role must not spin up a throwaway main-model
+    # client just to discover it can't see (that extra build is observable to callers that
+    # account for client construction, e.g. subagent profile plumbing).
+    if not explicit and not getattr(config, "model_vision", False):
+        log.warning("[image_describe] role unavailable: inherited main model lacks image support")
+        return None
+    llm = create_role_llm(config, "image_describe")
 
     def _describe(data: bytes, mime: str, filename: str) -> str:
         import base64

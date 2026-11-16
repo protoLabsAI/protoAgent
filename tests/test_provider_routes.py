@@ -425,6 +425,112 @@ def test_list_reports_the_implicit_gateway_lead_as_a_model_name_reference(client
     assert row["in_use_by"] == ["model.name=protolabs/reasoning (implicit gateway)"]
 
 
+# ── ADR 0133: a model slot may be an ordered chain; a connection named by ANY entry ──
+# is in use. `str([...])` would render the chain as "['conn:model']" and the delete guard's
+# startswith check would miss it, so a connection referenced only by a chain entry could be
+# deleted out from under the slot, leaving a dangling route.
+
+
+def _chain_fixture(monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:lead"},
+        routing={"aux_model": ["local-vllm:fast", "prod-gateway:aux"]},  # prod named by the FALLBACK
+    )
+
+
+def test_delete_sees_a_reference_from_a_non_primary_chain_entry(client, monkeypatch):
+    _chain_fixture(monkeypatch)
+    prod = next(p for p in client.get("/api/config/providers").json()["providers"] if p["id"] == "prod-gateway")
+    # The chain entry naming prod is listed, and collapses to ONE structured slot entry
+    # whose value is the matching entry (the scalar shape, since only one entry matched).
+    assert "routing.aux_model=prod-gateway:aux" in prod["in_use_by"]
+    by_key = {e["key"]: e for e in prod["in_use"]}
+    assert by_key["routing.aux_model"] == {
+        "key": "routing.aux_model",
+        "value": "prod-gateway:aux",
+        "kind": "slot",
+        "clearable": True,
+    }
+    # …and the delete is refused, not allowed through as it was when the chain stringified.
+    r = client.delete("/api/config/providers/prod-gateway")
+    assert r.status_code == 409
+    assert "routing.aux_model=prod-gateway:aux" in r.json()["detail"]
+
+
+def test_delete_releases_a_chain_slot_by_repointing_it(client, monkeypatch):
+    _chain_fixture(monkeypatch)
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"routing.aux_model": "local-vllm:aux"}},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "removed": "prod-gateway", "released": ["routing.aux_model"]}
+    # Repointing touches ONLY the entry that named prod-gateway; the healthy local-vllm:fast
+    # primary survives, so the chain becomes [local-vllm:fast, local-vllm:aux] — a repoint
+    # never discards a fallback that pointed elsewhere.
+    assert seen["updates"]["routing"]["aux_model"] == ["local-vllm:fast", "local-vllm:aux"]
+
+
+def test_delete_clears_only_the_matching_chain_entry(client, monkeypatch):
+    _chain_fixture(monkeypatch)  # routing.aux_model = [local-vllm:fast, prod-gateway:aux]
+    seen = _apply_spy(monkeypatch, {})
+    # Clearing (target null) a chain slot drops only the prod-gateway entry; the local-vllm
+    # fallback is kept, so the slot stays a usable one-entry chain rather than being emptied.
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"routing.aux_model": None}},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "removed": "prod-gateway", "released": ["routing.aux_model"]}
+    assert seen["updates"]["routing"]["aux_model"] == ["local-vllm:fast"]
+
+
+@pytest.mark.parametrize(
+    "slot", ["memory.harvest_model", "memory.facts_model", "memory.gist_model", "knowledge.image_describe_model"]
+)
+def test_delete_sees_a_reference_from_a_newly_routed_slot(client, monkeypatch, slot):
+    # ADR 0133 added four route-bearing model roles; the delete in-use guard (`_SLOT_ATTRS`)
+    # must see each, or a connection referenced ONLY by one is reported unused and removed,
+    # leaving a dangling route.
+    section, key = slot.split(".", 1)
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:lead"},  # the lead names local-vllm, so prod is used ONLY by `slot`
+        **{section: {key: "prod-gateway:worker"}},
+    )
+    prod = next(p for p in client.get("/api/config/providers").json()["providers"] if p["id"] == "prod-gateway")
+    assert f"{slot}=prod-gateway:worker" in prod["in_use_by"]
+    r = client.delete("/api/config/providers/prod-gateway")
+    assert r.status_code == 409
+    assert f"{slot}=prod-gateway:worker" in r.json()["detail"]
+
+
+def test_delete_with_releases_that_leave_a_chain_entry_is_refused(client, monkeypatch):
+    _chain_fixture(monkeypatch)
+    seen = _apply_spy(monkeypatch, {})
+    # Clearing the UNRELATED model.name leaves the aux chain's prod entry dangling.
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {}},
+    )
+    assert r.status_code == 409
+    assert "routing.aux_model=prod-gateway:aux" in r.json()["detail"]
+    assert seen.get("calls", 0) == 0
+
+
 def test_delete_with_releases_resolves_every_slot_in_one_apply(client, monkeypatch):
     _install(
         monkeypatch,
@@ -619,6 +725,43 @@ def test_overlay_subagent_model_pin_is_in_use_and_releasable(client, monkeypatch
     assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
 
 
+@pytest.mark.parametrize(
+    "chain,replacement,expected",
+    [
+        (["prod-gateway:sub", "local-vllm:sub-fb"], "local-vllm:sub", ["local-vllm:sub", "local-vllm:sub-fb"]),
+        (["local-vllm:fast", "prod-gateway:sub"], None, ["local-vllm:fast"]),
+    ],
+    ids=["repoint-primary", "clear-fallback"],
+)
+def test_delete_sees_and_releases_only_matching_subagent_chain_entries(client, monkeypatch, chain, replacement, expected):
+    # ADR 0133 M5: either entry protects its provider; release preserves the healthy entry.
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:lead"},
+        subagents={"researcher": {"model": chain}},
+    )
+    prod = next(p for p in client.get("/api/config/providers").json()["providers"] if p["id"] == "prod-gateway")
+    assert "subagents.researcher.model=prod-gateway:sub" in prod["in_use_by"]
+    assert {e["key"]: e for e in prod["in_use"]}["subagents.researcher.model"] == {
+        "key": "subagents.researcher.model",
+        "value": "prod-gateway:sub",
+        "kind": "subagent",
+        "clearable": True,
+    }
+    assert client.delete("/api/config/providers/prod-gateway").status_code == 409
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE", "/api/config/providers/prod-gateway", json={"releases": {"subagents.researcher.model": replacement}}
+    )
+    assert r.status_code == 200
+    assert seen["updates"]["subagents"] == {"researcher": {"model": expected}}
+    assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
+
+
 def test_delete_release_no_host_writes_providers_and_slots_in_one_save(monkeypatch):
     """No host wired: providers (minus pid) AND the released slots land in a SINGLE
     save_yaml_doc, through the same YAML-doc seam the disk fallback already uses."""
@@ -759,3 +902,165 @@ def test_a_blank_connection_key_leaves_the_stored_one_alone():
 
     _, secrets = split_secret_updates({"providers": [{"id": "gateway", "api_key": "   "}]})
     assert secrets == {}
+
+
+# ── GET /api/config/model-roles: each role's chain, inherited flag, last fallback ──
+# (ADR 0133 M6). Read-only status for Settings › Models (M7).
+
+from types import SimpleNamespace  # noqa: E402
+
+from langchain_core.runnables import RunnableLambda  # noqa: E402
+
+from graph import model_roles  # noqa: E402
+
+
+@pytest.fixture
+def clear_fallbacks(monkeypatch):
+    """M2's last-fallback registry is a process-global; isolate it per test."""
+    monkeypatch.setattr(model_roles, "_last_fallbacks", {})
+    monkeypatch.setattr(model_roles, "_streaks", set())
+
+
+class _Transient(Exception):
+    def __init__(self):
+        super().__init__("transient")
+        self.status_code = 429
+
+
+def _record_fallback(monkeypatch, role, field, primary, winner):
+    """Drive one real retryable fallback through M2's seam so it records last_fallback(role).
+
+    The record is keyed by role name alone, independent of the config the route reads — so a
+    fake-model chain here populates the record the status surface then reports for that role.
+    """
+    def _boom(_):
+        raise _Transient()
+
+    models = {primary: RunnableLambda(_boom), winner: RunnableLambda(lambda _: "ok")}
+    monkeypatch.setattr(model_roles, "create_llm", lambda config, model_name, **kw: models[model_name])
+    llm = model_roles.create_role_llm(SimpleNamespace(**{field: [primary, winner]}), role)
+    assert llm.invoke("x") == "ok"
+
+
+def test_model_roles_reports_chain_inherited_and_last_fallback(client, monkeypatch, clear_fallbacks):
+    _install(monkeypatch, **{**BASE, "routing": {"aux_model": ["prod-gateway:a", "prod-gateway:b"]}})
+    roles = {r["role"]: r for r in client.get("/api/config/model-roles").json()["roles"]}
+
+    # The main model's own chain, marked set (not inherited).
+    assert roles["main"]["chain"] == ["prod-gateway:protolabs/reasoning"]
+    assert roles["main"]["inherited"] is False and roles["main"]["source"] == "main"
+    # aux is a two-model chain, set here.
+    assert roles["aux"]["chain"] == ["prod-gateway:a", "prod-gateway:b"]
+    assert roles["aux"]["inherited"] is False and roles["aux"]["source"] == "aux"
+    # A blank aux-family role inherits the WHOLE aux chain (ADR 0133 D2), flagged inherited.
+    assert roles["compaction"]["chain"] == ["prod-gateway:a", "prod-gateway:b"]
+    assert roles["compaction"]["inherited"] is True and roles["compaction"]["source"] == "aux"
+    assert roles["soul_drift_judge"]["chain"] == ["prod-gateway:a", "prod-gateway:b"]
+    assert roles["soul_drift_judge"]["inherited"] is True
+    assert roles["soul_drift_judge"]["source"] == "aux"
+    # No fallback has fired yet.
+    assert roles["aux"]["last_fallback"] is None
+
+    # A retryable failure makes aux answer from its fallback; the status surface reports it,
+    # reason redacted to the exception type/status (never a provider payload).
+    _record_fallback(monkeypatch, "aux", "aux_model", "prod-gateway:a", "prod-gateway:b")
+    roles = {r["role"]: r for r in client.get("/api/config/model-roles").json()["roles"]}
+    record = roles["aux"]["last_fallback"]
+    assert record["from"] == ["prod-gateway:a"] and record["to"] == "prod-gateway:b"
+    assert "prod-gateway:a" in record["reason"] and "429" in record["reason"]
+
+
+def test_model_roles_lists_every_core_role(client, monkeypatch, clear_fallbacks):
+    from graph.config import _ROLE_FIELDS
+
+    _install(monkeypatch, **BASE)
+    roles = client.get("/api/config/model-roles").json()["roles"]
+    assert [r["role"] for r in roles] == list(_ROLE_FIELDS)
+
+
+def test_model_roles_lists_harvest_and_facts_once_each(client, monkeypatch, clear_fallbacks):
+    # ADR 0133 fix: the session-memory passes are ONE role each — the status surface no longer
+    # reports duplicate `memory_harvest`/`memory_facts` aliases alongside `harvest`/`facts`.
+    _install(monkeypatch, **BASE)
+    names = [r["role"] for r in client.get("/api/config/model-roles").json()["roles"]]
+    assert names.count("harvest") == 1
+    assert names.count("facts") == 1
+    assert "memory_harvest" not in names
+    assert "memory_facts" not in names
+
+
+def test_model_roles_image_describe_unavailable_without_vision(client, monkeypatch, clear_fallbacks):
+    # BASE: the main model is set, model.vision defaults off, image_describe is blank.
+    _install(monkeypatch, **BASE)
+    describe = next(
+        r for r in client.get("/api/config/model-roles").json()["roles"] if r["role"] == "image_describe"
+    )
+    # A blank describe model inherits the MAIN chain (D2 exception), but the main model can't
+    # read images (model.vision off), so image description reports itself unavailable.
+    assert describe["chain"] == ["prod-gateway:protolabs/reasoning"]
+    assert describe["inherited"] is True and describe["source"] == "main"
+    assert describe["status"] == "unavailable" and describe["reason"] == "no-vision"
+
+
+def test_model_roles_image_describe_available_when_the_main_model_reads_images(client, monkeypatch, clear_fallbacks):
+    _install(monkeypatch, **{**BASE, "model": {**BASE["model"], "vision": True}})
+    describe = next(
+        r for r in client.get("/api/config/model-roles").json()["roles"] if r["role"] == "image_describe"
+    )
+    # The inherited main model reads images natively → available, no reason reported.
+    assert describe["status"] == "ok" and "reason" not in describe
+    assert describe["inherited"] is True and describe["source"] == "main"
+
+
+def test_model_roles_image_describe_available_with_its_own_chain(client, monkeypatch, clear_fallbacks):
+    _install(monkeypatch, **{**BASE, "knowledge": {"image_describe_model": "prod-gateway:vision"}})
+    describe = next(
+        r for r in client.get("/api/config/model-roles").json()["roles"] if r["role"] == "image_describe"
+    )
+    # A SET describe model is vision-capable by the field's purpose — available and not inherited.
+    assert describe["chain"] == ["prod-gateway:vision"]
+    assert describe["inherited"] is False and describe["source"] == "image_describe"
+    assert describe["status"] == "ok" and "reason" not in describe
+
+
+def test_model_roles_reports_skips_probed_live_without_a_production_build(client, monkeypatch):
+    # The status surface probes buildability from the LIVE config, so a role no production path
+    # ever builds — ``aux`` and the blank aux-family roles that inherit its chain — still reports
+    # the fallback a graph rebuild would drop. The rejected approach recorded skips only when a
+    # role's own ``create_role_llm`` ran, so aux reported ``skipped: []`` here.
+    cfg = _install(monkeypatch, **BASE)
+    cfg.aux_model = ["ok", "bad", "ok2"]
+    broken = True
+
+    def factory(config, model_name, **kwargs):
+        if broken and model_name == "bad":
+            raise ValueError("Missing credentials: secret")
+        return RunnableLambda(lambda _: "answer")
+
+    monkeypatch.setattr(model_roles, "create_llm", factory)
+
+    def role_status(role):
+        response = client.get("/api/config/model-roles")
+        assert response.status_code == 200
+        return next(r for r in response.json()["roles"] if r["role"] == role)
+
+    # No create_role_llm("aux") call — the skip is probed, not read from a prior build.
+    aux = role_status("aux")
+    assert aux["chain"] == ["ok", "bad", "ok2"]
+    assert aux["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+    # The redacted reason is the exception type alone, never the provider payload.
+    assert all("secret" not in str(v) for v in aux["skipped"][0].values())
+    # A blank aux-family role inherits the WHOLE aux chain, so it reports the same drop.
+    compaction = role_status("compaction")
+    assert compaction["inherited"] is True and compaction["source"] == "aux"
+    assert compaction["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+
+    # Fixing credentials clears the skip on the very next read — no rebuild needed.
+    broken = False
+    assert role_status("aux")["skipped"] == []
+    assert role_status("compaction")["skipped"] == []
+
+    # A shorter, fully-buildable chain has nothing to skip.
+    broken = True
+    cfg.aux_model = ["ok", "ok2"]
+    assert role_status("aux")["skipped"] == []

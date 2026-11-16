@@ -63,8 +63,11 @@ class SubagentConfig:
     max_turns: int = 30
     # Per-subagent model override. Blank = fall back to routing.aux_model, then
     # the main model. Pin a subagent that needs heavy reasoning to the main
-    # model even when aux_model routes the others to a cheaper alias.
-    model: str = ""
+    # model even when aux_model routes the others to a cheaper alias. A LIST is an
+    # ADR 0133 fallback chain — the primary, then each fallback on a retryable
+    # provider error (resolved by graph.subagent_model.subagent_pin_chain); a scalar
+    # is a chain of one.
+    model: str | list[str] = ""
     # Whether this subagent's runs are eligible to become a reusable skill-v1
     # artifact via the skill-emission path. When False, emission is suppressed for
     # this subagent even if the caller requests it — set it on subagents whose
@@ -849,6 +852,11 @@ nothing is a correct result. Return a compact audit of changes, proposals, and s
     max_turns=30,
     allow_skill_emission=False,
 )
+
+
+# Definitions removed by enabled:false remain discoverable to operator surfaces,
+# but must never be used for dispatch through SUBAGENT_REGISTRY.
+DISABLED_SUBAGENT_DEFAULTS: dict[str, SubagentConfig] = {}
 
 
 SUBAGENT_REGISTRY: dict[str, SubagentConfig] = {

@@ -175,6 +175,7 @@
         "/guides/react-tauri-ui",
         "/guides/conversations-from-others",
         "/guides/model-connections",
+        "/guides/model-fallback-chains",
         "/guides/model-passthrough",
         "/guides/command-palette",
         "/guides/documents-and-files",
@@ -223,6 +224,10 @@
             {
               "text": "Connect and change models",
               "link": "/guides/model-connections"
+            },
+            {
+              "text": "Model fallback chains",
+              "link": "/guides/model-fallback-chains"
             },
             {
               "text": "Call a model directly",
