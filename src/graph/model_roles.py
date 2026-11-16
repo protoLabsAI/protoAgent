@@ -68,39 +68,58 @@ def last_fallback(role: str) -> dict | None:
         return {**record, "from": list(record["from"])} if record else None
 
 
-def skipped_entries(config, role: str, names: list[str]) -> list[dict]:
-    """Build diagnostics for this config and chain only; never expose provider payloads."""
-    with _lock:
-        record = getattr(config, "_model_role_skips", {}).get(role)
-        if record is None or record[0] != tuple(names):
-            return []
-        return [dict(entry) for entry in record[1]]
+def _try_build(build, name: str) -> tuple[object | None, str | None]:
+    """Build one chain entry: ``(model, None)`` on success, ``(None, reason)`` on failure.
 
-
-def build_fallbacks(config, role: str, names: list[str], build):
-    """Build a chain's tail, keeping names aligned with models after skips.
-
-    The caller builds the primary outside this guard so its failure remains fatal.
-    Diagnostics live on the config, not globally: a failed config transaction cannot
-    overwrite the running graph's status. A rebuild replaces the previous failures.
+    The reason is the exception's class name alone — never its message — so a redacted
+    diagnostic can never leak a provider payload (an api_key echoed in an error string).
     """
-    kept, models, skipped = [], [], []
+    try:
+        return build(name), None
+    except Exception as exc:  # noqa: BLE001 — a backup that can't build is diagnosable, not fatal
+        return None, type(exc).__name__
+
+
+def skipped_entries(config, names: list[str], build=None) -> list[dict]:
+    """Which tail entries of this resolved chain cannot be built against ``config`` right now.
+
+    A pure, read-only probe for the model-role status surface (ADR 0133 M6): it rebuilds each
+    fallback and reports the ones that raise, mirroring the drops :func:`build_fallbacks` makes
+    at graph rebuild. The primary (index 0) is never a skip — its build failure is fatal, so a
+    running graph already has a buildable primary. It mutates no config and logs nothing, so it
+    is correct even for a role that NO production call ever builds — ``aux`` and the blank
+    aux-family roles that inherit its chain — and a repeated GET neither records diagnostics nor
+    re-emits the build-time warnings. ``build`` is injectable so one status pass can memoize
+    construction across the many roles that resolve to the same inherited chain; it defaults to
+    ``create_llm`` for this config.
+    """
+    builder = build or (lambda name: create_llm(config, model_name=name))
+    skipped: list[dict] = []
     for index, name in enumerate(names[1:], start=1):
-        try:
-            model = build(name)
-        except Exception as exc:  # noqa: BLE001 — a backup must not reject the graph
-            reason = type(exc).__name__
-            log.warning("[model-roles] %s[%d] %s skipped: %s", role, index, name, reason)
+        _, reason = _try_build(builder, name)
+        if reason is not None:
             skipped.append({"index": index, "model": name, "reason": reason})
-        else:
+    return skipped
+
+
+def build_fallbacks(role: str, names: list[str], build):
+    """Build a chain's tail, dropping entries that cannot be built (ADR 0133 D6).
+
+    The caller builds the primary OUTSIDE this guard, so a primary build failure stays fatal.
+    A fallback that raises is logged ``[model-roles] <role>[<i>] <model> skipped: <reason>``
+    (reason redacted to the exception type) and dropped; the surviving models keep their order
+    and the returned names stay index-aligned with them. The read-only status surface reports
+    the same drops via :func:`skipped_entries`, which re-probes the live config rather than
+    reading any state recorded here — so a role never built in production still reports them.
+    """
+    kept, models = [], []
+    for index, name in enumerate(names[1:], start=1):
+        model, reason = _try_build(build, name)
+        if reason is None:
             kept.append(name)
             models.append(model)
-    with _lock:
-        # Copy on write: per-turn model overrides may shallow-copy the config.
-        config._model_role_skips = {
-            **getattr(config, "_model_role_skips", {}),
-            role: (tuple(names), skipped),
-        }
+        else:
+            log.warning("[model-roles] %s[%d] %s skipped: %s", role, index, name, reason)
     return kept, models
 
 
@@ -216,7 +235,7 @@ def create_role_llm(config, role: str, **kwargs):
     def _build(name):
         return create_llm(config, model_name=name, **kwargs)
 
-    kept, fallbacks = build_fallbacks(config, role, names, _build)
+    kept, fallbacks = build_fallbacks(role, names, _build)
     if len(names) == 1:
         return primary
     return _RoleLLM(role, [names[0], *kept], [primary, *fallbacks])

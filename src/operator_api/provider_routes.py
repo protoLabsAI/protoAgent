@@ -521,6 +521,17 @@ def _role_status_list(cfg) -> list[dict]:
     from graph import model_roles
     from graph.config import _ROLE_FIELDS, resolve_role_chain
 
+    # Memoize successful fallback builds across the whole pass: the many blank aux-family
+    # roles resolve to the same inherited chain, so probing each one independently would
+    # otherwise reconstruct the same models repeatedly. A build that raises fails before any
+    # network, so it is cheap to re-probe and need not be cached.
+    built: dict[str, object] = {}
+
+    def _probe(name):
+        if name not in built:
+            built[name] = model_roles.create_llm(cfg, model_name=name)
+        return built[name]
+
     out: list[dict] = []
     for role in _ROLE_FIELDS:
         chain, source = resolve_role_chain(cfg, role)
@@ -541,7 +552,7 @@ def _role_status_list(cfg) -> list[dict]:
             "source": source,
             "status": status,
             "last_fallback": model_roles.last_fallback(role),
-            "skipped": model_roles.skipped_entries(cfg, role, chain),
+            "skipped": model_roles.skipped_entries(cfg, chain, build=_probe),
         }
         if reason is not None:
             entry["reason"] = reason
@@ -557,8 +568,9 @@ def register_provider_routes(app) -> None:
         Read-only status for Settings › Models (M7): the chain each role resolves to (D2),
         whether it is set or inherited (and from which parent), the last time a fallback fired
         for it (M2's record, reason redacted to exception type/status), and construction
-        skips (zero-based chain index, model, exception type). Unbuilt roles have no recorded
-        skips. For image_describe, this also reports
+        skips (one-based chain index, model, exception type). Skips are probed live from the
+        current config, so a role with no production build site (e.g. ``aux``) still reports the
+        unbuildable fallbacks its chain would drop. For image_describe, this also reports
         whether any resolved model can read images (`status: "unavailable"`, `reason:
         "no-vision"` when none can)."""
         return {"roles": _role_status_list(_config())}

@@ -1009,7 +1009,11 @@ def test_model_roles_image_describe_available_with_its_own_chain(client, monkeyp
     assert describe["status"] == "ok" and "reason" not in describe
 
 
-def test_model_roles_reports_skips_and_clears_them_on_rebuild(client, monkeypatch):
+def test_model_roles_reports_skips_probed_live_without_a_production_build(client, monkeypatch):
+    # The status surface probes buildability from the LIVE config, so a role no production path
+    # ever builds — ``aux`` and the blank aux-family roles that inherit its chain — still reports
+    # the fallback a graph rebuild would drop. The rejected approach recorded skips only when a
+    # role's own ``create_role_llm`` ran, so aux reported ``skipped: []`` here.
     cfg = _install(monkeypatch, **BASE)
     cfg.aux_model = ["ok", "bad", "ok2"]
     broken = True
@@ -1021,25 +1025,28 @@ def test_model_roles_reports_skips_and_clears_them_on_rebuild(client, monkeypatc
 
     monkeypatch.setattr(model_roles, "create_llm", factory)
 
-    def aux_status():
+    def role_status(role):
         response = client.get("/api/config/model-roles")
         assert response.status_code == 200
-        return next(r for r in response.json()["roles"] if r["role"] == "aux")
+        return next(r for r in response.json()["roles"] if r["role"] == role)
 
-    model_roles.create_role_llm(cfg, "aux")
-    assert aux_status()["chain"] == ["ok", "bad", "ok2"]
-    assert aux_status()["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+    # No create_role_llm("aux") call — the skip is probed, not read from a prior build.
+    aux = role_status("aux")
+    assert aux["chain"] == ["ok", "bad", "ok2"]
+    assert aux["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+    # The redacted reason is the exception type alone, never the provider payload.
+    assert all("secret" not in str(v) for v in aux["skipped"][0].values())
+    # A blank aux-family role inherits the WHOLE aux chain, so it reports the same drop.
+    compaction = role_status("compaction")
+    assert compaction["inherited"] is True and compaction["source"] == "aux"
+    assert compaction["skipped"] == [{"index": 1, "model": "bad", "reason": "ValueError"}]
+
+    # Fixing credentials clears the skip on the very next read — no rebuild needed.
     broken = False
-    from copy import copy
+    assert role_status("aux")["skipped"] == []
+    assert role_status("compaction")["skipped"] == []
 
-    model_roles.create_role_llm(copy(cfg), "aux")
-    assert len(aux_status()["skipped"]) == 1  # a turn override cannot clear live diagnostics
-    model_roles.create_role_llm(cfg, "aux")
-    assert aux_status()["skipped"] == []
+    # A shorter, fully-buildable chain has nothing to skip.
     broken = True
-    model_roles.create_role_llm(cfg, "aux")
     cfg.aux_model = ["ok", "ok2"]
-    assert aux_status()["skipped"] == []
-    replacement = _install(monkeypatch, **BASE)
-    replacement.aux_model = ["ok", "bad", "ok2"]
-    assert aux_status()["skipped"] == []
+    assert role_status("aux")["skipped"] == []

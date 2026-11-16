@@ -680,7 +680,7 @@ def _build_middleware(
     from graph.model_roles import build_fallbacks
 
     fallback_names, fallbacks = build_fallbacks(
-        config, "main", [config.model_name, *(config.routing_fallback_models or [])],
+        "main", [config.model_name, *(config.routing_fallback_models or [])],
         lambda name: create_llm(config, model_name=name),
     )
     if fallbacks:
@@ -1499,7 +1499,7 @@ async def _run_subagent_inner(
     from graph.model_roles import build_fallbacks
 
     sub_fallback_names, sub_fallbacks = build_fallbacks(
-        config, f"subagent:{subagent_type}", [sub_model, *sub_fallback_names],
+        f"subagent:{subagent_type}", [sub_model, *sub_fallback_names],
         lambda name: create_llm(config, model_name=name, **profile_kwargs),
     )
     if sub_fallbacks:
