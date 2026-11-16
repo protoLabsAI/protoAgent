@@ -1,0 +1,146 @@
+"""ADR 0133 D1/D2/D5/D6 — model-role fields accept a scalar or an ordered chain, and
+``graph.config.role_chain`` resolves each role's effective chain: the D2 inheritance for a
+blank role, its exceptions, and the gateway-alias coherence drop.
+
+A bare ``LangGraphConfig(**kw)`` is used throughout: it skips ``from_dict`` (and its scalar
+slot reconcile), so list values survive verbatim — exactly what ``role_chain`` reads.
+"""
+
+import logging
+
+import pytest
+
+from graph.config import LangGraphConfig, role_chain
+
+
+@pytest.fixture(autouse=True)
+def _clean_model_env(monkeypatch):
+    # PROTOAGENT_MODEL would overwrite model_name in __post_init__; OPENAI_API_KEY would make
+    # the native-provider coherence check see a gateway key. Both must be absent here.
+    monkeypatch.delenv("PROTOAGENT_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+
+def _cfg(**kw) -> LangGraphConfig:
+    return LangGraphConfig(**kw)
+
+
+# ── D1: scalar or list; the main chain folds in the legacy fallback tail ──────
+
+
+def test_main_chain_scalar():
+    assert role_chain(_cfg(model_name="a"), "main") == ["a"]
+
+
+def test_main_chain_list_plus_fallback_tail():
+    cfg = _cfg(model_name=["a", "b"], routing_fallback_models=["c"])
+    assert role_chain(cfg, "main") == ["a", "b", "c"]
+
+
+def test_main_chain_scalar_plus_fallback_tail():
+    cfg = _cfg(model_name="a", routing_fallback_models=["b", "c"])
+    assert role_chain(cfg, "main") == ["a", "b", "c"]
+
+
+# ── D2: a set chain is exactly what's listed ──────────────────────────────────
+
+
+def test_set_chain_is_exactly_the_list():
+    cfg = _cfg(model_name="m", aux_model=["x", "y"], compaction_model=["c1", "c2"])
+    assert role_chain(cfg, "aux") == ["x", "y"]
+    assert role_chain(cfg, "compaction") == ["c1", "c2"]
+
+
+def test_single_element_list_stays_a_chain_of_one():
+    assert role_chain(_cfg(model_name=["solo"]), "main") == ["solo"]
+
+
+# ── D2: a blank role inherits its parent's whole chain ────────────────────────
+
+
+def test_blank_aux_inherits_the_whole_main_chain():
+    cfg = _cfg(model_name=["a", "b"], routing_fallback_models=["c"], aux_model="")
+    assert role_chain(cfg, "aux") == ["a", "b", "c"]
+
+
+def test_blank_specific_role_falls_through_aux_to_main():
+    # compaction / goal_eval blank → aux's chain …
+    cfg = _cfg(model_name="m", aux_model=["x", "y"])
+    assert role_chain(cfg, "compaction") == ["x", "y"]
+    assert role_chain(cfg, "goal_eval") == ["x", "y"]
+    # … and when aux is also blank, through to main.
+    bare = _cfg(model_name="m")
+    assert role_chain(bare, "compaction") == ["m"]
+    assert role_chain(bare, "goal_eval") == ["m"]
+
+
+# ── D2 exceptions ─────────────────────────────────────────────────────────────
+
+
+def test_blank_image_describe_stays_off_and_never_inherits():
+    off = _cfg(model_name="m", aux_model="x", image_describe_model="")
+    assert role_chain(off, "image_describe") == []
+    on = _cfg(model_name="m", image_describe_model="vision")
+    assert role_chain(on, "image_describe") == ["vision"]
+
+
+def test_blank_drift_judge_and_memory_select_inherit_aux():
+    cfg = _cfg(model_name="m", aux_model="x")
+    assert role_chain(cfg, "soul_drift_judge") == ["x"]
+    assert role_chain(cfg, "memory_select") == ["x"]
+    # A set chain still wins over the inherited aux.
+    pinned = _cfg(model_name="m", aux_model="x", memory_select_model=["s"])
+    assert role_chain(pinned, "memory_select") == ["s"]
+
+
+# ── D5/D6: harvest → aux, facts → harvest, gist → aux ─────────────────────────
+
+
+def test_memory_passes_default_inheritance():
+    cfg = _cfg(model_name="m", aux_model="aux")
+    assert role_chain(cfg, "memory_harvest") == ["aux"]
+    assert role_chain(cfg, "memory_facts") == ["aux"]  # facts → harvest(blank) → aux
+    assert role_chain(cfg, "memory_gist") == ["aux"]
+
+
+def test_memory_facts_inherits_harvest_not_aux_directly():
+    cfg = _cfg(model_name="m", aux_model="aux", memory_harvest_model=["h1", "h2"])
+    assert role_chain(cfg, "memory_facts") == ["h1", "h2"]
+    # gist still inherits aux, not harvest.
+    assert role_chain(cfg, "memory_gist") == ["aux"]
+
+
+def test_unknown_role_raises():
+    with pytest.raises(ValueError):
+        role_chain(_cfg(), "not_a_role")
+
+
+# ── coherence: an incoherent entry is dropped with a log line ─────────────────
+
+
+def test_incoherent_gateway_alias_is_dropped_with_a_log_line(caplog):
+    # A native-OAuth provider with no gateway key: a bare '/'-alias in a chain can't route,
+    # so it is dropped (the same incoherence from_dict reconciles the scalar slots for).
+    cfg = _cfg(model_provider="anthropic-oauth", api_key="", model_name=["claude-good", "protolabs/reasoning"])
+    with caplog.at_level(logging.WARNING, logger="protoagent.config"):
+        chain = role_chain(cfg, "main")
+    assert chain == ["claude-good"]
+    assert any("dropping incoherent model" in r.getMessage() and "main[1]" in r.getMessage() for r in caplog.records)
+
+
+def test_chain_emptied_by_coherence_drop_is_treated_as_blank_and_inherits():
+    # aux is ALL incoherent aliases → emptied → treated as blank → inherits the main chain.
+    cfg = _cfg(
+        model_provider="anthropic-oauth",
+        api_key="",
+        model_name="claude-main",
+        aux_model=["protolabs/a", "protolabs/b"],
+    )
+    assert role_chain(cfg, "aux") == ["claude-main"]
+
+
+def test_coherent_provider_keeps_gateway_aliases():
+    # The default openai provider is NOT native-OAuth, so nothing is dropped and a gateway
+    # alias is perfectly routable.
+    cfg = _cfg(model_name=["protolabs/reasoning", "protolabs/fast"])
+    assert role_chain(cfg, "main") == ["protolabs/reasoning", "protolabs/fast"]

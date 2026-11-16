@@ -218,6 +218,11 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "memory_whole_store_max_rows": 500,
     "memory_whole_store_weak_score": 0.5,
     "memory_select_model": "",
+    # ADR 0133 D5/D6 session-memory role chains — blank by default (scalar ""), inherit
+    # aux via role_chain. ui_hidden FIELDS, so they round-trip but don't render until M7.
+    "memory_harvest_model": "",
+    "memory_facts_model": "",
+    "memory_gist_model": "",
     "memory_session_retention_days": 90,
     "memory_session_max_files": 500,
     "history_retention_dry_run": True,
@@ -1348,6 +1353,48 @@ def test_migrated_null_endpoint_round_trip(tmp_path, monkeypatch):
     reloaded = LangGraphConfig.from_yaml(path)
     assert reloaded.providers_declared is False
     assert reloaded.provider_by_id("gateway").base_url is None
+
+
+def test_model_role_scalar_and_list_both_load_and_round_trip(tmp_path):
+    """ADR 0133 D1: a model-role field loads from a YAML scalar OR a YAML list, and each
+    round-trips to the SAME shape — a scalar stays a scalar, a list stays a list (even a
+    one-element list, which is not collapsed to a scalar). Covers the new memory passes too."""
+    scalar = LangGraphConfig.from_yaml(_write_yaml(tmp_path, "model:\n  name: solo-model\n"))
+    assert scalar.model_name == "solo-model"  # scalar unchanged — today's shape
+
+    list_dir = tmp_path / "chain"
+    list_dir.mkdir()
+    chained = LangGraphConfig.from_yaml(
+        _write_yaml(
+            list_dir,
+            """
+            model:
+              name:
+                - primary
+                - backup
+            routing:
+              aux_model:
+                - aux-a
+                - aux-b
+            memory:
+              harvest_model: [solo-harvest]
+            """,
+        )
+    )
+    assert chained.model_name == ["primary", "backup"]
+    assert chained.aux_model == ["aux-a", "aux-b"]
+    assert chained.memory_harvest_model == ["solo-harvest"]  # one-element list stays a list
+
+    # config_to_dict -> apply -> from_yaml preserves each field's shape exactly.
+    for cfg in (scalar, chained):
+        doc: dict = {}
+        apply_updates_to_yaml(doc, config_to_dict(cfg))
+        out = tmp_path / "rt.yaml"
+        save_yaml_doc(doc, out)
+        reloaded = LangGraphConfig.from_yaml(str(out))
+        assert reloaded.model_name == cfg.model_name
+        assert reloaded.aux_model == cfg.aux_model
+        assert reloaded.memory_harvest_model == cfg.memory_harvest_model
 
 
 def test_any_subagent_overlay_roundtrip(tmp_path):

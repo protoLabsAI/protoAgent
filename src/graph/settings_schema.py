@@ -83,6 +83,26 @@ ACP_MODEL_OPTIONS = acp_runtime_options()
 # does NOT enforce it — a custom gateway provider label still saves.
 _PROVIDER_OPTIONS = ["openai", "anthropic-oauth", "openai-codex"]
 
+# Model-role slots that accept a SCALAR (a chain of one) or an ordered LIST (ADR 0133 D1).
+# They render as ``string_list`` (an ordered chain editor) but — unlike a genuine list field
+# such as routing.fallback_models / model.favorites — a bare string stays valid on save, so a
+# legacy scalar value still round-trips through the write path. ``validate_flat`` and the
+# config drift guard both key off this set. Blank defaults stay strings (no behavior change);
+# the config layer resolves the real chain via ``graph.config.role_chain``.
+MODEL_ROLE_CHAIN_KEYS: frozenset[str] = frozenset(
+    {
+        "model.name",
+        "routing.aux_model",
+        "compaction.model",
+        "goal.eval_model",
+        "memory.select_model",
+        "memory.harvest_model",
+        "memory.facts_model",
+        "memory.gist_model",
+        "knowledge.image_describe_model",
+    }
+)
+
 
 # Ordered registry. Section order here is the order the UI renders groups in.
 FIELDS: list[Field] = [
@@ -123,9 +143,11 @@ FIELDS: list[Field] = [
         "model.name",
         "model_name",
         "Primary model",
-        "select",
+        "string_list",
         "Model & runtime",
-        "The main reasoning model. Names its connection, like every other slot (ADR 0106).",
+        "The main reasoning model, or an ordered fallback chain (ADR 0133) — the primary, then "
+        "each fallback in turn (the legacy routing.fallback_models tail still appends). A single "
+        "entry is the ordinary case. Names its connection, like every other slot (ADR 0106).",
         # Qualified, cross-connection options — the lead model is no longer special
         # (ADR 0106). It used to draw from `models`, the bare list of ONE provider's ids,
         # because the main model belonged to `model.provider` by definition; now it can
@@ -381,11 +403,11 @@ FIELDS: list[Field] = [
         "routing.aux_model",
         "aux_model",
         "Auxiliary (fast) model",
-        "string",
+        "string_list",
         "Routing",
-        "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the "
-        "main model. Prefix another provider to send these calls there instead — "
-        "e.g. gateway:protolabs/fast, openai-codex:gpt-5.6-sol.",
+        "Cheap/fast alias for summarization, goal-verification, and subagents — a single model or "
+        "an ordered fallback chain (ADR 0133). Blank = use the main model. Prefix another provider "
+        "to send these calls there instead — e.g. gateway:protolabs/fast, openai-codex:gpt-5.6-sol.",
         options_source="slot_models",
         scope="host",
     ),
@@ -450,9 +472,9 @@ FIELDS: list[Field] = [
         "compaction.model",
         "compaction_model",
         "Summarizer model",
-        "string",
+        "string_list",
         "Compaction",
-        "Blank = routing.aux_model, then the main model.",
+        "A single model or an ordered fallback chain (ADR 0133). Blank = routing.aux_model, then the main model.",
         options_source="slot_models",
     ),
     # In-history tool-result pruning (#2782, ADR 0101 D3) — same category as
@@ -513,9 +535,9 @@ FIELDS: list[Field] = [
         "goal.eval_model",
         "goal_eval_model",
         "Verifier model",
-        "string",
+        "string_list",
         "Goal mode",
-        "Blank = routing.aux_model, then the main model.",
+        "A single model or an ordered fallback chain (ADR 0133). Blank = routing.aux_model, then the main model.",
         options_source="slot_models",
     ),
     # ── Watches ──────────────────────────────────────────────────────────────
@@ -877,11 +899,49 @@ FIELDS: list[Field] = [
         "memory.select_model",
         "memory_select_model",
         "Memory selection model",
-        "string",
+        "string_list",
         "Memory",
-        "Model for memory selection. Falls back to routing.aux_model, then the main model. "
+        "Model for memory selection — a single model or an ordered fallback chain (ADR 0133). "
+        "Falls back to routing.aux_model, then the main model. "
         "Whole-store selection stays off when this resolves to the main model.",
         options_source="slot_models",
+    ),
+    # Session-memory LLM passes (ADR 0133 D5/D6) — each a single model or an ordered fallback
+    # chain. ui_hidden for now: they round-trip through config_to_dict / the YAML writer so the
+    # config shape is live, but the dedicated editor lands with the rest of the role-chain UI
+    # (M7). Inheritance (role_chain): harvest → aux, facts → harvest, gist → aux.
+    Field(
+        "memory.harvest_model",
+        "memory_harvest_model",
+        "Memory harvest model",
+        "string_list",
+        "Memory",
+        "Model for the session-end conversation-harvest pass — a single model or an ordered "
+        "fallback chain (ADR 0133). Blank = routing.aux_model, then the main model.",
+        options_source="slot_models",
+        ui_hidden=True,
+    ),
+    Field(
+        "memory.facts_model",
+        "memory_facts_model",
+        "Memory facts model",
+        "string_list",
+        "Memory",
+        "Model for the session-end fact-extraction pass — a single model or an ordered fallback "
+        "chain (ADR 0133). Blank = memory.harvest_model, then routing.aux_model, then the main model.",
+        options_source="slot_models",
+        ui_hidden=True,
+    ),
+    Field(
+        "memory.gist_model",
+        "memory_gist_model",
+        "Memory gist model",
+        "string_list",
+        "Memory",
+        "Model for the short session-gist summary — a single model or an ordered fallback chain "
+        "(ADR 0133). Blank = routing.aux_model, then the main model.",
+        options_source="slot_models",
+        ui_hidden=True,
     ),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
@@ -947,14 +1007,15 @@ FIELDS: list[Field] = [
         "knowledge.image_describe_model",
         "image_describe_model",
         "Image description model",
-        "string",
+        "string_list",
         "Knowledge",
         "Vision-capable gateway model used to DESCRIBE attached images when the chat model "
-        "can't see them (text-only). The screenshot is sent to this model; its description + "
-        "any transcribed text is inlined as context. Blank disables image attachments on "
-        "non-vision models (they error with a clear message). Needs a vision model (e.g. "
-        "protolabs/smart); the chat model can stay text-only.",
-        options_source="models",
+        "can't see them (text-only) — a single model or an ordered fallback chain (ADR 0133). "
+        "The screenshot is sent to this model; its description + any transcribed text is inlined "
+        "as context. Blank disables image attachments on non-vision models (they error with a "
+        "clear message) — unlike the other slots, a blank describe model is never inherited. "
+        "Needs a vision model (e.g. protolabs/smart); the chat model can stay text-only.",
+        options_source="slot_models",
         restart=True,
     ),
     Field(
@@ -2746,8 +2807,14 @@ def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> t
                     f"/<subagent> runs report progress every {PROGRESS_MIN_INTERVAL_S:g}s, so a "
                     "shorter window would stop them mid-work"
                 )
-        if f.type == "string_list" and not (isinstance(val, list) and all(isinstance(x, str) for x in val)):
-            return False, f"{key} must be a list of strings"
+        if f.type == "string_list":
+            # A model-role chain (ADR 0133) accepts a SCALAR (a chain of one) or a list; a
+            # genuine list field accepts only a list. Either way every entry must be a string.
+            if key in MODEL_ROLE_CHAIN_KEYS and isinstance(val, str):
+                pass
+            elif not (isinstance(val, list) and all(isinstance(x, str) for x in val)):
+                suffix = " (or a single model string)" if key in MODEL_ROLE_CHAIN_KEYS else ""
+                return False, f"{key} must be a list of strings{suffix}"
         if f.type == "select" and f.options and val not in f.options:
             return False, f"{key} must be one of {f.options}"
         # `path` saves a plain string like `string` does — the picker is a rendering
