@@ -808,7 +808,7 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   // renders as a list of datalist comboboxes — one per value plus a trailing
   // blank row to add — so you pick models from the gateway (or type any alias),
   // ordered. Clearing a row removes it.
-  if (field.type === "string_list" && field.options.length) {
+  if ((field.type === "string_list" || field.type === "model_chain") && field.options.length) {
     // A scalar lead (model.name: "…") coerces to a one-item chain so the role renders its
     // configured model rather than a blank row (ADR 0133); see settingListItems.
     const items = settingListItems(value);
@@ -851,7 +851,7 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
       </div>
     );
   }
-  if (field.type === "string_list") {
+  if (field.type === "string_list" || field.type === "model_chain") {
     return <StringListInput id={id} value={value} onChange={onChange} />;
   }
   if (field.type === "text") {

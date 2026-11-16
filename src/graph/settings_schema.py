@@ -28,7 +28,7 @@ class Field:
     key: str  # dotted YAML path, e.g. "model.temperature"
     attr: str  # LangGraphConfig attribute holding the value
     label: str
-    type: str  # string|text|number|bool|select|string_list|secret|path
+    type: str  # string|text|number|bool|select|string_list|model_chain|secret|path
     section: str
     description: str = ""
     restart: bool = False  # True = needs a full process restart (not hot-reload)
@@ -71,6 +71,9 @@ class Field:
     # refused a write to it at the config write path — see `credential_plane_keys`, which
     # also matches whole sections by prefix (`CREDENTIAL_PLANE_SECTIONS`).
     credential_plane: bool = False
+    role: str = ""
+    subhead: str = ""
+    inherits: str = ""
 
 
 # ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for the
@@ -84,7 +87,7 @@ ACP_MODEL_OPTIONS = acp_runtime_options()
 _PROVIDER_OPTIONS = ["openai", "anthropic-oauth", "openai-codex"]
 
 # Model-role slots that accept a SCALAR (a chain of one) or an ordered LIST (ADR 0133 D1).
-# They render as ``string_list`` (an ordered chain editor) but — unlike a genuine list field
+# They render as ``model_chain`` but — unlike a genuine list field
 # such as routing.fallback_models / model.favorites — a bare string stays valid on save, so a
 # legacy scalar value still round-trips through the write path. ``validate_flat`` and the
 # config drift guard both key off this set. Blank defaults stay strings (no behavior change);
@@ -92,6 +95,7 @@ _PROVIDER_OPTIONS = ["openai", "anthropic-oauth", "openai-codex"]
 MODEL_ROLE_CHAIN_KEYS: frozenset[str] = frozenset(
     {
         "model.name",
+        "soul.drift.judge.model",
         "routing.aux_model",
         "compaction.model",
         "goal.eval_model",
@@ -2243,6 +2247,35 @@ for _f in FIELDS:
     if _f.key in _KNOWLEDGE_SUBSECTION:
         _f.section = _KNOWLEDGE_SUBSECTION[_f.key]
 
+# Legacy declarations still round-trip; the role editor owns their UI.
+for _f in FIELDS:
+    if _f.key in MODEL_ROLE_CHAIN_KEYS or _f.key == "routing.fallback_models":
+        _f.ui_hidden = True
+
+_MODEL_ROLES = (
+    ("main", "model.name", "model_name", "Main", "Main and aux", ""),
+    ("aux", "routing.aux_model", "aux_model", "Auxiliary", "Main and aux", "main"),
+    ("compaction", "compaction.model", "compaction_model", "Compaction", "Memory", "aux"),
+    ("harvest", "memory.harvest_model", "memory_harvest_model", "Harvest", "Memory", "aux"),
+    ("facts", "memory.facts_model", "memory_facts_model", "Facts", "Memory", "harvest"),
+    ("memory_select", "memory.select_model", "memory_select_model", "Memory select", "Memory", "aux"),
+    ("memory_gist", "memory.gist_model", "memory_gist_model", "Chat gist", "Memory", "aux"),
+    ("goal_eval", "goal.eval_model", "goal_eval_model", "Goal eval", "Checks", "aux"),
+    ("soul_drift_judge", "soul.drift.judge.model", "soul_drift_judge_model", "Drift judge", "Checks", "aux"),
+    ("image_describe", "knowledge.image_describe_model", "image_describe_model", "Image describe", "Media", "main"),
+)
+_legacy_fields = {f.key: f for f in FIELDS}
+FIELDS.extend(
+    Field(
+        key, attr, label, "model_chain", "Model roles",
+        "Models to try in order." if not parent else f"Models to try in order; blank inherits {parent}.",
+        options_source="slot_models",
+        scope=_legacy_fields[key].scope if key in _legacy_fields else "agent",
+        role=role, subhead=subhead, inherits=parent,
+    )
+    for role, key, attr, label, subhead, parent in _MODEL_ROLES
+)
+
 _BY_KEY = {f.key: f for f in FIELDS}
 _SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
 _HOST_KEYS = {f.key for f in FIELDS if getattr(f, "scope", "agent") == "host"}
@@ -2352,7 +2385,7 @@ def is_secret_key(key: str) -> bool:
 # "the golden test went red". Add a Field per knob instead; that is the fix in nearly every
 # case. If you do add one, say here why the shape defeats Field.
 SETTINGS_EXEMPT_SECTIONS: tuple[str, ...] = (
-    "subagents",  # subagents.researcher — nested per-subagent dicts, emitted by config_io §B
+    "subagents",  # nested per-subagent dicts, emitted by config_io §B
     "plugins",  # plugins.* install/enable knobs, emitted by config_io §B
     "lifecycle_hooks",  # ADR 0074 — a LIST of hook dicts
     "projects",  # ADR 0095 — a LIST of managed-project dicts
@@ -2452,6 +2485,7 @@ _SECTION_CATEGORY = {
     # connection, sampling, and cache. The runtime lives here, not in Behavior, because it
     # decides whether the model config is even required (create_llm's ACP-only fallback).
     "Model & runtime": "Model",
+    "Model roles": "Model",
     "Model passthrough": "Model",
     "Favorite models": "Model",  # /model quick-switch pins (#1957)
     "Routing": "Model",
@@ -2633,7 +2667,13 @@ def build_schema(
             # the result into every field whose options come from "models".
             "options_source": f.options_source,
         }
-        if f.type == "secret":
+        if f.type == "model_chain":
+            from graph.config import _as_chain
+
+            entry.update(role=f.role, subhead=f.subhead, inherits=f.inherits)
+            entry["value"] = _as_chain(current)
+            entry["default"] = _as_chain(getattr(defaults, f.attr, None))
+        elif f.type == "secret":
             entry["value"] = ""
             entry["is_set"] = bool(current)
         else:
@@ -2807,7 +2847,7 @@ def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> t
                     f"/<subagent> runs report progress every {PROGRESS_MIN_INTERVAL_S:g}s, so a "
                     "shorter window would stop them mid-work"
                 )
-        if f.type == "string_list":
+        if f.type in {"string_list", "model_chain"}:
             # A model-role chain (ADR 0133) accepts a SCALAR (a chain of one) or a list; a
             # genuine list field accepts only a list. Either way every entry must be a string.
             if key in MODEL_ROLE_CHAIN_KEYS and isinstance(val, str):
@@ -2853,6 +2893,8 @@ def nest_updates(updates: dict[str, Any]) -> dict[str, Any]:
     for key, val in updates.items():
         if key in _SECRET_KEYS and (val is None or val == ""):
             continue  # leave an existing secret untouched
+        if key in MODEL_ROLE_CHAIN_KEYS and key != "model.name" and val == []:
+            val = ""  # clearing a role restores inheritance
         cursor = nested
         parts = key.split(".")
         for part in parts[:-1]:
