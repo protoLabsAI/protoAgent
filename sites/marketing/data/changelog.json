@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.244.1",
+    "date": "2026-11-16",
+    "changes": [
+      "Conversation task summaries (#5329).",
+      "Chat status rail uses Instructions (#5327).",
+      "Inbox items carry a display-only origin (#5330).",
+      "Work origin resolution (#5332).",
+      "Stall reminders retain their conversation origin (#5331).",
+      "From others retention (#5334).",
+      "Tasks inherit their originating conversation (#5333).",
+      "Thread reader title tooltip (#5337).",
+      "Follow-up backoff now survives a restart (#5336).",
+      "ACP delegation transcript fallback (#5335).",
+      "Every way a task closes now gets the same self-improvement review, once per completion (#5325).",
+      "Align instruction chip wording in the design docs (#5328)."
+    ]
+  },
+  {
     "version": "v0.244.0",
     "date": "2026-11-15",
     "changes": [

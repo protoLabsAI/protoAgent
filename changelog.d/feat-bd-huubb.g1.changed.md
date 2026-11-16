@@ -1,1 +1,0 @@
-- **Chat status rail uses Instructions.** The instructions chip and its accessible labels now match the terminology in Work, while retaining the number-only phone display.

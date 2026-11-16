@@ -1,1 +1,0 @@
-- **Work origin resolution.** Add a read-only resolver that follows inbox, scheduled-job and background-work provenance back to the conversation that caused it, with bounded hops and empty origins for unknown or unreadable records.

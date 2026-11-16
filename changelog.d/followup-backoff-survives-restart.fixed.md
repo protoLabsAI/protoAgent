@@ -1,1 +1,0 @@
-- **Follow-up backoff now survives a restart.** Fixes #5299 — quiet recurring follow-up deadlines are persisted in the existing scheduler database. Elapsed deadlines are retained so the still-waiting card isn't repeated, and cleared when the operator answers or edits the job. Recreated jobs start with a fresh generation; a failed store load does not poison the registry.
