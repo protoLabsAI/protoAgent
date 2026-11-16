@@ -91,8 +91,14 @@ def _referencing_view(cfg) -> dict:
     DELETE can apply its `releases` in memory and re-run the walk without ever touching
     the live config. Subagent tiers are typed fields (`cfg.researcher.model`), so read
     them through the registry the coherence checker already uses rather than a `subagents`
-    dict the config never exposes."""
-    from graph.config import _SUBAGENT_MODEL_SLOTS
+    dict the config never exposes.
+
+    A model slot is now list-capable (ADR 0133 role chains), so each is read as its ORDERED
+    CHAIN (`_as_chain`): a scalar becomes a one-entry list, a stored list stays itself. The
+    walk below then tests EVERY entry, so a connection named by any chain entry still counts
+    as in use — otherwise `str(['conn:model'])` would stringify to `"['conn:model']"` and the
+    delete guard would miss the reference, leaving a dangling route."""
+    from graph.config import _SUBAGENT_MODEL_SLOTS, _as_chain
 
     # Typed tiers (`cfg.researcher.model`) PLUS every `subagents.<name>.model` overlay pin
     # (ADR 0128 S1b). A connection named ONLY by an overlay subagent is in use exactly as a
@@ -106,7 +112,7 @@ def _referencing_view(cfg) -> dict:
         subagents[name] = str(model or "")
 
     return {
-        "slots": {label: str(getattr(cfg, attr, "") or "") for label, attr in _SLOT_ATTRS},
+        "slots": {label: _as_chain(getattr(cfg, attr, "")) for label, attr in _SLOT_ATTRS},
         "favorites": [str(f) for f in (getattr(cfg, "model_favorites", []) or [])],
         "subagents": subagents,
         "model_provider": str(getattr(cfg, "model_provider", "") or "").lower(),
@@ -121,27 +127,39 @@ def _walk_references(view: dict, pid: str) -> tuple[list[str], list[dict]]:
     never clearable (the lead model must always resolve); every other slot is. Favorites
     collapse to a SINGLE entry whose ``value`` is the list of matching favorites, while the
     display strings still list one per favorite (the shape the 409 detail has always used).
+
+    A slot value is an ORDERED CHAIN (ADR 0133) — a one-entry list for a scalar. EVERY entry
+    is tested, so any chain entry naming ``pid`` counts; the display strings list one per
+    matching entry (the favorites shape), and the slot collapses to ONE structured entry
+    whose ``value`` is the matching entry for a chain-of-one (today's scalar shape, byte for
+    byte) or the list of matching entries for a longer chain.
     """
     strings: list[str] = []
     entries: list[dict] = []
     for label, _attr in _SLOT_ATTRS:
-        value = view["slots"][label]
-        if value.lower().startswith(f"{pid}:"):
-            strings.append(f"{label}={value}")
-            entries.append({"key": label, "value": value, "kind": "slot", "clearable": label != "model.name"})
-        elif (
+        chain = view["slots"][label]
+        implicit_gateway = (
             label == "model.name"
             and pid == "gateway"
-            and value
-            and ":" not in value
             and view["model_provider"] not in {"anthropic-oauth", "openai-codex"}
-        ):
-            # A pre-registry config's bare lead model implicitly runs through the migrated
-            # `gateway` connection. Treat that dependency exactly like the qualified
-            # `gateway:<model>` form; otherwise Settings can claim there are no connections
-            # while the legacy gateway is still serving the agent.
-            strings.append(f"{label}={value} (implicit gateway)")
-            entries.append({"key": label, "value": value, "kind": "slot", "clearable": False})
+        )
+        matched: list[str] = []
+        for value in chain:
+            if value.lower().startswith(f"{pid}:"):
+                strings.append(f"{label}={value}")
+                matched.append(value)
+            elif implicit_gateway and value and ":" not in value:
+                # A pre-registry config's bare lead model implicitly runs through the migrated
+                # `gateway` connection. Treat that dependency exactly like the qualified
+                # `gateway:<model>` form; otherwise Settings can claim there are no connections
+                # while the legacy gateway is still serving the agent.
+                strings.append(f"{label}={value} (implicit gateway)")
+                matched.append(value)
+        if matched:
+            # `model.name` is never clearable (explicit OR implicit-gateway lead); every
+            # other slot is. A chain-of-one keeps the scalar `value` shape exactly.
+            value = matched[0] if len(matched) == 1 else matched
+            entries.append({"key": label, "value": value, "kind": "slot", "clearable": label != "model.name"})
     matched_favs = [f for f in view["favorites"] if f.lower().startswith(f"{pid}:")]
     for fav in matched_favs:
         strings.append(f"model.favorites={fav}")
@@ -330,7 +348,10 @@ def _remaining_after_releases(cfg, pid: str, releases: dict) -> list[str]:
             name = key[len("subagents.") : -len(".model")]
             sim["subagents"][name] = "" if target is None else str(target)
         elif key in sim["slots"]:
-            sim["slots"][key] = "" if target is None else str(target)
+            # Slot values are chains (lists) in the view; a release repoints or clears the
+            # WHOLE slot (chain editing arrives in a later ADR-0133 milestone), so the
+            # re-walked slot is an empty chain or a one-entry chain at the new target.
+            sim["slots"][key] = [] if target is None else [str(target)]
     return _walk_references(sim, pid)[0]
 
 

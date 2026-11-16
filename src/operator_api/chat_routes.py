@@ -630,6 +630,40 @@ async def _conversation_index(engine, *, before, cutoff, pool_cap: int):
     return summaries, openings
 
 
+async def _session_started_incognito(session_id: str) -> bool:
+    """True when this chat was OPENED incognito (ADR 0069 D3b) — read from the per-message
+    ``incognito`` stamp the executor keeps on its stored turns (``_TRANSCRIPT_METADATA_KEYS``),
+    off the OPENING turn, the same oldest-first signal ``_is_private_history`` and the
+    conversations index read to keep a private thread unlisted. Scoped to ``incognito`` alone
+    (not the sibling ``hidden`` mark, which also tags internal/system threads): only an incognito
+    chat forces the forget (ADR 0132 D5). A thread merely resumed incognito mid-way is not one
+    started that way, so it does not qualify.
+
+    Best-effort and read-only: no task engine, no stored turn, or a failed read defaults to
+    False (honour the request), exactly like the other opportunistic task-store reads here."""
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        return False
+    try:
+        from sqlalchemy import select
+
+        from a2a.server.tasks.database_task_store import TaskModel
+
+        async with engine.begin() as conn:
+            oldest = _oldest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id == session_id)
+            row = (await conn.execute(select(oldest.c.history).where(oldest.c.rn == 1))).first()
+    except Exception as exc:  # noqa: BLE001 — detection is opportunistic, like the session index
+        log.warning("[chat] incognito detection failed for %s: %s", session_id, exc)
+        return False
+    if row is None:
+        return False
+    for msg in row.history or []:
+        md = msg.get("metadata") if isinstance(msg, dict) else None
+        if isinstance(md, dict) and md.get("incognito"):
+            return True
+    return False
+
+
 class ChatRequest(BaseModel):
     # Omitted/blank session_id → a unique per-call id is minted (ADR 0069 D4).
     # The old literal "api-default" pooled every anonymous caller into ONE
@@ -1154,6 +1188,14 @@ def register_chat_routes(app, ui: str) -> None:
         # contend for the checkpoint DB write lock and one fails "database is locked". The
         # retry now waits and finds nothing left to remove.
         async with _delete_lock(session_id):
+            # ADR 0132 D5 (S2): deleting OR clearing an incognito chat always forgets its
+            # memory rows, whatever the request asked. S1 stops new incognito writes; before
+            # it, memory_save/knowledge_ingest wrote freely from incognito turns, so forcing
+            # forget here cleans up anything left behind. Decided before the FORGETS_IN_FLIGHT
+            # branch so a forced forget registers in flight like any other (the orphaned-forget
+            # sweep must never settle a forget a running delete still owns).
+            if not forget and await _session_started_incognito(session_id):
+                forget = True
             if not forget:
                 return await _delete_session(session_id, harvest=harvest, retire=retire, forget=False)
             _harvest.FORGETS_IN_FLIGHT.add(session_id)

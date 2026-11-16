@@ -330,7 +330,7 @@ def _model_role(value, default):
     absent falls back to ``default``. A non-string scalar passes through as today's
     ``data.get(...)`` did, so no existing scalar behavior changes."""
     if isinstance(value, (list, tuple)):
-        return [s for s in (str(v).strip() for v in value if v is not None) if s]
+        return _as_chain(value)  # ONE list-normalizer, so the two can never drift apart
     return default if value is None else value
 
 

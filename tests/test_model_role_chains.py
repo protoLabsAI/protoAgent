@@ -144,3 +144,40 @@ def test_coherent_provider_keeps_gateway_aliases():
     # alias is perfectly routable.
     cfg = _cfg(model_name=["protolabs/reasoning", "protolabs/fast"])
     assert role_chain(cfg, "main") == ["protolabs/reasoning", "protolabs/fast"]
+
+
+# ── Runtime readers tolerate a list-valued slot (ADR 0133 M1 crash fixes) ─────
+#
+# M1 made the slots list-capable. These readers still return a single primary id (chain-
+# aware fan-out is a later milestone), but they must not crash on the old `.strip()` now
+# that a slot can be a list.
+
+
+def test_resolve_aux_model_takes_the_primary_of_a_list_slot():
+    from graph.agent import _resolve_aux_model
+
+    # routing.aux_model as a chain → its primary
+    assert _resolve_aux_model(_cfg(model_name="m", aux_model=["fast", "slow"])) == "fast"
+    # a list `specific` override (compaction passes config.compaction_model) wins, primary used
+    assert _resolve_aux_model(_cfg(model_name="m", aux_model="aux"), ["comp1", "comp2"]) == "comp1"
+    # both blank → None (→ the main model), unchanged
+    assert _resolve_aux_model(_cfg(model_name="m")) is None
+
+
+def test_resolve_claude_model_name_resolves_the_primary_of_a_list_lead():
+    from graph.providers.anthropic_oauth import resolve_claude_model_name
+
+    cfg = _cfg(model_provider="anthropic-oauth", api_key="", model_name=["claude-opus-4-6", "claude-sonnet-4-5"])
+    assert resolve_claude_model_name(cfg) == "claude-opus-4-6"
+    # an override chain still wins over the lead
+    assert resolve_claude_model_name(cfg, ["claude-haiku-4-5"]) == "claude-haiku-4-5"
+
+
+def test_resolve_claude_model_name_rejects_an_all_alias_list_lead():
+    from graph.providers.anthropic_oauth import resolve_claude_model_name
+
+    # Every entry is a '/'-gateway alias — meaningless to Anthropic. The primary trips the
+    # existing lead-coherence guard (a clear RuntimeError), not a `.strip()` crash on a list.
+    cfg = _cfg(model_provider="anthropic-oauth", api_key="", model_name=["protolabs/reasoning"])
+    with pytest.raises(RuntimeError):
+        resolve_claude_model_name(cfg)
