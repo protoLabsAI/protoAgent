@@ -56,6 +56,24 @@ def test_close_sets_terminal_fields(store):
     assert out["status"] == "closed" and out["closed_at"] and out["close_reason"] == "obsolete"
 
 
+@pytest.mark.parametrize("status", ["open", "in_progress", "blocked", "waiting", "deferred", "bogus", "closed", None])
+def test_reopening_clears_previous_dismissal_before_update_close(store, status):
+    issue = store.create("Release")
+    closed = store.close(issue["id"], reason="dismissed: No longer needed")
+    updated = store.update(issue["id"], status=status, title="Reconsidered release")
+    if status in ("closed", None):
+        # Editing a closed task must preserve its recorded outcome.
+        assert updated["close_reason"] == closed["close_reason"]
+        assert updated["closed_at"] == closed["closed_at"]
+    else:
+        assert not updated["close_reason"]
+        assert updated["closed_at"] is None
+        completed = store.update(issue["id"], status="closed")
+        assert completed["status"] == "closed"
+        assert not completed["close_reason"]
+        assert store.get(issue["id"])["close_reason"] == completed["close_reason"]
+
+
 def test_update_and_close_unknown_raise(store):
     with pytest.raises(KeyError):
         store.update("task-999", status="open")
