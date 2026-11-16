@@ -145,9 +145,9 @@ async def test_concurrent_requests_do_not_mix_failed_models(monkeypatch):
     assert record["to"] == "third"
 
 
-def test_empty_role_does_not_enable_main(monkeypatch):
+def test_empty_role_reports_no_configured_models():
     with pytest.raises(ValueError, match="no configured models"):
-        model_roles.create_role_llm(SimpleNamespace(model_name="primary"), "image_describe")
+        model_roles.create_role_llm(SimpleNamespace(model_name=""), "image_describe")
 
 
 @pytest.mark.parametrize("partial", [False, True])

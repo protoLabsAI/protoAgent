@@ -1617,15 +1617,26 @@ def create_describe_image_fn(
     Lets a TEXT-only chat model "see" an attached image: the bytes are sent to the configured
     vision model (``knowledge.image_describe_model``) as an OpenAI ``image_url`` block, and its
     description + transcribed text is inlined as context by the attachment pipeline — the same
-    shape as ``create_transcribe_fn`` does for audio. Returns ``None`` when no describe model is
-    configured (images then stay unsupported on non-vision models, with a clear error)."""
-    # ``knowledge.image_describe_model`` is list-capable (ADR 0133); route on its primary
-    # entry (and blank → None → images unsupported, unchanged) until a later milestone reads
-    # the chain. ``model_field_primary`` keeps a scalar value byte-identical to the old strip.
-    model = model_field_primary(getattr(config, "image_describe_model", ""))
-    if not model:
+    shape as ``create_transcribe_fn`` does for audio. Blank inherits the main chain.
+    Returns ``None`` when the resolved chain cannot read images."""
+    from graph.model_roles import create_role_llm, resolve_chain
+
+    names = resolve_chain(config, "image_describe")
+    if not names:
         return None
-    llm = create_llm(config, model_name=model)
+    explicit = bool(model_field_primary(getattr(config, "image_describe_model", "")))
+    # Availability mirrors the M6 status surface (provider_routes._image_describe_can_read), so
+    # a role Settings reports "ok" always yields a describe fn and one it reports "unavailable"
+    # never does. An EXPLICIT describe model is vision-capable by the field's purpose; a BLANK
+    # one inherits the MAIN chain (ADR 0133 D2) and reads images only when the main model does
+    # (config.model_vision, ADR 0021). Decide from config and build NOTHING when it cannot —
+    # a text-only agent with a blank describe role must not spin up a throwaway main-model
+    # client just to discover it can't see (that extra build is observable to callers that
+    # account for client construction, e.g. subagent profile plumbing).
+    if not explicit and not getattr(config, "model_vision", False):
+        log.warning("[image_describe] role unavailable: inherited main model lacks image support")
+        return None
+    llm = create_role_llm(config, "image_describe")
 
     def _describe(data: bytes, mime: str, filename: str) -> str:
         import base64

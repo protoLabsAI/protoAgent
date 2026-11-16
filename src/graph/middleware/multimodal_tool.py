@@ -79,7 +79,7 @@ def build_multimodal_middleware(config, *, vision: bool | None = None) -> Multim
         try:
             from graph.llm import create_describe_image_fn
 
-            describe = create_describe_image_fn(config)  # None unless knowledge.image_describe_model is set
+            describe = create_describe_image_fn(config)  # None when the resolved role cannot read images
         except Exception:  # noqa: BLE001 — a describe-model misconfig must not break graph build
             logger.warning("[multimodal] describe-image fallback unavailable", exc_info=True)
     return MultimodalToolResultMiddleware(vision=vision, describe_fn=describe)

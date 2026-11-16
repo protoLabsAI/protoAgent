@@ -852,7 +852,7 @@ def _judge_soul_drift(cfg, report: dict) -> dict | None:
         current = read_soul()
         if not baseline or not current:
             return None
-        verdict = judge_soul_drift(baseline, current, model=(getattr(cfg, "soul_drift_judge_model", "") or None))
+        verdict = judge_soul_drift(baseline, current, config=cfg)
     except Exception:  # noqa: BLE001 — never break the pass over the optional tier
         log.exception("[soul-drift] semantic tier failed")
         return None

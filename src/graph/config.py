@@ -238,20 +238,20 @@ _ROLE_FIELDS: dict[str, str | None] = {
     "memory_gist": "memory_gist_model",
 }
 
-#: What a BLANK role inherits — its parent's whole chain (D2). ``main`` is the root (its
-#: chain is ``model.name`` ++ the legacy ``routing.fallback_models`` tail, so it has no
-#: parent here); ``image_describe`` is absent on purpose — a blank describe model stays OFF
-#: (``[]``), never inheriting, so a text-only chat model with no describe model refuses
-#: image attachments rather than silently using the main model. ``memory_select`` and
-#: ``soul_drift_judge`` inherit aux (not main) per the D2 exceptions.
+#: Blank roles inherit their parent's whole chain (ADR 0133 D2). Two roles inherit MAIN,
+#: not aux: ``image_describe`` because aux models may not read images while the main model
+#: usually can, and ``soul_drift_judge`` because its blank model ran on the agent's own
+#: (main) model before ADR 0133 — a single-string config with aux set must keep judging
+#: drift on main, not silently drop to the cheap aux model.
 _ROLE_PARENT: dict[str, str] = {
     "aux": "main",
+    "image_describe": "main",
+    "soul_drift_judge": "main",
     "harvest": "aux",
     "facts": "harvest",
     "compaction": "aux",
     "goal_eval": "aux",
     "memory_select": "aux",
-    "soul_drift_judge": "aux",
     "memory_harvest": "aux",
     "memory_facts": "memory_harvest",
     "memory_gist": "aux",
@@ -323,9 +323,9 @@ def role_chain(config, role: str) -> list[str]:
     logs repeatedly.
 
     A SET chain is exactly what's listed; a BLANK role inherits its parent's whole chain
-    (specific role → aux → main; harvest → aux, facts → harvest, gist → aux), except a blank
-    ``image_describe`` which stays OFF (``[]``) and never inherits. Each entry is run through
-    the gateway-alias coherence check: one incoherent with the live provider (a bare gateway
+    (specific role → aux → main; harvest → aux, facts → harvest, gist → aux), except blank
+    ``image_describe`` and ``soul_drift_judge`` which inherit main directly. Each entry is run
+    through the gateway-alias coherence check: one incoherent with the live provider (a bare gateway
     alias under a native-OAuth provider with no gateway key to route it) is DROPPED with a
     log line naming the role and position, and a chain EMPTIED by that drop is treated as
     blank — so it then inherits — exactly as a scalar slot ``from_dict`` reconciles would.
@@ -340,8 +340,9 @@ def resolve_role_chain(config, role: str) -> tuple[list[str], str | None]:
 
     ``source`` is ``role`` when the role declares its own coherent chain, the ancestor role a
     blank role inherited from (a blank ``compaction`` → ``"aux"`` → ``"main"``), or ``None``
-    when nothing resolves (an empty chain — a fully-blank ``main``, or a blank
-    ``image_describe``, which stays OFF and never inherits here). The resolution, logging and
+    when nothing resolves (an empty chain — a fully-blank ``main``).
+    Blank ``image_describe`` and ``soul_drift_judge`` inherit main directly.
+    The resolution, logging and
     coherence are identical to :func:`role_chain`; this is the single resolver, and the
     status surface (ADR 0133 M6) reads ``source`` to report whether a role is inherited and
     from where.
@@ -355,8 +356,6 @@ def resolve_role_chain(config, role: str) -> tuple[list[str], str | None]:
         chain = coherent_model_chain(config, _role_raw_chain(config, r), where=r)
         if chain:
             return chain, r
-        if r == "image_describe":
-            return [], None  # a blank describe model stays off — never inherits
         parent = _ROLE_PARENT.get(r)
         return _resolve(parent) if parent is not None else ([], None)  # main (root) with nothing set
 
@@ -1530,7 +1529,8 @@ class LangGraphConfig:
     # deterministic tier already crossed its threshold — the cheap signal decides whether
     # to look, the judge decides what kind of drift it is. Blank model ⇒ the agent's own.
     soul_drift_judge_enabled: bool = False
-    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits aux → main. Resolve via
+    # Scalar or ordered-list chain (ADR 0133 D1); blank inherits the MAIN chain — the
+    # agent's own model, as before ADR 0133 — not aux. Resolve via
     # ``role_chain(config, "soul_drift_judge")``.
     soul_drift_judge_model: str | list[str] = ""
 
@@ -1563,12 +1563,8 @@ class LangGraphConfig:
     # as-is; video has its audio track pulled by ffmpeg first. Blank disables
     # audio/video ingestion (they error with a clear message).
     transcribe_model: str = "whisper-1"
-    # Vision model used to DESCRIBE attached images for a text-only chat model (#1381) —
-    # the screenshot is sent to this vision-capable gateway model, its description + any
-    # transcribed text is inlined as context the chat model can read. Blank disables image
-    # attachments on non-vision models (they error with a clear "switch models" message). A
-    # scalar or an ordered-list chain (ADR 0133 D1); blank stays OFF and never inherits —
-    # ``role_chain(config, "image_describe")`` returns [] when blank.
+    # Vision model for describing images to text-only callers. A scalar or chain;
+    # blank inherits the main chain (ADR 0133 D2). Unavailable without vision.
     image_describe_model: str | list[str] = ""
     # Semantic recall (ADR 0021): when True, the knowledge store is the
     # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused

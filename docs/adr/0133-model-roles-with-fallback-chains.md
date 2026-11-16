@@ -18,8 +18,8 @@ Today only the **main model** (and the subagents built from it) has a fallback c
 | Harvest summary and fact extraction | none (→ aux → main) | `graph/conversation_harvest.py` ~659, `graph/memory_facts.py` ~114 |
 | Goal verification (llm verifier) | `goal_eval_model` (→ aux → main) | `graph/goals/verifiers.py` ~341 (inline) |
 | Memory selection | `memory_select_model` (→ aux → main) | `graph/projection.py` ~341 (inline) |
-| SOUL drift judge | `soul_drift_judge_model` | `server/maintenance_loops.py` |
-| Image description | `image_describe_model` | `graph/multimodal.py`, `middleware/multimodal_tool.py` |
+| SOUL drift judge | `soul_drift_judge_model` (→ main) | `server/maintenance_loops.py`, `graph/soul_judge.py` |
+| Image description | `image_describe_model` (→ main) | `graph/multimodal.py`, `middleware/multimodal_tool.py` |
 | Subagent tiers | `subagents.<name>.model` | `graph/subagent_model.py` |
 
 On 2026-11-13 this bit us. protoEngineer's aux was Codex only. When Codex hit its usage limit, every compaction summary, fact extraction and goal check failed with a 429, and compaction paused 240 s per three failures, all with nothing to fall back to.
@@ -55,7 +55,8 @@ model:
 
 **Exceptions to "blank inherits":**
 - A blank `image_describe_model` inherits the **main** chain, not aux. Aux models may not read images, while the main model usually can (Josh, 2026-11-16, changing today's "blank = off"). If the resolved model can't read images, image description reports itself unavailable instead of failing on each call.
-- A blank `soul_drift_judge_model` and a blank `memory_select_model` inherit the aux chain.
+- A blank `soul_drift_judge_model` inherits the **main** chain, not aux. Before ADR 0133 the blank drift judge ran on the agent's own (main) model, so a single-string config with aux set must keep judging drift on main (M4; the ADR's "a string behaves exactly as today" guarantee applied to this role).
+- A blank `memory_select_model` inherits the aux chain (its pre-0133 behavior: `memory_select_model` → `aux_model` → main).
 
 **Settings decisions (Josh, 2026-11-16), from the designSystem mockup:**
 - All roles sit in one "Model roles" group.

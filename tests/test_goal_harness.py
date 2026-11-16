@@ -57,7 +57,9 @@ class _FakeLLM:
 @pytest.fixture
 def fake_llm(monkeypatch):
     def _install(met: bool) -> None:
-        monkeypatch.setattr("graph.llm.create_llm", lambda *a, **k: _FakeLLM(met))
+        # The llm verifier builds through graph.model_roles.create_role_llm, which holds its
+        # own create_llm binding — patch THAT seam, not graph.llm's, or the real builder runs.
+        monkeypatch.setattr("graph.model_roles.create_llm", lambda *a, **k: _FakeLLM(met))
 
     return _install
 

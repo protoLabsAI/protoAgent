@@ -61,7 +61,7 @@ def _build_prompt(baseline: str, current: str) -> str:
     return f"BASELINE PERSONA:\n{_clip(baseline)}\n\n---\n\nCURRENT PERSONA:\n{_clip(current)}"
 
 
-def _invoke_judge(prompt: str, model: str | None) -> str:
+def _invoke_judge(prompt: str, model: str | None, config=None) -> str:
     """Call the judge model and return its raw reply.
 
     Isolated so tests can monkeypatch it without a live gateway — the same seam
@@ -69,13 +69,17 @@ def _invoke_judge(prompt: str, model: str | None) -> str:
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from graph.llm import create_llm
+    from dataclasses import replace
+
+    from graph.model_roles import create_role_llm
     from runtime.state import STATE
 
-    config = STATE.graph_config
+    config = config if config is not None else STATE.graph_config
     if config is None:
         raise RuntimeError("no loaded config — cannot reach the gateway")
-    llm = create_llm(config, model_name=model or config.model_name)
+    if model:
+        config = replace(config, soul_drift_judge_model=model)
+    llm = create_role_llm(config, "soul_drift_judge")
     resp = llm.invoke([SystemMessage(_JUDGE_SYSTEM), HumanMessage(prompt)])
     return resp.content if isinstance(resp.content, str) else str(resp.content)
 
@@ -108,7 +112,7 @@ def _parse(raw: str) -> dict | None:
     }
 
 
-def judge_soul_drift(baseline: str, current: str, *, model: str | None = None) -> dict | None:
+def judge_soul_drift(baseline: str, current: str, *, model: str | None = None, config=None) -> dict | None:
     """Semantic verdict on a persona diff, or ``None`` when no verdict is available.
 
     Returns ``{drift_score, identity_preserved, doctrine_leak, rationale}``. ``None``
@@ -119,7 +123,8 @@ def judge_soul_drift(baseline: str, current: str, *, model: str | None = None) -
     if not (baseline or "").strip() or not (current or "").strip():
         return None
     try:
-        raw = _invoke_judge(_build_prompt(baseline, current), model)
+        prompt = _build_prompt(baseline, current)
+        raw = _invoke_judge(prompt, model, config) if config is not None else _invoke_judge(prompt, model)
     except Exception:  # noqa: BLE001 — a curation pass must never break its host loop
         log.exception("[soul-drift] judge call failed")
         return None
