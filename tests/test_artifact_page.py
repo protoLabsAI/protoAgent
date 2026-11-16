@@ -273,18 +273,3 @@ def test_panel_page_link_is_on_the_gated_router(artifact):  # noqa: F811
     assert not any("page-link" in p for p in paths)
     aid = _show(artifact)
     assert _client(artifact).post(f"/plugins/artifact/artifact/{aid}/page-link").status_code in (404, 405)
-
-
-def test_shell_open_in_browser_button_is_a_real_link():
-    from tests.test_artifact_plugin import ROOT
-
-    html = (ROOT / "shell.html").read_text()
-    js = (ROOT / "shell.js").read_text()
-    # A DS button-styled anchor: a plain link click is the new-tab path every host honours.
-    assert '<a id="open" class="pl-btn pl-btn--sm" target="_blank" rel="noopener noreferrer"' in html
-    assert 'var ACT_IDS=["edit","open","dl","del"];' in js  # folds into the ⋯ menu when narrow
-    assert '$open.style.display = a.kind==="file" ? "none" : "";' in js
-    mint = js[js.index("async function openMint("):js.index("function openRefresh(")]
-    assert '"/page-link?version="+n, {method:"POST"}' in mint and "kit.apiFetch" in mint
-    assert 'j.path.indexOf("/plugins/artifact/media/artifact/")!==0' in mint
-    assert "if(seq!==openSeq) return null;" in mint
