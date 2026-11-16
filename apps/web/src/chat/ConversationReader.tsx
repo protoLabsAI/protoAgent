@@ -151,7 +151,7 @@ export function ConversationReader({
   const meta = conversationMeta(row?.origin_label, row?.last_updated, row?.turn_count);
 
   const copyLink = () => {
-    void navigator.clipboard?.writeText(`#/conversations/${threadId}`);
+    void navigator.clipboard?.writeText(`${window.location.origin}${window.location.pathname}#/conversations/${threadId}`);
   };
 
   // The full read-only explanation (§3.4 item 1 / §7): it hangs on the lock's Tooltip and is the

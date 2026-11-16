@@ -23,7 +23,7 @@ import { agentChunkPrefix, expandSessions, orphanChunks, packSessions } from "./
 import { openTranscriptStore, withinMs, type SessionLike, type TranscriptStore } from "./transcriptStore";
 import { attachmentDisplay, validThumbnails } from "./imageThumbnails";
 import { persistBlocked } from "../lib/storageReset";
-import { saveDraft } from "./scratchState";
+import { saveDraft, saveDraftContext } from "./scratchState";
 import { setStage as setConversationsStage } from "./conversations-store";
 
 export const MAX_SESSIONS = 50;
@@ -379,17 +379,10 @@ function titleFromMessages(messages: ChatMessage[]) {
   return sessionTitleFromText(text);
 }
 
-/** The composer draft "Continue in a new chat" pre-fills (other-conversations §4.5): a human lead
- *  the operator finishes, then a HIDDEN reference to the source context id so the agent can pull
- *  the original thread with `recall_session`. The reference rides in the draft text itself as an
- *  HTML comment — the same machine-note shape the memory digest header uses, and the only place to
- *  carry it: the composer draft is a plain string with no separate hidden-context wire, so this is
- *  how the id reaches the agent when the operator sends. Lead-first so the draft reads as the
- *  prompt it is, with the id tucked below. */
+/** The editable lead for Continue in a new chat (other-conversations §4.5).
+ *  The agent-facing reference is stored separately from the visible draft. */
 export function continueConversationDraft(opts: { title: string; origin: string; contextId: string }): string {
-  const lead = `About the conversation "${opts.title}" (${opts.origin}): `;
-  const ref = `\n\n<!-- Continuing session "${opts.contextId}"; read its full transcript with recall_session(session_id="${opts.contextId}"). -->`;
-  return lead + ref;
+  return `About the conversation "${opts.title}" (${opts.origin}): `;
 }
 
 function createSession(opts: { incognito?: boolean } = {}): ChatSession {
@@ -1622,6 +1615,10 @@ export const chatStore = {
     // Seed the draft BEFORE the slot mounts: ChatSessionSlot reads loadDraft(sessionId) into its
     // composer state on mount, so writing scratch state here is what the new tab opens showing.
     saveDraft(session.id, continueConversationDraft({ title, origin, contextId }));
+    saveDraftContext(
+      session.id,
+      `<!-- Continuing session "${contextId}"; read its full transcript with recall_session(session_id="${contextId}"). -->`,
+    );
     setState((current) => {
       // New tabs append to the RIGHT; cap at MAX_SESSIONS by dropping the oldest (left).
       const sessions = [...current.sessions, session].slice(-MAX_SESSIONS);

@@ -45,6 +45,18 @@ export function saveDraft(sessionId: string, draft: string): void {
   write("draft", sessionId, draft);
 }
 
+/** Hidden continuation context survives composer edits and reloads with the draft. */
+export function saveDraftContext(sessionId: string, context: string): void {
+  write("draft-context", sessionId, context);
+}
+
+/** Build the agent payload without putting machine notes in the editor or display text.
+ *  Keep context until the send succeeds so a failed send can be retried. */
+export function draftPayload(sessionId: string, text: string): string {
+  const context = read("draft-context", sessionId);
+  return context ? `${text}\n\n${context}` : text;
+}
+
 export function loadSteers(sessionId: string): QueuedSteer[] {
   const raw = read("steers", sessionId);
   if (!raw) return [];

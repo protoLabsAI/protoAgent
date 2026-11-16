@@ -93,7 +93,7 @@ import {
 } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { watchGoalKickoff, type GoalKickoffWatch } from "./goalKickoffWatch";
-import { loadDraft, loadScroll, saveDraft, saveScroll } from "./scratchState";
+import { draftPayload, loadDraft, loadScroll, saveDraft, saveDraftContext, saveScroll } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { markUserScroll } from "./streamFollow";
 import { composerPlaceholder } from "./composerPlaceholder";
@@ -1127,7 +1127,9 @@ export function ChatSessionSlot({
     if (!opts.hidden) repinTranscript();
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
     // is what the user bubble shows.
-    const sent = opts.sendAs ?? content;
+    const sent = opts.hitlResume
+      ? (opts.sendAs ?? content)
+      : draftPayload(session.id, opts.sendAs ?? content);
     const userMessage: ChatMessage = {
       id: messageId(),
       role: "user",
@@ -1683,6 +1685,8 @@ export function ChatSessionSlot({
         // keeps; a hidden send drew no bubble, so it carries none.
         thumbnails: opts.hidden ? undefined : opts.attachments,
       });
+      // The reference has reached the agent. Failed sends retain it for retry.
+      if (!opts.hitlResume) saveDraftContext(session.id, "");
       // Stream returned: reveal any withheld tail NOW, before the reconcile
       // below — flushing after it would append the tail on top of the
       // canonical replace and double that text. (Redundant after onDone, which

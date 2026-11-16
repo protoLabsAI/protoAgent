@@ -1071,16 +1071,22 @@ describe("continueConversation (other-conversations C4)", () => {
     const session = chat.chatStore.continueConversation(args);
 
     const draft = scratch.loadDraft(session.id);
-    expect(draft).toBe(
-      chat.continueConversationDraft({ title: args.title, origin: args.origin, contextId: args.contextId }),
-    );
     // The visible lead the operator finishes, verbatim per §4.5.
-    expect(draft.startsWith('About the conversation "Release triage" (From Claude Code for Josh): ')).toBe(true);
-    // The hidden reference the agent can act on: the context id in a recall_session call, tucked in
-    // an HTML comment — carried in the draft text itself, not a new wire field.
-    expect(draft).toContain('recall_session(session_id="ctx-abc")');
-    expect(draft).toContain("<!--");
-    expect(draft).toContain("-->");
+    expect(draft).toBe('About the conversation "Release triage" (From Claude Code for Josh): ');
+    expect(draft).not.toContain("<!--");
+    expect(draft).not.toContain("recall_session");
+    // Editing and remounting the composer keeps context out of the visible draft.
+    scratch.saveDraft(session.id, "What happened next?");
+    expect(scratch.loadDraft(session.id)).toBe("What happened next?");
+    const payload = scratch.draftPayload(session.id, scratch.loadDraft(session.id));
+    expect(payload).toBe(
+      'What happened next?\n\n<!-- Continuing session "ctx-abc"; read its full transcript with recall_session(session_id="ctx-abc"). -->',
+    );
+    // A failed send can rebuild the same payload; other tabs never inherit the reference.
+    expect(scratch.draftPayload(session.id, "retry")).toContain('recall_session(session_id="ctx-abc")');
+    expect(scratch.draftPayload("another-chat", "hello")).toBe("hello");
+    scratch.saveDraftContext(session.id, "");
+    expect(scratch.draftPayload(session.id, "next turn")).toBe("next turn");
   });
 
   it("sends nothing and shows no toast — the new empty, selected tab is the only feedback (r2)", async () => {
@@ -1091,13 +1097,5 @@ describe("continueConversation (other-conversations C4)", () => {
     // No turn is run: the tab opens empty and idle; the operator edits and sends.
     expect(created.messages).toEqual([]);
     expect(snap.sessionStatusMap[session.id]).toBeUndefined();
-  });
-
-  it("continueConversationDraft is lead-first with the id hidden below (pure)", async () => {
-    const { chat } = await fresh();
-    const draft = chat.continueConversationDraft({ title: "Foo", origin: "A2A", contextId: "ctx-9" });
-    expect(draft).toBe(
-      'About the conversation "Foo" (A2A): \n\n<!-- Continuing session "ctx-9"; read its full transcript with recall_session(session_id="ctx-9"). -->',
-    );
   });
 });
