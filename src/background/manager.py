@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+from contextlib import nullcontext
 import logging
 import os
 import uuid
@@ -135,6 +136,7 @@ class BackgroundManager:
         # job_id -> the running asyncio.Task for a ``spawn_work`` (deterministic) job, so
         # ``cancel`` can stop the coroutine directly (a work job has no A2A task handle).
         self._work_tasks: dict[str, asyncio.Task] = {}
+        self._adopted_jobs: set[str] = set()
         # Fan-out batch-join (#1766). A batch (all jobs sharing a spawning turn id)
         # push-resumes ONCE, when its last member settles. ``_joined_batches`` is the
         # single-fire guard — a SYNCHRONOUS check-and-set (``_claim_batch``) so two
@@ -314,9 +316,33 @@ class BackgroundManager:
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
         t.add_done_callback(lambda _t, jid=job_id: self._work_tasks.pop(jid, None))
+        t.add_done_callback(lambda _t, jid=job_id: self._adopted_jobs.discard(jid))
         log.info("[background] spawned work %s (%s): %s", job_id, kind, description)
         self._publish_started(job_id, kind, description, origin_session or "")
         return job_id
+
+    async def adopt_work(self, *, task: asyncio.Task, result_text=str, **kwargs) -> str:
+        """Track already-running work; ownership transfers only on success."""
+        async def collect():
+            return result_text(await task)
+
+        job_id = await self.spawn_work(work=collect, **kwargs)
+        self._adopted_jobs.add(job_id)
+        self._work_tasks[job_id].add_done_callback(lambda _: task.cancel() if not task.done() else None)
+        return job_id
+
+    async def wait_work(self, job_id: str, timeout: float) -> bool:
+        """Wait without canceling work; return False if no live collector exists."""
+        task = self._work_tasks.get(job_id)
+        if task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout)
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise  # the collector itself was canceled
+                # The work was canceled; the caller can read its terminal store row.
+            return True
+        return False
 
     async def _run_work(self, job_id: str, kind: str, description: str, origin_session: str, work) -> None:
         """Run a ``spawn_work`` coroutine under the shared concurrency cap, settle the
@@ -326,7 +352,9 @@ class BackgroundManager:
 
         # This task's own context (a copy made by create_task), so the binding never leaks.
         _CURRENT_WORK_JOB.set((self.store, job_id))
-        async with self._sem:  # same cap as background turns — one fan-out can't swamp the gateway
+        adopted = job_id in self._adopted_jobs
+        self._adopted_jobs.discard(job_id)
+        async with (nullcontext() if adopted else self._sem):  # adopted work already started
             try:
                 # A coding delegate this job dispatches reports its live progress onto the
                 # job's own `background.progress` lane (#3979) — never into the card of the

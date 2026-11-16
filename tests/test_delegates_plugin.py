@@ -321,6 +321,27 @@ async def _invoke_delegate(tool, args):
     return getattr(result, "content", result)
 
 
+async def _settle_until(predicate, *, timeout: float = 2.0):
+    """Yield the event loop until ``predicate()`` holds, then return (asserting it did).
+
+    A side effect driven by a chain of done-callbacks — an adopted dispatch task's
+    ``kill_now`` firing after its tracking job is canceled (#5318) — settles over several
+    loop iterations. The Windows proactor loop drains ready callbacks in a different order
+    than the macOS/Linux selector loop, so asserting the effect inline assumes a scheduling
+    order that doesn't hold cross-platform. Polling removes that assumption without
+    weakening what is checked.
+    """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    assert predicate(), "condition never settled"
+
+
 def test_register_no_delegates_registers_only_propose(monkeypatch):
     """An empty roster still gets propose_delegate (#2944) — the consent-gated way
     OUT of the empty-roster dead end — and nothing else."""
@@ -480,7 +501,7 @@ async def test_delegate_to_background_falls_back_inline_without_manager(monkeypa
 
 
 async def test_delegate_to_forwards_timeout_override(monkeypatch):
-    """#3091: delegate_to(timeout=…) threads a per-call override into registry.dispatch."""
+    """ACP keeps a bounded continuation budget beyond the caller's wait (#5318)."""
     r = _register([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
     tool = r.tools[0]
     seen: dict = {}
@@ -491,11 +512,11 @@ async def test_delegate_to_forwards_timeout_override(monkeypatch):
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
     assert await _invoke_delegate(tool, {"target": "coder", "query": "build", "timeout": 900}) == "done"
-    assert seen["timeout"] == 900.0
+    assert seen["timeout"] == 2700.0
 
 
-async def test_delegate_to_omitted_timeout_passes_none(monkeypatch):
-    """Default timeout=0 ⇒ None down the stack ⇒ the delegate's configured timeout is used."""
+async def test_delegate_to_omitted_timeout_uses_configured_wait_budget(monkeypatch):
+    """The configured wait budget also leaves time to collect the original ACP run."""
     r = _register([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
     tool = r.tools[0]
     seen: dict = {"timeout": "unset"}
@@ -506,7 +527,7 @@ async def test_delegate_to_omitted_timeout_passes_none(monkeypatch):
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
     assert await _invoke_delegate(tool, {"target": "coder", "query": "build"}) == "done"
-    assert seen["timeout"] is None
+    assert seen["timeout"] == 3600.0
 
 
 async def test_delegate_to_background_threads_timeout(monkeypatch):
@@ -1562,3 +1583,165 @@ async def test_a2a_probe_timeout_has_a_diagnostic_name(monkeypatch):
     monkeypatch.setattr(policy, "check_url", lambda url: None)
     d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
     assert await ADAPTERS["a2a"].probe(d) == {"ok": False, "error": "ReadTimeout"}
+
+
+@pytest.mark.parametrize("adoption", ["ok", "cancel", "missing", "store_failure"])
+async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_path, adoption):
+    """#5318: one prompt survives the wait deadline; collection never sends it twice."""
+    import asyncio
+    import re
+
+    import plugins.coding_agent as pool
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+    from runtime.state import STATE
+
+    release = asyncio.Event()
+    calls = []
+    killed = []
+
+    class Client:
+        async def prompt(self, query, timeout, **kwargs):
+            calls.append(query)
+            await asyncio.wait_for(release.wait(), timeout)
+            return "original result"
+
+        def kill_now(self):
+            killed.append(True)
+
+    monkeypatch.setattr(pool, "_client_for", lambda spec: Client())
+    monkeypatch.setattr(pool, "_drop_client", lambda spec: None)
+    store = BackgroundStore(str(tmp_path / "jobs.db"))
+    mgr = BackgroundManager(agent_name="test", invoke_url="http://unused", store=store)
+    monkeypatch.setattr(STATE, "background_mgr", None if adoption == "missing" else mgr)
+    if adoption == "store_failure":
+        def fail(**kwargs):
+            raise OSError("store unavailable")
+        monkeypatch.setattr(store, "create", fail)
+    tool = _register([{
+        "name": "coder", "type": "acp", "command": "proto", "workdir": str(tmp_path), "timeout_s": 0.01,
+    }], monkeypatch).tools[0]
+    try:
+        reply = await _invoke_delegate(tool, {"target": "coder", "query": "build once"})
+        if adoption in ("missing", "store_failure"):
+            assert "could not be kept as a collectable task" in reply
+            assert "may still apply side effects" in reply
+            assert killed == [True]
+            assert not mgr._work_tasks
+            return
+        task_id = re.search(r"still running .* on task ([^.]+)\.", reply).group(1)
+        # A second short wait retains the same task and does not cancel the prompt.
+        args = {"target": "coder", "query": "", "resume_task_id": task_id}
+        assert task_id in await _invoke_delegate(tool, args)
+        assert not killed
+        if adoption == "ok":
+            # Re-sending after adoption must find the original job, even in the
+            # foreground and with equivalent whitespace/case (#5318).
+            for background in (False, True):
+                duplicate = await _invoke_delegate(tool, {
+                    "target": "coder", "query": " BUILD   once ", "background": background,
+                })
+                assert "Refused:" in duplicate
+                assert task_id in duplicate
+                assert calls == ["build once"]
+        if adoption == "cancel":
+            await mgr.cancel(task_id)
+            assert "canceled" in await _invoke_delegate(tool, args)
+            # cancel() only schedules the tracking job's cancellation; the adopted dispatch
+            # task's kill_now fires a few loop hops later via a done-callback chain, and the
+            # proactor loop orders that drain differently — so wait for it, don't assume it.
+            await _settle_until(lambda: killed == [True])
+            return
+        release.set()
+        assert await _invoke_delegate(tool, {**args, "timeout": 1}) == "original result"
+        # Collection also works from the durable row once the live task is gone.
+        mgr.store = BackgroundStore(str(tmp_path / "jobs.db"))
+        assert await _invoke_delegate(tool, args) == "original result"
+        assert calls == ["build once"]
+        assert mgr.store.get(task_id).status == "completed"
+        # A settled job must not prevent an intentional new run of the same ask.
+        assert await _invoke_delegate(tool, {
+            "target": "coder", "query": "build once", "timeout": 1,
+        }) == "original result"
+        assert calls == ["build once", "build once"]
+    finally:
+        release.set()
+        await asyncio.gather(*mgr._fire_tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_adopted_acp_preserves_room_exchange_without_blocking_collection(monkeypatch, tmp_path, fails):
+    """Late room envelopes survive adoption, even while a collecting turn owns the lock."""
+    import asyncio
+    import re
+
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import START, END, MessagesState, StateGraph
+    from runtime.state import STATE
+    from server.turn_control import _thread_lock
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("turn", lambda state: {})
+    builder.add_edge(START, "turn")
+    builder.add_edge("turn", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    monkeypatch.setattr(STATE, "graph", graph)
+    monkeypatch.setattr(STATE, "thread_id_resolver", None)
+    mgr = BackgroundManager(
+        agent_name="test", invoke_url="http://unused",
+        store=BackgroundStore(str(tmp_path / "jobs.db")),
+    )
+    monkeypatch.setattr(STATE, "background_mgr", mgr)
+    release = asyncio.Event()
+    calls = []
+
+    async def dispatch(self, target, query, **kwargs):
+        calls.append(query)
+        await release.wait()
+        if fails:
+            raise DelegateError("coder failed")
+        return "original result"
+
+    monkeypatch.setattr(DelegateRegistry, "dispatch", dispatch)
+    tool = _register([{
+        "name": "coder", "type": "acp", "command": "proto", "workdir": str(tmp_path), "timeout_s": 0.01,
+    }], monkeypatch).tools[0]
+    state = {"session_id": "room-test", "messages": []}
+    config = {"configurable": {"thread_id": "a2a:room-test"}}
+    try:
+        async with _thread_lock("a2a:room-test"):
+            reply = await _invoke_delegate(tool, {"target": "coder", "query": "build once", "state": state})
+            task_id = re.search(r"still running .* on task ([^.]+)\.", reply).group(1)
+            release.set()
+            args = {"target": "coder", "query": "", "resume_task_id": task_id, "state": state, "timeout": 1}
+            result = await _invoke_delegate(tool, args)
+            reply_text = "coder failed" if fails else "original result"
+            assert reply_text in result
+            assert not (await graph.aget_state(config)).values
+        await asyncio.gather(*mgr._fire_tasks)
+        # record_room writes ONLY the lead's question. The delegate's own reply is delivered
+        # by the chat drain (result_author=coder) — writing it here too would duplicate the
+        # coder's answer in the transcript (#5318), so it must NOT be on the thread yet.
+        messages = (await graph.aget_state(config)).values["messages"]
+        assert len(messages) == 1
+        assert messages[0].type == "human"
+        assert "build once" in messages[0].content
+        assert messages[0].additional_kwargs["room"]["to"] == "coder"
+        assert reply_text not in messages[0].content
+        # The drain delivers the reply exactly once, authored by the coder.
+        from server.chat import _drain_background
+
+        drained, _ = _drain_background("room-test")
+        assert len(drained) == 1
+        assert drained[0].additional_kwargs["room"]["from"] == "coder"
+        assert reply_text in drained[0].content
+        # Collecting again re-sends nothing and writes no further room messages.
+        again = await _invoke_delegate(tool, args)
+        assert reply_text in again
+        assert len((await graph.aget_state(config)).values["messages"]) == 1
+        assert len(calls) == 1
+    finally:
+        release.set()
+        await asyncio.gather(*mgr._fire_tasks, return_exceptions=True)

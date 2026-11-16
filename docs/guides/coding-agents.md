@@ -170,6 +170,12 @@ Notes for whoever writes the `query`:
   declare another delegate — or, programmatically, dispatch a `workdir`-scoped copy
   (the board loop does this per feature; see below).
 - The call **blocks** until the turn finishes (coding is slow), up to `timeout_s`.
+  On timeout it does **not** throw the work away: the original run is kept as a
+  tracked background task and the reply comes back as *"still running … on task
+  `<id>`"*. The coder keeps going for up to 30 more minutes; collect its answer with
+  `delegate_to(target=…, query="", resume_task_id="<id>")`, which waits on the *same*
+  run and re-sends nothing. If the run can't be kept (no background manager, a store
+  error), the reply says so and warns the delegate may still apply side effects.
 - **Follow-up calls reuse the cached session** — so you can iterate
   (`delegate_to("proto", "now also add a test for it")`).
 
