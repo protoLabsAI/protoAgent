@@ -9,6 +9,7 @@ import { api, ApiError } from "../lib/api";
 import { textFromParts, type DurableChatTurn } from "../lib/api/a2aStream";
 import { openWorkGroup } from "./ChatStatusRail";
 import { Markdown } from "./Markdown";
+import { ThreadJobs } from "./ThreadJobs";
 import { conversationMeta, displayTitle } from "./conversation-title";
 import { backToList, type ConversationRow } from "./conversations-store";
 
@@ -189,6 +190,7 @@ export function ConversationReader({
             </Tooltip>
           </p>
         )}
+        {row && <ThreadJobs key={threadId} row={row} />}
       </header>
 
       <div className="conversation-reader__body">

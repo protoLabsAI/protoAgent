@@ -39,7 +39,9 @@ function rowTone(row: ConversationRow): RowTone {
 function ConversationRowButton({ row }: { row: ConversationRow }) {
   const tone = rowTone(row);
   const t = row.last_updated ? relTime(row.last_updated) : { text: "", tooltip: "" };
-  const name = `${row.title}, ${row.origin_label}, ${tone.word}${t.text ? `, ${t.text}` : ""}`;
+  const openJobs = row.tasks?.filter((task) => task.status !== "closed").length ?? 0;
+  const jobsLabel = openJobs ? `${openJobs} open job${openJobs === 1 ? "" : "s"}` : "";
+  const name = `${row.title}, ${row.origin_label}, ${tone.word}${t.text ? `, ${t.text}` : ""}${jobsLabel ? `, ${jobsLabel}` : ""}`;
   return (
     <li className="conversations-row">
       <button
@@ -67,6 +69,7 @@ function ConversationRowButton({ row }: { row: ConversationRow }) {
               </>
             ) : null}
             {row.turn_count > 1 ? ` · ${row.turn_count} messages` : ""}
+            {jobsLabel ? ` · ${jobsLabel}` : ""}
           </span>
         </span>
       </button>
