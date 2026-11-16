@@ -11,7 +11,7 @@ import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ConversationRow } from "../../lib/api/chat";
-import { __resetForTest as resetConversationsStore } from "../../chat/conversations-store";
+import { __resetForTest as resetConversationsStore, snapshotForTest as conversationsSnapshot } from "../../chat/conversations-store";
 
 const apiMock = vi.hoisted(() => ({
   setScheduleEnabled: vi.fn(async () => ({ job: {} })),
@@ -28,8 +28,17 @@ const apiMock = vi.hoisted(() => ({
 }));
 vi.mock("../../lib/api", () => ({ api: apiMock, currentSlug: () => "test" }));
 
+// The "Started in" A2A link routes through the one palette navigate chokepoint; spy on it to
+// prove the click, keeping the rest of the module real.
+const navigateMock = vi.hoisted(() => vi.fn());
+vi.mock("../../app/palette/nav", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/palette/nav")>()),
+  navigate: navigateMock,
+}));
+
 import { SchedulesSection } from "./schedules";
 import { TasksSection } from "./tasks";
+import { chatStore } from "../../chat/chat-store";
 import { buildOnce } from "../../schedule/schedule-builder";
 import type { WorkItem, WorkItems, WorkSource } from "../useWorkItems";
 import type { WorkSectionContext } from "../WorkView";
@@ -171,6 +180,9 @@ function button(text: string): HTMLButtonElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The conversations store is a module singleton that TaskDetail now reads for "Started in" —
+  // reset it so each case drives its own rows, not a leftover from the test before.
+  resetConversationsStore();
   root = null;
   host = null;
 });
@@ -548,77 +560,165 @@ describe("Jobs in the list (§2, r1)", () => {
   });
 });
 
-describe("Waiting-task provenance links into the conversation (§4.6)", () => {
-  function convRow(over: Partial<ConversationRow> = {}): ConversationRow {
-    return {
-      session_id: "ctx-55",
-      title: "Friction triage",
-      origin_label: "From Claude Code for Josh",
-      group: "for_you",
-      last_updated: "2026-11-14T09:00:00Z",
-      turn_count: 3,
-      active: false,
-      last_state: "input-required",
-      ...over,
-    };
+// Shared by the waiting-provenance cases and the open-job "Started in" cases below.
+function startedConvRow(over: Partial<ConversationRow> = {}): ConversationRow {
+  return {
+    session_id: "ctx-55",
+    title: "Friction triage",
+    origin_label: "From Claude Code for Josh",
+    group: "for_you",
+    last_updated: "2026-11-14T09:00:00Z",
+    turn_count: 3,
+    active: false,
+    last_state: "input-required",
+    ...over,
+  };
+}
+// The conversations list (and, for a waiting job, its source check) resolve asynchronously; flush
+// microtasks until the caller's condition holds — by default until the "Checking source chat…"
+// placeholder clears — or give up after a bounded wait.
+async function settleUntil(ready: () => boolean = () => !allText().includes("Checking source chat")) {
+  for (let i = 0; i < 50; i++) {
+    await act(async () => { await Promise.resolve(); });
+    if (ready()) return;
   }
+}
+/** The "Started in" (or waiting "Source") field by its dt label, or null when it isn't drawn. */
+function labeledField(label: string): HTMLElement | null {
+  return Array.from(document.querySelectorAll<HTMLElement>(".work-detail__field"))
+    .find((field) => field.querySelector("dt")?.textContent === label) ?? null;
+}
+
+describe("Waiting-task source names the conversation (§4.6, criterion 7)", () => {
   function waiting(over: Partial<TaskRaw> = {}): WorkItem {
     return taskItem({ status: "waiting", session_id: "ctx-55", ...over });
   }
-  // The detail's source check + the conversations list both resolve asynchronously; poll the
-  // DOM until the "Checking source chat…" placeholder clears (or give up after a bounded wait).
-  async function settle() {
-    for (let i = 0; i < 50; i++) {
-      await act(async () => { await Promise.resolve(); });
-      if (!allText().includes("Checking source chat")) return;
-    }
-  }
 
-  // The store is a module singleton — reset so each case drives its own rows, not a leftover.
-  beforeEach(() => resetConversationsStore());
-
-  it("an A2A context becomes a TextLink to #/conversations/<id> that names the caller (r2)", async () => {
-    apiMock.listConversations.mockResolvedValueOnce({ conversations: [convRow()] });
+  it("a listed A2A thread is its title as a link, with the origin alongside (criterion 7 ≡ r1)", async () => {
+    apiMock.listConversations.mockResolvedValueOnce({ conversations: [startedConvRow()] });
     await mount(h(TasksSection, ctx({
       sources: sources({ tasks: src([waiting()]) }),
       state: { itemId: "task:task-3" },
     })));
-    await settle();
-    const link = document.querySelector<HTMLAnchorElement>('a.pl-link[href="#/conversations/ctx-55"]');
-    expect(link).not.toBeNull();
-    // "From Claude Code for Josh" → "…from Claude Code for Josh" (the leading "From " dropped).
-    expect(link!.textContent).toBe("Started in a conversation from Claude Code for Josh");
+    await settleUntil(() => !!document.querySelector('a[href="#/conversations/ctx-55"]'));
+    const source = labeledField("Source")!;
+    const link = source.querySelector<HTMLAnchorElement>('a.pl-link[href="#/conversations/ctx-55"]')!;
+    expect(link.textContent).toBe("Friction triage"); // the thread title, not the old caller phrase
+    expect(source.querySelector("dd")?.textContent).toBe("Friction triage · From Claude Code for Josh");
+    expect(link.closest(".pl-tip-wrap")).not.toBeNull(); // the full title lives in a Tooltip
+    expect(link.style.textOverflow).toBe("ellipsis"); // cut to one line
+    await act(async () => link.click());
+    expect(navigateMock).toHaveBeenCalledWith({ kind: "conversation", contextId: "ctx-55" });
   });
 
-  it("falls back to the plain link text when the thread isn't listed (r2)", async () => {
+  it("falls back to an 'Open the conversation' link when the thread isn't listed (r3)", async () => {
     apiMock.listConversations.mockResolvedValueOnce({ conversations: [] });
     await mount(h(TasksSection, ctx({
       sources: sources({ tasks: src([waiting()]) }),
       state: { itemId: "task:task-3" },
     })));
-    await settle();
+    await settleUntil();
     const link = document.querySelector<HTMLAnchorElement>('a.pl-link[href="#/conversations/ctx-55"]');
     expect(link).not.toBeNull();
-    expect(link!.textContent).toBe("Started in a conversation");
+    expect(link!.textContent).toBe("Open the conversation");
+    expect(allText()).not.toContain("From Claude Code"); // no origin without a listed thread
   });
 
-  it("a job: source keeps its plain 'Started by a background job' text, no link (r2)", async () => {
+  it("a job: source keeps its plain 'Started by a background job' text, no link (r5)", async () => {
     await mount(h(TasksSection, ctx({
       sources: sources({ tasks: src([waiting({ session_id: "job:weekly" })]) }),
       state: { itemId: "task:task-3" },
     })));
-    await settle();
+    await settleUntil();
     expect(allText()).toContain("Started by a background job");
     expect(document.querySelector('a[href^="#/conversations/"]')).toBeNull();
   });
 
-  it("a deleted chat keeps its plain 'Its chat was deleted' text, no link (r2)", async () => {
+  it("a deleted chat keeps its plain 'Its chat was deleted' text, no link (r6)", async () => {
     await mount(h(TasksSection, ctx({
       sources: sources({ tasks: src([waiting({ session_id: "chat-9" })]) }),
       state: { itemId: "task:task-3" },
     })));
-    await settle();
+    await settleUntil();
     expect(allText()).toContain("Its chat was deleted");
     expect(document.querySelector('a[href^="#/conversations/"]')).toBeNull();
+  });
+});
+
+describe("'Started in' on an open job (§11.1 items 5–6)", () => {
+  it("names the A2A thread right after Type and priority, linking into it (r1)", async () => {
+    apiMock.listConversations.mockResolvedValueOnce({ conversations: [startedConvRow()] });
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "in_progress", session_id: "ctx-55" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settleUntil(() => !!document.querySelector('a[href="#/conversations/ctx-55"]'));
+    const labels = Array.from(document.querySelectorAll(".work-detail__field dt")).map((n) => n.textContent);
+    expect(labels.slice(0, 2)).toEqual(["Type and priority", "Started in"]);
+    const field = labeledField("Started in")!;
+    const link = field.querySelector<HTMLAnchorElement>('a.pl-link[href="#/conversations/ctx-55"]')!;
+    expect(link.textContent).toBe("Friction triage");
+    expect(field.querySelector("dd")?.textContent).toBe("Friction triage · From Claude Code for Josh");
+    expect(link.closest(".pl-tip-wrap")).not.toBeNull();
+    await act(async () => link.click());
+    expect(navigateMock).toHaveBeenCalledWith({ kind: "conversation", contextId: "ctx-55" });
+  });
+
+  it("links 'Open the conversation' when the thread isn't in the store (r3)", async () => {
+    apiMock.listConversations.mockResolvedValueOnce({ conversations: [] });
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "in_progress", session_id: "ctx-55" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settleUntil(() => !!document.querySelector('a[href="#/conversations/ctx-55"]'));
+    expect(labeledField("Started in")?.querySelector("dd")?.textContent).toBe("Open the conversation");
+  });
+
+  it("links a live chat source as 'Started in chat <title>' and opens it (r4)", async () => {
+    const chat = chatStore.createSession();
+    chatStore.renameSession(chat.id, "Release review");
+    const openChat = vi.fn();
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "in_progress", session_id: chat.id })]) }),
+      state: { itemId: "task:task-3" },
+      decisionActions: { agentOnline: true, openSourceChat: openChat, answerDecision: vi.fn() },
+    })));
+    await flush();
+    const field = labeledField("Started in")!;
+    expect(field.querySelector("dd")?.textContent).toBe("Started in chat Release review");
+    await act(async () => field.querySelector<HTMLAnchorElement>("a")!.click());
+    expect(openChat).toHaveBeenCalledWith(chat.id);
+    expect(navigateMock).not.toHaveBeenCalled(); // a chat doesn't route through the conversation link
+  });
+
+  it.each(["job:weekly", "background:sweep"])("shows muted 'Started by a background job' for a %s source, no link (r5)", async (source) => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "in_progress", session_id: source })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await flush();
+    const field = labeledField("Started in")!;
+    expect(field.querySelector("dd")?.textContent).toBe("Started by a background job");
+    expect(field.querySelector("a")).toBeNull();
+  });
+
+  it("draws no 'Started in' field when the source chat is gone from the store (r6)", async () => {
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "in_progress", session_id: "chat-gone" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await flush();
+    expect(labeledField("Started in")).toBeNull();
+  });
+
+  it("shows no 'Started in' field on a closed job, even with a listed thread (r8)", async () => {
+    apiMock.listConversations.mockResolvedValueOnce({ conversations: [startedConvRow()] });
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status: "closed", closed_at: "2026-11-09T10:00:00Z", session_id: "ctx-55" })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settleUntil(() => conversationsSnapshot().status === "ready"); // let the thread resolve first
+    expect(labeledField("Started in")).toBeNull();
+    expect(document.querySelector('a[href="#/conversations/ctx-55"]')).toBeNull();
   });
 });

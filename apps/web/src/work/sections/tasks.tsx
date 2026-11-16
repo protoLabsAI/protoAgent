@@ -19,17 +19,17 @@ import { useWorkActionSize } from "../../shell/SurfaceFrame";
  * Edit (the existing PATCH, reusing `TaskCreateDialog`) and Delete…, which hands back an
  * `undo_token` (bd-0ia51.5) driving the §4.5 undo toast.
  */
-import { useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Skeleton } from "@protolabsai/ui/data";
 import { Button, Callout, TextLink } from "@protolabsai/ui/primitives";
 import { FormField, Input } from "@protolabsai/ui/forms";
 import { CircleDashed } from "lucide-react";
 import { WorkEmpty as Empty } from "../WorkEmpty";
-import { useToast } from "@protolabsai/ui/overlays";
+import { Tooltip, useToast } from "@protolabsai/ui/overlays";
 
 import { chatStore } from "../../chat/chat-store";
-import { useConversationRow } from "../../chat/conversations-store";
+import { useConversationRow, type ConversationRow } from "../../chat/conversations-store";
 import { navigate } from "../../app/palette/nav";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queries";
@@ -67,8 +67,11 @@ function Description({ text }: { text: string }) {
   );
 }
 
-function taskFields(task: Task): WorkField[] {
+function taskFields(task: Task, startedIn?: ReactNode): WorkField[] {
   const fields: WorkField[] = [{ label: "Type and priority", value: typeAndPriority(task) }];
+  // "Started in" sits right after Type and priority (§11.1 item 5) — the one source value the
+  // shared builder produced. Absent (empty / gone chat / closed job) means no field at all.
+  if (startedIn != null) fields.push({ label: "Started in", value: startedIn });
   if (task.assignee) fields.push({ label: "Assignee", value: `Assigned to ${task.assignee}` });
   // The 24h quiet line (ADR 0129) — muted information in a plain field, never a warning.
   const staleDays = taskStaleDays(task);
@@ -146,11 +149,61 @@ function jobMeta(item: WorkItem): string {
   return typeAndPriority(task);
 }
 
-/** The caller name for the provenance link — the conversation row's origin label with its
- *  leading "From " / "Delegation from " dropped so it reads "…from Claude Code" (§4.6). Empty
- *  when the thread isn't listed yet, which falls back to the plain "Started in a conversation". */
-function conversationOrigin(originLabel: string | undefined): string {
-  return (originLabel ?? "").replace(/^(from|delegation from)\s+/i, "").trim();
+// The thread-title link is cut to one line (§11.1 item 6, the full title lives in a Tooltip); the
+// origin that follows it is muted. Token-only inline styles — this card ships no design-system
+// change — so a single builder owns both without a new stylesheet rule.
+const STARTED_IN_TITLE: CSSProperties = {
+  display: "inline-block", maxWidth: "100%", overflow: "hidden",
+  textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom",
+};
+const STARTED_IN_ORIGIN: CSSProperties = { color: "var(--pl-color-fg-muted)" };
+
+/** The "Started in" source value — one builder shared by `TaskDetail` (via `taskFields`) and the
+ *  waiting detail's Source field so the wording can't drift (§11.1 items 5–6). Returns the field
+ *  value, or null when there's nothing to point at: no source, or a `chat-` id whose chat is gone
+ *  (the waiting detail keeps its own "Its chat was deleted" line for that). A `job:`/`background:`
+ *  turn (ADR 0131 D2) is muted text; a live console chat and an A2A thread each link out. */
+function startedInValue({ task, convRow, chatTitle, openChat }: {
+  task: Task;
+  convRow: ConversationRow | null;
+  chatTitle: string | null;
+  openChat?: (sessionId: string) => void | Promise<void>;
+}): ReactNode {
+  const source = task.session_id ?? "";
+  if (!source) return null;
+  if (source.startsWith("job:") || source.startsWith("background:")) return "Started by a background job";
+  if (source.startsWith("chat-")) {
+    // A live console chat opens in place; a chat that's gone leaves no field (criterion 6).
+    return chatTitle
+      ? <TextLink href="#" onClick={(event: MouseEvent) => { event.preventDefault(); void openChat?.(source); }}>
+          Started in chat {chatTitle}
+        </TextLink>
+      : null;
+  }
+  // A real A2A context links into its read-only thread at `#/conversations/<id>` (§4.6). Listed:
+  // name the thread (clamped, full title in a Tooltip) and its origin; not listed: a plain link.
+  const href = `#/conversations/${source}`;
+  const open = (event: MouseEvent) => { event.preventDefault(); navigate({ kind: "conversation", contextId: source }); };
+  if (!convRow) return <TextLink href={href} onClick={open}>Open the conversation</TextLink>;
+  return (
+    <>
+      <Tooltip label={convRow.title}>
+        <TextLink href={href} onClick={open} style={STARTED_IN_TITLE}>{convRow.title}</TextLink>
+      </Tooltip>
+      {convRow.origin_label ? <span style={STARTED_IN_ORIGIN}> · {convRow.origin_label}</span> : null}
+    </>
+  );
+}
+
+/** The thread/chat inputs the shared `startedInValue` builder needs, resolved from the live stores
+ *  (the Conversations list for an A2A thread, the chat store for a `chat-` title). A hook so both
+ *  details read the same singletons and re-render when either changes. */
+function useStartedIn(task: Task, openChat?: (sessionId: string) => void | Promise<void>): ReactNode {
+  const source = task.session_id ?? "";
+  const convRow = useConversationRow(source);
+  const sessions = useSyncExternalStore(chatStore.subscribe, () => chatStore.getSnapshot().sessions);
+  const chatTitle = source.startsWith("chat-") ? sessions.find((s) => s.id === source)?.title ?? null : null;
+  return startedInValue({ task, convRow, chatTitle, openChat });
 }
 
 async function sourceHasTurns(sessionId: string): Promise<boolean> {
@@ -162,9 +215,9 @@ async function sourceHasTurns(sessionId: string): Promise<boolean> {
 }
 
 /** Waiting jobs are answered here even when their originating session was never a chat. */
-function WaitingTaskDetail({ task, actions, openChat, refresh }: {
+function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
   task: Task; actions: WorkAction[]; openChat?: (sessionId: string) => void | Promise<void>;
-  refresh: () => Promise<unknown>;
+  refresh: () => Promise<unknown>; startedIn: ReactNode;
 }) {
   const size = useWorkActionSize();
   const [reply, setReply] = useState("");
@@ -173,9 +226,6 @@ function WaitingTaskDetail({ task, actions, openChat, refresh }: {
   // Retrying finishes the same reply instead of creating another chat or turn.
   const attempt = useRef<{ sessionId: string; id: string; text: string; sent: boolean; fresh: boolean } | null>(null);
   const source = task.session_id ?? "";
-  // The conversation row (if this agent lists the thread) names who started it, for the §4.6
-  // provenance link. Unknown → the plain "Started in a conversation".
-  const convRow = useConversationRow(source);
   const history = useQuery({
     queryKey: ["work-task-source", task.id, source],
     queryFn: () => sourceHasTurns(source),
@@ -228,22 +278,10 @@ function WaitingTaskDetail({ task, actions, openChat, refresh }: {
   if (history.data && !history.isError && openChat) waitingActions.push({
     id: "open-chat", label: "Open chat", run: async () => openChat(source),
   });
-  // An A2A context's provenance links into its read-only thread at `#/conversations/<source>`
-  // (§4.6), naming the caller when the Conversations list knows it. A `job:` or deleted-`chat-`
-  // source has no thread to open, so those stay as plain muted text.
-  const origin = conversationOrigin(convRow?.origin_label);
-  const provenance: ReactNode = source.startsWith("job:") ? "Started by a background job"
-    : source.startsWith("chat-") ? "Its chat was deleted"
-    // A real A2A context links into its thread; a missing source (no context to open) keeps the
-    // plain text rather than a dead `#/conversations/` link.
-    : source ? (
-      <TextLink
-        href={`#/conversations/${source}`}
-        onClick={(event) => { event.preventDefault(); navigate({ kind: "conversation", contextId: source }); }}
-      >
-        {origin ? `Started in a conversation from ${origin}` : "Started in a conversation"}
-      </TextLink>
-    ) : "Started in a conversation";
+  // The Source field carries the one shared "Started in" value (§11.1 item 6) when the source has
+  // no turns. A `chat-` id whose chat is gone has no shared value — keep the existing deleted-chat
+  // line there; an empty source has nothing to point at, so the field drops out.
+  const provenance: ReactNode = startedIn ?? (source.startsWith("chat-") ? "Its chat was deleted" : null);
   return <WorkDetail title={task.title} status="needs-you" type="Job" technical={{ Id: task.id }}
     onUndo={async (token) => { await api.undo(token); await refresh(); }}
     actions={send.isPending ? [] : [...waitingActions, ...actions]}
@@ -276,6 +314,9 @@ function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId:
   const toast = useToast();
   const [editOpen, setEditOpen] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: queryKeys.tasks });
+  // Where this job started — shown on every open job (§11.1 item 5) and shared with the waiting
+  // detail's Source field so the two can't drift.
+  const startedIn = useStartedIn(task, openChat);
 
   const edit = useMutation({
     mutationFn: (draft: IssueDraft) =>
@@ -399,11 +440,12 @@ function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId:
 
   return (
     <>
-      {status === "waiting" ? <WaitingTaskDetail task={task} openChat={openChat} refresh={refresh}
+      {status === "waiting" ? <WaitingTaskDetail task={task} openChat={openChat} refresh={refresh} startedIn={startedIn}
         actions={actions.filter((action) => action.id === "edit" || action.id === "delete")} /> : <WorkDetail
         title={task.title}
         status={item.status}
-        fields={taskFields(task)}
+        // Closed jobs show no "Started in" — finished work leaves Work (criterion 8).
+        fields={taskFields(task, isClosed ? undefined : startedIn)}
         actions={actions}
         technical={{ Id: task.id }}
         type="Job"

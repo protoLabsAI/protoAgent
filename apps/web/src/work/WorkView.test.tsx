@@ -532,7 +532,9 @@ async function fillInput(value: string) {
 }
 
 it.each([
-  ["a2a-session", "Started in a conversation"],
+  // Revision 5 (§11.1 item 6): an A2A context the conversations store doesn't list links out as
+  // "Open the conversation" — no live rows are seeded here, so this is the not-listed fallback.
+  ["a2a-session", "Open the conversation"],
   ["job:daily", "Started by a background job"],
   ["chat-deleted", "Its chat was deleted"],
 ])("opens the waiting detail for %s, with provenance and no chat jump", async (source, provenance) => {
