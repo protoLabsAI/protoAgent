@@ -1,0 +1,1 @@
+- **Incognito chats leave no memory on delete.** Deleting or clearing an incognito chat now always forgets its session's memory rows — the server forces it, whatever the request asked (ADR 0132 D5). Anything an incognito chat wrote to memory before the write-time guard landed is cleaned up too.
