@@ -109,6 +109,38 @@ it("orders the four groups, hides empty ones down to the approved all-empty copy
   expect(host.textContent).toContain("Nothing needs you, nothing is running or planned, and you haven't given standing instructions.");
 });
 
+it.each(["overview", "doing-now"])("%s rows and detail pills reflect task activity", async (section) => {
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const cases = [
+    { id: "idle", activity: "idle", minutes: 45, lead: "in progress · idle 45m", pill: "in progress · idle 45m", spinner: true },
+    { id: "stalled", activity: "stalled", minutes: 45, lead: "stalled", pill: "stalled", spinner: false },
+    { id: "old-stalled", activity: "stalled", minutes: 2880, lead: "No activity for 2 days", pill: "stalled", spinner: false },
+    { id: "driven", activity: "driven", minutes: 0, lead: "Task", pill: "running", spinner: true },
+    { id: "legacy", activity: undefined, minutes: 0, lead: "Task", pill: "running", spinner: true },
+  ] as const;
+  data.sources.tasks.items = cases.map(({ id, activity, minutes }) => task(id, "in_progress", {
+    raw: { id, title: id, status: "in_progress", activity, updated_at: new Date(now - minutes * 60_000).toISOString() },
+  }));
+  useUI.setState({ surfaceStates: { work: { section } } });
+  await render("modal");
+  for (const { id, lead, pill, spinner } of cases) {
+    const row = host.querySelector<HTMLButtonElement>(`[data-surface-focus="task:${id}"]`)!;
+    expect(row.querySelector(".work-row__meta")?.textContent).toBe(lead === "Task" ? lead : `${lead} · Task`);
+    expect(!!row.querySelector(".pl-spinner")).toBe(spinner);
+    await act(async () => row.click());
+    expect(host.querySelector(".work-detail__header .pl-badge")?.textContent).toBe(pill);
+    await click(`Back to ${section === "overview" ? "Overview" : "Doing now"}`);
+  }
+});
+
+it("an unscheduled task's detail says not started", async () => {
+  data.sources.tasks.items = [task("queued", "open")];
+  await render("modal");
+  await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
+  expect(host.querySelector(".work-detail__header .pl-badge")?.textContent).toBe("not started");
+});
+
 it("a picked group shows its help line and rows, or its inline empty text", async () => {
   data.sources.watches.items = [{ kind: "watch", id: "w1", status: "waiting", title: "CI goes green", meta: "Fires once when met", raw: { id: "w1", status: "active" } }];
   useUI.setState({ surfaceStates: { work: { section: "coming-up" } } });

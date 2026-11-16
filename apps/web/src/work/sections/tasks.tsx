@@ -117,7 +117,7 @@ function jobShowsInWork(item: WorkItem): boolean {
 // "stalled" once the stall loop has parked it. `driven` or a missing field (an older server
 // that doesn't report activity) returns null — today's label, never guessing it's stuck. Plain
 // muted text, no warning colour (the operator-copy rule in tone.ts).
-function activityLead(task: Task, now: number = Date.now()): string | null {
+export function activityLead(task: Task, now: number = Date.now()): string | null {
   if (task.activity === "stalled") return "stalled";
   if (task.activity !== "idle") return null;
   const last = new Date(task.updated_at || task.created_at || "").getTime();
@@ -444,6 +444,7 @@ function TaskDetail({ item, openChat }: { item: WorkItem; openChat?: (sessionId:
         actions={actions.filter((action) => action.id === "edit" || action.id === "delete")} /> : <WorkDetail
         title={task.title}
         status={item.status}
+        statusLabel={notStarted ? "not started" : isActive ? activityLead(task) ?? undefined : undefined}
         // Closed jobs show no "Started in" — finished work leaves Work (criterion 8).
         fields={taskFields(task, isClosed ? undefined : startedIn)}
         actions={actions}
