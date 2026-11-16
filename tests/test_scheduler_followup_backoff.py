@@ -303,7 +303,7 @@ def test_editing_a_job_clears_its_backoff(tmp_path):
 
 
 @pytest.mark.parametrize("release", ["deadline", "answered", "edit"])
-def test_backoff_survives_restart_and_release_is_persisted(tmp_path, release):
+def test_backoff_survives_restart_and_release_is_persisted(tmp_path, monkeypatch, release):
     from scheduler.local import LocalScheduler
 
     scheduler = LocalScheduler("durable", invoke_url="http://test", db_dir=tmp_path)
@@ -320,7 +320,11 @@ def test_backoff_survives_restart_and_release_is_persisted(tmp_path, release):
     if release == "deadline":
         assert not scheduler._followup_backed_off(job, now + timedelta(hours=1))
     elif release == "answered":
-        followup_backoff.set_waiting_check(lambda session: False)
+        # A real restart re-wires the waiting re-test from the server at BOOT (not by hand):
+        # the chat is no longer waiting, so the reloaded backoff clears early on the next tick.
+        monkeypatch.setattr(server.STATE, "tasks_store", _FakeTasks(), raising=False)
+        monkeypatch.setattr(server.STATE, "decision_store", _FakeDecisions(), raising=False)
+        a2a.register_followup_waiting_check()
         assert not scheduler._followup_backed_off(job, now)
     else:
         scheduler.update_job(job.id, "updated follow up", "*/5 * * * *")
@@ -334,6 +338,44 @@ def test_backoff_survives_restart_and_release_is_persisted(tmp_path, release):
     scheduler = LocalScheduler("durable", invoke_url="http://test", db_dir=tmp_path)
     assert followup_backoff.backoff_until(job.id, job.created_at) == expected
     assert not followup_backoff.is_backed_off(job.id, job.created_at, deadline)
+
+
+def test_restart_reregisters_waiting_check_so_backoff_clears_early(tmp_path, monkeypatch):
+    # The blocking fix: after a restart the deadline is reloaded from the store, but the
+    # waiting re-test lives in the server (it owns the stores — import layering) and must be
+    # re-wired at BOOT, not only when a fresh backoff is armed. Otherwise still_waiting is None
+    # and a reloaded backoff whose chat was already answered stalls to the whole-hour deadline.
+    from scheduler.local import LocalScheduler
+
+    scheduler = LocalScheduler("reboot", invoke_url="http://test", db_dir=tmp_path)
+    job = scheduler.add_job("follow up", "*/5 * * * *", origin_session="chat-42")
+    now = datetime.now(UTC)
+    followup_backoff.set_backoff(job.id, job.created_at, (now + timedelta(hours=1)).timestamp())
+
+    # Restart: process state gone, DB intact. With no predicate re-wired yet, still_waiting is
+    # None and the gate would stall on the deadline — the bug.
+    followup_backoff.clear_all()
+    scheduler = LocalScheduler("reboot", invoke_url="http://test", db_dir=tmp_path)
+    assert followup_backoff.still_waiting("chat-42") is None
+    assert scheduler._followup_backed_off(job, now) is True
+
+    # The server's boot registration re-wires its waiting test against the live stores
+    # (ADR 0131 P1). While the chat is still waiting the gate still holds...
+    tasks = _FakeTasks(waiting_for="chat-42")
+    monkeypatch.setattr(server.STATE, "tasks_store", tasks, raising=False)
+    monkeypatch.setattr(server.STATE, "decision_store", _FakeDecisions(), raising=False)
+    a2a.register_followup_waiting_check()
+    assert scheduler._followup_backed_off(job, now) is True
+
+    # ...and the instant the operator answers, the reloaded backoff clears early — with no
+    # manual set_waiting_check — and that clear is persisted through to the store.
+    tasks._waiting_for = None
+    assert scheduler._followup_backed_off(job, now) is False
+    assert followup_backoff.backoff_until(job.id, job.created_at) is None
+    with scheduler._connect() as db:
+        assert db.execute(
+            "SELECT followup_backoff_until FROM jobs WHERE id = ?", (job.id,)
+        ).fetchone()[0] is None
 
 
 def test_recreated_job_does_not_inherit_backoff_or_stale_writes(tmp_path):

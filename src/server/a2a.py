@@ -1540,7 +1540,8 @@ _SCHEDULED_CARD_HASHES: dict[str, tuple[str, str]] = {}
 # already seen — empty, a NO_UPDATE quiet reply, or a repeat of the last delivered card
 # for the same generation (exactly the cases ``_scheduled_delivery_payload`` suppresses).
 # Resets the moment a run posts a card, fails or is canceled. Sits beside
-# ``_SCHEDULED_CARD_HASHES``; in-memory, so a restart resets it (and the backoff).
+# ``_SCHEDULED_CARD_HASHES``; in-memory, so a restart resets this count — but NOT the backoff
+# deadline itself, which the scheduler store now persists and reloads (ADR 0131 P1, #5299).
 _SCHEDULED_UNCHANGED_RUNS: dict[str, tuple[str, int]] = {}
 
 # A recurring follow-up whose chat is waiting on the operator backs off after this many
@@ -1759,6 +1760,20 @@ def _followup_waiting_on_operator(origin_session: str) -> bool:
     return False
 
 
+def register_followup_waiting_check() -> None:
+    """Wire the server's waiting re-test into the scheduler's follow-up backoff registry.
+
+    The scheduler owns neither the tasks nor the decision store (import layering), so the
+    server — which does — injects ``_followup_waiting_on_operator`` here; the scheduler calls
+    it each tick for a backed-off job and clears the backoff the moment the chat stops
+    waiting. This runs at boot (``agent_init``) so a backoff reloaded from the store after a
+    restart is still cleared early, before any new arm has run to wire the predicate; the
+    arm path (``_apply_followup_backoff``) also calls it. Idempotent."""
+    from scheduler import followup_backoff
+
+    followup_backoff.set_waiting_check(_followup_waiting_on_operator)
+
+
 def _bump_unchanged_run(job_id: str, generation: str) -> int:
     """Increment this job generation's consecutive-unchanged count and return it. A
     stored count from an earlier generation (cancel-and-recreate) restarts at 1."""
@@ -1827,7 +1842,7 @@ def _apply_followup_backoff(outcome, payload):
     # extends the deadline with no new card. Register the waiting re-check so the scheduler
     # can clear this backoff the moment the chat stops waiting (it owns neither store —
     # import layering — so the server, which does, injects its waiting test here). Idempotent.
-    followup_backoff.set_waiting_check(_followup_waiting_on_operator)
+    register_followup_waiting_check()
     already = followup_backoff.backoff_until(job.id, generation)
     followup_backoff.set_backoff(
         job.id, generation, (datetime.now(UTC) + timedelta(seconds=_FOLLOWUP_BACKOFF_SECONDS)).timestamp()

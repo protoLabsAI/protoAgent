@@ -374,17 +374,26 @@ class AcpAdapter(Adapter):
             # stderr tail. getattr: a pooled client missing the seam degrades to 'no
             # failure', never to an AttributeError that fails a working delegate.
             empty = getattr(client, "empty_reply_failure", lambda _r: None)(reply)
+            stop_reason = getattr(client, "last_stop_reason", None)
+            evidence = ""
+            if not reply.strip() or stop_reason == "background_pending":
+                tail = getattr(client, "transcript_tail", lambda: "")()
+                evidence = (
+                    "\n\n[incomplete reply — ended with no final reply]\n"
+                    "Transcript tail (partial evidence, not a final answer):\n"
+                    + (tail or "(no messages or tool calls received)")
+                )
             if empty is not None:
                 if tracker is not None:
                     await tracker.finish(ok=False)
-                raise DelegateError(f"delegate {d.name!r} ({d.command}): no reply — {empty}")
+                raise DelegateError(f"delegate {d.name!r} ({d.command}): no reply — {empty}{evidence}")
             if tracker is not None:
                 await tracker.finish(ok=True)
             # getattr: the pool hands back whatever client the spec resolves to, and a
             # missing stop reason must degrade to 'no marker', never to an AttributeError
             # that turns a working delegate into a hard dispatch failure. ``max_tokens`` /
             # ``refusal`` (the non-empty-but-cut-off reasons) still ride this marker.
-            return _mark_incomplete(reply, getattr(client, "last_stop_reason", None))
+            return _mark_incomplete(reply, stop_reason) + evidence
         except asyncio.CancelledError:
             if tracker is not None:
                 tracker.close()  # synchronous — no awaits mid-cancellation
