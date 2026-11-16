@@ -296,6 +296,22 @@ def role_chain(config, role: str) -> list[str]:
     alias under a native-OAuth provider with no gateway key to route it) is DROPPED with a
     log line naming the role and position, and a chain EMPTIED by that drop is treated as
     blank — so it then inherits — exactly as a scalar slot ``from_dict`` reconciles would.
+
+    The chain-only view; :func:`resolve_role_chain` is the same resolver with the source.
+    """
+    return resolve_role_chain(config, role)[0]
+
+
+def resolve_role_chain(config, role: str) -> tuple[list[str], str | None]:
+    """:func:`role_chain` plus the role its chain ultimately came from — ``(chain, source)``.
+
+    ``source`` is ``role`` when the role declares its own coherent chain, the ancestor role a
+    blank role inherited from (a blank ``compaction`` → ``"aux"`` → ``"main"``), or ``None``
+    when nothing resolves (an empty chain — a fully-blank ``main``, or a blank
+    ``image_describe``, which stays OFF and never inherits here). The resolution, logging and
+    coherence are identical to :func:`role_chain`; this is the single resolver, and the
+    status surface (ADR 0133 M6) reads ``source`` to report whether a role is inherited and
+    from where.
     """
     if role not in _ROLE_FIELDS:
         raise ValueError(f"unknown model role {role!r} (known: {sorted(_ROLE_FIELDS)})")
@@ -322,14 +338,14 @@ def role_chain(config, role: str) -> list[str]:
 
     # ``_ROLE_PARENT`` is a fixed acyclic module constant, so parent resolution always
     # terminates at ``main`` (no parent) — no cycle guard is needed.
-    def _resolve(r: str) -> list[str]:
+    def _resolve(r: str) -> tuple[list[str], str | None]:
         chain = _coherent(_role_raw_chain(config, r), r)
         if chain:
-            return chain
+            return chain, r
         if r == "image_describe":
-            return []  # a blank describe model stays off — never inherits
+            return [], None  # a blank describe model stays off — never inherits
         parent = _ROLE_PARENT.get(r)
-        return _resolve(parent) if parent is not None else []  # main (root) with nothing set
+        return _resolve(parent) if parent is not None else ([], None)  # main (root) with nothing set
 
     return _resolve(role)
 
