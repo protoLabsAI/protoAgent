@@ -462,6 +462,14 @@ def _init_langgraph_agent(headless_setup: bool = False):
         from graph.directives import DirectiveStore
 
         STATE.directive_store = DirectiveStore()  # ADR 0127 D6 — per-chat directive ledger
+    # Follow-up backoff (ADR 0131 P1, #5299): the scheduler reloads a persisted backoff at
+    # startup but owns neither the tasks nor the decision store (import layering), so wire the
+    # server's waiting re-test into the backoff registry now that both stores exist. Without
+    # this, a backoff reloaded after a restart would hold to its full deadline even once the
+    # operator answered, because no new arm has run yet to inject the predicate.
+    from server.a2a import register_followup_waiting_check
+
+    register_followup_waiting_check()
     if STATE.storm_guard is None:
         from inbox import StormGuard
 
