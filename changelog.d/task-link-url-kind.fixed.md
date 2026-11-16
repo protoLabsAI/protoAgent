@@ -1,1 +1,0 @@
-- **Plain task URLs no longer imply active work.** Only GitHub pull-request URLs are tracked as PRs; other URLs are informational, including previously stored links. They no longer keep tasks driven, trigger PR polling, or prevent completed linked work from closing a task.

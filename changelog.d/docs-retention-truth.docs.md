@@ -1,1 +1,0 @@
-- **Retention and restart documentation.** Correct A2A history retention by context and scheduler restart recovery; document Work task retention, inbox pruning, and persisted follow-up backoff.
