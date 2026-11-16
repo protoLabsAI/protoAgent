@@ -1,8 +1,17 @@
 """Debounced session-card gists (ADR 0132 D2).
 
-Daemon timers support both sync and async graph callers without a maintenance
-scan. A new turn invalidates even an already-running model call. No retries run
-without new activity; deletion and card writes share the publication lock.
+Trigger: a debounced after-turn daemon timer rather than a maintenance sweep. A
+timer fires exactly once per quiet period and is cancelled by the next turn, so a
+chat is gisted only after it goes idle AND only after new activity — never on a
+periodic clock that would re-summarize unchanged chats. It also needs no scan of
+every card each tick, and supports both sync and async graph callers.
+
+The model input is bounded with the same caps the session card uses (first user
+message plus the newest few, each clipped): an unbounded first gist (since=0 sends
+the whole transcript) could exceed the gist model's input limit, and the broad
+except in _generate would swallow that and re-schedule every turn, so the chat
+would never get a gist. A new turn invalidates even an already-running model call.
+No retries run without new activity; deletion and card writes share the lock.
 """
 
 import json
@@ -62,6 +71,9 @@ def schedule(state, config):
         if (
             config is None
             or not config.memory_session_gist
+            # 0 is "off" everywhere _coerce_retention parses (and the UI floors it
+            # at 1); honour that instead of letting max(1, …) run it after a second.
+            or config.memory_gist_idle_seconds <= 0
             or memory._PERSISTENCE_DISABLED
             or state.get("incognito")
             or in_goal_turn()
@@ -87,7 +99,17 @@ def schedule(state, config):
                         messages.append(
                             {"role": "user" if isinstance(msg, HumanMessage) else "assistant", "content": content}
                         )
-            payload = json.dumps({"previous_gist": card.get("gist", ""), "messages": messages[since:]})
+            # Bound the payload with the SAME caps the card uses (first user message
+            # plus the newest _SUMMARY_MAX_MESSAGES, each clipped): a long first gist
+            # (since=0 sends the whole transcript) could otherwise exceed the gist
+            # model's input limit, and _generate's broad except would swallow that and
+            # re-schedule every turn, so the chat would never receive a gist. The
+            # previous gist carries the older context the cap drops.
+            new_messages = [
+                {"role": m["role"], "content": memory._clip(m["content"], memory._SUMMARY_MESSAGE_MAX_CHARS)}
+                for m in memory._kept_messages(messages[since:])
+            ]
+            payload = json.dumps({"previous_gist": card.get("gist", ""), "messages": new_messages})
             timer = Timer(
                 max(1, config.memory_gist_idle_seconds), lambda: _generate(path, card, payload, config, timer)
             )

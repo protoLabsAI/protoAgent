@@ -94,6 +94,38 @@ def test_idle_debounce_incremental_input_and_preservation(harness):
     assert h.card()["gist_message_count"] == 10
 
 
+def test_long_chat_payload_is_bounded(harness):
+    """A long first gist (since=0 sends the whole transcript) must not ship the
+    unclipped, uncapped transcript — that could exceed the gist model's input
+    limit and get swallowed, so the chat would never receive a gist."""
+    h = harness
+    h.mw.before_agent(h.state, None)
+    filler = "x" * 5000
+    messages = []
+    for i in range(60):
+        messages.append(HumanMessage(content=f"topic marker {i} {filler}"))
+        messages.append(AIMessage(content=f"reply {i} {filler}"))
+    h.state["messages"] = messages
+    h.mw.after_agent(h.state, None)
+    h.timers[-1].fire()
+    payload = h.calls[0]["messages"]
+    assert len(payload) <= memory._SUMMARY_MAX_MESSAGES
+    assert all(len(m["content"]) <= memory._SUMMARY_MESSAGE_MAX_CHARS for m in payload)
+    # The first user message (the chat's topic) survives the cap, and the chat
+    # still receives a bounded gist rather than a swallowed failure.
+    assert payload[0]["content"].startswith("topic marker 0")
+    assert 0 < len(h.card()["gist"]) <= 240
+
+
+def test_idle_seconds_zero_disables_generation(harness):
+    """gist_idle_seconds: 0 means off (as _coerce_retention documents), not a
+    one-second timer."""
+    h = harness
+    h.config.memory_gist_idle_seconds = 0
+    h.turn(2)  # four new messages — would otherwise schedule
+    assert not h.timers and not h.calls
+
+
 @pytest.mark.parametrize(
     "sid,incognito,goal,enabled",
     [
