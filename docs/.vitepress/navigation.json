@@ -185,6 +185,7 @@
         "/guides/mcp",
         "/guides/discord",
         "/guides/browser-automation",
+        "/guides/what-is-kept",
         "/guides/phone-access",
         "/guides/pairing",
         "/guides/agent-snapshots",
@@ -280,6 +281,10 @@
           "text": "Devices and data",
           "collapsed": false,
           "items": [
+            {
+              "text": "What is kept, and where",
+              "link": "/guides/what-is-kept"
+            },
             {
               "text": "Use protoAgent on your phone or tablet",
               "link": "/guides/phone-access"

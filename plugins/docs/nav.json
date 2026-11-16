@@ -118,6 +118,10 @@
           "label": "Devices and data",
           "items": [
             {
+              "path": "guides/what-is-kept.md",
+              "title": "What is kept, and where"
+            },
+            {
               "path": "guides/phone-access.md",
               "title": "Use protoAgent on your phone or tablet"
             },
