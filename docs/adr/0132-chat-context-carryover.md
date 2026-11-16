@@ -1,6 +1,6 @@
 # ADR 0132 — Chat context carries across tabs: a short gist inline, the rest on demand
 
-- Status: Proposed (2026-11-15). Awaiting Josh's sign-off before anything is boarded.
+- Status: Accepted (2026-11-15, Josh: "sign off now, start the backend"). Backend slices boarded 2026-11-15.
 - Date: 2026-11-15
 - Deciders: Josh Mabry; protoAgent maintainers
 - Builds on: [ADR 0069](./0069-memory-delivery-layer.md) (incognito leaves no memory, D3b), [ADR 0125](./0125-memory-knowledge-history-separation.md) (the memory / knowledge / history split; the digest is an index, D2), [ADR 0130](./0130-server-authoritative-live-sync.md) (server-held chat list), [ADR 0131](./0131-work-knows-its-conversation.md).

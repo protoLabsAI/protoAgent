@@ -1,6 +1,6 @@
 # ADR 0133 — Every core model role takes a fallback chain, set in config
 
-- Status: Proposed (2026-11-15). Awaiting Josh's sign-off before anything is boarded.
+- Status: Accepted (2026-11-15, Josh: "sign off now, start the backend"). Backend slices boarded 2026-11-15.
 - Date: 2026-11-15
 - Deciders: Josh Mabry; protoAgent maintainers
 - Related: [ADR 0132](./0132-chat-context-carryover.md) (the chat gist is a new role that uses this). projectBoard's coder ladders (`coders: {tier: [model, …]}` with `difficulty_tiers`) are the model to follow.
@@ -53,6 +53,8 @@ model:
 - A blank role inherits its parent's **entire chain**. Specific roles inherit the aux chain, and a blank aux inherits the main chain. This is today's inheritance rule, applied to chains.
 - A set chain is **exactly** what's listed. Nothing is appended implicitly: an aux chain of two cheap models never silently escalates to the expensive main model. To get that, list it. Same rule as the board's coder ladders.
 
+**Exceptions to "blank inherits" (keep today's behaviour):** a blank `image_describe_model` stays **off**. Aux may not be able to read images, so it never inherits. A blank `soul_drift_judge_model` and a blank `memory_select_model` inherit the aux chain.
+
 ### D3 — One seam builds every role's model
 
 A new module (`graph/model_roles.py`) provides two functions:
@@ -87,7 +89,7 @@ The roles are main, aux, compaction, harvest (new, inherits aux), facts (new, in
 | **M4** | Move the inline resolvers: goal_eval, memory_select, drift judge, image describe | `src/graph/goals/verifiers.py`, `src/graph/projection.py`, `src/server/maintenance_loops.py`, `src/graph/multimodal.py` | M2 |
 | **M5** | Subagent tiers take chains | `src/graph/subagent_model.py`, `src/graph/agent.py`, a test | M2, M3 (shares `agent.py`) |
 | **M6** | Provider/status surface shows each role's chain and last fallback | `src/operator_api/provider_routes.py`, its test | M2 |
-| **M7** | Settings › Routing edits every role's chain (committed scope) | `src/graph/settings_schema.py`, `apps/web/src/settings/SettingsCategory.tsx`, its test, plus whatever the approved design spec names (split if over 4 files) | M1, M6, designSystem spec approved |
+| **M7** | Settings edits every role's chain (committed scope; split into M7a/b/c per the designSystem spec `docs/design/model-chains-settings.md`, boarded after Josh answers the mockup's open questions) | `src/graph/settings_schema.py`, `apps/web/src/settings/SettingsCategory.tsx`, its test, plus whatever the approved design spec names (split if over 4 files) | M1, M6, designSystem spec approved |
 
 ADR 0132's gist slice (S4) builds its model through `create_role_llm(config, "memory_gist")`, so it depends on M2.
 
