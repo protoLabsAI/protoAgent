@@ -43,7 +43,7 @@ def resolve_memory_store(store=_DEFAULT_MEMORY_STORE):
     return store
 
 
-# Cap the transcript fed to the summarizer (keep the most recent tail).
+# Bound each harvest model input; long conversations are processed in parts.
 _MAX_TRANSCRIPT_CHARS = 16000
 
 
@@ -669,6 +669,37 @@ async def _default_summarizer(transcript: str, config) -> str:
     return extract_output(text).strip() or text.strip()
 
 
+def _transcript_parts(transcript: str) -> list[str]:
+    """Split without dropping text, preferring complete transcript lines."""
+    parts = []
+    while len(transcript) > _MAX_TRANSCRIPT_CHARS:
+        end = transcript.rfind("\n", 0, _MAX_TRANSCRIPT_CHARS)
+        if end <= 0:
+            end = transcript.rfind(" ", 0, _MAX_TRANSCRIPT_CHARS)
+        end = end + 1 if end > 0 else _MAX_TRANSCRIPT_CHARS
+        parts.append(transcript[:end])
+        transcript = transcript[end:]
+    if transcript:
+        parts.append(transcript)
+    return parts
+
+
+async def _summarize_parts(parts: list[str], config, summarizer) -> str:
+    """Summarize every part, then combine; bound reduction inputs too."""
+    summaries = []
+    for part in parts:
+        summary = await summarizer(part, config)
+        if not summary.strip():
+            raise ValueError("harvest summarizer returned an empty part summary")
+        summaries.append(summary)
+    combined = "\n\n".join(summaries)
+    if len(combined) > _MAX_TRANSCRIPT_CHARS:
+        if len(combined) >= sum(map(len, parts)):
+            raise ValueError("harvest part summaries did not shrink")
+        return await _summarize_parts(_transcript_parts(combined), config, summarizer)
+    return await summarizer(combined, config)
+
+
 def facts_allowed(thread_id: str, channel_values: dict) -> bool:
     """Whether a retired thread's facts may be extracted into memory.
 
@@ -766,10 +797,21 @@ async def harvest_thread(
             log.info("[harvest] thread %s is incognito — skipping harvest", thread_id)
             return None
         messages = channel_values.get("messages", [])
-        transcript = render_transcript(messages)
+        import asyncio
+
+        session_id = str(channel_values.get("session_id") or thread_id)
+        archives = await asyncio.to_thread(history_store.list_for_session, session_id, kinds=["archive"])
+        transcript = "\n\n".join(
+            [entry.content for entry in archives] + [render_transcript(messages, max_chars=None)]
+        )
         if not transcript.strip():
             return None
-        summary = await summarizer(transcript, config)
+        parts = _transcript_parts(transcript)
+        summary = (
+            await summarizer(transcript, config)
+            if len(parts) == 1
+            else await _summarize_parts(parts, config, summarizer)
+        )
         if not summary.strip():
             return None
         # Date what we store to when the conversation happened, not when it retired. The
@@ -780,9 +822,6 @@ async def harvest_thread(
         as_of = _as_of(tup)
         if as_of:
             summary = f"[as of {as_of}] {summary}"
-        session_id = str(channel_values.get("session_id") or thread_id)
-        import asyncio
-
         entry_id = await asyncio.to_thread(
             history_store.add,
             summary,
@@ -838,7 +877,8 @@ async def harvest_thread(
                 }
                 if fact_extractor is not None:
                     kwargs["extractor"] = fact_extractor
-                await extract_and_store_facts(transcript, **kwargs)
+                for part in parts:
+                    await extract_and_store_facts(part, **kwargs)
 
         return entry_id
     except Exception:
