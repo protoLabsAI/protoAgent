@@ -10,6 +10,8 @@ by default: off unless configured, and warning-only unless exiting is asked for.
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -18,6 +20,52 @@ from infra.memory_guard import EXIT_CODE, MemoryCeiling, read_rss_bytes
 pytestmark = pytest.mark.platform_sensitive
 
 _MB = 1024 * 1024
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incognito", [True, False, None])
+@pytest.mark.parametrize("destination", ["private", "shared", "file", "background"])
+async def test_incognito_prevents_memory_writes(tmp_path, monkeypatch, incognito, destination):
+    from knowledge.memories import MemoryStore
+    from knowledge.shared_profile import SharedProfileStore
+    from knowledge.store import KnowledgeStore
+    from tools.memory_tools import _build_memory_tools
+
+    knowledge = KnowledgeStore(db_path=str(tmp_path / "agent.db"))
+    memory = MemoryStore(db_path=str(tmp_path / "agent.db"))
+    shared = SharedProfileStore(tmp_path / "commons")
+    monkeypatch.setattr("runtime.state.STATE.shared_profile_store", shared, raising=False)
+    background = SimpleNamespace(spawn_work=AsyncMock(return_value="job-test"))
+    config = SimpleNamespace(memory_shared_profile=destination == "shared")
+    tools = {t.name: t for t in _build_memory_tools(
+        knowledge, config, memory_store=memory, background_mgr=background,
+    )}
+    state = {"session_id": "incognito-test"}
+    if incognito is not None:
+        state["incognito"] = incognito
+    content = "The operator prefers concise answers."
+    if destination in {"private", "shared"}:
+        args = {"content": content, "kind": "profile", "state": state}
+        if destination == "shared":
+            args["shared"] = True
+        result = await tools["memory_save"].ainvoke(args)
+    else:
+        document = tmp_path / "notes.txt"
+        document.write_text(content)
+        source = "https://example.com/notes" if destination == "background" else str(document)
+        result = await tools["knowledge_ingest"].ainvoke({"source": source, "state": state})
+
+    if incognito:
+        assert result == "This is an incognito chat, so nothing is saved to memory."
+    else:
+        assert result.startswith({
+            "private": "Saved memory #", "shared": "Proposed to the shared operator profile",
+            "file": "Ingested ", "background": "Ingesting ",
+        }[destination])
+    assert len(memory.list()) == int(not incognito and destination == "private")
+    assert len(shared.list()) == int(not incognito and destination == "shared")
+    assert knowledge.stats()["total"] == int(not incognito and destination == "file")
+    assert background.spawn_work.await_count == int(not incognito and destination == "background")
 
 
 def test_disabled_by_default() -> None:

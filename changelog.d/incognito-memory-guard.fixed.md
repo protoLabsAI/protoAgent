@@ -1,0 +1,1 @@
+- **Incognito memory protection.** `memory_save` and `knowledge_ingest` now refuse to save from incognito chats, including shared-profile writes and background ingestion, while ordinary chats retain their existing behavior.
