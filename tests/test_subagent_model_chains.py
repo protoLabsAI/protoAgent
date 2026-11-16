@@ -1,13 +1,10 @@
 """A subagent tier's pinned model may be a FALLBACK CHAIN (ADR 0133 M5).
 
-``subagents.<name>.model`` accepted a single id; it now also accepts an ordered list — the
-primary, then each fallback used only on a retryable provider error. The pin still wins the
-``graph.subagent_model`` precedence (pin > turn override > routing.aux_model > main); a list
-pin resolves to its PRIMARY there — the model handed to ``create_agent`` as a real
-BaseChatModel, so a tool-bearing subagent still binds its tools — and the dispatch wires the
-chain's remaining entries as fallbacks on the subagent's ``ObservableModelFallbackMiddleware``,
-so a 429 on the primary fails over to the next model INSTEAD of failing the whole delegation.
-A scalar pin stays a chain of one (today's behavior), and a tier with no pin inherits the
+``subagents.<name>.model`` now also accepts an ordered list — the primary, then each fallback
+used only on a retryable provider error. The pin still wins ``graph.subagent_model`` precedence;
+a list pin resolves to its PRIMARY (the real BaseChatModel ``create_agent`` binds tools onto) and
+the dispatch wires the chain's tail onto the subagent's ``ObservableModelFallbackMiddleware`` so a
+429 on the primary fails over. A scalar pin is a chain of one; an unpinned tier inherits the
 aux→main chain with the main chain's fallbacks unchanged.
 """
 
@@ -23,7 +20,7 @@ import graph.agent as agent_mod
 from graph import model_roles
 from graph.agent import ObservableModelFallbackMiddleware
 from graph.config import LangGraphConfig
-from graph.subagent_model import resolve_subagent_model, subagent_pin_chain
+from graph.subagent_model import pinned_subagent_model, resolve_subagent_model, subagent_pin_chain
 from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
 
 
@@ -34,16 +31,13 @@ class _ProviderError(Exception):
 
 
 class _FakeModel:
-    """A stand-in chat model: the breaker/account helpers key on ``model_name`` and the fake
-    handler on identity — a real chat client is never built in these dispatch tests."""
+    """Breaker/account helpers key on ``model_name``; a real chat client is never built here."""
 
     def __init__(self, name: str):
         self.model_name = name
 
 
 class _Req:
-    """A minimal ModelRequest for driving the fallback middleware (as test_fallback_breaker)."""
-
     def __init__(self, model):
         self.model = model
 
@@ -53,63 +47,40 @@ class _Req:
 
 @pytest.fixture(autouse=True)
 def _reset_diagnostics(monkeypatch):
-    # The role-LLM fallback records a streak/last-fallback per role; isolate each test.
     monkeypatch.setattr(model_roles, "_last_fallbacks", {})
     monkeypatch.setattr(model_roles, "_streaks", set())
-    # A 429 never trips the primary breaker, but a prior test's unavailable-error trip would
-    # route this test's primary straight to the fallback — reset the process-wide breaker.
-    agent_mod.reset_primary_breakers()
-    # OPENAI_API_KEY would make the native-provider coherence check see a gateway key;
-    # PROTOAGENT_MODEL would overwrite model_name in __post_init__.
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("PROTOAGENT_MODEL", raising=False)
+    agent_mod.reset_primary_breakers()  # a prior test's breaker trip must not route this primary
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)  # else read as a gateway key
+    monkeypatch.delenv("PROTOAGENT_MODEL", raising=False)  # else overwrites model_name in __post_init__
 
 
-# ── resolver: a list pin's PRIMARY wins precedence (chain-aware pin reading) ─────
-
-
-def test_resolve_subagent_model_reads_a_list_pins_primary():
+def test_list_pin_resolves_to_its_primary(monkeypatch):
     cfg = LangGraphConfig()
     cfg.aux_model = "protolabs/fast"
-    # A list pin wins over the turn override, resolving to its PRIMARY entry — before the fix
-    # `_clean` dropped the whole list to "" and the pin silently lost to the override/aux.
+    # A list pin wins over the turn override, resolving to its PRIMARY — before the fix `_clean`
+    # dropped the whole list to "" and the pin silently lost to the override/aux.
     assert resolve_subagent_model(cfg, "ignored", "override", pinned=["pa", "pb"]) == "pa"
-    # A blank/all-blank list pin is as empty as "" → the override, then the aux primary.
-    assert resolve_subagent_model(cfg, "ignored", "override", pinned=["", "  "]) == "override"
+    assert resolve_subagent_model(cfg, "ignored", "override", pinned=["", "  "]) == "override"  # all-blank == no pin
     assert resolve_subagent_model(cfg, "ignored", "", pinned=[]) == "protolabs/fast"
-
-
-def test_registry_list_pin_resolves_to_its_primary(monkeypatch):
-    # The pinned= arg is omitted (None) → the pin is read from the registry. This is the
-    # background-fire path (background.manager carries the resolved primary in fire metadata);
-    # a list pin now yields its primary instead of `_clean` dropping the whole list to "".
-    from graph.subagent_model import pinned_subagent_model
-
+    # pinned=None → read from the registry (the background-fire path); a list pin yields its primary.
     sub = SubagentConfig(name="stub", description="d", system_prompt="p", model=["pa", "pb"])
     monkeypatch.setitem(SUBAGENT_REGISTRY, "stub", sub)
     assert pinned_subagent_model("stub") == "pa"
     assert resolve_subagent_model(LangGraphConfig(), "stub", "override") == "pa"  # pin > override
 
 
-def test_subagent_pin_chain_normalizes_scalar_list_and_blanks():
+def test_subagent_pin_chain_normalizes_and_drops_incoherent_entries():
     cfg = LangGraphConfig()
     assert subagent_pin_chain(cfg, ["a", "b"]) == ["a", "b"]
     assert subagent_pin_chain(cfg, "a") == ["a"]  # a scalar is a chain of one
     assert subagent_pin_chain(cfg, "") == []  # no pin → inherit (empty chain)
-    assert subagent_pin_chain(cfg, ["", "  "]) == []  # all blank → no pin
-    assert subagent_pin_chain(cfg, [" a ", "", "b"]) == ["a", "b"]  # stripped, blanks dropped
-
-
-def test_subagent_pin_chain_drops_incoherent_entries_under_native_provider():
-    # Native-OAuth provider, no gateway key: a bare '/'-alias can't route, so it's dropped
-    # per-entry (the same coherence role_chain applies), leaving the coherent tail.
-    cfg = LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-main")  # api_key="" by default
-    assert subagent_pin_chain(cfg, ["claude-reason", "protolabs/alias"]) == ["claude-reason"]
-    # A chain whose EVERY entry is incoherent empties to [] → the tier inherits (no pin),
-    # exactly as a scalar incoherent pin would (not a dangling route onto an unroutable alias).
-    assert subagent_pin_chain(cfg, ["protolabs/a", "protolabs/b"]) == []
-    # The coherence drop is gated on the native-OAuth-without-gateway shape: under a gateway
-    # provider the very same aliases route fine, so the full chain is kept verbatim.
+    assert subagent_pin_chain(cfg, [" a ", "", "b"]) == ["a", "b"]  # stripped; blanks dropped
+    # Native-OAuth provider, no gateway key: a bare '/'-alias can't route, so it drops per-entry
+    # (the coherence role_chain applies); an all-incoherent chain empties to [] → the tier inherits.
+    native = LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-main")
+    assert subagent_pin_chain(native, ["claude-reason", "protolabs/alias"]) == ["claude-reason"]
+    assert subagent_pin_chain(native, ["protolabs/a", "protolabs/b"]) == []
+    # Under a gateway provider the same aliases route fine — kept verbatim.
     assert subagent_pin_chain(LangGraphConfig(model_provider="openai"), ["protolabs/a", "protolabs/b"]) == [
         "protolabs/a",
         "protolabs/b",
@@ -120,9 +91,8 @@ def test_subagent_pin_chain_drops_incoherent_entries_under_native_provider():
 
 
 def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=()):
-    """Drive ``_run_subagent`` far enough to capture BOTH the ``model`` and the ``middleware``
-    it hands to ``create_agent`` — the same harness shape as test_subagent_model_config.py.
-    The fake ``create_llm`` resolves each model id to its prepared fake model."""
+    """Capture the ``model`` and fallback middleware ``_run_subagent`` hands to ``create_agent``
+    (the harness shape of test_subagent_model_config.py); fake ``create_llm`` maps id→fake model."""
     seen: dict = {}
 
     def fake_create_agent(**kwargs):
@@ -135,24 +105,18 @@ def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=()):
 
         return _Agent()
 
-    def fake_create_llm(_cfg, *, model_name=None, **_kw):
-        return models.get(model_name, object())
-
     monkeypatch.setattr(agent_mod, "create_agent", fake_create_agent)
-    # The primary AND every chain fallback are built through agent's create_llm; the subagent
-    # pin no longer builds a Runnable-only chain model out of model_roles.
-    monkeypatch.setattr(agent_mod, "create_llm", fake_create_llm)
+    monkeypatch.setattr(agent_mod, "create_llm", lambda _c, *, model_name=None, **_k: models.get(model_name, object()))
 
     cfg = LangGraphConfig(model_provider="openai")
     cfg.routing_fallback_models = list(routing_fallbacks)
     sub = SubagentConfig(name="stub", description="d", system_prompt="p", tools=["current_time"], model=pin)
     monkeypatch.setitem(SUBAGENT_REGISTRY, "stub", sub)
-    tool = SimpleNamespace(name="current_time")
     try:
         asyncio.run(
             agent_mod._run_subagent(
                 config=cfg,
-                tool_map={"current_time": tool},
+                tool_map={"current_time": SimpleNamespace(name="current_time")},
                 available_subagents="stub",
                 prompt="go",
                 subagent_type="stub",
@@ -161,26 +125,20 @@ def _capture_dispatch(monkeypatch, *, pin, models, routing_fallbacks=()):
         )
     except Exception:  # noqa: BLE001 — the fake agent fails past create_agent; only the capture matters
         pass
-    return seen.get("model"), seen.get("middleware", [])
-
-
-def _fallback_mw(middleware):
-    return next((m for m in middleware if isinstance(m, ObservableModelFallbackMiddleware)), None)
+    mw = next((m for m in seen.get("middleware", []) if isinstance(m, ObservableModelFallbackMiddleware)), None)
+    return seen.get("model"), mw
 
 
 def test_pinned_chain_tier_fails_over_to_the_second_model(monkeypatch):
-    models = {"a": _FakeModel("a"), "b": _FakeModel("b")}
-    model, middleware = _capture_dispatch(monkeypatch, pin=["a", "b"], models=models)
-
-    # The chain's PRIMARY — a real (fake) BaseChatModel create_agent can bind_tools onto for a
-    # tool-bearing subagent — is handed to create_agent, NOT a Runnable-only chain model (the
-    # defect: a _RoleLLM has no bind_tools and would fail the delegation before any failover).
+    # routing_fallbacks is set but must be IGNORED here: a tier that pins its OWN chain fails
+    # over across the chain's tail, not the global fallbacks.
+    models = {"a": _FakeModel("a"), "b": _FakeModel("b"), "glob": _FakeModel("glob")}
+    model, fb = _capture_dispatch(monkeypatch, pin=["a", "b"], models=models, routing_fallbacks=["glob"])
+    # The PRIMARY — a real (fake) BaseChatModel create_agent can bind_tools onto, NOT a
+    # Runnable-only _RoleLLM that would fail the delegation before any failover. Its tail rides
+    # the SAME observable middleware, keyed on its OWN names (not the globals).
     assert model is models["a"]
-    # The chain's TAIL rides the SAME ObservableModelFallbackMiddleware the lead chain uses,
-    # carrying its OWN names so quota/account routing keys on the chain's models.
-    fb = _fallback_mw(middleware)
     assert fb is not None and fb.models == [models["b"]] and fb._fallback_names == ["b"]
-
     # A 429 on the primary fails over to "b", which answers — driven through the real middleware.
     order: list[str] = []
 
@@ -195,42 +153,27 @@ def test_pinned_chain_tier_fails_over_to_the_second_model(monkeypatch):
     assert order == ["a", "b"]
 
 
-def test_scalar_pin_tier_stays_a_single_model_using_the_global_fallbacks(monkeypatch):
-    # A scalar pin is a chain of one: its model is the primary, and the fallback middleware
-    # (if any) is the GLOBAL routing.fallback_models, exactly as before — NOT the pin.
+def test_scalar_and_unpinned_tiers_use_the_global_fallbacks(monkeypatch):
+    # A scalar pin is a chain of one: its primary + the GLOBAL routing.fallback_models, as before.
     models = {"only": _FakeModel("only"), "glob": _FakeModel("glob")}
-    model, middleware = _capture_dispatch(monkeypatch, pin="only", models=models, routing_fallbacks=["glob"])
+    model, fb = _capture_dispatch(monkeypatch, pin="only", models=models, routing_fallbacks=["glob"])
     assert model is models["only"]
-    fb = _fallback_mw(middleware)
     assert fb is not None and fb.models == [models["glob"]] and fb._fallback_names == ["glob"]
-
-
-def test_unpinned_tier_inherits_and_uses_the_global_fallbacks(monkeypatch):
-    # No pin → inherit (empty pin chain) → the resolved default (here None → the main model);
-    # the MAIN chain's fallbacks (routing.fallback_models) still ride the middleware.
+    # No pin → inherit (here None → the main model); the main chain's fallbacks still ride the mw.
     sentinel = _FakeModel("main")
-    model, middleware = _capture_dispatch(
+    _model, fb = _capture_dispatch(
         monkeypatch, pin="", models={None: sentinel, "glob": _FakeModel("glob")}, routing_fallbacks=["glob"]
     )
-    assert model is sentinel
-    assert _fallback_mw(middleware)._fallback_names == ["glob"]
+    assert _model is sentinel and fb._fallback_names == ["glob"]
 
 
-def test_pinned_chain_wins_over_the_global_fallbacks(monkeypatch):
-    # When a tier pins its OWN chain, the chain's tail is the fallback set — NOT
-    # routing.fallback_models (which still applies to every un-pinned/scalar-pinned tier).
-    models = {"a": _FakeModel("a"), "b": _FakeModel("b"), "glob": _FakeModel("glob")}
-    _model, middleware = _capture_dispatch(monkeypatch, pin=["a", "b"], models=models, routing_fallbacks=["glob"])
-    fb = _fallback_mw(middleware)
-    assert fb.models == [models["b"]] and fb._fallback_names == ["b"]
+def test_researcher_model_parses_as_a_list_and_blank_falls_back(tmp_path):
+    # subagents.researcher.model accepts a list (ADR 0133) and applies without the .strip() crash.
+    import dataclasses
 
-
-# ── config: subagents.researcher.model accepts a list and applies without crashing ──
-
-
-def test_researcher_model_parses_as_a_list(tmp_path):
     import yaml
 
+    from graph.subagents.config import RESEARCHER_CONFIG
     from server.agent_init import _apply_config_subagents
 
     p = tmp_path / "config.yaml"
@@ -240,27 +183,12 @@ def test_researcher_model_parses_as_a_list(tmp_path):
 
     original = SUBAGENT_REGISTRY.get("researcher")
     try:
-        # The researcher special-case overlay once did `(model or "").strip()` — a list would
-        # crash there; the fix keeps the list verbatim on the registry entry.
+        # The overlay once did `(model or "").strip()` (crashes on a list); now a set list is kept
+        # verbatim, an all-blank chain is "" → the base pin.
         _apply_config_subagents(cfg)
         assert SUBAGENT_REGISTRY["researcher"].model == ["protolabs/a", "protolabs/b"]
-    finally:
-        if original is not None:
-            SUBAGENT_REGISTRY["researcher"] = original
-
-
-def test_researcher_blank_list_model_falls_back_to_base():
-    import dataclasses
-
-    from graph.subagents.config import RESEARCHER_CONFIG
-    from server.agent_init import _apply_config_subagents
-
-    original = SUBAGENT_REGISTRY.get("researcher")
-    try:
-        cfg = LangGraphConfig()
-        cfg.researcher = dataclasses.replace(cfg.researcher, model=["", "  "])  # all-blank chain
+        cfg.researcher = dataclasses.replace(cfg.researcher, model=["", "  "])
         _apply_config_subagents(cfg)
-        # An empty chain is as blank as "" → the base pin, exactly like a blank scalar.
         assert SUBAGENT_REGISTRY["researcher"].model == RESEARCHER_CONFIG.model
     finally:
         if original is not None:
