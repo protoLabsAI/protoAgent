@@ -674,6 +674,31 @@ describe("'Started in' on an open job (§11.1 items 5–6)", () => {
     expect(labeledField("Started in")?.querySelector("dd")?.textContent).toBe("Open the conversation");
   });
 
+  it.each([
+    ["in_progress", 8, false, false, false],
+    ["waiting", 8, false, false, false],
+    ["in_progress", 6, false, false, true],
+    ["in_progress", 8, true, false, true],
+    ["in_progress", 8, false, true, true],
+  ])("keeps source links only when usable (%s, %s days, listed=%s, failed=%s)", async (status, days, listed, failed, linked) => {
+    if (failed) apiMock.listConversations.mockRejectedValueOnce(new Error("offline"));
+    else apiMock.listConversations.mockResolvedValueOnce({ conversations: listed ? [startedConvRow()] : [] });
+    const timestamp = new Date(Date.now() - days * 86_400_000).toISOString();
+    await mount(h(TasksSection, ctx({
+      sources: sources({ tasks: src([taskItem({ status, session_id: "ctx-55", created_at: timestamp, updated_at: timestamp })]) }),
+      state: { itemId: "task:task-3" },
+    })));
+    await settleUntil(() => ["ready", "error"].includes(conversationsSnapshot().status) && !allText().includes("Checking source chat"));
+    const field = labeledField(status === "waiting" ? "Source" : "Started in")!;
+    expect(!!field.querySelector('a[href="#/conversations/ctx-55"]')).toBe(linked);
+    if (!linked) {
+      expect(field.querySelector("dd")?.textContent).toBe("Started in a conversation that's no longer kept");
+      expect(field.querySelector("dd span")?.getAttribute("style")).toContain("--pl-color-fg-muted");
+    } else {
+      expect(field.querySelector("dd")?.textContent).toContain(listed ? "Friction triage" : "Open the conversation");
+    }
+  });
+
   it("links a live chat source as 'Started in chat <title>' and opens it (r4)", async () => {
     const chat = chatStore.createSession();
     chatStore.renameSession(chat.id, "Release review");
