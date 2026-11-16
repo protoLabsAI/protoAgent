@@ -1,0 +1,1 @@
+- **Whole-chat harvest summaries.** Retirement summaries now cover compaction archives and the full live conversation, summarizing long chats in parts before combining them. Fact extraction reads the same parts so opening facts are no longer lost to the 16,000-character tail limit.

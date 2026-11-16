@@ -118,7 +118,7 @@ def test_harvest_thread_summarizes_into_history(tmp_path, history_store):
     kb = _FakeKnowledge()
 
     async def fake_summarizer(transcript, config):
-        assert "teal" in transcript  # got the real conversation
+        assert transcript == "User: my favorite color is teal\nAssistant: <output>noted</output>"
         return "User prefers teal."
 
     cid = asyncio.run(
@@ -135,6 +135,70 @@ def test_harvest_thread_summarizes_into_history(tmp_path, history_store):
     assert "teal" in row.content
     assert row.thread_id == "a2a:chat-1"
     assert kb.chunks == []
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_harvest_covers_long_chat_opening_and_live_tail(tmp_path, history_store, archived):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from knowledge.memories import MemoryStore
+
+    opening = "The user's launch code is ORCHID.\n" + "Earlier discussion.\n" * 2500
+    tail = "Recent discussion.\n" * 1000 + "The user chose a Friday launch."
+    assert len(opening + tail) > 60000
+    if archived:
+        history_store.add(opening, kind="archive", session_id="chat-1", namespace="chat-archive:chat-1")
+        history_store.add("Unrelated secret", kind="archive", session_id="other")
+        history_store.add("Old summary", kind="summary", session_id="chat-1")
+    messages = [HumanMessage(content=tail if archived else opening + tail)]
+    saver = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
+        "channel_values": {"messages": messages, "session_id": "chat-1", "operator_chat_turn": True},
+    })))
+    summary_inputs, fact_inputs = [], []
+
+    async def summarize(transcript, config):
+        summary_inputs.append(transcript)
+        return " ".join(word for word in ("ORCHID", "Friday") if word in transcript) or "Discussion."
+
+    async def facts(transcript, config):
+        fact_inputs.append(transcript)
+        return ["The user's launch code is ORCHID."] if "ORCHID" in transcript else []
+
+    memory = MemoryStore(tmp_path / "facts.db")
+    cid = asyncio.run(harvest_thread(
+        "a2a:chat-1", checkpointer=saver, knowledge_store=None, history_store=history_store,
+        memory_store=memory, config=SimpleNamespace(knowledge_facts=True),
+        summarizer=summarize, fact_extractor=facts, raise_on_error=True,
+    ))
+    assert history_store.get(cid).content == "ORCHID Friday"
+    assert summary_inputs[:-1] == fact_inputs
+    assert all(len(part) <= 16000 for part in summary_inputs)
+    raw = "".join(fact_inputs)
+    assert opening.strip() in raw and tail in raw
+    assert "Unrelated secret" not in raw and "Old summary" not in raw
+    assert memory.list(kind="fact")[0].content == "The user's launch code is ORCHID."
+
+
+@pytest.mark.parametrize("failure", ["archive", "part"])
+def test_harvest_does_not_save_partial_summary_on_read_or_part_failure(history_store, monkeypatch, failure):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    saver = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
+        "channel_values": {"messages": [HumanMessage(content="x" * 60000)]},
+    })))
+    if failure == "archive":
+        def fail_read(*args, **kwargs):
+            raise RuntimeError("archive unavailable")
+        monkeypatch.setattr(history_store, "list_for_session", fail_read)
+    summarizer = AsyncMock(side_effect=["First part.", RuntimeError("part unavailable")])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        asyncio.run(harvest_thread(
+            "chat", checkpointer=saver, knowledge_store=None, config=object(),
+            summarizer=summarizer, raise_on_error=True,
+        ))
+    assert history_store.stats()["summary"] == 0
 
 
 def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
