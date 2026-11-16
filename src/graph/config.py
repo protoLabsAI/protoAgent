@@ -1627,6 +1627,8 @@ class LangGraphConfig:
     memory_harvest_model: str | list[str] = ""
     memory_facts_model: str | list[str] = ""
     memory_gist_model: str | list[str] = ""
+    memory_session_gist: bool = True
+    memory_gist_idle_seconds: int = 120
     # Session-summary file retention (the ``memory/*.json`` files behind the prior-session
     # digest and recall_session). Nothing pruned them before. The periodic maintenance
     # sweep deletes files last written more than ``session_retention_days`` ago, then the
@@ -2762,6 +2764,12 @@ class LangGraphConfig:
             memory_harvest_model=_model_role(memory.get("harvest_model", cls.memory_harvest_model), cls.memory_harvest_model),
             memory_facts_model=_model_role(memory.get("facts_model", cls.memory_facts_model), cls.memory_facts_model),
             memory_gist_model=_model_role(memory.get("gist_model", cls.memory_gist_model), cls.memory_gist_model),
+            memory_session_gist=not _falsey(
+                memory.get("session_gist"), default=not cls.memory_session_gist
+            ),
+            memory_gist_idle_seconds=_coerce_retention(
+                memory.get("gist_idle_seconds"), cls.memory_gist_idle_seconds, "memory.gist_idle_seconds"
+            ),
             memory_session_retention_days=_coerce_retention(
                 memory.get("session_retention_days"), cls.memory_session_retention_days, "memory.session_retention_days"
             ),
