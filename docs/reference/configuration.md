@@ -136,7 +136,7 @@ model:
 
 | Key | Default | What |
 |---|---|---|
-| `name` | `protolabs/reasoning` | The lead model. `<id>:<model>` names the connection that serves it (`gateway:protolabs/reasoning`, `anthropic-oauth:claude-sonnet-5`); a bare gateway alias routes to the gateway. |
+| `name` | `protolabs/reasoning` | The lead model, or an ordered **fallback chain** — a list whose primary is first and each fallback follows ([ADR 0133](../adr/0133-model-roles-with-fallback-chains.md)); the legacy `routing.fallback_models` tail still appends after it. A string is a chain of one (today's shape, unchanged). `<id>:<model>` names the connection that serves it (`gateway:protolabs/reasoning`, `anthropic-oauth:claude-sonnet-5`); a bare gateway alias routes to the gateway. |
 | `temperature` | `0.2` | Sampling temperature. |
 | `max_tokens` | `32768` | Per-call output cap. 32k headroom for the Qwen models we run. |
 | `max_iterations` | `2000` | LangGraph `recursion_limit` for the tool loop — counts graph steps through the middleware chain, not tool calls 1:1 (~8 steps/tool call, so 2000 ≈ 250 tool calls/turn). |
@@ -245,7 +245,7 @@ The built-in `subagents.researcher` block accepts the fields below. Plugin roles
 | `enabled` | `true` | If false, the subagent is still registered but dispatches return "disabled" errors. |
 | `tools` | researcher tool list | Allowlist; see the researcher example in [Configure subagents](/guides/subagents#_3-add-to-the-yaml). Tool names not listed are unavailable to this role. |
 | `max_turns` | `40` | Tool rounds per delegation: the subagent can call tools this many times, then it must answer. The runner converts this into LangGraph's step-based `recursion_limit` using the compiled middleware stack, so adding middleware never shrinks it. Round `max_turns + 1` hard-stops, and the partial output comes back marked `hard-stopped at max_turns`. |
-| `model` | `""` | Pin this subagent to a model. A subagent run picks its model in this order: this pin, then the delegating turn's model override (the chat tab's pick, `metadata.model`), then `routing.aux_model`, then the main model. The same order covers `task` / `task_batch`, `/<subagent>` slash runs and background jobs. A background job runs as a detached turn, so it takes the pin or the override when one is set and otherwise runs on the main model. |
+| `model` | `""` | Pin this subagent to a model, or an ordered fallback chain (a list; [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md)). A subagent run picks its model in this order: this pin, then the delegating turn's model override (the chat tab's pick, `metadata.model`), then `routing.aux_model`, then the main model. The same order covers `task` / `task_batch`, `/<subagent>` slash runs and background jobs. A background job runs as a detached turn, so it takes the pin or the override when one is set and otherwise runs on the main model. |
 
 Two `subagents`-block keys govern **fan-out** via the `task_batch` tool (concurrent delegation):
 
@@ -357,7 +357,7 @@ compaction:
 | `max_tokens` | `200000` | Absolute token ceiling, OR-ed with `trigger`: on a chat thread compaction fires at **min(fraction × window, max_tokens)**. Without it a 1M-window model waited for 800k tokens, re-sending a huge prompt on every call. `0` disables the ceiling. |
 | `system_thread_max_tokens` | `30000` | A much lower absolute ceiling applied **only** on background `system:*` threads (e.g. scheduled wakes on `system:activity`), OR-ed with `trigger` the same way `max_tokens` is — so on a system thread the effective trigger is **min(fraction × window, max_tokens, system_thread_max_tokens)** — so wakes compact early and run at a small, bounded context instead of re-sending the whole accumulated thread. Chat threads are unaffected. On a system thread a compaction keeps at most `system_thread_max_tokens // 2` tokens of the newest history verbatim (fewer than `keep_messages` when those are large, and always the newest message), so the thread lands well under the ceiling instead of on it. To avoid re-compacting every step, a system compaction fires only when it would summarize away at least `system_thread_max_tokens // 4` tokens of new history; the previous compaction's notes don't count toward that. `0` disables the separate system-thread ceiling. |
 | `keep_messages` | `20` | Most-recent messages kept verbatim. |
-| `model` | `""` | Summarizer model. Blank = `routing.aux_model`, then the main model. |
+| `model` | `""` | Summarizer model, or an ordered fallback chain (a list; [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md)). Blank = inherit the `routing.aux_model` chain, then the main chain. |
 
 **Which window.** A `fraction:` trigger is sized off the window of the model **this turn** runs on — a chat tab's model override included — not the summarizer's. The window comes from the gateway's model info; when the gateway doesn't know the model, from the model's own langchain profile (`claude-opus-5-5`, `gpt-5.4`, …); for the `openai-codex` lane, a conservative 272k (the ChatGPT backend is smaller than the public API card); otherwise a conservative family window (`gpt-*` 272k, `claude-*` 200k). When no window is known at all, the `max_tokens` ceiling alone triggers (or `messages:60`, logged, when the ceiling is `0`).
 
@@ -724,18 +724,18 @@ runtime:
 
 ## `routing`
 
-Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback). `aux_model` is a separate, optional cheap/fast alias for non-reasoning calls.
+On a primary-model error, retry on each fallback model in order. `fallback_models` is the legacy way to write the **main** model's fallbacks; it is appended after `model.name`'s primary so `model.name` + `fallback_models` reads as the one main chain. Since [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md) **every** model role — not just the main model — takes a fallback chain: any role field (`aux_model` included) accepts an ordered list as well as a single string, and a blank role inherits its parent's whole chain (specific role → `aux_model` → main). A fallback fires only on a retryable failure (429 / quota / 5xx / timeout / connection), never on a bad request. See [Model fallback chains](../guides/model-fallback-chains.md).
 
 ```yaml
 routing:
-  fallback_models: [claude-haiku-4-5, gpt-5]
-  aux_model: ""        # cheap/fast alias for summarization, goal-verify, subagent delegation
+  fallback_models: [claude-haiku-4-5, gpt-5]   # legacy main-chain tail (model.name's fallbacks)
+  aux_model: [protolabs/fast, gpt-6-luna]      # a cheap/fast chain; a bare string is still valid
 ```
 
 | Key | Default | What |
 |---|---|---|
-| `fallback_models` | `[]` | Models to retry on a primary-model error, in order. Empty = no fallback. |
-| `aux_model` | `""` | Single cheap/fast alias for non-reasoning calls (compaction summarizer, goal verifier, subagent delegation). Blank = everything runs on the main model; each path's own override still wins. |
+| `fallback_models` | `[]` | Legacy tail of the **main** model's fallback chain, retried in order after `model.name`. Empty = the main chain is whatever `model.name` lists on its own. Prefer putting the whole chain in `model.name` (a list) for a new config. |
+| `aux_model` | `""` | Cheap/fast alias for non-reasoning calls (compaction summarizer, goal verifier, subagent delegation). A single model or an ordered fallback chain (a list). Blank = inherit the main chain; each role's own override still wins. |
 
 ### Failover under quota
 
@@ -829,7 +829,7 @@ goal:
 | `enabled` | `true` | Wire goal mode. No goal runs until set. |
 | `max_iterations` | `8` | Max continuation turns before a goal is `exhausted`. |
 | `no_progress_limit` | `3` | Consecutive unchanged progress checks before `unachievable`. Concrete verifiers compare reason/evidence; LLM goals compare the saved plan. |
-| `eval_model` | `""` | Model for the `llm` verifier; blank uses `routing.aux_model`, then the main model. |
+| `eval_model` | `""` | Model for the `llm` verifier, or an ordered fallback chain (a list; [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md)). Blank inherits the `routing.aux_model` chain, then the main chain. |
 | `verify_timeout` | `120` | Default wall-clock seconds for `command`/`test` verifiers; their `timeout` spec overrides it. CI checks use the GitHub CLI runner's separate timeout. |
 | `max_rounds_per_turn` | `50` | Model rounds per goal-driven turn. At the cap, verify then pause if unmet; the goal stays active until a new message or trigger resumes it. `0` disables this cap. The smaller of this and `model.round_hard_cap` applies. Hot-applies on save. |
 
