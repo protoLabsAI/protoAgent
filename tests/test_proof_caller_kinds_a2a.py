@@ -10,6 +10,7 @@ context``), never a hand-set tier. The peer is authenticated as each kind; the o
 reached via a verified fleet-proxy delegation (ADR 0131 P1a.2) that also runs the source's ``CALL``
 sends. Non-human callers cannot read private content; enrolled consoles are human operators
 and can read the private console projection. Transport projections remain content-free.
+Josh confirmed the enrolled-console expectation on 2026-11-17: "yes fix and remove marker".
 """
 
 from __future__ import annotations
@@ -121,11 +122,13 @@ def principals(delegation_env, tmp_path, monkeypatch):
             code, _ = devices.start_pairing(kind="device")
             _, token = devices.claim_pairing(code, "proof-console")
             state = _authed_state(token)
-            # the console IS a human operator (setup invariant, not a privacy assertion)
-            _require(auth.is_human_operator(state["principal_kind"]),
-                     ("an enrolled console must classify as a human operator", state.get("principal_kind")))
         else:  # federation
             state = _authed_state("fed")
+        # The shared scenarios select their private-history expectation by this classification.
+        # Only the enrolled console is human; the three peer kinds must retain hidden content.
+        _require(auth.is_human_operator(state["principal_kind"]) == (kind == ENROLLED_CONSOLE),
+                 ("caller kind must select the expected private-content visibility", kind,
+                  state.get("principal_kind")))
         if requester_principal is not None:
             state["requester_principal"] = requester_principal
         return ServerCallContext(state=state)
