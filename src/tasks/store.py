@@ -191,6 +191,18 @@ class TaskStore:
             if "stall_nudges" not in cols:
                 self._conn.execute("ALTER TABLE issues ADD COLUMN stall_nudges INTEGER NOT NULL DEFAULT 0")
 
+            # Relationship metadata is unknown on legacy rows; only new creates
+            # opt into version 1. Provenance is never an authorization input.
+            if "rel_version" not in cols:
+                self._conn.execute("ALTER TABLE issues ADD COLUMN rel_version INTEGER NOT NULL DEFAULT 0")
+            for column in ("request_ref", "requester", "promotion_key"):
+                if column not in cols:
+                    self._conn.execute(f"ALTER TABLE issues ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS issues_promotion_key "
+                "ON issues (promotion_key) WHERE promotion_key != ''"
+            )
+
             # Persist the high-water mark independently of surviving tasks. Seed
             # existing boards from their rows without lowering it on restart.
             self._conn.execute(
@@ -288,6 +300,15 @@ class TaskStore:
 
     # ── operations ──────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _norm_relationship(value: dict | None, keys: tuple[str, ...]) -> str:
+        """Keep known, nonempty correlation/provenance fields as compact JSON."""
+        data = {key: str(value.get(key) or "").strip() for key in keys} if value else {}
+        data = {key: item for key, item in data.items() if item}
+        if "kind" in data and data["kind"] not in {"inbox", "a2a"}:
+            del data["kind"]
+        return json.dumps(data, separators=(",", ":")) if data else ""
+
     def create(
         self,
         title: str,
@@ -298,16 +319,26 @@ class TaskStore:
         assignee: str = "",
         session_id: str = "",
         links: Any = None,
+        request: dict | None = None,
+        requester: dict | None = None,
+        promotion_key: str = "",
     ) -> dict[str, Any]:
         title = (title or "").strip()
         if not title:
             raise ValueError("title is required")
         now = _now()
         with self._write():
+            if promotion_key:
+                existing = self._conn.execute(
+                    "SELECT * FROM issues WHERE promotion_key = ?", (promotion_key,)
+                ).fetchone()
+                if existing is not None:
+                    return {**dict(existing), "promoted_existing": True}
             issue_id = self._next_id()
             self._conn.execute(
                 "INSERT INTO issues (id, title, description, status, priority, issue_type, "
-                "assignee, created_at, updated_at, session_id, links) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "assignee, created_at, updated_at, session_id, links, rel_version, request_ref, "
+                "requester, promotion_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     issue_id,
                     title,
@@ -320,6 +351,10 @@ class TaskStore:
                     now,
                     session_id or "",
                     self._norm_links(links),
+                    1,
+                    self._norm_relationship(request, ("kind", "owner", "context_id", "message_id", "task_id", "item_id")),
+                    self._norm_relationship(requester, ("caller", "caller_kind", "on_behalf_of")),
+                    promotion_key,
                 ),
             )
             result = dict(self._row(issue_id))
@@ -348,6 +383,8 @@ class TaskStore:
     def update(self, issue_id: str, **fields: Any) -> dict[str, Any]:
         if not issue_id:
             raise ValueError("issue_id is required")
+        # request_ref, requester, promotion_key and rel_version are immutable:
+        # edits to work must not rewrite its originating request or provenance.
         allowed = {"title", "description", "status", "priority", "issue_type", "assignee", "links", "ask", "session_id"}
         # Accept `type` as an alias for issue_type (the console/tools use both).
         if "type" in fields and "issue_type" not in fields:
