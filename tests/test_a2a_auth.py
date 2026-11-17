@@ -1517,3 +1517,89 @@ def test_configure_defaults_to_loopback_when_bind_host_unspecified(monkeypatch, 
         auth.configure(bearer_token="", api_key="", allowed_origins_raw="")
     assert _auth_records(caplog, _OPEN_TOKEN_MSG)
     assert not [r for r in caplog.records if r.name == "a2a_impl.auth" and r.levelno >= logging.WARNING]
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("case", ["shared", "device", "agent", "fleet", "federation", "legacy", "open"])
+def test_verified_principal_in_http_call_context(case, tmp_path, monkeypatch):
+    from starlette.responses import JSONResponse
+    from a2a_impl.stores import tier_context_builder
+    from security import devices
+
+    monkeypatch.setattr(devices, "_registry_path", lambda: tmp_path / "devices.json")
+    auth.configure(bearer_token="shared", federation_token="fed", fleet_token="fleet",
+                   api_key="legacy", allowed_origins_raw="")
+    expected = {
+        "shared": ("shared-operator-bearer", "operator", "full", True),
+        "device": ("device", "operator", "device", True),
+        "agent": ("agent-device", "operator", "full", False),
+        "fleet": ("fleet-service", "operator", "full", False),
+        "federation": ("federation", "federation", "full", False),
+        "legacy": ("open/unknown", "operator", "full", False),
+        "open": ("open/unknown", "operator", "full", False),
+    }[case]
+    token = {"federation": "fed"}.get(case, case)
+    if case in ("device", "agent"):
+        code, _ = devices.start_pairing(kind=case)
+        _, token = devices.claim_pairing(code, "test principal")
+    if case == "open":
+        auth.configure(bearer_token="", api_key="", allowed_origins_raw="")
+    headers = {"Authorization": f"Bearer {token}", "X-Principal-Kind": "device"}
+    if case == "legacy":
+        headers = {"X-API-Key": "legacy"}
+
+    def inspect(request):
+        state = tier_context_builder().build(request).state
+        kind = state["principal_kind"]
+        return JSONResponse([kind, state["trust_tier"], request.state.credential_scope,
+                             auth.is_human_operator(kind)])
+
+    app = Starlette(routes=[Route("/a2a", inspect)])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    with TestClient(app) as client:
+        response = client.get("/a2a", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == list(expected)
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("transition", ["revoke", "expire", "rotate", "missing_registry"])
+def test_device_principal_lifecycle(transition, tmp_path, monkeypatch):
+    from starlette.responses import JSONResponse
+    from security import devices
+
+    monkeypatch.setattr(devices, "_registry_path", lambda: tmp_path / "devices.json")
+    now = [time.time()]
+    monkeypatch.setattr(devices, "_now", lambda: now[0])
+    monkeypatch.setattr(devices, "idle_ttl_days", lambda: 30)
+    code, _ = devices.start_pairing()
+    device, token = devices.claim_pairing(code, "phone")
+    reached = []
+
+    def inspect(request):
+        reached.append(request.state.principal_kind)
+        return JSONResponse({"kind": request.state.principal_kind})
+
+    app = Starlette(routes=[Route("/a2a", inspect)])
+    auth.install(app, bearer_token="shared", api_key="", allowed_origins_raw="")
+    with TestClient(app) as client:
+        def read(bearer):
+            return client.get("/a2a", headers={"Authorization": f"Bearer {bearer}"})
+
+        assert read(token).json() == {"kind": "device"}
+        if transition == "revoke":
+            devices.revoke_device(device["id"])
+        elif transition == "expire":
+            now[0] += 31 * 86400
+        elif transition == "missing_registry":
+            (tmp_path / "devices.json").unlink()
+        else:
+            _, replacement = devices.rotate_device(device["id"], token)
+            assert read(replacement).json() == {"kind": "device"}
+            assert read(token).json() == {"kind": "device"}  # D5 in-flight grace is retained
+            now[0] += devices.ROTATION_GRACE_SECONDS + 1
+        before = len(reached)
+        assert read(token).status_code == 401
+        assert len(reached) == before  # no principal reaches a handler
+        if transition == "rotate":
+            assert read(replacement).status_code == 401  # late reuse revokes the device
