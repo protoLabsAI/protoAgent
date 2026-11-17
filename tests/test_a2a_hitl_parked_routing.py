@@ -595,3 +595,241 @@ async def test_an_operator_steer_into_a_peer_thread_keeps_the_thread_the_peers(t
         await handler.on_message_send(_msg("let me in", mid="p3", ctx="chat-own"), fed)
     await router.drain()
     await store.engine.dispose()
+
+
+# ── P1b.2 private intake: the output gate can no longer hide private input (Refs #5401) ──
+# Phase 0 proved an output gate alone could NOT keep a private steer out of a peer-readable
+# task history (the leak assertions). With the P1b.1 partition the input never travels as
+# text — the loopback carries only an opaque reference — so these assert PRIVACY instead: at
+# intake and at every peer read (poll, push, stream, reopened history), for a fresh (idle)
+# private steer and for a parked resume, with console recovery of the input and the reply.
+
+_SECRET = "SECRET-PRIVATE-STEER-xyz"
+
+
+def test_private_input_prefix_mirrors_the_partition_module():
+    from a2a_impl import private_intake
+
+    assert hitl_routing._PRIVATE_INPUT_PREFIX == private_intake.PRIVATE_INPUT_PREFIX
+
+
+def test_a_private_marker_with_a_smuggled_prompt_is_refused():
+    from a2a.utils.errors import InvalidParamsError
+
+    smuggled = Message(message_id="x", context_id=CTX, role=Role.ROLE_USER,
+                       parts=[Part(text="private-input:abc"), Part(text="SECRET smuggled prompt")])
+    smuggled.metadata.update({hitl_routing.PRIVATE_INPUT_MARKER: True})
+    with pytest.raises(InvalidParamsError):
+        hitl_routing.enforce_private_input(smuggled)
+    # A clean single-reference private message, and any unmarked ordinary message, pass.
+    clean = Message(message_id="y", context_id=CTX, role=Role.ROLE_USER, parts=[Part(text="private-input:abc")])
+    clean.metadata.update({hitl_routing.PRIVATE_INPUT_MARKER: True})
+    hitl_routing.enforce_private_input(clean)
+    hitl_routing.enforce_private_input(_msg("hello", mid="z").message)
+
+
+def _private_steer_stream(seen: list):
+    """Parks a fresh 'ask me something' turn; otherwise answers. The private input never
+    reaches it — the runner only ever sees the opaque reference."""
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        seen.append({"text": text, "resume": resume})
+        if not resume and text == "ask me something":
+            yield ("input_required", {"question": "What should I prioritise?"})
+        else:
+            yield ("done", "Noted; proceeding.")
+
+    return stream
+
+
+def _ref_msg(ref: str, *, mid: str, hitl_resume: bool = False, ctx: str = CTX) -> SendMessageRequest:
+    m = Message(message_id=mid, context_id=ctx, role=Role.ROLE_USER, parts=[Part(text=ref)])
+    if hitl_resume:
+        m.metadata.update({"hitl_resume": True})
+    m.metadata.update({hitl_routing.PRIVATE_INPUT_MARKER: True})
+    return SendMessageRequest(message=m)
+
+
+async def _assert_partition_is_the_only_home(store):
+    from sqlalchemy import text as _sql
+
+    async with store.engine.connect() as conn:
+        rows = (await conn.execute(
+            _sql("SELECT history, artifacts, metadata, status, private_payload FROM tasks")
+        )).all()
+    # The private text lives ONLY in a private_payload column, never in any peer-readable one.
+    assert any(_SECRET in (r.private_payload or "") for r in rows)
+    assert all(_SECRET not in str((r.history, r.artifacts, r.metadata, r.status)) for r in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parked", [False, True])
+async def test_phase0_output_gate_cannot_hide_private_input_history(tmp_path, delegation_env, parked):
+    from a2a.server.context import ServerCallContext
+    from a2a.types import TaskPushNotificationConfig
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_impl import private_intake, stores
+
+    ctx_id = "chat-private"
+    engine = stores.make_sqlite_engine(str(tmp_path / "p.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    await store.initialize()
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    peer = ServerCallContext(state={"principal_kind": "federation", "trust_tier": "federation"})
+    seen: list = []
+    handler, router = _handler(_private_steer_stream(seen), task_store=store)
+
+    # The steer is recorded into the partition BEFORE any turn; the loopback would carry only
+    # this opaque reference bound to the delegation.
+    ref = await private_intake.record_private_steer(store, session_id=ctx_id, text=_SECRET, msg_id="m0", context=op)
+
+    async def _stream_send(req):
+        return [e async for e in handler.on_message_send_stream(req, CALL)]
+
+    # stream: the live SSE frames a console watches as the turn runs — for a fresh (idle)
+    # private steer and for a parked resume.
+    if parked:
+        parkd = await handler.on_message_send(_msg("ask me something", mid="a1", ctx=ctx_id), CALL)
+        assert parkd.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+        turn_id = parkd.id
+        frames = await asyncio.wait_for(_stream_send(_ref_msg(ref, mid="o1", hitl_resume=True, ctx=ctx_id)), 5)
+    else:
+        frames = await asyncio.wait_for(_stream_send(_ref_msg(ref, mid="o1", ctx=ctx_id)), 5)
+        turn_id = next(getattr(e, "id", "") or getattr(e, "task_id", "") for e in frames
+                       if getattr(e, "id", "") or getattr(e, "task_id", ""))
+    await router.drain()
+    assert frames and all(_SECRET not in str(MessageToDict(f)) for f in frames)
+    if parked:
+        assert turn_id == parkd.id  # the guarded resume continued the ORIGINAL checkpoint/task
+    # The runner only ever saw the opaque reference, never the private text.
+    assert any(c["text"] == ref for c in seen) and all(_SECRET not in str(c["text"]) for c in seen)
+
+    await _assert_partition_is_the_only_home(store)  # intake
+    got = await handler.on_get_task(GetTaskRequest(id=turn_id), CALL)
+    assert got.status.state == TaskState.TASK_STATE_COMPLETED
+    assert _SECRET not in str(MessageToDict(got))  # poll
+    # push: a registered webhook ships that same Task projection — nothing private to deliver.
+    await handler.on_create_task_push_notification_config(
+        TaskPushNotificationConfig(task_id=turn_id, url="https://8.8.8.8/hook"), CALL
+    )
+    assert _SECRET not in str(MessageToDict(await handler.on_get_task(GetTaskRequest(id=turn_id), CALL)))
+
+    # reopened history: a fresh store on the same db (a new browser rebuilding the chat) still
+    # never reads the private text; the operator recovers the input and the folded-in reply.
+    await engine.dispose()
+    engine2 = stores.make_sqlite_engine(str(tmp_path / "p.db"))
+    store2 = stores.ReasoningCoalescingTaskStore(engine2, owner_resolver=stores.resolve_task_owner)
+    await store2.initialize()
+    try:
+        assert _SECRET not in str(MessageToDict(await store2.get(turn_id, op)))
+        assert _SECRET not in str(await store2.history_records(ctx_id, peer))
+        assert await store2.get(private_intake.ref_task_id(ref), peer) is None  # the shell is invisible to a peer
+        assert await private_intake.record_private_reply(store2, ref, "handled privately", op)
+        rec = await store2.get_record(private_intake.ref_task_id(ref), op)
+        assert rec.private_payload["input"] == _SECRET and rec.private_payload["reply"] == "handled privately"
+    finally:
+        await engine2.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_private_steer_into_a_peer_thread_hides_the_input_and_keeps_the_thread_the_peers(tmp_path, delegation_env):
+    """#5380: a private steer into a federation peer's context runs as the operator's own
+    task carrying only the reference; the peer keeps its thread, a later peer follow-up never
+    sees the private input, and the private-only shell is invisible to the peer."""
+    from a2a.server.context import ServerCallContext
+    from a2a.types import ListTasksRequest
+    from a2a.utils.errors import TaskNotFoundError
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_impl import private_intake, stores
+
+    engine = stores.make_sqlite_engine(str(tmp_path / "peer.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    await store.initialize()
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    fed = ServerCallContext(state={"trust_tier": "federation"})
+    seen: list = []
+    handler, router = _handler(_private_steer_stream(seen), task_store=store)
+
+    first = await handler.on_message_send(_msg("please look", mid="p1", ctx="fed-ctx"), fed)
+    ref = await private_intake.record_private_steer(store, session_id="fed-ctx", text=_SECRET, msg_id="m0", context=op)
+    steer = await handler.on_message_send(_ref_msg(ref, mid="o1", ctx="fed-ctx"), CALL)
+    assert steer.id != first.id  # the operator's private turn is its OWN task in the peer's context
+    await router.drain()
+
+    # A later peer follow-up continues the peer's own thread and never sees the private input.
+    again = await handler.on_message_send(_msg("any update?", mid="p2", ctx="fed-ctx"), fed)
+    assert again.context_id == "fed-ctx"
+    listed = {t.id for t in (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks}
+    assert steer.id not in listed and first.id in listed
+    with pytest.raises(TaskNotFoundError):
+        await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
+    with pytest.raises(TaskNotFoundError):
+        await handler.on_get_task(GetTaskRequest(id=private_intake.ref_task_id(ref)), fed)
+    peer_tasks = (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks
+    assert _SECRET not in str([MessageToDict(t) for t in peer_tasks])
+    assert (await store.get_record(private_intake.ref_task_id(ref), op)).private_payload["input"] == _SECRET
+    assert all(_SECRET not in str(c["text"]) for c in seen)
+    await router.drain()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_private_resume_never_lands_on_a_peer_owned_parked_task(tmp_path, delegation_env):
+    """#5380 / ADR 0131 P1b.2: when a PEER owns the only parked task in a context and the
+    operator has none, a private steer taking the guarded resume path must NOT be re-pointed
+    onto the peer's parked task — the operator→federation read fallback would otherwise do
+    that and land the private reply on a peer-readable task. It runs as the operator's own
+    task instead; the peer's parked task and its requires_input message keep no private input
+    or reply, and an operator turn ending in the peer's context never settles the peer's pause."""
+    from a2a.server.context import ServerCallContext
+    from a2a.types import ListTasksRequest
+    from a2a.utils.errors import TaskNotFoundError
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_impl import private_intake, stores
+
+    engine = stores.make_sqlite_engine(str(tmp_path / "peer-parked.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    await store.initialize()
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    fed = ServerCallContext(state={"trust_tier": "federation"})
+    seen: list = []
+    handler, router = _handler(_private_steer_stream(seen), task_store=store)
+
+    # The PEER parks a HITL turn in its own context; the operator owns no parked task here, but
+    # the operator's read of the context DOES see the peer's via the federation fallback.
+    peer_parked = await handler.on_message_send(_msg("ask me something", mid="p1", ctx="fed-ctx"), fed)
+    assert peer_parked.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    assert await _parked(handler, "fed-ctx") == [peer_parked.id]
+    owner_scoped = await hitl_routing.ParkedTaskRouter(handler).parked_tasks("fed-ctx", CALL, owner_scoped=True)
+    assert owner_scoped == []  # the operator owns no parked task — the fallback is skipped
+
+    ref = await private_intake.record_private_steer(store, session_id="fed-ctx", text=_SECRET, msg_id="m0", context=op)
+    steer = await handler.on_message_send(_ref_msg(ref, mid="o1", hitl_resume=True, ctx="fed-ctx"), CALL)
+    await router.drain()
+
+    # The private resume ran as the operator's OWN fresh task — never the peer's parked one.
+    assert steer.id != peer_parked.id
+    assert steer.status.state == TaskState.TASK_STATE_COMPLETED
+
+    # The peer's parked task is untouched: still input-required (never settled by the operator
+    # turn), its requires_input message / history hold no private input or reply, and the
+    # private reference is invisible to the peer.
+    peer_view = await handler.on_get_task(GetTaskRequest(id=peer_parked.id), fed)
+    assert peer_view.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    dumped = str(MessageToDict(peer_view))
+    assert _SECRET not in dumped and ref not in dumped
+    peer_tasks = (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks
+    assert steer.id not in {t.id for t in peer_tasks}
+    assert all(_SECRET not in str(MessageToDict(t)) and ref not in str(MessageToDict(t)) for t in peer_tasks)
+    with pytest.raises(TaskNotFoundError):  # the operator's private turn stays out of the peer's reads
+        await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
+
+    # The runner only ever saw the opaque reference, never the private text; the operator still
+    # recovers the input from the partition.
+    assert any(c["text"] == ref for c in seen) and all(_SECRET not in str(c["text"]) for c in seen)
+    assert (await store.get_record(private_intake.ref_task_id(ref), op)).private_payload["input"] == _SECRET
+    await router.drain()
+    await engine.dispose()
