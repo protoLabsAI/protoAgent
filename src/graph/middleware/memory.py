@@ -786,6 +786,8 @@ def record_closed_session(
     message_count: int = 0,
     closed_days: int = 14,
     base: str | None = None,
+    audience: str | None = None,
+    source_version: int | None = None,
 ) -> bool:
     """Write the chat's "closed" digest record (ADR 0132 D3b). Best-effort: returns True
     when a record was written, False (with a log) otherwise — a harvest must never fail
@@ -810,6 +812,11 @@ def record_closed_session(
         "gist": gist or "",
         "timestamp": closed_at,
         "closed_at": closed_at,
+        # Conversations in Work (ADR 0131 §5): the audience this card was built for and the
+        # projection version that built it. The harvest stamps the public projection; a reader
+        # can refuse a card from an unsupported/mixed projection instead of trusting its text.
+        "audience": audience,
+        "source_version": source_version,
     }
     tmp_path = None
     try:

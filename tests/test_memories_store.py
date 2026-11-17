@@ -46,6 +46,7 @@ def test_schema_idempotency_and_shared_database(store):
             "expires_at",
             "source_session",
             "thread_id",
+            "audience",
             "invalidated_at",
             "invalidation_reason",
             "created_at",

@@ -20,6 +20,18 @@ from knowledge.store import _WRITE_LOCK_RETRY_S, _fts_quote, _normalize_expires_
 
 log = logging.getLogger(__name__)
 
+# Conversations in Work (ADR 0131 §5): a fact's audience lineage. Public and legacy
+# unmarked (NULL) facts are *shared* (peer-readable); a ``human-operator`` fact is private.
+# The literal matches ``graph.conversation_audience.PRIVATE_AUDIENCE``; repeated here so
+# ``knowledge`` keeps no dependency on ``graph``. A private fact may only supersede another
+# private fact — it never merges into or retires a shared one.
+_PRIVATE_AUDIENCE = "human-operator"
+
+
+def _shared_audience(audience: str | None) -> bool:
+    return audience != _PRIVATE_AUDIENCE
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +49,7 @@ CREATE TABLE IF NOT EXISTS memories (
     expires_at TEXT,
     source_session TEXT,
     thread_id TEXT,
+    audience TEXT,
     invalidated_at TEXT,
     invalidation_reason TEXT,
     created_at TEXT NOT NULL,
@@ -128,6 +141,9 @@ class MemoryEntry:
     invalidation_reason: str | None
     created_at: str
     updated_at: str
+    # Conversations in Work (ADR 0131 §5): the public/private audience lineage of this fact.
+    # NULL on legacy rows written before the feature — treated as shared (peer-readable).
+    audience: str | None = None
 
 
 class LiveSubjectConflict(ValueError):
@@ -151,6 +167,15 @@ class MemoryStore:
         self._embed_lock = threading.Lock()
         with closing(self._connect()) as db:
             db.executescript(_SCHEMA)
+            # Migration: add the audience column to databases created before Conversations
+            # in Work (ADR 0131 §5). Additive + nullable; existing rows stay NULL (shared),
+            # so no data is rewritten and dedup/supersession are unchanged for shared facts.
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(memories)")}
+                if "audience" not in cols:
+                    db.execute("ALTER TABLE memories ADD COLUMN audience TEXT")
+            except sqlite3.DatabaseError:  # pragma: no cover — a locked/odd DB keeps the old shape
+                pass
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.path))
@@ -206,6 +231,7 @@ class MemoryStore:
         thread_id: str | None = None,
         legacy_domain: str | None = None,
         supersede: bool = True,
+        audience: str | None = None,
     ) -> int:
         """Persist a memory and its embedding atomically; operator rows default confirmed.
 
@@ -231,6 +257,7 @@ class MemoryStore:
             legacy_domain=legacy_domain,
             supersede=supersede,
             reject_live_subject=reject_live_subject,
+            audience=audience,
         )
         return id
 
@@ -254,6 +281,7 @@ class MemoryStore:
         as_of: str | None = None,
         protect_confirmed_operator: bool = False,
         matched_extracted_id: int | None = None,
+        audience: str | None = None,
     ) -> tuple[int, list[MemoryEntry]]:
         """Persist a memory and retire the rows it supersedes, atomically (ADR 0125 P3-A).
 
@@ -306,8 +334,9 @@ class MemoryStore:
                         raise LiveSubjectConflict(row["id"])
             cur = db.execute(
                 "INSERT INTO memories (kind, subject, heading, content, delivery, review_state, provenance, "
-                "scope, expires_at, source_session, thread_id, legacy_domain, valid_from, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "scope, expires_at, source_session, thread_id, legacy_domain, valid_from, audience, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     kind,
                     subject,
@@ -322,6 +351,7 @@ class MemoryStore:
                     thread_id,
                     legacy_domain,
                     as_of,
+                    audience,
                     now,
                     now,
                 ),
@@ -343,6 +373,11 @@ class MemoryStore:
                     row
                     for row in rows
                     if (row["scope"] or None) == norm_scope
+                    # Conversations in Work (ADR 0131 §5): a private fact may only supersede
+                    # another private fact — it never retires a shared one, and a shared fact
+                    # never retires a private one. NULL/public are the same shared bucket, so
+                    # legacy shared facts keep their existing supersession behaviour exactly.
+                    and _shared_audience(row["audience"]) == _shared_audience(audience)
                     and (
                         _normalize_subject(row["subject"]) == norm_subject
                         or (
