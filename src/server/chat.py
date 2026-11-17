@@ -928,6 +928,56 @@ def _redeem_loopback_delegation(headers, *, context: str, operation: str, task_i
     )
 
 
+# ── private-steer intake carriage (ADR 0131 P1b.2; dormant) ──────────────────────
+# A private steer is recorded into the P1b.1 partition BEFORE any turn starts (see
+# steer_or_start_turn below); the loopback then carries only this opaque reference plus the
+# single-use delegation (above), never the private text, never images. The reference is
+# resolved back to the text ONLY here, inside the trusted runner, before the graph runs —
+# fail-closed, with no SendMessage fallback (r3). Dormant: no live route sets ``private``.
+_PRIVATE_INPUT_PREFIX = "private-input:"
+_PRIVATE_UNAVAILABLE = "This turn could not continue: its private input is unavailable."
+
+
+def _private_partition_store():
+    """The P1b.1 partition task store over this instance's A2A engine, or None when there is
+    no A2A stack (a headless test app). A fresh wrapper is cheap — it is stateless over the
+    shared engine, and ``save_private``/``get_record`` carry their own transactions."""
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        return None
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, resolve_task_owner
+
+    return ReasoningCoalescingTaskStore(engine, owner_resolver=resolve_task_owner)
+
+
+async def _resolve_private_turn_input(message: str, session_id: str, request_metadata: dict | None):
+    """Redeem the delegation and resolve an opaque private-input reference to its text.
+
+    Returns ``(True, text)`` on success and ``(False, "")`` on any fail-closed outcome — no
+    partition store, a missing/forged/wrong-target/expired/revoked/unbound delegation, or a
+    missing/unknown-version record (r3). The caller MUST refuse the turn on ``False`` rather
+    than run the reference as a literal message."""
+    from a2a_impl import private_intake
+    from graph.fleet.delegation import DELEGATION_HEADER
+
+    store = _private_partition_store()
+    if store is None:
+        return False, ""
+    token = str((request_metadata or {}).get(DELEGATION_HEADER) or "")
+    if not token:
+        return False, ""
+    # The delegation is bound to this context + reference (operation); idempotent so a
+    # transport retry of the self-POST redeems the SAME grant rather than tripping replay.
+    delegation = _redeem_loopback_delegation({DELEGATION_HEADER: token}, context=session_id, operation=message)
+    if delegation is None:
+        return False, ""
+    from a2a.server.context import ServerCallContext
+
+    context = ServerCallContext(state={"principal_kind": delegation.principal_kind})
+    text = await private_intake.resolve_private_input(store, message, delegation=delegation, context=context)
+    return (True, text) if text is not None else (False, "")
+
+
 # ── steering a session with NO live turn (bd-0ad5v) ─────────────────────────────
 # A console with a stale 'streaming' bubble steers a session whose turn is long over; the
 # queued message then has nothing left to drain it and sits ``pending`` forever, with the
@@ -945,6 +995,8 @@ async def _start_steer_turn(
     images: list[tuple[str, str]] | None = None,
     incognito: bool = False,
     settings: dict | None = None,
+    private_ref: str | None = None,
+    delegation: str | None = None,
 ) -> str:
     """Run a steer as an ordinary operator turn; return its A2A task id ("" on failure).
 
@@ -969,10 +1021,16 @@ async def _start_steer_turn(
         log.warning("[steer] no active port — cannot start a turn for session %s", session_id)
         return ""
     mid = str(msg_id or "").strip() or uuid.uuid4().hex
-    parts: list[dict] = [{"text": text}] if text else []
-    # Image attachments ride as parts exactly as a console send's do; the turn layer
-    # bridges/gates them itself (_vision_human_message), so nothing is pre-bridged here.
-    parts += [{"url": uri, "mediaType": mt} for mt, uri in images or []]
+    if private_ref:
+        # A private steer carries ONLY the opaque reference + the single-use delegation —
+        # never the private text, never images (ADR 0131 P1b.2). The trusted runner redeems
+        # the delegation and resolves the reference (server.chat._resolve_private_turn_input).
+        parts: list[dict] = [{"text": private_ref}]
+    else:
+        parts = [{"text": text}] if text else []
+        # Image attachments ride as parts exactly as a console send's do; the turn layer
+        # bridges/gates them itself (_vision_human_message), so nothing is pre-bridged here.
+        parts += [{"url": uri, "mediaType": mt} for mt, uri in images or []]
     message: dict[str, Any] = {
         "role": "ROLE_USER",
         "parts": parts,
@@ -992,6 +1050,13 @@ async def _start_steer_turn(
         meta["bypass_permissions"] = True
     if incognito:
         meta["incognito"] = True
+    if private_ref and delegation:
+        # The single-use delegation rides the message metadata (not an HTTP header) so the
+        # trusted runner can redeem it; it carries no private content and is 30s-lived.
+        from graph.fleet.delegation import DELEGATION_HEADER
+
+        meta["private_input"] = True
+        meta[DELEGATION_HEADER] = delegation
     if meta:
         message["metadata"] = meta
     body = {
@@ -1018,7 +1083,7 @@ async def _start_steer_turn(
         return ""
 
 
-async def _session_turn_idle(session_id: str) -> bool:
+async def _session_turn_idle(session_id: str, *, request_metadata: dict | None = None) -> bool:
     """True when nothing can fold a queued steer into a running turn for ``session_id``.
 
     Conservative by construction — any doubt reads as "not idle", so the message takes the
@@ -1027,12 +1092,22 @@ async def _session_turn_idle(session_id: str) -> bool:
     A2A stack to start a replacement turn on; or the thread is PARKED at a HITL interrupt
     (no live driver, but the held message folds in right after the operator's answer —
     ``_hold_if_hitl_pending``'s rule). The interrupt check runs under the thread lock so it
-    can't race a turn that is just starting or parking."""
+    can't race a turn that is just starting or parking.
+
+    The pending-interrupt snapshot is read on the ORIGINAL turn's checkpointer thread: with a
+    custom thread-id resolver (#571) keyed on request metadata, re-resolving from the idle
+    call's empty metadata would pick a DIFFERENT thread and miss the live pause (ADR 0131
+    P1b.2). So the resolver inputs persisted by the original turn (``graph.thread_ids``) are
+    reused when the caller passes none; the template default (``a2a:<session>``) ignores
+    metadata, so this is inert unless a fork registered a resolver."""
     if _turn_activity.is_active(session_id):
         return False
     if STATE.graph is None or getattr(STATE, "a2a_task_engine", None) is None:
         return False
-    tid = _turn_control._resolve_thread_id(None, session_id)
+    from graph import thread_ids as _thread_ids
+
+    md = request_metadata if request_metadata is not None else _thread_ids.resolver_metadata(session_id)
+    tid = _turn_control._resolve_thread_id(md or None, session_id)
     config = {"configurable": {"thread_id": tid}}
     async with _turn_control._thread_lock(tid):
         if _turn_activity.is_active(session_id):
@@ -1063,6 +1138,51 @@ async def _await_started_task(session_id: str, msg_id: str) -> str:
     return ""
 
 
+async def _private_steer_or_start(
+    session_id: str, text: str, mid: str, *, store, context, settings: dict | None = None
+) -> dict[str, Any]:
+    """Dormant private idle-steer intake (ADR 0131 P1b.2; r1/r3).
+
+    Records the steer and its dedupe key into the P1b.1 partition BEFORE any turn starts, then
+    — when the session is idle — starts an ordinary operator turn carrying only the opaque
+    reference bound to a single-use delegation, never the text. Fail-closed: with no partition
+    store/context, or if recording fails, nothing is sent and no ordinary SendMessage falls
+    back. A non-idle session only records (the parked/live delivery is the guarded resume path,
+    ``a2a_impl.hitl_routing``) — private text is never queued in the in-memory steering queue."""
+    from graph import steering
+
+    from a2a_impl import private_intake
+
+    if store is None or context is None:
+        log.warning("[steer] private steer for %s has no partition store/context — refusing", session_id)
+        return {"ok": False, "id": mid, "private": True, "pending": steering.pending(session_id)}
+    started = steering.started_task(session_id, mid)
+    if started:
+        return {"ok": True, "id": mid, "started_turn": started, "private": True, "pending": steering.pending(session_id)}
+    try:
+        ref = await private_intake.record_private_steer(
+            store, session_id=session_id, text=text, msg_id=mid, context=context
+        )
+    except Exception:  # noqa: BLE001 — a failed record must never fall back to sending text
+        log.exception("[steer] could not record a private steer for %s — refusing (fail-closed)", session_id)
+        return {"ok": False, "id": mid, "private": True, "pending": steering.pending(session_id)}
+    if not await _session_turn_idle(session_id):
+        return {"ok": True, "id": mid, "private_ref": ref, "private": True, "pending": steering.pending(session_id)}
+    steering.note_starting(session_id, [mid])
+    # Bind the delegation to the context + the opaque reference (operation). The reference
+    # already names a single private record uniquely, and the runner redeems it without
+    # knowing the loopback message id — so no task-id binding (which the runner couldn't match).
+    token = _mint_loopback_delegation(context=session_id, operation=ref)
+    task_id = await _start_steer_turn(session_id, "", mid, settings=settings, private_ref=ref, delegation=token)
+    if task_id:
+        steering.note_started(session_id, mid, task_id)
+        return {"ok": True, "id": mid, "started_turn": task_id, "private_ref": ref, "private": True,
+                "pending": steering.pending(session_id)}
+    steering.clear_starting(session_id, [mid])
+    log.warning("[steer] session %s idle but a private turn could not be started — refusing", session_id)
+    return {"ok": False, "id": mid, "private_ref": ref, "private": True, "pending": steering.pending(session_id)}
+
+
 async def steer_or_start_turn(
     session_id: str,
     text: str,
@@ -1071,6 +1191,9 @@ async def steer_or_start_turn(
     images: list[tuple[str, str]] | None = None,
     incognito: bool = False,
     settings: dict | None = None,
+    private: bool = False,
+    private_store=None,
+    private_context=None,
 ) -> dict[str, Any]:
     """The steer POST's body: queue into the running turn, or start one when idle.
 
@@ -1079,12 +1202,21 @@ async def steer_or_start_turn(
     old behavior left it ``pending`` forever (nothing drains an idle session's queue, the
     bd-0ad5v stuck chat), so the message now runs as an ordinary operator turn instead and
     the reply carries ``started_turn: <task_id>`` for the console to attach to. A repeat of
-    an already-started ``msg_id`` answers with the first task — one turn per message."""
+    an already-started ``msg_id`` answers with the first task — one turn per message.
+
+    ``private`` (ADR 0131 P1b.2, dormant) routes the steer through the P1b.1 partition
+    intake (``_private_steer_or_start``): the text is recorded privately and the loopback
+    carries only an opaque reference. No live route sets it, so the ordinary path below is
+    unchanged."""
     import uuid
 
     from graph import steering
 
     mid = str(msg_id or "").strip() or uuid.uuid4().hex
+    if private:
+        return await _private_steer_or_start(
+            session_id, text, mid, store=private_store, context=private_context, settings=settings
+        )
     started = steering.started_task(session_id, mid)
     if started:
         return {"ok": True, "id": mid, "started_turn": started, "pending": steering.pending(session_id)}
@@ -1957,6 +2089,18 @@ async def _chat_langgraph_stream_impl(
                 yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
+    # ADR 0131 P1b.2 (dormant): a private steer arrives as an opaque reference plus a
+    # single-use delegation in the request metadata. Resolve it to the private text ONLY here,
+    # inside this trusted runner, before any turn work — fail-closed, never running the
+    # reference as a literal message and never falling back to an ordinary send (r1/r3). Inert
+    # for every ordinary turn: no live route produces a private reference.
+    if message.startswith(_PRIVATE_INPUT_PREFIX):
+        _ok, _resolved = await _resolve_private_turn_input(message, session_id, request_metadata)
+        if not _ok:
+            yield ("error", _PRIVATE_UNAVAILABLE)
+            return
+        message = _resolved
+
     # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
     # test-built, falling back to the default with a notice when it can't be. Everything
     # below reads it from the metadata: the lead graph's stamp, the pre-turn chain's
@@ -2046,6 +2190,13 @@ async def _chat_langgraph_stream_impl(
             # a pluggable seam (#571): a fork registers a resolver to scope memory
             # off request metadata (e.g. per-project) without editing this file.
             _tid = _turn_control._resolve_thread_id(request_metadata, session_id)
+            # Persist this turn's resolver inputs so a later idle start or parked resume (ADR
+            # 0131 P1b.2) resolves the SAME checkpointer thread — not one rebuilt from the idle
+            # call's empty metadata under a custom resolver (#571). Inert for the default
+            # resolver, which ignores metadata.
+            from graph import thread_ids as _thread_ids
+
+            _thread_ids.remember_resolver_metadata(session_id, request_metadata)
             config = {
                 "configurable": {"thread_id": _tid},
                 "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200),

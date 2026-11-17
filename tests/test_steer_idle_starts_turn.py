@@ -360,3 +360,165 @@ def test_idle_steer_goes_out_as_an_ordinary_a2a_message(monkeypatch, client):
         "reasoning_effort": "high",
         "bypass_permissions": True,
     }
+
+
+# ── private idle intake (ADR 0131 P1b.2; dormant) ─────────────────────────────────
+# A private steer is recorded into the P1b.1 partition BEFORE any turn starts; the loopback
+# carries only an opaque reference bound to a single-use delegation, never the private text.
+
+
+async def _partition(tmp_path):
+    from a2a_impl import stores
+
+    engine = stores.make_sqlite_engine(str(tmp_path / "private.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    await store.initialize()
+    return engine, store
+
+
+def _operator_ctx():
+    from a2a.server.context import ServerCallContext
+
+    return ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+
+
+@pytest.mark.asyncio
+async def test_private_idle_steer_records_before_start_and_sends_only_a_reference(tmp_path, monkeypatch, delegation_env):
+    from a2a.server.context import ServerCallContext
+
+    from a2a_impl import private_intake
+
+    steering._reset()
+    engine, store = await _partition(tmp_path)
+    monkeypatch.setattr(STATE, "graph", _Graph(_idle_snapshot()), raising=False)
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
+    op = _operator_ctx()
+    captured: dict = {}
+
+    async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None,
+                          private_ref=None, delegation=None):
+        captured.update(text=text, ref=private_ref, delegation=delegation, images=images)
+        return "task-1"
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _fake_start)
+    body = await chat_mod.steer_or_start_turn(
+        "chat-p", "SECRET-STEER", "m1", private=True, private_store=store, private_context=op
+    )
+    assert body["started_turn"] == "task-1" and body["private"] is True
+    ref = body["private_ref"]
+    # The loopback carries ONLY the opaque reference + a single-use delegation — never the text,
+    # never images (intake assertion).
+    assert captured["text"] == "" and captured["ref"] == ref and captured["images"] is None
+    assert captured["delegation"] and "SECRET-STEER" not in str(captured)
+    # The steer + its dedupe key were recorded into the partition BEFORE the start; the console
+    # recovers the input (and later the reply) from there.
+    rec = await store.get_record(private_intake.ref_task_id(ref), op)
+    assert rec.private_payload["input"] == "SECRET-STEER" and rec.private_payload["dedupe"] == "m1"
+    assert await private_intake.record_private_reply(store, ref, "done, privately", op)
+    assert (await store.get_record(private_intake.ref_task_id(ref), op)).private_payload["reply"] == "done, privately"
+    # A peer sees no task for the private-only shell, and the resolver round-trips with the
+    # delegation it was bound to but fails closed for an unbound one.
+    peer = ServerCallContext(state={"principal_kind": "federation", "trust_tier": "federation"})
+    assert await store.get(private_intake.ref_task_id(ref), peer) is None
+    deleg = delegation_env.redeem_delegation(
+        captured["delegation"], audience=chat_mod._LOOPBACK_AUDIENCE, context="chat-p",
+        operation=ref, idempotent=True, allowed_issuers=frozenset({delegation_env.ISSUER_LOOPBACK}),
+    )
+    assert await private_intake.resolve_private_input(store, ref, delegation=deleg, context=op) == "SECRET-STEER"
+    assert await private_intake.resolve_private_input(store, ref, delegation=None, context=op) is None
+    await engine.dispose()
+    steering._reset()
+
+
+@pytest.mark.asyncio
+async def test_private_idle_steer_fails_closed_without_a_partition(monkeypatch):
+    steering._reset()
+    monkeypatch.setattr(STATE, "graph", _Graph(_idle_snapshot()), raising=False)
+    monkeypatch.setattr(STATE, "a2a_task_engine", object(), raising=False)
+    calls: list = []
+
+    async def _fake_start(*a, **k):
+        calls.append(1)
+        return "task-x"
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _fake_start)
+    body = await chat_mod.steer_or_start_turn("chat-p", "SECRET", "m1", private=True)
+    assert body["ok"] is False and "started_turn" not in body and calls == []
+    steering._reset()
+
+
+@pytest.mark.asyncio
+async def test_private_idle_steer_fails_closed_when_the_record_cannot_be_written(tmp_path, monkeypatch):
+    steering._reset()
+    engine, store = await _partition(tmp_path)
+    monkeypatch.setattr(STATE, "graph", _Graph(_idle_snapshot()), raising=False)
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
+    calls: list = []
+
+    async def _fake_start(*a, **k):
+        calls.append(1)
+        return "task-x"
+
+    async def _boom(*a, **k):
+        raise RuntimeError("partition down")
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _fake_start)
+    monkeypatch.setattr(store, "save_private", _boom)
+    body = await chat_mod.steer_or_start_turn(
+        "chat-p", "SECRET", "m1", private=True, private_store=store, private_context=_operator_ctx()
+    )
+    # Fail-closed: no turn started, no ordinary SendMessage fallback.
+    assert body["ok"] is False and "started_turn" not in body and calls == []
+    await engine.dispose()
+    steering._reset()
+
+
+@pytest.mark.asyncio
+async def test_idle_check_resolves_the_original_turns_thread(monkeypatch):
+    # A later idle start / parked resume must resolve the ORIGINAL turn's checkpointer thread,
+    # not one rebuilt from the idle call's empty metadata under a custom resolver (#571).
+    from graph import thread_ids
+
+    thread_ids.forget_resolver_metadata("chat-x")
+    monkeypatch.setattr(STATE, "thread_id_resolver",
+                        lambda md, sid: f"proj:{md.get('project', 'none')}:{sid}", raising=False)
+    seen: dict = {}
+
+    class _G:
+        async def aget_state(self, config):
+            seen["tid"] = config["configurable"]["thread_id"]
+            return _idle_snapshot()
+
+    monkeypatch.setattr(STATE, "graph", _G(), raising=False)
+    monkeypatch.setattr(STATE, "a2a_task_engine", object(), raising=False)
+    assert await chat_mod._session_turn_idle("chat-x") is True
+    assert seen["tid"] == "proj:none:chat-x"
+    thread_ids.remember_resolver_metadata("chat-x", {"project": "atlas"})
+    assert await chat_mod._session_turn_idle("chat-x") is True
+    assert seen["tid"] == "proj:atlas:chat-x"
+    thread_ids.forget_resolver_metadata("chat-x")
+
+
+@pytest.mark.asyncio
+async def test_trusted_runner_resolves_the_reference_and_fails_closed(tmp_path, monkeypatch, delegation_env):
+    # The trusted runner redeems the delegation from the request metadata and resolves the
+    # opaque reference to the private text — fail-closed, never running the reference literally.
+    from graph.fleet.delegation import DELEGATION_HEADER
+
+    from a2a_impl import private_intake
+
+    steering._reset()
+    engine, store = await _partition(tmp_path)
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
+    op = _operator_ctx()
+    ref = await private_intake.record_private_steer(
+        store, session_id="chat-r", text="RUNNER-SECRET", msg_id="m1", context=op
+    )
+    token = chat_mod._mint_loopback_delegation(context="chat-r", operation=ref)
+    assert await chat_mod._resolve_private_turn_input(ref, "chat-r", {DELEGATION_HEADER: token}) == (True, "RUNNER-SECRET")
+    # Fail-closed: no delegation header, or one bound to a DIFFERENT reference.
+    assert await chat_mod._resolve_private_turn_input(ref, "chat-r", {}) == (False, "")
+    other = chat_mod._mint_loopback_delegation(context="chat-r", operation="private-input:other")
+    assert await chat_mod._resolve_private_turn_input(ref, "chat-r", {DELEGATION_HEADER: other}) == (False, "")
+    await engine.dispose()
+    steering._reset()

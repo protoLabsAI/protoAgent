@@ -29,3 +29,35 @@ def resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
         except Exception:
             log.exception("[thread_id] custom resolver failed; using default")
     return f"a2a:{session_id}"
+
+
+# Resolver inputs persisted per session so a turn that carries NO request metadata of its
+# own — an idle steer start or a parked resume (ADR 0131 P1b.2) — resolves the SAME
+# checkpointer thread as the original turn, instead of re-deriving it from empty metadata
+# under a custom resolver (#571). The template default ignores metadata, so this is inert
+# unless a fork registered a resolver. Bounded + in-memory (a restart just falls back to the
+# default thread), like the other per-session caches this runtime keeps.
+_RESOLVER_METADATA: dict[str, dict] = {}
+_RESOLVER_METADATA_MAX = 1024
+
+
+def remember_resolver_metadata(session_id: str, request_metadata: dict | None) -> None:
+    """Persist the resolver inputs of the ORIGINAL turn on ``session_id``. A no-op for an
+    empty session id or empty metadata (nothing a resolver could key on). Overwrites on each
+    turn so the newest request's scoping wins."""
+    if not session_id or not isinstance(request_metadata, dict) or not request_metadata:
+        return
+    if session_id not in _RESOLVER_METADATA and len(_RESOLVER_METADATA) >= _RESOLVER_METADATA_MAX:
+        # Evict the oldest-inserted entry; dict preserves insertion order.
+        _RESOLVER_METADATA.pop(next(iter(_RESOLVER_METADATA)), None)
+    _RESOLVER_METADATA[session_id] = dict(request_metadata)
+
+
+def resolver_metadata(session_id: str) -> dict:
+    """A copy of the resolver inputs persisted for ``session_id`` (``{}`` when none)."""
+    return dict(_RESOLVER_METADATA.get(session_id) or {})
+
+
+def forget_resolver_metadata(session_id: str) -> None:
+    """Drop the persisted resolver inputs for ``session_id`` (session deletion / test reset)."""
+    _RESOLVER_METADATA.pop(session_id, None)

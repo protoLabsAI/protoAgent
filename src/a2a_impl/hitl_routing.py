@@ -176,6 +176,44 @@ def _is_hitl_resume(message: Message) -> bool:
     return value is not None and value.WhichOneof("kind") == "bool_value" and value.bool_value
 
 
+# Mirror of ``a2a_impl.private_intake.PRIVATE_INPUT_PREFIX`` — a stable wire constant kept
+# local so this module's import chain stays free of the partition store. Pinned equal by
+# tests/test_a2a_hitl_parked_routing.py.
+_PRIVATE_INPUT_PREFIX = "private-input:"
+#: Message-metadata flag a private steer / its resume carries (ADR 0131 P1b.2).
+PRIVATE_INPUT_MARKER = "private_input"
+
+
+def private_input_ref(message: Message | None) -> str:
+    """The opaque private-input reference a message carries as its ONLY part, or ``""``.
+
+    A private steer and its parked resume travel as the reference alone — never the private
+    prompt (ADR 0131 P1b.2) — so nothing it carries can reach a task's history or a peer's
+    ``requires_input`` message. More than one part, a non-text part, or a non-reference text
+    is NOT a private-input carrier."""
+    if message is None:
+        return ""
+    try:
+        parts = list(message.parts)
+    except (AttributeError, TypeError):
+        return ""
+    if len(parts) != 1 or parts[0].WhichOneof("content") != "text":
+        return ""
+    text = parts[0].text or ""
+    return text if text.startswith(_PRIVATE_INPUT_PREFIX) and len(text) > len(_PRIVATE_INPUT_PREFIX) else ""
+
+
+def enforce_private_input(message: Message | None) -> None:
+    """Refuse a message MARKED private (``PRIVATE_INPUT_MARKER`` metadata) that does not carry
+    exactly the opaque reference and nothing else — a private prompt smuggled alongside the
+    marker. Runs before the SDK sees the message, so a peer-visible task can never hold the
+    private text. Unmarked messages pass untouched (the ordinary path)."""
+    if message is None or not message.HasField("metadata") or PRIVATE_INPUT_MARKER not in message.metadata.fields:
+        return
+    if not private_input_ref(message):
+        raise InvalidParamsError(message="A private-input message must carry only its opaque reference")
+
+
 class ParkedTaskRouter:
     """Routes HITL answers onto the parked task and settles superseded pauses."""
 
@@ -280,6 +318,10 @@ class ParkedTaskRouter:
         context without the task and never compares the two, so the message would run
         against that task under the wrong context's thread."""
         message = params.message
+        # A private steer / resume (ADR 0131 P1b.2) must carry ONLY its opaque reference —
+        # refuse any attempt to smuggle a private prompt alongside the marker before the SDK
+        # records the message, so a peer's requires_input / history can never hold it (r2).
+        enforce_private_input(message)
         if is_settle_message(message) and message.message_id not in _PENDING_SETTLES:
             # Only this module sends settles; a client's copy just loses the marker's meaning.
             message.metadata.fields.pop(SETTLE_MARKER, None)
