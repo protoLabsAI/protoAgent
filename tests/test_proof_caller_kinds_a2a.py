@@ -13,8 +13,11 @@ and ``enrolled-console``, a paired HUMAN ``device`` (``is_human_operator`` True)
 NOT the operator — while the private-content operator is a human reached via a verified fleet-proxy
 delegation (ADR 0131 P1a.2); its private ops AND its sends (the source's ``CALL``) run as that human.
 Original assertions are kept verbatim. A real leak for a caller kind is a strict ``xfail`` named
-"PROOF FAILURE" (PR body ``## Proof failures``), scoped with ``raises=AssertionError`` so only the
-privacy assertion — never a setup error — satisfies it. Never fixed here, never in ``src/``.
+"PROOF FAILURE" (PR body ``## Proof failures``), scoped with ``raises=AssertionError``. So that only
+the source test's bare-assert privacy check — never this harness's own setup — can satisfy that
+``xfail``, every setup precondition here is validated with ``_require`` (which raises ``_HarnessError``,
+a ``RuntimeError``), not ``assert``: a broken ``peer()`` / ``human_operator()`` / ``_authed_state``
+fails the run outright. Never fixed here, never in ``src/``.
 """
 
 from __future__ import annotations
@@ -69,13 +72,31 @@ _PRIVATE_PAYLOAD_LEAK = (
 )
 
 
+class _HarnessError(RuntimeError):
+    """A failure in THIS file's real-auth harness setup — NOT a privacy leak.
+
+    Raised (never ``assert``ed) by ``_require`` so a broken setup surfaces as a ``RuntimeError``,
+    not an ``AssertionError``. The PROOF FAILURE ``xfail``s are scoped ``raises=AssertionError``, so
+    only the source test's bare-assert privacy check can satisfy one — a broken ``peer()`` /
+    ``human_operator()`` / ``_authed_state`` fails the run outright instead of masquerading as the
+    documented leak.
+    """
+
+
+def _require(cond, msg):
+    """Validate a harness precondition. Unlike ``assert`` this raises ``_HarnessError`` (not
+    ``AssertionError``), so a setup failure never counts as a privacy PROOF FAILURE."""
+    if not cond:
+        raise _HarnessError(msg)
+
+
 def _kinds(*, leak_kinds=(), reason=None):
     """The four caller-kind params; ``leak_kinds`` are strict ``xfail``s scoped to ``AssertionError``
     (so only the real privacy assertion, never a setup error, satisfies them) with ``reason``."""
     params = []
     for kind in ALL_KINDS:
         if kind in leak_kinds:
-            assert reason is not None, "a leaking kind needs a PROOF FAILURE reason"
+            _require(reason is not None, "a leaking kind needs a PROOF FAILURE reason")
             marks = [pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)]
         else:
             marks = []
@@ -96,7 +117,7 @@ def _authed_state(token: str) -> dict:
     app.add_middleware(auth.A2AAuthMiddleware)
     with TestClient(app) as client:
         response = client.post("/a2a", headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 200, (token, response.status_code)
+    _require(response.status_code == 200, (token, response.status_code))
     return captured["state"]
 
 
@@ -126,16 +147,18 @@ def principals(delegation_env, tmp_path, monkeypatch):
         from graph.fleet.proxy import mint_member_delegation
 
         hub = _authed_state("shared")
-        assert auth.is_human_operator(hub["principal_kind"])
+        _require(auth.is_human_operator(hub["principal_kind"]),
+                 ("the shared bearer must classify as a human operator", hub.get("principal_kind")))
         hub_req = SimpleNamespace(state=SimpleNamespace(principal_kind=hub["principal_kind"]))
         token = mint_member_delegation("member", hub_req, method="SendMessage",
                                        context="delegation-ctx", operation="delegation-op", task_id="")
-        assert token, "a human operator must earn a fleet-proxy delegation"
+        _require(token, "a human operator must earn a fleet-proxy delegation")
         grant = auth.resolve_human_operator(
             SimpleNamespace(headers={delegation_env.DELEGATION_HEADER: token}),
             audience="member", method="SendMessage", context="delegation-ctx",
             operation="delegation-op", task_id="", idempotent=True)
-        assert grant is not None and auth.is_human_operator(grant.principal_kind)
+        _require(grant is not None and auth.is_human_operator(grant.principal_kind),
+                 ("the member must redeem the delegation to a human operator", grant))
         return ServerCallContext(state={"principal_kind": grant.principal_kind})
 
     def peer(kind: str, *, requester_principal: str | None = None) -> ServerCallContext:
@@ -151,7 +174,9 @@ def principals(delegation_env, tmp_path, monkeypatch):
             code, _ = devices.start_pairing(kind="device")
             _, token = devices.claim_pairing(code, "proof-console")
             state = _authed_state(token)
-            assert auth.is_human_operator(state["principal_kind"])  # the console IS a human operator
+            # the console IS a human operator (setup invariant, not a privacy assertion)
+            _require(auth.is_human_operator(state["principal_kind"]),
+                     ("an enrolled console must classify as a human operator", state.get("principal_kind")))
         else:  # federation
             state = _authed_state("fed")
         if requester_principal is not None:
