@@ -76,17 +76,22 @@ TURN_PROJECTION_KEY = "protoagent_turn_projection"
 _FEDERATION_DENIED_TOOLS = frozenset({"recall_session", "session_search"})
 
 
-def _federation_caller() -> bool:
+def _restrict_prior_session_memory() -> bool:
     """Restrict federation and unclassified remote turns using server-bound identity.
 
-    Local invocations have no HTTP principal and retain their existing delivery.
+    Open-mode and local invocations retain their existing delivery.
     The trust-tier fallback also covers drivers that bind only the verified tier.
     Neither value comes from model state or caller-supplied metadata.
     """
+    from a2a_impl.auth import open_mode
     from graph.middleware.request_context import current_verified_principal
     from observability.tracing import current_trust_tier
 
     principal = current_verified_principal()
+    if principal == "open/unknown" and open_mode():
+        # Auth uses the same kind for open mode and unclassified credentials on a
+        # protected server. Only the former retains the existing memory delivery.
+        return False
     if principal is not None:
         return principal not in {"shared-operator-bearer", "fleet-service", "device", "agent-device"}
     return current_trust_tier() == "federation"
@@ -359,7 +364,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         # Decided per turn from the server-verified tier (never this shared instance),
         # so concurrent operator and federation turns each get the right policy, and the
         # composer then skips the digest loader entirely (``policy == "off"``).
-        if _federation_caller():
+        if _restrict_prior_session_memory():
             opts = replace(opts, prior_sessions_policy="off")
         if self._bound_tool_names is not None and opts.bound_tool_names is None:
             opts = replace(opts, bound_tool_names=self._bound_tool_names)
@@ -731,10 +736,10 @@ class KnowledgeMiddleware(AgentMiddleware):
 
         Both tools read the operator's OWN prior conversations, so a federation-token
         turn must not have them bound. Decided per turn from the server-verified tier
-        (:func:`_federation_caller`), never by mutating this shared-across-turns
+        (:func:`_restrict_prior_session_memory`), never by mutating this shared-across-turns
         instance, and a no-op for every other caller and whenever neither tool is bound
         (so a provider never sees a history with tool calls but an emptied ``tools``)."""
-        if not _federation_caller():
+        if not _restrict_prior_session_memory():
             return request
         tools = getattr(request, "tools", None)
         if not tools:

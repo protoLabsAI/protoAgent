@@ -203,15 +203,20 @@ def test_federation_turn_receives_no_closed_chat_card(memory_env):
     assert "CLOSEDCARD-CANARY" not in _deliver({"Authorization": "Bearer federation-test"})["context"]
 
 
-def test_unclassified_a2a_turn_gets_no_digest_or_recall_tools(memory_env):
+@pytest.mark.parametrize("open_mode", [True, False])
+def test_open_mode_keeps_memory_but_unclassified_protected_turn_fails_closed(memory_env, open_mode):
     _write_session(memory_env, "operator-session", _CANARY)
-    auth.configure(bearer_token="", federation_token="", fleet_token="", api_key="", allowed_origins_raw="")
+    auth.configure(
+        bearer_token="", federation_token="", fleet_token="",
+        api_key="" if open_mode else "legacy-key", allowed_origins_raw="",
+    )
 
-    result = _deliver({})
+    result = _deliver({} if open_mode else {"X-API-Key": "legacy-key"})
 
     assert result["principal_kind"] == "open/unknown"
-    assert _CANARY not in result["context"]
-    assert not {"recall_session", "session_search"} & set(result["tools"])
+    assert (_CANARY in result["context"]) is open_mode
+    recall_tools = {"recall_session", "session_search"} & set(result["tools"])
+    assert recall_tools == ({"recall_session", "session_search"} if open_mode else set())
 
     # The HTTP scope resets: a subsequent local invocation retains memory delivery.
     tools = _build_memory_tools(None)
