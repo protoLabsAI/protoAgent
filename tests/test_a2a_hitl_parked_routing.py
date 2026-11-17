@@ -856,7 +856,7 @@ async def test_phase0_preexisting_handles(tmp_path):
     secret, reply, result = "STEERING-CANARY", "PRIVATE-REPLY-CANARY", "The requested result."
     ref = await private_intake.record_private_steer(store, session_id=CTX, text=secret, msg_id="steer", context=op)
     ready, proceed = asyncio.Event(), asyncio.Event()
-    projections, progress, pushes = [], [], []
+    projections, progress, pushes, outcomes = [], [], [], []
     config = TaskPushNotificationConfig(id="original", url="https://8.8.8.8/hook")
 
     async def factory(context, queue):
@@ -879,7 +879,11 @@ async def test_phase0_preexisting_handles(tmp_path):
         await projection.begin_private(ref)
         yield "steer_consumed", {"items": [{"text": secret}]}
         yield "text", reply
-        yield "tool_end", {"name": "private", "output": secret}
+        # A private turn still spends: its usage/tool telemetry must reach the executor's
+        # accounting (the terminal TurnOutcome), even though none of this content publishes.
+        yield "tool_start", {"id": "private-call", "name": "private"}
+        yield "usage", {"input_tokens": 11, "output_tokens": 7, "cost_usd": 0.25, "model": "m-private"}
+        yield "tool_end", {"name": "private", "output": secret, "duration_ms": 9}
         yield "text", {"audience": "requester", "text": reply}  # wrong labels never publish
         yield "deliver_to_requester", {"text": reply, "audience": "requester"}  # raw B event
         delivery_id = await projection.prepare_result(result)
@@ -894,6 +898,7 @@ async def test_phase0_preexisting_handles(tmp_path):
         yield "done", reply
 
     set_progress_hook(lambda *args: progress.append(args))
+    set_terminal_hook(outcomes.append)
     client = httpx.AsyncClient(transport=httpx.MockTransport(
         lambda request: (pushes.append(request.content.decode()), httpx.Response(200))[1],
     ))
@@ -931,8 +936,16 @@ async def test_phase0_preexisting_handles(tmp_path):
     assert sum(result in str(f) for f in frames) == 1
     assert sum(result in str(f) for f in subscriptions) == 1
     assert all(canary not in str(surface) for canary in (secret, reply)
-               for surface in (frames, subscriptions, got, pushes, progress))
+               for surface in (frames, subscriptions, got, pushes, progress, outcomes))
     assert sum(result in body for body in pushes) == 1
+    # The private turn is isolated, not untelemetered: its spend reaches the terminal
+    # row with the result/canary text stripped off, so nothing private rides it either.
+    outcome = next(o for o in outcomes if o.state == "completed")
+    assert outcome.text == "" and outcome.error == ""
+    assert outcome.llm_calls == 1 and outcome.tool_calls == 1
+    assert outcome.usage["input_tokens"] == 11 and outcome.usage["output_tokens"] == 7
+    assert outcome.cost_usd == 0.25 and outcome.tool_durations.get("private") == [9]
+    assert outcome.models == ["m-private"]
     # Dispatch through the production sender, including URL validation, then replace it.
     artifact = next(f for f in frames if result in str(f))
     pushes.clear()

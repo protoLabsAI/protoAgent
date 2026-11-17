@@ -139,6 +139,17 @@ class RequesterProjection:
             clean.ClearField("metadata")
             await self.queue.enqueue_event(clean)
 
+    # Frames the executor still PROCESSES for a privately-steered turn. Its usage/cost/
+    # llm_calls, tool_calls/tool-duration and delta accounting must run or the turn's row
+    # records zero spend; the terminals let it finish or park. Only the CONTENT frames
+    # (text, reasoning, steer_consumed, …) are quarantined — telemetry is not isolated.
+    # The accounted frames' peer-facing output is suppressed downstream in enqueue_event
+    # and the executor's private-mode progress wrapper, so processing them here leaks
+    # nothing; a content frame carrying a forged audience label is swallowed, not published.
+    _PASS_THROUGH = frozenset(
+        {"usage", "delta", "tool_start", "tool_end", "done", "error", "input_required"}
+    )
+
     async def consume(self, event, payload):
         if event == "deliver_to_requester":
             # A label or a raw B event is never a delivery record.
@@ -148,5 +159,5 @@ class RequesterProjection:
         if self.private_ref:
             await self.retain(event, payload if isinstance(payload, (dict, list, str, int, float, bool, type(None)))
                               else json.dumps(str(type(payload))))
-            return event not in ("done", "error", "input_required")
+            return event not in self._PASS_THROUGH
         return False
