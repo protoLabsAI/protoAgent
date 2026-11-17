@@ -1,6 +1,5 @@
 """Killed-process proof worker; importable by pytest and launched as a module."""
 from __future__ import annotations
-
 import asyncio
 import json
 import importlib
@@ -8,20 +7,17 @@ import os
 import sys
 from contextlib import closing
 from pathlib import Path
-
 from a2a.server.context import ServerCallContext
 from langchain_core.tools import tool
 from a2a.types import GetTaskRequest
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import interrupt
-
 from a2a_impl import auth, private_intake as pi, segment_schedule as ss, stores
 from graph import thread_ids
 from graph.checkpointer import build_sqlite_checkpointer
 from runtime.state import STATE
 from security import devices
 from tests.test_a2a_hitl_parked_routing import _handler, _msg
-
 chat = importlib.import_module("server.chat")
 SESSION = "restart-proof"
 THREAD = "proj:atlas:restart-proof"
@@ -29,19 +25,10 @@ SECRET = "PRIVATE-RESTART-CANARY"
 FLEET_TOKEN = "proof-fleet-service-token"
 FED_TOKEN = "proof-federation-token"
 
-
 def identities():
-    """Classify every caller through the REAL auth ladder (``a2a_impl.auth._classify_token``)
-    and the device registry, exactly as P1a prescribes ("propagate a verified principal kind
-    from ``_classify_token``/the device record, separate from the operator tier").
-
-    This is the whole point of "no operator-tier shortcut": nothing here hand-assigns a tier.
-    The fleet service token and an ``agent``-kind device each authenticate to the OPERATOR
-    trust tier yet a non-operator principal kind, so the private-partition rejection the proof
-    asserts rests on the verified principal kind (``is_human_operator``), not on an elevated
-    tier. A ``device``-kind pairing is the only non-shared-bearer credential that reads as the
-    human operator; federation is its own tier."""
-    auth.set_bearer_token(None)  # no shared bearer: the ladder must fall through to each real credential
+    # Classify every caller through the REAL auth ladder + device registry (no hand-assigned tier): the fleet
+    # token and agent-kind device reach the OPERATOR tier yet a non-operator kind — rejection rests on kind, not tier.
+    auth.set_bearer_token(None)
     auth.set_fleet_token(FLEET_TOKEN)
     auth.set_federation_token(FED_TOKEN)
     _, device_token = devices._register("enrolled console", devices.KIND_DEVICE)
@@ -49,24 +36,18 @@ def identities():
     return {"federation": FED_TOKEN, "fleet-service": FLEET_TOKEN,
             "paired-agent": agent_token, "enrolled-console": device_token}
 
-
 def context(caller, tokens):
     cred = auth._classify_token(tokens[caller])
     assert cred is not None, f"{caller} credential did not authenticate"
-    # trust_tier + principal_kind are exactly what A2AAuthMiddleware stamps on request.state
-    # and TierCallContextBuilder copies into the call context; requester_principal binds the
-    # dormant acceptance path (stores.bind_requester / requester_binding).
-    return ServerCallContext(state={"principal_kind": cred.principal_kind,
-                                   "trust_tier": cred.tier,
-                                   "requester_principal": f"device:{caller}"})
-
+    # trust_tier + principal_kind are what A2AAuthMiddleware stamps; requester_principal binds acceptance.
+    return ServerCallContext(state={"principal_kind": cred.principal_kind, "trust_tier": cred.tier,
+                                    "requester_principal": f"device:{caller}"})
 
 def append(path, value):
     with path.open("a", encoding="utf-8") as out:
         out.write(value + "\n")
         out.flush()
         os.fsync(out.fileno())
-
 
 async def run(base, point, caller, recover):
     engine = stores.make_sqlite_engine(str(base / "tasks.db"))
@@ -76,11 +57,9 @@ async def run(base, point, caller, recover):
     human, requester = context("enrolled-console", tokens), context(caller, tokens)
     STATE.thread_id_resolver = lambda md, sid: f"proj:{md.get('project', 'none')}:{sid}"
     cfg = {"configurable": {"thread_id": THREAD}}
-
     async def ready():
         (base / "ready").write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
         await asyncio.Event().wait()  # parent kills us with stores and execution still open
-
     @tool
     async def effect() -> str:
         """Record a durable external effect before returning."""
@@ -88,13 +67,11 @@ async def run(base, point, caller, recover):
         if not recover and point == "claimed":
             await ready()
         return "recorded"
-
     async def node(state):
         if point == "parked":
             interrupt("approve continuation")
         await effect.ainvoke({})
         return {"messages": []}
-
     saver = build_sqlite_checkpointer(str(base / "checkpoints.db"))
     with closing(saver.conn):
         builder = StateGraph(MessagesState)
@@ -102,20 +79,17 @@ async def run(base, point, caller, recover):
         builder.add_edge(START, "effect")
         builder.add_edge("effect", END)
         graph = builder.compile(checkpointer=saver)
-
         async def stream(text, ctx, **kwargs):
             yield "done", "public receipt"
-
         handler, router = _handler(stream, task_store=store)
         if not recover:
-            # Original caller enters through the SDK/executor, independently of the human
-            # who subsequently contributes private input to this conversation.
+            # Original caller enters through the SDK/executor, separate from the human who later steers.
             chat._resolve_turn_thread_id({"project": "atlas"}, SESSION)
             original = await handler.on_message_send(_msg("public request", mid="original", ctx=SESSION), requester)
             await router.drain()
             await graph.aupdate_state(cfg, {"messages": []}, as_node="__start__")
             ref = await pi.record_private_steer(store, session_id=SESSION, text=SECRET,
-                                               msg_id="private", context=human)
+                                                msg_id="private", context=human)
             await pi.record_private_reply(store, ref, "PRIVATE-REPLY-CANARY", human)
             for dedupe, audience, principal, input_ref in (
                 ("private", "private", "device:enrolled-console", ref),
@@ -127,7 +101,6 @@ async def run(base, point, caller, recover):
             (base / "ids.json").write_text(json.dumps({"ref": ref, "task": original.id}), encoding="utf-8")
             if point == "accepted":
                 await ready()
-
             async def send(turn):
                 append(base / "sends", turn["input_ref"])
                 await graph.ainvoke(None, cfg)
@@ -137,7 +110,6 @@ async def run(base, point, caller, recover):
                 assert await ss.park_segment(store, SESSION, generation=seg["generation"], interrupt_id=iid, context=human)
                 await ss.set_turn_state(store, SESSION, turn["seq"], "parked", human, interrupt_id=iid)
                 await ready()
-
             await ss.dispatch_pending_turn(store, SESSION, human, send)
         else:
             ids = json.loads((base / "ids.json").read_text(encoding="utf-8"))
@@ -149,12 +121,10 @@ async def run(base, point, caller, recover):
             public = await store.get(pi.ref_task_id(ref), requester)
             snapshot = await graph.aget_state(cfg)
             sends = []
-
             async def unexpected_send(turn):
                 sends.append(turn)
                 await effect.ainvoke({})
                 return "unexpected"
-
             if point != "accepted":
                 await ss.dispatch_pending_turn(store, SESSION, human, unexpected_send)
             denied = False
@@ -189,7 +159,6 @@ async def run(base, point, caller, recover):
             (base / "report.json").write_text(json.dumps(report), encoding="utf-8")
             await router.drain()
     await engine.dispose()
-
 
 if __name__ == "__main__":
     asyncio.run(run(Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4] == "recover"))

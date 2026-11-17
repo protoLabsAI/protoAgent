@@ -1,6 +1,4 @@
-"""Actual SIGKILL proof: each scenario boots two independent Python interpreters.
-Startup/imports and SQLite initialization can exceed five seconds on slower hosts.
-"""
+"""Actual SIGKILL proof: boots two independent interpreters per scenario; cold startup can exceed five seconds."""
 import json
 import os
 from pathlib import Path
@@ -8,13 +6,11 @@ import signal
 import subprocess
 import sys
 import time
-
 import pytest
 
 pytestmark = [pytest.mark.platform_sensitive,
               pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGKILL semantics")]
 ROOT = Path(__file__).resolve().parents[1]
-
 
 @pytest.fixture(scope="module", params=[(point, caller) for point in ("accepted", "claimed", "parked")
     for caller in ("federation", "fleet-service", "paired-agent", "enrolled-console")],
@@ -45,7 +41,6 @@ def proof(request, tmp_path_factory):
     assert report["pid"] != child.pid
     return point, caller, base, report
 
-
 def test_killed_process_preserves_partition_and_reservation(proof):
     point, caller, base, report = proof
     rec = report["recovery"]
@@ -62,10 +57,9 @@ def test_killed_process_preserves_partition_and_reservation(proof):
     assert "public receipt" in report["peer_task"] and "CANARY" not in report["peer_task"]
     assert not report["public"] and report["unresolved"] is None and report["sends"] == []
     assert report["denied"] == (caller != "enrolled-console")
-    # P1a "no operator-tier shortcut": identity is the verified principal kind, SEPARATE from
-    # the operator tier. The fleet service token and an agent-kind device are operator TIER yet
-    # non-operator principals, so their rejection above is a real principal-kind restriction —
-    # not an elevated-tier free pass. Only a device-kind pairing reads as the human operator.
+    # P1a "no operator-tier shortcut": the fleet token and an agent-kind device are operator TIER yet
+    # non-operator principals, so their rejection is a principal-kind restriction, not a tier free pass;
+    # only a device-kind pairing reads as the human operator.
     assert report["principal_kind"] == {"federation": "federation", "fleet-service": "fleet-service",
         "paired-agent": "agent-device", "enrolled-console": "device"}[caller]
     assert report["tier"] == ("federation" if caller == "federation" else "operator")
@@ -83,7 +77,6 @@ def test_killed_process_preserves_partition_and_reservation(proof):
         assert report["interrupts"] == [rec["segment"]["interrupt_id"]]
         assert report["wrong_resume"] is None
         assert report["matching_resume"] == rec["segment"]["generation"] + 1
-
 
 @pytest.mark.xfail(strict=True, reason="PROOF FAILURE: resolver metadata is memory-only and lost on SIGKILL restart")
 def test_original_resolver_metadata_survives_process_restart(proof):
