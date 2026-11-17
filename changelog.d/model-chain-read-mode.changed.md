@@ -1,0 +1,1 @@
+- **Model chain summaries.** Settings shows each saved role’s models in order with an Edit button, so only the chain you choose opens its editor. Done returns to the summary without saving.

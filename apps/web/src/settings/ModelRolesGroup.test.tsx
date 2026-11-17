@@ -110,7 +110,8 @@ it("reads a pin from the registry when it is absent from the overrides map", asy
   const group = list.querySelector('[aria-label="alpha model chain"]')!;
   // A set chain renders its row(s), not the empty "Set its own chain" inherit state.
   expect([...group.querySelectorAll("button")].some((b) => b.textContent === "Set its own chain")).toBe(false);
-  expect(group.querySelectorAll("input").length).toBe(1);
+  expect(group.querySelector(".model-chain__summary")?.textContent).toBe("two");
+  expect(group.querySelector("input")).toBeNull();
 });
 
 it.each([false, true])("image status only appears with no-vision signal (%s)", async (unavailable) => {

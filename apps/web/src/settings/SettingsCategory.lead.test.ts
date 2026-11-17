@@ -74,6 +74,7 @@ it("renders model chains as ordered lists and emits reordered arrays", async () 
       value: ["one", "two"], onChange,
     }));
   });
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="Edit Main chain"]')!.click());
   const down = container.querySelector<HTMLButtonElement>('[aria-label="Move one down"]');
   expect(down).not.toBeNull();
   act(() => down!.click());
