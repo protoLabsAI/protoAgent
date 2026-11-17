@@ -584,3 +584,174 @@ def test_enforcement_gate_built_only_when_configured():
     )
     assert gate is not None
     assert gate("boom_tool") and gate("echo_tool") is None
+
+
+@pytest.mark.asyncio
+async def test_parallel_calls_finish_in_time_of_slowest_call():
+    import asyncio
+    import time
+
+    delay_seconds = 0.5
+
+    @tool
+    async def slow_echo(n: int) -> str:
+        """Return a distinct result after simulated I/O."""
+        # Real delay is intentional: this acceptance test measures parallel I/O.
+        await asyncio.sleep(delay_seconds)
+        return str(n)
+
+    started = time.monotonic()
+    out = await run_code(
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "with ThreadPoolExecutor(8) as pool:\n"
+        "    print(list(pool.map(lambda n: tools.slow_echo(n=n), range(8))))\n",
+        {"slow_echo": slow_echo},
+    )
+    assert time.monotonic() - started < 2.0
+    assert out == str([str(n) for n in range(8)])
+
+
+@pytest.mark.asyncio
+async def test_parallel_calls_respect_concurrency_cap():
+    import asyncio
+
+    from plugins.execute_code.engine import _MAX_PARALLEL_CALLS
+
+    active = peak = 0
+    full = asyncio.Event()
+
+    @tool
+    async def counted(n: int) -> str:
+        """Track concurrent calls, releasing once the first batch fills."""
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == _MAX_PARALLEL_CALLS:
+            full.set()
+        try:
+            await full.wait()
+            await asyncio.sleep(0.01)
+            return str(n)
+        finally:
+            active -= 1
+
+    count = _MAX_PARALLEL_CALLS * 3
+    out = await run_code(
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        f"with ThreadPoolExecutor({count}) as pool:\n"
+        f"    print(list(pool.map(lambda n: tools.counted(n=n), range({count}))))\n",
+        {"counted": counted}, timeout=5,
+    )
+    assert out == str([str(n) for n in range(count)])
+    assert peak == _MAX_PARALLEL_CALLS
+    assert active == 0
+
+
+@pytest.mark.asyncio
+async def test_parallel_denial_is_audited_while_allowed_calls_succeed(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from observability.audit import AuditLogger
+    from plugins.execute_code.engine import _build_enforcement_gate
+
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(audit_path))
+    gate = _build_enforcement_gate(SimpleNamespace(
+        enforcement_enabled=True, enforcement_disallowed_tools=["boom_tool"],
+        enforcement_rate_limits=None,
+    ))
+    out = await run_code(
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "def one(n):\n"
+        "    try:\n"
+        "        return tools.boom_tool() if n == 1 else tools.echo_tool(text=str(n))\n"
+        "    except RuntimeError as e:\n"
+        "        return str(e)\n"
+        "with ThreadPoolExecutor(3) as pool:\n"
+        "    print(list(pool.map(one, range(3))))\n",
+        _TOOL_MAP, gate=gate, session_id="parallel-policy",
+    )
+    assert "'0'" in out and "'2'" in out and "Blocked by policy" in out
+    rows = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert len(rows) == 3
+    assert all(row["session_id"] == "parallel-policy" for row in rows)
+    denied = next(row for row in rows if row["tool"] == "ptc:boom_tool")
+    assert denied["success"] is False
+    assert "disabled by policy" in denied["result_summary"]
+    assert all(row["success"] for row in rows if row["tool"] == "ptc:echo_tool")
+
+
+@pytest.mark.asyncio
+async def test_timeout_cancels_parallel_tool_tasks():
+    import asyncio
+
+    from plugins.execute_code.engine import _MAX_PARALLEL_CALLS
+
+    running = set()
+    started = 0
+
+    @tool
+    async def blocked() -> str:
+        """Stay in flight until the run cancels the call."""
+        nonlocal started
+        task = asyncio.current_task()
+        running.add(task)
+        started += 1
+        try:
+            await asyncio.Event().wait()
+            return "unreachable"
+        finally:
+            running.remove(task)
+
+    out = await run_code(
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "with ThreadPoolExecutor(16) as pool:\n"
+        "    print(list(pool.map(lambda n: tools.blocked(), range(16))))\n",
+        {"blocked": blocked}, timeout=1,
+    )
+    assert "timed out" in out
+    assert started == _MAX_PARALLEL_CALLS
+    assert not running
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["null_id", "closed"])
+async def test_bridge_failure_releases_every_waiter(failure):
+    import asyncio
+
+    @tool
+    async def blocked() -> str:
+        """Keep callers waiting until their bridge fails."""
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    action = (
+        "_REQ.write('not json\\n'); _REQ.flush()"
+        if failure == "null_id" else "_sock.shutdown(_socket.SHUT_RDWR)"
+    )
+    code = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "import time\n"
+        "def one(n):\n"
+        "    try:\n"
+        "        return tools.blocked()\n"
+        "    except RuntimeError as e:\n"
+        "        return str(e)\n"
+        "with ThreadPoolExecutor(4) as pool:\n"
+        "    futures = [pool.submit(one, n) for n in range(4)]\n"
+        "    while True:\n"
+        "        with _LOCK:\n"
+        "            if len(_PENDING) == 4:\n"
+        f"                {action}\n"
+        "                break\n"
+        "        time.sleep(0.001)\n"
+        "    print([f.result() for f in futures])\n"
+    )
+    if failure == "null_id":
+        code += "print(tools.echo_tool(text='recovered'))\n"
+    out = await run_code(code, {**_TOOL_MAP, "blocked": blocked}, timeout=5)
+    message = "malformed tool-bridge request" if failure == "null_id" else "tool bridge closed before responding"
+    assert out.count(message) == 4
+    if failure == "null_id":
+        assert out.endswith("RECOVERED")
