@@ -710,6 +710,14 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             page = await DatabaseTaskStore.list(reader, params, _FEDERATION_CALL)
         return page
 
+    async def list_owner_scoped(self, params, context: ServerCallContext):
+        """Like :meth:`list` but WITHOUT the operator→federation fallback: the caller sees
+        only its OWN tier's tasks in the context. A private steer's guarded resume routes
+        through this (``a2a_impl.hitl_routing``) so it can never be re-pointed onto — nor can
+        an operator turn's settle complete — a PEER-owned parked task (#5380, ADR 0131 P1b.2)."""
+        reader = await self._reader()
+        return await DatabaseTaskStore.list(reader, params, context)
+
     async def context_foreign(self, context_id: str, context: ServerCallContext) -> bool:
         """Whether ``context_id`` is another owner's conversation, one a federation caller
         must not continue. Never true for an operator-tier caller.
