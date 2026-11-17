@@ -11,6 +11,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None, seen=None):
     import operator_api.chat_routes as cr

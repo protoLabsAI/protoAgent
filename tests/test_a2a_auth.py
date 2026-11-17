@@ -24,6 +24,8 @@ from starlette.testclient import TestClient
 from a2a_impl import auth
 from observability import tracing
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _reset_guard():
