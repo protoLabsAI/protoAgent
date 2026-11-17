@@ -33,6 +33,7 @@ from a2a_impl.hosts import cross_site_refusal as _cross_site_refusal
 from a2a_impl.hosts import host_allowed as _host_allowed
 from a2a_impl.hosts import origin_allowed as _origin_allowed
 from graph.fleet import supervisor
+from graph.fleet.delegation import PRINCIPAL_HEADERS
 from infra.access_log_redact import redact as _redact_media
 
 log = logging.getLogger("protoagent.server")
@@ -295,8 +296,16 @@ def _proxy_headers(request, extra_headers: dict | None) -> dict:
     """App headers for an upstream dial: hop-by-hop stripped, then ``extra_headers`` applied as
     a case-insensitive override (a value of None drops the caller's header outright, e.g. a
     tokenless remote's Authorization). Shared by the streaming proxy and the detached-chat
-    poller so both forward byte-identical headers."""
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
+    poller so both forward byte-identical headers.
+
+    Untrusted PRINCIPAL headers (``PRINCIPAL_HEADERS`` — an asserted principal kind or an
+    inbound delegation) are stripped unconditionally here, BEFORE any ``extra_headers`` the hub
+    minted are applied: the hub authenticates the caller and is the only author of a member's
+    principal/delegation, so a caller can never smuggle one in (ADR 0131 P1a.2). No legitimate
+    console/plugin/a2a traffic sends these, so the strip is dormant for every non-private hop."""
+    headers = {
+        k: v for k, v in request.headers.items() if k.lower() not in _HOP and k.lower() not in PRINCIPAL_HEADERS
+    }
     if extra_headers:
         # A header in extra REPLACES the caller's — drop any case-variant first, else the
         # upstream carries both (dict keys are case-sensitive, HTTP header names aren't) and
@@ -306,6 +315,28 @@ def _proxy_headers(request, extra_headers: dict | None) -> dict:
         headers = {k: v for k, v in headers.items() if k.lower() not in overridden}
         headers.update({k: v for k, v in extra_headers.items() if v is not None})
     return headers
+
+
+def mint_member_delegation(
+    slug: str, request, *, method: str, context: str, operation: str, task_id: str = ""
+) -> str | None:
+    """Mint a one-member, one-operation human-operator delegation for a proxied private op, or
+    None when the caller is not a human operator (ADR 0131 P1a.2; dormant until P1b consumes it).
+
+    The hub authenticates every caller (``A2AAuthMiddleware`` stamps ``request.state.principal_kind``);
+    this re-reads that VERIFIED kind — never a client header, which ``_proxy_headers`` strips —
+    and mints only for a human-operator kind. A swapped fleet bearer resolves to ``fleet-service``
+    (a peer whatever operator tier it earns), so it gets no delegation and stays a peer; the owner
+    then verifies issuer, audience, expiry, nonce and revocation generation before honoring it."""
+    from a2a_impl.auth import is_human_operator
+    from graph.fleet.delegation import ISSUER_PROXY, mint_delegation
+
+    principal = getattr(getattr(request, "state", None), "principal_kind", "open/unknown")
+    if not is_human_operator(principal):
+        return None
+    return mint_delegation(
+        audience=slug, method=method, context=context, operation=operation, task_id=task_id, issuer=ISSUER_PROXY
+    )
 
 
 async def _forward_to_base(

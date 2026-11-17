@@ -215,6 +215,34 @@ def _isolate_prompt_snapshots(tmp_path, monkeypatch):
     reset_prompt_snapshots()
 
 
+@pytest.fixture
+def delegation_env(monkeypatch):
+    """One deterministic hub keypair + a clean ledger/revocation generation for the P1a.2
+    human-operator delegation (ADR 0131). Shared by test_fleet_proxy and test_a2a_auth so the
+    reset of ``graph.fleet.delegation``'s process-global state (signing key, redemption ledger,
+    revocation generation) lives in ONE place rather than a near-verbatim copy in each file.
+
+    The ``PROTOAGENT_FLEET_DELEGATION_SEED`` env pins the Ed25519 private key so mint and verify
+    agree without touching disk; no ``…_PUBKEY`` is set, so the owner derives the public key from
+    that same local key (hub / standalone, which is what the tests model). Not autouse: only the
+    delegation tests opt in, so every other test's key cache stays untouched."""
+    import base64
+
+    from graph.fleet import delegation
+
+    monkeypatch.setenv(
+        "PROTOAGENT_FLEET_DELEGATION_SEED",
+        base64.urlsafe_b64encode(b"p1a2-delegation-test-seed-32byte").decode().rstrip("="),
+    )
+    monkeypatch.delenv("PROTOAGENT_FLEET_DELEGATION_PUBKEY", raising=False)
+    delegation.reset_signing_keys()
+    delegation._revocation_generation[0] = 0
+    delegation.reset_ledger()
+    yield delegation
+    delegation.reset_signing_keys()
+    delegation.reset_ledger()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_host_config(tmp_path, monkeypatch):
     """Point the ADR-0047 Host layer at a per-test ABSENT tmp file.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 import time
+from pathlib import Path
 
 import pytest
 
@@ -1009,6 +1010,31 @@ def test_spawned_member_is_closed_with_fleet_token(tmp_path, monkeypatch):
     assert env["A2A_AUTH_TOKEN"] == "fleet-xyz"  # the fleet token, NOT the hub's "hub-inbound-secret"
     assert env["PROTOAGENT_FLEET_TOKEN"] == "fleet-xyz"  # also accepted via the _FLEET tier
     assert "PROTOAGENT_ALLOW_OPEN" not in env  # dropped — a credential now gates the surface
+
+
+def test_spawned_member_does_not_inherit_hub_delegation_key(tmp_path, monkeypatch):
+    """Member startup cannot reuse the hub's environment or persisted signing seed."""
+    from infra.paths import reset_instance_paths
+
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_FLEET_DELEGATION_SEED", "hub-private-seed")
+    hub_root = manager.workspaces_root()
+    manager.create("beta", port=7891)
+
+    supervisor.start("beta")
+
+    env = captured["env"]
+    assert "PROTOAGENT_FLEET_DELEGATION_SEED" not in env
+    assert "PROTOAGENT_WORKSPACES_DIR" not in env
+    # Resolve paths as the child does, with the actual environment passed to Popen.
+    with monkeypatch.context() as child:
+        child.setattr(supervisor.os, "environ", env)
+        reset_instance_paths()
+        try:
+            assert manager.workspaces_root() == Path(env["PROTOAGENT_HOME"]) / "workspaces"
+            assert manager.workspaces_root() != hub_root
+        finally:
+            reset_instance_paths()
 
 
 def test_spawned_member_keeps_explicit_workspace_token(tmp_path, monkeypatch):
