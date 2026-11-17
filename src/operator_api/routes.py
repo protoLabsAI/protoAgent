@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
 import secrets
 import uuid
@@ -208,6 +209,24 @@ class TaskInitRequest(BaseModel):
     prefix: str | None = None
 
 
+class ConversationLinkInput(BaseModel):
+    """A related-conversation link a client may attach to a task's ``links`` (P2d, ADR 0131)
+    — the original Chat behind the work, by owner-agent and context. ``role`` (or a ``roles``
+    list) labels the original's relationship to the work (requester/coder/reviewer/related);
+    the store validates the role and derives the stored ``conv:<owner>/<context_id>`` ref
+    (:meth:`tasks.store.TaskStore._conversation_entry`). The owner/context is PROVENANCE to
+    display later, never a key that grants read access — the route rejects (403) a link whose
+    ``owner`` is not this agent or whose ``context_id`` this agent does not own (see
+    :func:`_authorize_conversation_links`). Extra round-trip keys (``ref``/``state``/
+    ``reason``) are ignored."""
+
+    kind: Literal["conversation"]
+    owner: str
+    context_id: str
+    role: str | None = None
+    roles: list[str] | None = None
+
+
 class TaskCreateRequest(BaseModel):
     project_path: str = ""  # ignored — the tasks store is agent-global
     title: str
@@ -215,7 +234,10 @@ class TaskCreateRequest(BaseModel):
     priority: int = 2
     description: str | None = None
     assignee: str | None = None
-    links: list[str] | None = None  # linked work refs (ADR 0129 Q1) — cards/jobs/directive/PR URLs
+    # linked work refs (ADR 0129 Q1) — cards/jobs/directive/PR URLs as strings, OR
+    # related-conversation objects (P2d). request/requester/promotion_key are NOT accepted
+    # here: they are server-derived provenance a client cannot set over the API.
+    links: list[ConversationLinkInput | str] | None = None
 
 
 class TaskUpdateRequest(BaseModel):
@@ -228,7 +250,9 @@ class TaskUpdateRequest(BaseModel):
     priority: int | None = None
     type: str | None = None
     assignee: str | None = None
-    links: list[str] | None = None  # replaces the linked refs (ADR 0129 Q1); None keeps, resolved refs stay done
+    # replaces the linked refs (ADR 0129 Q1); None keeps, resolved refs stay done. Strings or
+    # related-conversation objects (P2d), same owner-authorization rule as create.
+    links: list[ConversationLinkInput | str] | None = None
 
 
 class TaskCloseRequest(BaseModel):
@@ -557,6 +581,141 @@ def _with_task_activity(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return issues
 
 
+def _decode_relationship(raw: Any) -> dict[str, Any]:
+    """A stored correlation/provenance column (compact JSON) as a dict — ``{}`` for an empty,
+    absent or unparseable value (P2d). Tolerant like :func:`tasks.store.parse_links`: a legacy
+    or hand-edited row must never break the list read."""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _issue_out(issue: dict[str, Any]) -> dict[str, Any]:
+    """A task row for the GET list with its request correlation and requester provenance
+    decoded (P2d, ADR 0131): ``rel_version`` as an int, and ``request`` / ``requester`` as
+    objects (``{}`` when unknown). The stored ``request_ref`` JSON column is surfaced as the
+    decoded ``request`` object (the raw column is not echoed). This provenance is display-only
+    — Work reads it to show who asked and the correlated request; it never authorizes a read.
+    ``promotion_key`` (server idempotency) rides through unchanged."""
+    out = {**issue, "rel_version": int(issue.get("rel_version") or 0)}
+    out["request"] = _decode_relationship(out.pop("request_ref", None))
+    out["requester"] = _decode_relationship(out.get("requester"))
+    return out
+
+
+# Conversation contexts an agent may NOT attach as a related-conversation link: a server-run
+# execution / system context is never an operator's chat the Work view can reopen (mirrors
+# graph.session_gist's set). A link naming one is forged provenance, so the route rejects it
+# even when a row with that context happens to exist in the A2A store.
+_SERVER_CONTEXT_PREFIXES = ("job:", "background:", "system:", "palette-")
+
+
+def _own_agent_name() -> str:
+    """This agent's own name — the only ``owner`` a related-conversation link may carry (P2d).
+    Mirrors ``server.agent_name`` WITHOUT importing across the operator_api → server layering
+    boundary: wizard-set ``identity.name`` (when non-placeholder) → ``AGENT_NAME`` env →
+    ``"protoagent"``."""
+    from runtime.state import STATE
+
+    cfg = getattr(STATE, "graph_config", None)
+    name = str(getattr(cfg, "identity_name", "") or "").strip() if cfg is not None else ""
+    if name and name != "protoagent":
+        return name
+    return os.environ.get("AGENT_NAME", "protoagent")
+
+
+async def _context_owned_by_this_agent(context_id: str) -> bool:
+    """Whether ``context_id`` is one of THIS agent's own conversations — a row with that
+    context in its A2A task store (``STATE.a2a_task_engine``), under the same public filter the
+    console's other context reads use. ``False`` when A2A is not wired or the engine read fails:
+    a conversation this agent cannot vouch for is never attachable (P2d)."""
+    from runtime.state import STATE
+
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        return False
+    from a2a.server.tasks.database_task_store import TaskModel
+    from sqlalchemy import select
+
+    from a2a_impl.stores import task_public_filter
+
+    try:
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(TaskModel.id)
+                    .where(TaskModel.context_id == context_id)
+                    .where(await task_public_filter(conn))
+                    .limit(1)
+                )
+            ).first()
+        return row is not None
+    except Exception:  # noqa: BLE001 — an unreadable store cannot authorize a link
+        log.warning("[tasks] conversation-link ownership check failed for %r", context_id, exc_info=True)
+        return False
+
+
+def _conversation_links(links: Any) -> list[dict[str, Any]]:
+    """The related-conversation items among a create/update ``links`` list — as dicts, whether
+    they arrived as :class:`ConversationLinkInput` models or already-dumped dicts."""
+    out: list[dict[str, Any]] = []
+    for item in links or []:
+        if isinstance(item, ConversationLinkInput):
+            out.append(item.model_dump())
+        elif isinstance(item, dict) and item.get("kind") == "conversation":
+            out.append(item)
+    return out
+
+
+async def _authorize_conversation_links(links: Any) -> None:
+    """Reject (403) a related-conversation link this agent cannot vouch for, BEFORE any write,
+    so a bad link never persists a partial link list (P2d, ADR 0131).
+
+    A conversation link is accepted ONLY when its ``owner`` is this agent's own name AND its
+    ``context_id`` is one of this agent's own, non-server conversations (a row in its A2A task
+    store, not a ``job:`` / ``background:`` / ``system:`` / ``palette-`` execution context). The
+    owner/context is provenance to display, never a key that grants read access — a forged
+    owner, an unknown context, a server context, or ANOTHER agent's equal context string is
+    refused with a clear 403."""
+    convs = _conversation_links(links)
+    if not convs:
+        return
+    own = _own_agent_name()
+    for entry in convs:
+        owner = str(entry.get("owner") or "").strip()
+        context_id = str(entry.get("context_id") or "").strip()
+        if owner != own:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"cannot attach conversation link: owner {owner!r} is not this agent "
+                    f"({own!r}) — an agent may only link conversations it owns."
+                ),
+            )
+        if not context_id or context_id.startswith(_SERVER_CONTEXT_PREFIXES):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"cannot attach conversation link: {context_id!r} is not an operator "
+                    "conversation (a server/execution context cannot be linked)."
+                ),
+            )
+        if not await _context_owned_by_this_agent(context_id):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"cannot attach conversation link: no conversation {context_id!r} exists in "
+                    "this agent's chat history."
+                ),
+            )
+
+
 def _bg_job_out(job) -> dict:
     """A background job for the console, its ``error`` redacted on the way out (#4726).
 
@@ -806,13 +965,18 @@ def register_operator_routes(
             # Tag each in_progress row driven | idle | stalled (ADR 0129 D9 item 5), off the
             # loop with the (potentially IO-bound) list read; best-effort, never 500s.
             issues = await asyncio.to_thread(_with_task_activity, issues)
-            return {"issues": issues}
+            # Decode the request-correlation / requester provenance columns (P2d) and surface
+            # rel_version as an int, so Work can show who asked and the correlated request.
+            return {"issues": [_issue_out(issue) for issue in issues]}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @app.post("/api/tasks/issues")
     async def _tasks_create(req: TaskCreateRequest):
         _require_tasks()
+        # Owner-authorize any conversation link BEFORE the write (P2d): a forged owner, an
+        # unknown/server context, or another agent's context 403s here, so nothing is written.
+        await _authorize_conversation_links(req.links)
         try:
             issue = await asyncio.to_thread(task_svc.create, req.project_path, _model_payload(req))
             return {"issue": issue}
@@ -822,6 +986,7 @@ def register_operator_routes(
     @app.patch("/api/tasks/issues/{issue_id}")
     async def _tasks_update(issue_id: str, req: TaskUpdateRequest):
         _require_tasks()
+        await _authorize_conversation_links(req.links)  # same pre-write gate as create (P2d)
         try:
             issue = await asyncio.to_thread(task_svc.update, req.project_path, issue_id, _model_payload(req))
             return {"issue": issue}

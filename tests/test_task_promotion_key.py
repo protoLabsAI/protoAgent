@@ -58,6 +58,27 @@ def test_distinct_jobs_share_only_request_lineage(open_stores):
             assert json.loads(row["request_ref"]) == {**request, "item_id": str(item["id"])}
 
 
+def test_same_job_key_under_different_requests_stays_separate(open_stores):
+    """Scoping the key to the durable request item (not the bare job_key) keeps distinct
+    requests apart: the same "fix-ci" fired for two different inbox items is two rows, never
+    folded into one — the key never guesses equality from the job name alone."""
+    with open_stores() as (inbox, tasks):
+        first = inbox.add("Fix CI in repo A", priority="now")
+        second = inbox.add("Fix CI in repo B", priority="now")
+        ctx_a = inbox.execution_identity(first["id"])["context_id"]
+        ctx_b = inbox.execution_identity(second["id"])["context_id"]
+        assert create_task(tasks, ctx_a, job_key="fix-ci").startswith("Created ")
+        assert create_task(tasks, ctx_b, job_key="fix-ci").startswith("Created ")
+
+    with open_stores() as (_, tasks):
+        rows = tasks.list()
+        assert len(rows) == 2
+        assert {row["promotion_key"] for row in rows} == {
+            f"inbox:{first['id']}:fix-ci",
+            f"inbox:{second['id']}:fix-ci",
+        }
+
+
 @pytest.mark.parametrize(("first_key", "retry_key", "normalized"), [
     ("fix-ci", "fix-ci", "fix-ci"),
     ("  Fix \t CI\n", "fix ci", "fix-ci"),
