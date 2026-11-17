@@ -39,6 +39,8 @@ def _env(tmp_path, monkeypatch):
     """Per-test instance root + clean fleet/auth module state (mirrors test_fleet_media_links)."""
     import runtime.state as rs
 
+    monkeypatch.setattr(media, "_PRIVATE_READERS", {})
+
     monkeypatch.setenv("PROTOAGENT_TRUSTED_HOSTS", "testserver")
     monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "instance"))
     monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
@@ -287,3 +289,94 @@ def test_remint_through_the_hub_needs_the_hub_bearer(monkeypatch, member):
     expired = f"/agents/m/media/{ref.path.name}?exp={past}&sig={media.sign_name(ref.path.name, past)}"
     assert hub.post("/agents/m/api/media/remint", json={"url": expired}).status_code == 401
     assert seen.requests == []
+
+
+@pytest.mark.asyncio
+async def test_private_media_requires_delivered_digest_and_enrolled_requester(tmp_path, monkeypatch):
+    import httpx
+    from a2a.server.context import ServerCallContext
+    from a2a.types import Artifact, Message, Part
+    from a2a_impl import private_intake, stores
+    from a2a_impl.requester_delivery import RequesterProjection
+    from security import devices
+    from server.media import register_media_routes
+
+    monkeypatch.setattr(devices, "_registry_path", lambda: tmp_path / "devices.json")
+    tokens = {}
+    for label, kind in (("requester", "device"), ("other", "device"), ("agent", "agent")):
+        code, _ = devices.start_pairing(kind=kind)
+        device, token = devices.claim_pairing(code, label)
+        tokens[label] = token
+        if label == "requester":
+            principal = f"device:{device['id']}"
+    store = stores.ReasoningCoalescingTaskStore(stores.make_sqlite_engine(str(tmp_path / "files.db")),
+                                              owner_resolver=stores.resolve_task_owner)
+    peer = ServerCallContext(state={"requester_principal": principal})
+    operator = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    context = SimpleNamespace(call_context=peer, current_task=None, task_id="request", context_id="session",
+                              message=Message(message_id="m1"))
+    events = []
+
+    class Queue:
+        async def enqueue_event(self, event):
+            events.append(event)
+
+    holder = media.begin_turn_files()
+    try:
+        projection = await RequesterProjection.accept(store, context, Queue(), agent_id="owner", operator=operator)
+        private = await private_intake.record_private_steer(
+            store, session_id="session", text="STEER-CANARY", msg_id="s1", context=operator)
+        await projection.begin_private(private)
+        delivered = media.save_media(b"DELIVERED-BYTES", "image/png")
+        hidden = media.save_media(b"PRIVATE-BYTES-CANARY", "image/png")
+        assert delivered.path.parent != media.media_dir()
+        assert media.attach_file(hidden, name="PRIVATE-NAME-CANARY")
+        _set_media_config(monkeypatch, public=True)
+        assert media.check_access(delivered.url.split("?")[0], media.sign_name(delivered.path.name)) == "deny"
+        artifact = Artifact(parts=[Part(text="result"), Part(url=delivered.url, filename="result.png")])
+        identity = await projection.prepare_result(artifact)
+        app = FastAPI()
+        register_media_routes(app)
+        auth.install(app, bearer_token="shared", api_key="", allowed_origins_raw="", fleet_token=FLEET)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+            owner_headers = {"Authorization": f"Bearer {tokens['requester']}"}
+            assert (await client.get(delivered.url, headers=owner_headers)).status_code == 404
+            assert await projection.deliver_to_requester(identity)
+            for token in ("", "shared", FLEET, tokens["agent"], tokens["other"], tokens["requester"]):
+                headers = {"Authorization": f"Bearer {token}"} if token else {}
+                allowed = token == tokens["requester"]
+                for ref in (delivered, hidden):
+                    for method in ("GET", "HEAD"):
+                        response = await client.request(method, ref.url, headers=headers)
+                        assert (response.status_code == 200) is (allowed and ref == delivered)
+                        assert "PRIVATE-BYTES-CANARY" not in response.text
+                    for route in ("open-link", "remint"):
+                        response = await client.post(f"/api/media/{route}", json={"url": ref.url}, headers=headers)
+                        assert (response.status_code == 200) is (allowed and ref == delivered)
+                        if response.status_code == 200:
+                            assert (await client.get(response.json()["url"])).status_code != 200
+            assert (await client.get(delivered.url, headers=owner_headers)).content == b"DELIVERED-BYTES"
+            media._PRIVATE_READERS.clear()
+            assert (await client.get(delivered.url, headers=owner_headers)).status_code == 404
+            await store.engine.dispose()
+            store = stores.ReasoningCoalescingTaskStore(stores.make_sqlite_engine(str(tmp_path / "files.db")),
+                                                      owner_resolver=stores.resolve_task_owner)
+            recovered = RequesterProjection(store, context, Queue(), projection.binding, operator)
+            await recovered.begin_private(private)
+            assert (await client.get(delivered.url, headers=owner_headers)).content == b"DELIVERED-BYTES"
+            delivered.path.write_bytes(b"TAMPERED")
+            assert (await client.get(delivered.url, headers=owner_headers)).status_code == 404
+            delivered.path.write_bytes(b"DELIVERED-BYTES")
+            binding, record = await store.delivery_data("request")
+            assert await store.cas_delivery("request", binding, record, {**record, "version": 99})
+            assert (await client.head(delivered.url, headers=owner_headers)).status_code == 404
+            assert (await client.post("/api/media/remint", json={"url": delivered.url},
+                                      headers=owner_headers)).status_code == 404
+            _, changed = await store.delivery_data("request")
+            assert await store.cas_delivery("request", binding, changed, record)
+            await store.delete(private_intake.ref_task_id(private), operator)
+            assert (await client.get(delivered.url, headers=owner_headers)).status_code == 404
+    finally:
+        media.end_turn_files(holder)
+        media._PRIVATE_READERS.clear()
+        await store.engine.dispose()

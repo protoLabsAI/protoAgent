@@ -582,7 +582,7 @@ def _end_run_scope(token) -> None:
         logger.debug("[a2a] run scope reset failed", exc_info=True)
 
 
-def _begin_turn_files(carry: str = "", principal: str = "", *, principal_kind: str = "unknown", task_id: str = ""):
+def _begin_turn_files(carry: str = "", principal: str = "", *, principal_kind: str = "unknown", task_id: str = "", owner: str = ""):
     def claim_mismatch(parked_kind: str, count: int) -> bool:
         if principal_kind == "operator" and parked_kind in ("scheduler", "operator"):
             return True
@@ -600,7 +600,7 @@ def _begin_turn_files(carry: str = "", principal: str = "", *, principal_kind: s
     try:
         from infra import media
 
-        return media.begin_turn_files(carry=carry, principal=principal, claim_mismatch=claim_mismatch)
+        return media.begin_turn_files(carry=carry, principal=principal, owner=owner, claim_mismatch=claim_mismatch)
     except Exception:  # noqa: BLE001 — attachments must never break a turn
         return None
 
@@ -1118,14 +1118,17 @@ class ProtoAgentExecutor(AgentExecutor):
         # takes over the files the parked turn attached before it paused (#4258) — one parked
         # pause per context (#3930), so the context is the key.
         # Credential-bound, with an owner-only handoff from scheduler/operator parks (#4274).
-        _turn_principal = _principal(context)
+        _turn_principal = projection.binding["principal"] if projection is not None else _principal(context)
         _turn_principal_kind = _principal_kind(context, _origin)
         files_token = _begin_turn_files(
             carry=str(context.context_id or "") if touches_pause else "",
             principal=_turn_principal,
             principal_kind=_turn_principal_kind,
             task_id=str(context.task_id or ""),
+            owner=projection.file_owner if projection is not None else "",
         )
+        if projection is not None:
+            projection.bind_files()
         run_token = _begin_run_scope(str(context.context_id or ""), str(context.task_id or ""))
 
         # Live answer streaming: forward each text delta as an incremental
@@ -1268,6 +1271,11 @@ class ProtoAgentExecutor(AgentExecutor):
             )
             parts = await self._append_structured(parts, context, final_text)
             parts.extend(_file_parts(_close_turn_files()))
+            if projection is not None and projection.private_ref:
+                from a2a.types import Artifact
+
+                await projection.finalize(Artifact(parts=parts, metadata=ext_meta or {}))
+                return
             # Guard on EITHER: cost/worldstate now ride metadata, so a turn with telemetry
             # but no text/context part must still emit the artifact (it would previously
             # have had a cost DataPart keeping `parts` non-empty).
