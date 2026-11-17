@@ -33,6 +33,8 @@ def test_schema_and_reopen(store):
             "namespace",
             "invalidated_at",
             "invalidation_reason",
+            "audience",
+            "source_version",
         ]
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert tables == {

@@ -41,6 +41,7 @@ import re
 
 from langchain_core.messages import HumanMessage
 
+from graph.conversation_audience import is_shared_audience
 from graph.message_blocks import text_of
 from graph.output_format import strip_reasoning
 
@@ -146,6 +147,7 @@ def consolidate_and_store(
     *,
     namespace: str | None = None,
     source: str | None = None,
+    audience: str | None = None,
 ) -> dict:
     """Consolidate extracted ``facts`` into ``store``, deduping near-duplicates and
     SUPERSEDING revisions (ADR 0069 D9). Returns counts (``added`` / ``skipped`` /
@@ -156,6 +158,9 @@ def consolidate_and_store(
     :func:`_consolidate_into_memories`. A store exposing ``add_chunk`` is the pre-0125
     knowledge-chunk backend (plugin hosts, the forget/layered tests) and still gets the
     legacy chunk path below; nothing in the harvest path reaches it anymore.
+
+    ``audience`` (ADR 0131 §5) is the public/private lineage of these facts; it is carried
+    into storage and keeps a private fact from merging with or superseding a shared one.
     """
     if hasattr(store, "add_chunk"):
         return _consolidate_into_chunks(
@@ -164,7 +169,7 @@ def consolidate_and_store(
             namespace=namespace,
             source=source,
         )
-    return _consolidate_into_memories(store, facts, namespace=namespace, source=source)
+    return _consolidate_into_memories(store, facts, namespace=namespace, source=source, audience=audience)
 
 
 def _consolidate_into_memories(
@@ -173,6 +178,7 @@ def _consolidate_into_memories(
     *,
     namespace: str | None = None,
     source: str | None = None,
+    audience: str | None = None,
 ) -> dict:
     """Resolve subjects and dedupe, then let the store own atomic supersession.
 
@@ -192,6 +198,10 @@ def _consolidate_into_memories(
         try:
             existing = memory_store.list(kind="fact", scope=namespace or None, limit=500)
             existing = [row for row in existing if (row.scope or None) == (namespace or None)]
+            # Conversations in Work (ADR 0131 §5): compare only within the same audience
+            # bucket, so a private fact never dedups against (merges into) a shared one and
+            # vice versa. NULL/public are the same shared bucket — legacy dedup is unchanged.
+            existing = [row for row in existing if is_shared_audience(row.audience) == is_shared_audience(audience)]
         except Exception:  # noqa: BLE001 — minimal stub or read failure ⇒ add-only
             existing = []
         # Deduplication also covers legacy NULL subjects and differently named keys.
@@ -213,7 +223,7 @@ def _consolidate_into_memories(
         try:
             metadata = dict(
                 kind="fact", provenance="extracted", review_state="pending",
-                scope=namespace, source_session=src, thread_id=src,
+                scope=namespace, source_session=src, thread_id=src, audience=audience,
             )
             funnel = getattr(memory_store, "add_with_supersession", None)
             if callable(funnel):
@@ -390,6 +400,7 @@ async def extract_and_store_facts(
     source: str | None = None,
     extractor=_default_extractor,
     as_of: str | None = None,
+    audience: str | None = None,
 ) -> dict:
     """Extract durable facts from ``transcript`` and consolidate them into the core
     ``MemoryStore`` (ADR 0125 P2-D3). Never raises — fact capture is best-effort and
@@ -397,7 +408,11 @@ async def extract_and_store_facts(
 
     ``as_of`` (``YYYY-MM-DD``) is when the conversation happened. Each fact is
     prefixed ``[as of …]`` so one harvested from an old thread reads as what was
-    true THEN, not as the current state."""
+    true THEN, not as the current state.
+
+    ``audience`` (ADR 0131 §5) is the public/private lineage carried into storage and
+    dedup. The harvest passes only public input here and stamps the public audience, so a
+    stored fact can never be merged into or superseded by a private one."""
     if memory_store is None or not transcript.strip():
         return {"added": 0, "skipped": 0, "superseded": 0}
     try:
@@ -411,7 +426,7 @@ async def extract_and_store_facts(
             for f in facts
         ]
     try:
-        counts = consolidate_and_store(memory_store, facts, namespace=namespace, source=source)
+        counts = consolidate_and_store(memory_store, facts, namespace=namespace, source=source, audience=audience)
     except Exception:  # noqa: BLE001 — consolidation is designed never to raise, but a store
         # failure here must never propagate into harvest_thread (it re-raises under
         # raise_on_error AFTER the history summary is written). Fact capture is best-effort.

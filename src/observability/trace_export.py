@@ -41,6 +41,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from graph.public_memory import source_for
+from graph.session_gist import card_lock
 from tools.a2a_parse import drop_peer_markers
 
 log = logging.getLogger(__name__)
@@ -258,57 +260,23 @@ def _thinking_mode(graph_config: Any) -> str | None:
     return None
 
 
-def _public_export(checkpoint: dict, session_id: str, task_id: str) -> dict:
-    """Validate the dormant, trusted-runner fleet projection contract (P1g).
-
-    No production writer emits this yet. A partitioned checkpoint must retain
-    the ``audience_partitions`` marker on every subsequent write, including
-    compaction. Its ``fleet_export_projection`` is an atomic snapshot, never a
-    redaction of the runner's mixed input. Each component attests that *all* its
-    sources (including summaries and cached auxiliary data) are public at this
-    checkpoint version. Missing, mixed or stale attestations refuse the row.
-
-    The trusted writer supplies messages, orient, OpenAI tools and metadata;
-    metadata contains the public outcome fields plus teacher/thinking/trace_id.
-    No auxiliary value may fall back to live state for a protected checkpoint.
-    These server-only channels are not an intake API or an enable/disable flag.
-    """
-    projection = checkpoint["channel_values"]["fleet_export_projection"]
-    version = checkpoint.get("id")
-    if (
-        not version
-        or type(projection["version"]) is not int
-        or projection["version"] != 1
-        or projection["context_id"] != session_id
-        or projection["task_id"] != task_id
-    ):
-        raise ValueError("Invalid fleet projection binding")
-    result = {}
-    for key in ("messages", "orient", "tools", "metadata"):
-        component = projection[key]
-        if component["audience"] != "public" or component["source_version"] != version:
-            raise ValueError("Unverified fleet projection")
-        result[key] = component["value"]
-    if (
-        not isinstance(result["messages"], list)
-        or not isinstance(result["orient"], str)
-        or not isinstance(result["tools"], list)
-        or not isinstance(result["metadata"], dict)
-    ):
-        raise ValueError("Invalid fleet projection values")
-    return result
-
-
 def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_tools: Any = None) -> None:
     """Append one canonical Trajectory row for a terminal A2A turn.
 
     Called from the single terminal chokepoint (``_record_a2a_telemetry``),
-    sync and best-effort — swallow everything. Reads the turn's messages from
-    the checkpoint (sync ``get_tuple`` on the ``ThreadedSqliteSaver``), shapes
-    them per the locked schema, and appends JSONL to today's dump.
+    Sync and best-effort. Partitioned turns use the shared public source, with
+    its publication lock held through the append. Unpartitioned turns retain
+    the checkpoint transcript and live auxiliary state.
     """
+    with card_lock:
+        _export_turn(outcome, checkpointer=checkpointer, graph_config=graph_config, bound_tools=bound_tools)
+
+
+def _export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_tools: Any) -> None:
     if not _enabled or _base_dir is None:
         return
+    public = None
+    task_id = ""
     try:
         session_id = getattr(outcome, "context_id", "") or ""
         task_id = getattr(outcome, "task_id", "") or ""
@@ -320,21 +288,30 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
         # default, which is what the dev/prod template instances use.
         messages: list = []
         incognito = False
-        public = None
+        # The shared reader raises for unknown lineage, including absent records.
+        # None means a known unpartitioned conversation.
+        try:
+            source = source_for(session_id)
+        except Exception:
+            return
+        if source is not None:
+            public = source.fleet
+            if public is None or public.task_id != task_id:
+                return
+            required = {"state", "models", "origin", "trigger", "priority", "cost_usd",
+                        "duration_ms", "llm_calls", "tool_calls", "teacher", "trace_id", "thinking"}
+            if not required.issubset(public.metadata):
+                return
+            messages = list(source.messages)
+            outcome = SimpleNamespace(**public.metadata)
+            state = outcome.state
         if checkpointer is not None and session_id:
             try:
                 tup = checkpointer.get_tuple({"configurable": {"thread_id": f"a2a:{session_id}"}})
                 checkpoint = (getattr(tup, "checkpoint", None) or {}) if tup else {}
                 channel_values = checkpoint.get("channel_values", {})
                 incognito = bool(channel_values.get("incognito"))
-                if "audience_partitions" in channel_values or "fleet_export_projection" in channel_values:
-                    public = _public_export(checkpoint, session_id, task_id)
-                    messages = public["messages"]
-                    # Even terminal metadata can derive from private tools/inputs.
-                    # Never combine the public transcript with the raw outcome.
-                    outcome = SimpleNamespace(**public["metadata"])
-                    state = getattr(outcome, "state", "") or ""
-                else:
+                if source is None:
                     messages = channel_values.get("messages", []) or []
             except Exception:  # noqa: BLE001 — no checkpoint → skip, don't crash the hook
                 return
@@ -350,7 +327,7 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
 
         # Orient artifact: the durable goal-plan snapshot. Its presence is our
         # ReAct-vs-OODA label (goals subsystem active ⇒ OODA/Orient turn).
-        orient = public["orient"] if public is not None else ""
+        orient = public.orient if public is not None else ""
         if public is None:
             try:
                 from graph.goals.store import GoalStore
@@ -388,7 +365,7 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
             "teacher": getattr(outcome, "teacher", "") if public is not None else os.environ.get("AGENT_NAME", "protoagent"),
             "domain": "unknown",  # skill/domain inference is a follow-up
             "messages": oai_messages,
-            "tools": public["tools"] if public is not None else _tool_schemas(bound_tools),
+            "tools": public.tools if public is not None else _tool_schemas(bound_tools),
             "verified": verified,
             "reward": reward,
             "thinking": _thinking_mode(outcome if public is not None else graph_config),
@@ -425,7 +402,10 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
             f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
     except Exception:  # noqa: BLE001 — export must never affect a turn
         # Exceptions/identifiers can themselves contain private tool or input text.
-        log.warning("[trace_export] failed to export turn")
+        if public is not None:
+            log.warning("[trace_export] failed to export turn")
+        else:
+            log.exception("[trace_export] failed to export turn %s", task_id)
 
 
 def _reset_for_test() -> None:

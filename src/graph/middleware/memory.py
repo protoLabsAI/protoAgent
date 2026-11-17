@@ -21,6 +21,8 @@ from typing import Any, NamedTuple
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from graph.public_memory import public_card, public_state
+
 
 log = logging.getLogger(__name__)
 
@@ -316,6 +318,10 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
         # worker's identity. The jobs DB is the system of record.
         log.debug("[memory] background worker session %s — skipping session persistence", session_id)
         return
+    try:
+        state, provenance = public_state(state, session_id)
+    except Exception:
+        return  # Unknown lineage must never fall back to the checkpoint.
     messages_raw: list = state.get("messages", []) or []
 
     # --- Extract user-visible messages ---
@@ -375,6 +381,7 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
     summary: dict[str, Any] = {
         "session_id": session_id,
         "trace_id": trace_id,
+        **provenance,
         "messages": user_messages,
         "message_count": len(all_messages),
         "tool_calls": top_calls,
@@ -407,6 +414,8 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
         return
     from graph.session_gist import preserve_gist
 
+    if not public_card(summary):
+        return
     preserve_gist(dest, summary)
     tmp_fd = None
     tmp_path = None
@@ -521,6 +530,8 @@ def digest_entry(summary: dict) -> dict:
     """
     from graph.output_format import strip_reasoning
 
+    if not public_card(summary):
+        summary = {}
     sid = str(summary.get("session_id") or "unknown")
     msgs = summary.get("messages", []) or []
     topic = ""
@@ -575,6 +586,8 @@ def format_session_summary(summary: dict) -> str:
     """
     from graph.output_format import strip_reasoning
 
+    if not public_card(summary):
+        return ""
     ts = summary.get("timestamp", "unknown")
     sid = summary.get("session_id", "unknown")
     lines = [f'<session id="{sid}" timestamp="{ts}">']
@@ -726,6 +739,8 @@ def load_digest_pool(
                 summary = json.load(fh)
         except (OSError, json.JSONDecodeError, ValueError):
             continue
+        if not public_card(summary):
+            continue
         sid = str(summary.get("session_id") or "unknown")
         if exclude_session_id and sid == exclude_session_id:
             continue
@@ -786,6 +801,9 @@ def record_closed_session(
     message_count: int = 0,
     closed_days: int = 14,
     base: str | None = None,
+    source_card: dict | None = None,
+    audience: str | None = None,
+    source_version: int | None = None,
 ) -> bool:
     """Write the chat's "closed" digest record (ADR 0132 D3b). Best-effort: returns True
     when a record was written, False (with a log) otherwise — a harvest must never fail
@@ -794,41 +812,55 @@ def record_closed_session(
     Skipped when the carry-over is off (``closed_days <= 0``), the id is unsafe, or the
     session is an automated surface the digest never lists (background/palette/activity):
     only real chats get a closed record. Writing also prunes expired/malformed records in
-    the same dir, so the folder stays bounded (the 2026-11 session-summary bloat lesson)."""
-    if closed_days <= 0 or not is_safe_session_id(session_id):
-        return False
-    if _surface_for(session_id) in _DIGEST_EXCLUDED_SURFACES:
-        return False
-    cdir = _closed_dir(base)
-    dest = os.path.join(cdir, session_filename(session_id))
-    if not contained_in(cdir, dest):  # never write outside the memory dir (#2340)
-        return False
-    summary = {
-        "session_id": session_id,
-        "messages": [{"role": "user", "content": topic or ""}],
-        "message_count": int(message_count or 0),
-        "gist": gist or "",
-        "timestamp": closed_at,
-        "closed_at": closed_at,
-    }
-    tmp_path = None
-    try:
-        os.makedirs(cdir, exist_ok=True)
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=cdir, suffix=".tmp")
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-            json.dump(summary, fh, indent=2, default=str)
-        os.replace(tmp_path, dest)
+    the same dir, so the folder stays bounded (the 2026-11 session-summary bloat lesson).
+    Partitioned sources require a current public source_card; raw harvest text is
+    never used for those records.
+    """
+    from graph.session_gist import card_lock
+
+    with card_lock:
+        if closed_days <= 0 or not is_safe_session_id(session_id):
+            return False
+        if _surface_for(session_id) in _DIGEST_EXCLUDED_SURFACES:
+            return False
+        cdir = _closed_dir(base)
+        dest = os.path.join(cdir, session_filename(session_id))
+        if not contained_in(cdir, dest):  # never write outside the memory dir (#2340)
+            return False
+        summary = {
+            "session_id": session_id,
+            "messages": [{"role": "user", "content": topic or ""}],
+            "message_count": int(message_count or 0),
+            "gist": gist or "",
+            "timestamp": closed_at,
+            "closed_at": closed_at,
+            "audience": audience,
+            "source_version": source_version,
+        }
+        if source_card is not None:
+            if source_card.get("session_id") != session_id or not public_card(source_card):
+                return False
+            summary = {**source_card, "timestamp": closed_at, "closed_at": closed_at}
+        if not public_card(summary):
+            return False
         tmp_path = None
-    except OSError as exc:
-        log.warning("[memory] could not record closed session %s: %s", session_id[:80], exc)
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-        return False
-    _prune_closed(cdir, closed_days)
-    return True
+        try:
+            os.makedirs(cdir, exist_ok=True)
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=cdir, suffix=".tmp")
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                json.dump(summary, fh, indent=2, default=str)
+            os.replace(tmp_path, dest)
+            tmp_path = None
+        except OSError as exc:
+            log.warning("[memory] could not record closed session %s: %s", session_id[:80], exc)
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            return False
+        _prune_closed(cdir, closed_days)
+        return True
 
 
 def _prune_closed(cdir: str, closed_days: int) -> None:
@@ -913,6 +945,8 @@ def load_closed_pool(
                 summary = json.load(fh)
         except (OSError, json.JSONDecodeError, ValueError):
             continue
+        if not public_card(summary):
+            continue
         sid = str(summary.get("session_id") or "unknown")
         if exclude_session_id and sid == exclude_session_id:
             continue
@@ -972,6 +1006,8 @@ def load_digest(
                     with open(fpath, encoding="utf-8") as fh:
                         summary = json.load(fh)
                 except (OSError, json.JSONDecodeError, ValueError):
+                    break
+                if not public_card(summary):
                     break
                 if _surface_for(str(summary.get("session_id") or "unknown")) in _DIGEST_EXCLUDED_SURFACES:
                     break

@@ -765,3 +765,65 @@ def test_gists_are_trimmed_before_whole_chats_are_dropped(tmp_path):
     res_bare = load_digest("newest", memory_dir=str(tmp_path), max_tokens=bare)
     assert [e.session_id for e in res_bare.entries] == ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4"]
     assert gist not in res_bare.block  # all gists gone, no chat lost
+
+
+@pytest.mark.parametrize("provenance", [None, {"audience": "mixed", "version": "1"}, {"audience": "public", "version": "old"}])
+def test_public_projection_filters_open_closed_relevant_and_cached_prompts(tmp_path, monkeypatch, provenance):
+    from datetime import datetime, timezone
+    from langchain_core.messages import AIMessage, HumanMessage
+    from graph import public_memory
+    from graph.middleware import memory
+    from graph.middleware.knowledge import KnowledgeMiddleware
+    from graph.session_search import search_session_summaries
+    from tests._public_memory_source import PublicMemorySource
+
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+    monkeypatch.setattr(memory, "_PERSISTENCE_DISABLED", False)
+    _quiet_working_state(monkeypatch)
+    _write(tmp_path, "chat-1", "PRIVATE-CANARY", gist="PRIVATE-GIST")
+    path = tmp_path / "chat-1.json"
+    old = json.loads(path.read_text())
+    if provenance is not None:
+        old[public_memory.PROVENANCE] = provenance
+    path.write_text(json.dumps(old))
+    mw = KnowledgeMiddleware(None)
+    mw.compose_context({"session_id": "peer", "messages": [HumanMessage(content="hello")]}, record=False)
+    search_session_summaries("PRIVATE", memory_dir=str(tmp_path))  # prime the FTS cache
+    source = PublicMemorySource(tmp_path / "source.record")
+    source.save([HumanMessage(content="rocket launch"), AIMessage(content="ready")])
+    monkeypatch.setattr(public_memory, "_source_reader", source)
+    closed = tmp_path / "closed"
+    closed.mkdir()
+    now = datetime.now(timezone.utc).isoformat()
+    (closed / path.name).write_text(json.dumps({**old, "closed_at": now}))
+    assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now)
+    assert search_session_summaries("PRIVATE", memory_dir=str(tmp_path)) == []
+    assert memory.digest_entry(old)["topic"] == ""
+    assert memory.format_session_summary(old) == ""
+    assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now, source_card=old,
+                                            audience="public", source_version=1)
+    for policy in ("newest", "relevant"):
+        assert load_digest(policy, query="PRIVATE", memory_dir=str(tmp_path)).entries == []
+    assert "PRIVATE" not in (mw.compose_context({"session_id": "peer", "messages": []}, record=False) or {}).get("context", "")
+    memory._persist_session({"session_id": "chat-1", "incognito": False,
+                             "messages": [HumanMessage(content="PRIVATE-COMPACTED"), AIMessage(content="PRIVATE-REPLY")]}, "trace")
+    card = json.loads(path.read_text())
+    assert "PRIVATE" not in json.dumps(card)
+    for policy in ("newest", "relevant"):
+        assert "rocket launch" in load_digest(policy, query="rocket", memory_dir=str(tmp_path)).block
+    card.update(audience="public", source_version=1)
+    assert memory.record_closed_session("chat-1", topic="ignored", gist="ignored", closed_at=now, source_card=card,
+                                        audience="mixed", source_version=0)
+    closed_card = json.loads((closed / path.name).read_text())
+    assert closed_card["audience"] == "public" and closed_card["source_version"] == 1
+    path.unlink()  # closed record outlives the open card
+    monkeypatch.setattr(public_memory, "_source_reader", PublicMemorySource(source.path))
+    restarted = KnowledgeMiddleware(None)
+    context = restarted.compose_context({"session_id": "peer", "messages": []}, record=False)
+    assert "rocket launch" in context["context"] and "PRIVATE" not in context["context"]
+    source.path.unlink()  # failed source read must also invalidate cached delivery
+    memory._persist_session({"session_id": "chat-1", "incognito": False,
+                             "messages": [HumanMessage(content="PRIVATE-UNKNOWN")]}, "trace")
+    assert not path.exists()
+    assert load_digest(memory_dir=str(tmp_path)).entries == []
+    assert "rocket launch" not in restarted.compose_context({"session_id": "peer", "messages": []}, record=False)["context"]
