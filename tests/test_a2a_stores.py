@@ -1494,7 +1494,18 @@ async def test_private_task_owner_survives_restart_and_pagination(tmp_path, prin
             public_ids = (await conn.execute(select(store.task_model.id).where(
                 await stores.task_public_filter(conn),
             ))).scalars().all()
-            assert public_ids == [ordinary.id]
+            # Internal SQL readers (console history, session state and origin) must
+            # retain human-owned turns; request-scoped reads still exclude peers.
+            assert set(public_ids) == {ordinary.id, private.id}
+            caller_ids = (await conn.execute(select(store.task_model.id).where(
+                await stores.task_public_filter(conn, context=caller),
+            ))).scalars().all()
+            assert set(caller_ids) == ({ordinary.id, private.id} if human else {ordinary.id})
+        # Ownership bookkeeping must see the human-owned starter too, otherwise a
+        # federation caller can continue a private operator conversation.
+        federation = ServerCallContext(state={"trust_tier": "federation", "principal_kind": "federation"})
+        assert await store.context_foreign("c", federation)
+        assert await store.get(private.id, None) is None
         assert owners == {"ordinary": stores.OPERATOR_OWNER, "private": stores.HUMAN_OPERATOR_OWNER}
     finally:
         await engine.dispose()

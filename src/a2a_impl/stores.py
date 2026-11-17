@@ -509,6 +509,11 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
     schema or unknown audience/version refuses protected rows, never guessing a format.
     Tombstones hide both partitions of protected records after incomplete deletion.
     Ordinary records retain the SDK's read behavior, including after chat deletion.
+
+    With a request context, exclude human-owned tasks from non-human callers. Without
+    one, this is the internal SQL projection used by console history and bookkeeping,
+    not an authorization boundary: retain all owners. Store reads additionally enforce
+    SDK owner scoping even when their context is absent.
     """
     from sqlalchemy import Column, MetaData, String, Table, and_, exists, false, inspect, literal_column, true
 
@@ -546,7 +551,7 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
                 func.json_extract(binding, "$.context_id") == task_model.context_id,
             ) if principal else false(),
         )
-    if "owner" in columns and not _human_operator(context):
+    if "owner" in columns and context is not None and not _human_operator(context):
         predicate &= task_model.owner != HUMAN_OPERATOR_OWNER
     return predicate
 
