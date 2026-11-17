@@ -246,14 +246,14 @@ def mint_delegation(
     ttl: float = _DELEGATION_TTL,
     now: float | None = None,
     revocation_gen: int | None = None,
-    signing_key: Ed25519PrivateKey | None = None,
+    signer: Ed25519PrivateKey | None = None,
 ) -> str:
     """Mint a signed delegation bound to one ``audience`` (member slug / loopback target),
     ``method``, ``context`` and ``operation`` (plus the ``task_id`` for the loopback binding).
 
     The caller must already be an authenticated human operator — the fleet proxy checks
     ``is_human_operator`` before calling this, and a peer caller is never handed a token. Minting
-    needs the hub's PRIVATE key (``signing_key`` overrides it for tests); holding the fleet
+    needs the hub's PRIVATE key (``signer`` overrides it for tests); holding the fleet
     service token reaches nothing here.
     """
     now = time.time() if now is None else now
@@ -271,7 +271,7 @@ def mint_delegation(
         "pk": DELEGATED_PRINCIPAL_KIND,
     }
     payload = _b64(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    sk = signing_key or _private_key()
+    sk = signer or _private_key()
     sig = _b64(sk.sign(payload.encode("ascii")))
     return f"{payload}.{sig}"
 

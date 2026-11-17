@@ -968,7 +968,7 @@ def test_owner_refuses_forged_delegation(delegation_env):
     # A token signed with a key the attacker chose (they lack the hub private key) is forged too.
     forged = delegation_env.mint_delegation(
         audience="alice", method="SendMessage", context="c", operation="o",
-        signing_key=Ed25519PrivateKey.generate(),
+        signer=Ed25519PrivateKey.generate(),
     )
     with pytest.raises(delegation_env.DelegationError):
         delegation_env.verify_delegation(forged, audience="alice")
@@ -1038,7 +1038,7 @@ def test_owner_middleware_rejects_forged_delegation(delegation_env):
 
     forged = delegation_env.mint_delegation(
         audience="alice", method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1",
-        issuer=delegation_env.ISSUER_PROXY, signing_key=Ed25519PrivateKey.generate(),
+        issuer=delegation_env.ISSUER_PROXY, signer=Ed25519PrivateKey.generate(),
     )
     assert _owner_resolve(delegation_env, forged) is None
     genuine = _mint(delegation_env)
@@ -1122,7 +1122,7 @@ def test_fleet_service_token_is_not_the_mint_key(delegation_env):
     member_key = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"fleet-service-token").digest())
     minted_by_member = delegation_env.mint_delegation(
         audience="alice", method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1",
-        issuer=delegation_env.ISSUER_PROXY, signing_key=member_key,
+        issuer=delegation_env.ISSUER_PROXY, signer=member_key,
     )
     assert _owner_resolve(delegation_env, minted_by_member) is None
 
