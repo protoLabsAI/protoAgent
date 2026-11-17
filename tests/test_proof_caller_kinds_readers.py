@@ -20,12 +20,14 @@ from tests.test_session_gist import harness  # noqa: F401
 from tests.test_steering import _clear_queue  # noqa: F401  (autouse: resets the steering queue)
 from tests.test_trace_export import _reset  # noqa: F401  (autouse: resets fleet export)
 from tests.test_tracing import _restore_tracing_module, session_langfuse  # noqa: F401
+# Auth fixtures exercise the platform-branching device registry.
+pytestmark = pytest.mark.platform_sensitive
 # case, resolved kind, operator access; ids name the four proof-matrix callers.
 CALLER_KINDS = [
     pytest.param(("federation", "federation", False), id="federation"),
     pytest.param(("fleet", "fleet-service", False), id="fleet-service"),
-    pytest.param(("agent", "agent-device", False), id="paired-agent", marks=pytest.mark.platform_sensitive),
-    pytest.param(("device", "device", True), id="enrolled-console", marks=pytest.mark.platform_sensitive),
+    pytest.param(("agent", "agent-device", False), id="paired-agent"),
+    pytest.param(("device", "device", True), id="enrolled-console"),
 ]
 _Caller = namedtuple("_Caller", "ctx principal is_operator")
 
@@ -148,6 +150,8 @@ def test_public_projection_filters_prompts_per_caller_kind(caller, tmp_path, mon
         _digest_scenario(tmp_path, monkeypatch, provenance)
 
 def test_harvest_excludes_private_canaries_per_caller_kind(caller, tmp_path, monkeypatch):
+    from a2a_impl.auth import is_human_operator
+    from graph.middleware.request_context import current_verified_principal
     from knowledge.history import HistoryStore
     from runtime.state import STATE
     store = HistoryStore(tmp_path / "kb.db")
@@ -155,7 +159,7 @@ def test_harvest_excludes_private_canaries_per_caller_kind(caller, tmp_path, mon
     monkeypatch.setenv("MEMORY_PATH", str(tmp_path / "memory"))
     with _caller_scope(caller):
         _src_harvest(tmp_path, store)
-    arcs = store.list_for_session("chat-9", kinds=["archive"], include_private=caller.is_operator)
+        arcs = store.list_for_session("chat-9", kinds=["archive"], include_private=is_human_operator(current_verified_principal()))
     if caller.is_operator:
         assert len(arcs) == 2  # the console recovers both the public and retained-private spans
     else:
