@@ -42,10 +42,17 @@ _RESOLVER_METADATA_MAX = 1024
 
 
 def remember_resolver_metadata(session_id: str, request_metadata: dict | None) -> None:
-    """Persist the resolver inputs of the ORIGINAL turn on ``session_id``. A no-op for an
-    empty session id or empty metadata (nothing a resolver could key on). Overwrites on each
-    turn so the newest request's scoping wins."""
-    if not session_id or not isinstance(request_metadata, dict) or not request_metadata:
+    """Persist this turn's resolver inputs so the newest request's scoping wins.
+
+    A metadata-less turn clears earlier inputs: a custom resolver can map empty metadata
+    to a different thread. An empty session id is ignored.
+    """
+    if not session_id:
+        return
+    if request_metadata is None or request_metadata == {}:
+        _RESOLVER_METADATA.pop(session_id, None)
+        return
+    if not isinstance(request_metadata, dict):
         return
     if session_id not in _RESOLVER_METADATA and len(_RESOLVER_METADATA) >= _RESOLVER_METADATA_MAX:
         # Evict the oldest-inserted entry; dict preserves insertion order.

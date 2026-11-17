@@ -574,7 +574,8 @@ async def test_private_idle_steer_fails_closed_when_the_record_cannot_be_written
 
 
 @pytest.mark.asyncio
-async def test_idle_check_resolves_the_original_turns_thread(monkeypatch):
+@pytest.mark.parametrize("latest_metadata", [None, {}])
+async def test_idle_check_resolves_the_latest_turns_thread(monkeypatch, latest_metadata):
     # A later idle start / parked resume must resolve the ORIGINAL turn's checkpointer thread,
     # not one rebuilt from the idle call's empty metadata under a custom resolver (#571).
     from graph import thread_ids
@@ -583,11 +584,12 @@ async def test_idle_check_resolves_the_original_turns_thread(monkeypatch):
     monkeypatch.setattr(STATE, "thread_id_resolver",
                         lambda md, sid: f"proj:{md.get('project', 'none')}:{sid}", raising=False)
     seen: dict = {}
+    snapshots = {}
 
     class _G:
         async def aget_state(self, config):
             seen["tid"] = config["configurable"]["thread_id"]
-            return _idle_snapshot()
+            return snapshots.get(seen["tid"], _idle_snapshot())
 
     monkeypatch.setattr(STATE, "graph", _G(), raising=False)
     monkeypatch.setattr(STATE, "a2a_task_engine", object(), raising=False)
@@ -596,6 +598,12 @@ async def test_idle_check_resolves_the_original_turns_thread(monkeypatch):
     thread_ids.remember_resolver_metadata("chat-x", {"project": "atlas"})
     assert await chat_mod._session_turn_idle("chat-x") is True
     assert seen["tid"] == "proj:atlas:chat-x"
+    # A subsequent metadata-less turn parks on the unscoped thread. Keeping atlas's
+    # inputs would miss that pause and incorrectly allow a fresh idle start.
+    thread_ids.remember_resolver_metadata("chat-x", latest_metadata)
+    snapshots["proj:none:chat-x"] = _parked_snapshot()
+    assert await chat_mod._session_turn_idle("chat-x") is False
+    assert seen["tid"] == "proj:none:chat-x"
     thread_ids.forget_resolver_metadata("chat-x")
 
 
