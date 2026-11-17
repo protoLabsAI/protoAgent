@@ -6,20 +6,15 @@ from contextlib import contextmanager
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from tests.test_conversation_harvest import _ARCHIVE_CANARY
-from tests.test_conversation_harvest import test_harvest_excludes_private_canaries_from_every_derived_reader as _src_harvest
+from tests.test_conversation_harvest import _ARCHIVE_CANARY, test_harvest_excludes_private_canaries_from_every_derived_reader as _src_harvest
 from tests.test_digest_gating import _write
 from tests.test_prompt_capture_middleware import test_private_partition_captures_nothing_and_drops_the_private_buffers as _src_prompt
-from tests.test_session_gist import test_private_source_survives_public_turn_compaction_restart_and_stale_timer as _src_gist
+from tests.test_session_gist import harness, test_private_source_survives_public_turn_compaction_restart_and_stale_timer as _src_gist  # noqa: F401
 from tests.test_steer_idle_starts_turn import _partition
-from tests.test_steering import test_no_model_call_mixes_audiences_in_a_real_graph as _src_no_mix
-from tests.test_trace_export import test_later_public_terminal_export_uses_only_public_bytes as _src_export
-from tests.test_tracing import test_a_private_partition_records_no_content_now_or_on_a_later_public_turn as _src_tracing
+from tests.test_steering import _clear_queue, test_no_model_call_mixes_audiences_in_a_real_graph as _src_no_mix  # noqa: F401  (autouse: resets the steering queue)
+from tests.test_trace_export import _reset, test_later_public_terminal_export_uses_only_public_bytes as _src_export  # noqa: F401  (autouse: resets fleet export)
+from tests.test_tracing import _restore_tracing_module, session_langfuse, test_a_private_partition_records_no_content_now_or_on_a_later_public_turn as _src_tracing  # noqa: F401
 
-from tests.test_session_gist import harness  # noqa: F401
-from tests.test_steering import _clear_queue  # noqa: F401  (autouse: resets the steering queue)
-from tests.test_trace_export import _reset  # noqa: F401  (autouse: resets fleet export)
-from tests.test_tracing import _restore_tracing_module, session_langfuse  # noqa: F401
 # Auth fixtures exercise the platform-branching device registry.
 pytestmark = pytest.mark.platform_sensitive
 # case, resolved kind, operator access; ids name the four proof-matrix callers.
