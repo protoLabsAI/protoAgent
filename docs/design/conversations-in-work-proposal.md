@@ -750,6 +750,9 @@ must not become two rows or inflate counts during retries, refresh, reconnect or
 restart. A board card link is progress evidence for that work, not another copy
 of the request. One request producing several independent jobs needs an explicit
 parent/child and count policy; do not deduplicate those jobs solely by conversation.
+Josh decided the policy on 2026-11-17 ("only the jobs count, request is lineage"):
+each child job is one Work item and one count; the parent request is lineage, not a
+counted item.
 
 Show real progress, expected waits and uncertainty using existing signals. A
 stream of events is not proof of progress, and a quiet conversation is not proof
@@ -1190,7 +1193,7 @@ See [Phase 0 outcome](#phase-0-outcome) for the historical result.
 | Files, structured output, tools and terminal exits | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400); result-release model **Decided by Josh, 2026-11-16 (Q1)** — auto delivery | Section 6: the delivery record seals files and structured output at finalization; per decision 2 effectful tools need no console-authorized manifest, but tool arguments, output, progress, errors and files stay private unless part of the delivered result; unknown/unsandboxable effectful tools stay unavailable; private errors/cancellation cannot flush to peers. |
 | Nonterminal active states for retention | Open — not informed by Phase 0 prototype | Include queued/Coming up, blocked, parked, waiting and unknown recovery; release only on durable closure of all references. |
 | Stalled, never-closed linked work: closure owner; D9 nudges and Needs you parking vs release | Open — not informed by Phase 0 prototype | Give release an owner; a stall nudge is a prompt to close or continue, never an automatic release. |
-| One request producing several jobs | Open — not informed by Phase 0 prototype | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
+| One request producing several jobs | **Decided by Josh, 2026-11-17**: "only the jobs count, request is lineage" | Only the child jobs count in Work, both in group counts and as items. The parent request is not counted; it is a lineage record tying its child jobs together. Each job keeps its own work identity; retries of the same job keep one identity. |
 | What makes an incoming thread an actionable request rather than routine conversation | Open — not informed by Phase 0 prototype | Require durable work intent/evidence; do not classify every A2A thread as Work or guess from a title. |
 | Remote original capability beyond v1 (read, retention, steering) | Open — not informed by Phase 0 prototype | v1 shows remote rows unavailable (decision 4). Advertise verified owner capabilities separately; read-only where authorized; no composer until privacy and continuation are proven. |
 | Routine-thread discoverability after From others is removed | Open — not informed by Phase 0 prototype | Evaluate the preview's Started by others group in Chat; approve its eligibility and visibility before removing the old entry point. |
