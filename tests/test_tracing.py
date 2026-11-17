@@ -1179,6 +1179,121 @@ async def test_an_incognito_session_records_no_content(session_langfuse):
     assert (tool["name"], tool["input"], tool["output"]) == ("tool:lookup", None, None)
 
 
+# ── Private-partition content suppression (ADR 0131 §5, P1g.1) ────────────────
+#
+# A conversation with a private partition records only content-free structure/metrics
+# until its composed input is VERIFIED public — and unlike incognito the suppression
+# follows the retained source, so a later ordinary turn (incognito=False) cannot clear
+# it. The dormant boundary is bound here exactly as the fleet-export / gist slices bind it.
+
+
+def _bind_private_source(monkeypatch, *, traceable=False):
+    """Bind the dormant public-source reader so ``chat-private`` reads as a partitioned
+    conversation (content traceable only once verified public) and everything else as an
+    ordinary, unpartitioned conversation."""
+    from langchain_core.messages import HumanMessage
+
+    from graph import public_memory
+
+    source = public_memory.PublicSource(
+        version="retained-2", messages=(HumanMessage(content="Public request"),), traceable=traceable
+    )
+    monkeypatch.setattr(public_memory, "_source_reader", lambda sid: source if sid == "chat-private" else None)
+
+
+async def test_a_private_partition_records_no_content_now_or_on_a_later_public_turn(session_langfuse, monkeypatch):
+    tracing, span = session_langfuse
+    _bind_private_source(monkeypatch)
+
+    # The private turn itself: input, tool args/result and the answer are all suppressed.
+    async with tracing.trace_session("chat-private", name="chat", input="PRIVATE_STEER_CANARY"):
+        assert tracing.io_allowed() is False
+        tracing.trace_tool_call("lookup", {"q": "PRIVATE_ARG_CANARY"}, "PRIVATE_RESULT_CANARY", 5, True)
+        tracing.set_session_output("PRIVATE_REPLY_CANARY")
+    # A later ORDINARY turn (incognito=False) on the same partitioned conversation stays
+    # suppressed — the partition can't be cleared to re-expose retained private state (#5403).
+    async with tracing.trace_session("chat-private", name="chat", input="PRIVATE_LATER_CANARY", incognito=False):
+        assert tracing.io_allowed() is False
+        tracing.trace_tool_call("lookup", {"q": "PRIVATE_LATER_ARG"}, "PRIVATE_LATER_RESULT", 5, True)
+        tracing.set_session_output("PRIVATE_LATER_REPLY")
+
+    tool = tracing._langfuse.start_observation.call_args.kwargs
+    assert (tool["input"], tool["output"]) == (None, None)
+    # No canary reached ANY recorded span field (session input/output or tool args/result).
+    blob = repr(span.update.call_args_list) + repr(tracing._langfuse.start_observation.call_args_list)
+    assert "CANARY" not in blob
+
+
+async def test_an_unpartitioned_conversation_is_traced_unchanged(session_langfuse, monkeypatch):
+    """AC#3: with no private partition the content paths are byte-for-byte the pre-slice ones."""
+    from graph import public_memory
+
+    tracing, span = session_langfuse
+    monkeypatch.setattr(public_memory, "_source_reader", lambda sid: None)
+
+    async with tracing.trace_session("chat-public", name="chat", input="status?"):
+        assert tracing.io_allowed() is True
+        tracing.trace_tool_call("lookup", {"q": "ok"}, "found", 5, True)
+        tracing.set_session_output("Three open.")
+
+    span.update.assert_any_call(input="status?")
+    span.update.assert_any_call(output="Three open.")
+    assert tracing._langfuse.start_observation.call_args.kwargs["input"] == {"q": "ok"}
+
+
+async def test_a_verified_public_partition_can_be_traced_again(session_langfuse, monkeypatch):
+    """The partition is not permanent incognito: once the trusted reader verifies the
+    composed input is public (``traceable``), the public turn records content again."""
+    tracing, span = session_langfuse
+    _bind_private_source(monkeypatch, traceable=True)
+
+    async with tracing.trace_session("chat-private", name="chat", input="now public?"):
+        assert tracing.io_allowed() is True
+        tracing.set_session_output("verified public")
+
+    span.update.assert_any_call(output="verified public")
+
+
+async def test_a_failing_run_on_a_private_partition_records_no_error_text(session_langfuse, monkeypatch):
+    """Terminal/error span: a run that raises on a partitioned conversation is still marked
+    ERROR (content-free structure), but the exception text — which can carry the private
+    steering — is suppressed. The ``sdk.trace_run`` terminal span is the path the card's
+    proof names, and ``_failed_on_raise`` gates its ``status_message`` on ``io_allowed``."""
+    from graph import sdk
+
+    tracing, span = session_langfuse
+    _bind_private_source(monkeypatch)
+
+    async with tracing.trace_session("chat-private", name="chat"):
+        assert tracing.io_allowed() is False
+        with pytest.raises(KeyError, match="PRIVATE_ERROR_CANARY"):
+            async with sdk.trace_run("workflow:x", run_id="r1"):
+                raise KeyError("PRIVATE_ERROR_CANARY")
+
+    marked = [c.kwargs for c in span.update.call_args_list if c.kwargs.get("level") == "ERROR"]
+    assert marked, "the failing run must still be marked ERROR (content-free structure stays)"
+    assert all("status_message" not in m for m in marked), "no exception text on a private partition"
+    assert "CANARY" not in repr(span.update.call_args_list)
+
+
+async def test_a_failing_run_on_a_public_conversation_still_records_its_error(session_langfuse, monkeypatch):
+    """The gate is bidirectional: without a private partition the error text is recorded
+    exactly as before, so debugging a real failure still works (AC#3)."""
+    from graph import sdk
+
+    tracing, span = session_langfuse
+    monkeypatch.setattr("graph.public_memory._source_reader", lambda sid: None)
+
+    async with tracing.trace_session("chat-public", name="chat"):
+        assert tracing.io_allowed() is True
+        with pytest.raises(KeyError, match="engine bug"):
+            async with sdk.trace_run("workflow:x", run_id="r1"):
+                raise KeyError("engine bug")
+
+    marked = [c.kwargs for c in span.update.call_args_list if c.kwargs.get("level") == "ERROR"]
+    assert marked and "KeyError" in marked[0]["status_message"]
+
+
 async def test_session_input_is_capped(session_langfuse):
     tracing, span = session_langfuse
     big = "x" * (tracing.MAX_IO_CHARS + 5)

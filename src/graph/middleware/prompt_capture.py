@@ -127,6 +127,25 @@ class PromptCaptureMiddleware(AgentMiddleware):
 
                 pop_projected_context(token)
                 return
+            # A conversation's private partition (ADR 0131 §5, amended by bd-jo3v6 — P1g.1)
+            # must not reach a persisted snapshot either, and this suppression follows the
+            # retained source (one shared boundary with tracing), so a later ordinary turn
+            # cannot clear it and restore a private snapshot via a shared capture cache.
+            # DROP the private buffers — the projected-context frame AND the wire stash — not
+            # just the final write, so nothing survives for a later call to pop. Dormant in
+            # production (the source reader is unbound → every conversation reads public), so
+            # capture is unchanged without a private partition.
+            from observability import tracing
+
+            from graph.public_memory import content_public
+
+            if not content_public(tracing.current_session_id() or ""):
+                from graph.context_frame import pop_projected_context
+                from graph.middleware.wire_capture import pop_wire_system
+
+                pop_projected_context(token)
+                pop_wire_system()
+                return
             split = _split_system(request)
             if split is None:
                 from graph.context_frame import pop_projected_context
@@ -146,7 +165,6 @@ class PromptCaptureMiddleware(AgentMiddleware):
             wire_text = wire if (wire is not None and wire != stable + context_tail) else None
 
             from graph.middleware.request_context import current_request_metadata
-            from observability import tracing
 
             # ADR 0108 D2 (#3191): the projected context (memory, skills, working
             # state, tool-delta notices) is stashed by the inner middleware during

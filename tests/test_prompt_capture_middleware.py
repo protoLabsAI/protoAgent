@@ -110,6 +110,38 @@ def test_incognito_turn_captures_nothing():
     assert prompt_snapshots().calls_for_task("task-incog") == []
 
 
+def test_private_partition_captures_nothing_and_drops_the_private_buffers(monkeypatch):
+    """ADR 0131 §5 (P1g.1): a conversation's private partition is suppressed before capture —
+    like incognito, but it follows the retained source (so a later ordinary turn can't clear
+    it) and it DROPS the private buffers (projected context + wire stash), not just the final
+    write, so nothing survives for a later call to pop."""
+    from langchain_core.messages import HumanMessage
+
+    from graph import public_memory
+    from graph.context_frame import pop_projected_context, stash_projected_context
+    from graph.middleware import wire_capture
+
+    source = public_memory.PublicSource(version="v2", messages=(HumanMessage(content="pub"),))
+    monkeypatch.setattr(public_memory, "_source_reader", lambda sid: source if sid == "chat-private" else None)
+    monkeypatch.setattr("observability.tracing.current_session_id", lambda: "chat-private")
+
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={})
+
+    def inner(r):
+        stash_projected_context("PRIVATE_CONTEXT_CANARY", [{"label": "Hot", "chars": 3}])
+        wire_capture._WIRE_SYSTEM.set("PRIVATE_WIRE_CANARY")
+        return _response()
+
+    with request_metadata_scope({"a2a.task_id": "task-private"}):
+        capture.wrap_model_call(req, inner)
+
+    assert prompt_snapshots().calls_for_task("task-private") == []
+    # Both private buffers were dropped — a later call pops nothing.
+    assert pop_projected_context() == (None, None)
+    assert wire_capture.pop_wire_system() is None
+
+
 def test_store_failure_never_touches_the_turn(monkeypatch):
     # Best-effort like the injection log: a broken store debug-logs; the
     # response still comes back.
