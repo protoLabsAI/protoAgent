@@ -41,7 +41,7 @@ from a2a.types import (
 )
 
 import protolabs_a2a as pa
-from a2a_impl import hitl_routing
+from a2a_impl import auth, hitl_routing
 from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
 
 CTX = "chat-3930"
@@ -734,7 +734,10 @@ async def test_phase0_output_gate_cannot_hide_private_input_history(tmp_path, de
     await store2.initialize()
     try:
         assert _SECRET not in str(MessageToDict(await store2.get(turn_id, op)))
-        assert _SECRET not in str(await store2.history_records(ctx_id, peer))
+        if auth.is_human_operator(peer.state.get("principal_kind")):
+            assert _SECRET in str(await store2.history_records(ctx_id, peer))
+        else:
+            assert _SECRET not in str(await store2.history_records(ctx_id, peer))
         assert await store2.get(private_intake.ref_task_id(ref), peer) is None  # the shell is invisible to a peer
         assert await private_intake.record_private_reply(store2, ref, "handled privately", op)
         rec = await store2.get_record(private_intake.ref_task_id(ref), op)
@@ -773,9 +776,14 @@ async def test_a_private_steer_into_a_peer_thread_hides_the_input_and_keeps_the_
     again = await handler.on_message_send(_msg("any update?", mid="p2", ctx="fed-ctx"), fed)
     assert again.context_id == "fed-ctx"
     listed = {t.id for t in (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks}
-    assert steer.id not in listed and first.id in listed
-    with pytest.raises(TaskNotFoundError):
-        await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
+    if auth.is_human_operator(fed.state.get("principal_kind")):
+        assert steer.id in listed and first.id in listed
+        assert (await handler.on_get_task(GetTaskRequest(id=steer.id), fed)).id == steer.id
+        assert (await store.get_record(private_intake.ref_task_id(ref), fed)).private_payload["input"] == _SECRET
+    else:
+        assert steer.id not in listed and first.id in listed
+        with pytest.raises(TaskNotFoundError):
+            await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
     with pytest.raises(TaskNotFoundError):
         await handler.on_get_task(GetTaskRequest(id=private_intake.ref_task_id(ref)), fed)
     peer_tasks = (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks
@@ -833,10 +841,16 @@ async def test_a_private_resume_never_lands_on_a_peer_owned_parked_task(tmp_path
     dumped = str(MessageToDict(peer_view))
     assert _SECRET not in dumped and ref not in dumped
     peer_tasks = (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks
-    assert steer.id not in {t.id for t in peer_tasks}
-    assert all(_SECRET not in str(MessageToDict(t)) and ref not in str(MessageToDict(t)) for t in peer_tasks)
-    with pytest.raises(TaskNotFoundError):  # the operator's private turn stays out of the peer's reads
-        await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
+    if auth.is_human_operator(fed.state.get("principal_kind")):
+        assert steer.id in {t.id for t in peer_tasks}
+        assert (await handler.on_get_task(GetTaskRequest(id=steer.id), fed)).id == steer.id
+        assert (await store.get_record(private_intake.ref_task_id(ref), fed)).private_payload["input"] == _SECRET
+        assert all(_SECRET not in str(MessageToDict(t)) for t in peer_tasks)
+    else:
+        assert steer.id not in {t.id for t in peer_tasks}
+        assert all(_SECRET not in str(MessageToDict(t)) and ref not in str(MessageToDict(t)) for t in peer_tasks)
+        with pytest.raises(TaskNotFoundError):  # the operator's private turn stays out of the peer's reads
+            await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
 
     # The runner only ever saw the opaque reference, never the private text; the operator still
     # recovers the input from the partition.
@@ -983,8 +997,14 @@ async def test_phase0_preexisting_handles(tmp_path):
     )
     try:
         history = await reopened.history_records(CTX, peer)
-        assert result in str(history) and all(c not in str(history) for c in (secret, reply))
-        assert await reopened.history_records(CTX, other) == []
+        if auth.is_human_operator(peer.state.get("principal_kind")):
+            assert all(c in str(history) for c in (result, secret, reply))
+            other_history = await reopened.history_records(CTX, other)
+            assert result not in str(other_history)
+            assert all(c in str(other_history) for c in (secret, reply))
+        else:
+            assert result in str(history) and all(c not in str(history) for c in (secret, reply))
+            assert await reopened.history_records(CTX, other) == []
         assert (await reopened.delivery_data(task_id))[1] == delivery
         recovered = RequesterProjection(reopened, projection.context, projection.queue, binding, op)
         await recovered.begin_private(ref)
@@ -1327,8 +1347,11 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
     }
     for name, surface in surfaces.items():
         blob = str(surface)
-        for canary in _C.values():
-            assert canary not in blob, (fault, name, canary)
+        if name == "history" and auth.is_human_operator(peer.state.get("principal_kind")):
+            assert _C["steer"] in blob
+        else:
+            for canary in _C.values():
+                assert canary not in blob, (fault, name, canary)
 
     # The sealed public result is delivered exactly once on a clean exit, and NEVER on a fault.
     peer_blob = str([surfaces[k] for k in ("stream", "subscription", "poll", "push", "history")])

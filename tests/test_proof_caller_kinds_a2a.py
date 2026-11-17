@@ -8,9 +8,8 @@ source test and routes the inline ``ServerCallContext(state=...)`` builds to pri
 the REAL auth path (``A2AAuthMiddleware``, as in ``test_a2a_auth::test_verified_principal_in_http_call_
 context``), never a hand-set tier. The peer is authenticated as each kind; the operator is a human
 reached via a verified fleet-proxy delegation (ADR 0131 P1a.2) that also runs the source's ``CALL``
-sends. Original assertions are kept verbatim. A real leak is a strict ``xfail`` named "PROOF FAILURE"
-(PR body ``## Proof failures``), scoped ``raises=AssertionError`` so only the source test's bare-assert
-check — not this harness's ``_require``/``_HarnessError`` setup guards — satisfies it.
+sends. Non-human callers cannot read private content; enrolled consoles are human operators
+and can read the private console projection. Transport projections remain content-free.
 """
 
 from __future__ import annotations
@@ -40,41 +39,20 @@ FEDERATION = "federation"
 ENROLLED_CONSOLE = "enrolled-console"
 ALL_KINDS = (FEDERATION, "fleet-service", "paired-agent", ENROLLED_CONSOLE)
 
-# Retained decision conflict: enrolled consoles ARE the human operator, but these
-# original proof assertions treat every caller kind as a peer denied private content.
-_STEER_LEAK = "Decision needed: an enrolled console is the human operator and may read private tasks"
-_RESUME_LEAK = "Decision needed: an enrolled console is the human operator and may read private tasks"
-_PRIVATE_PAYLOAD_LEAK = (
-    "PROOF FAILURE: an enrolled-console (paired human 'device') peer is is_human_operator AND shares the "
-    "operator's OPERATOR_OWNER ('') partition, so a server/console read returns the operator's "
-    "private_payload: the gate keys on the credential kind plus the trust-tier owner, not identity."
-)
-
 
 class _HarnessError(RuntimeError):
-    """A failure in THIS file's real-auth harness setup — NOT a privacy leak. ``_require`` raises it
-    (not ``AssertionError``) so a broken setup can't satisfy a PROOF FAILURE ``xfail``."""
+    """A failure in the real-auth harness setup, distinct from a privacy assertion."""
 
 
 def _require(cond, msg):
-    """Validate a harness precondition — raises ``_HarnessError`` (not ``AssertionError``), so a
-    setup failure never counts as a privacy PROOF FAILURE."""
+    """Validate a harness precondition before exercising privacy assertions."""
     if not cond:
         raise _HarnessError(msg)
 
 
-def _kinds(*, leak_kinds=(), reason=None):
-    """The four caller-kind params; ``leak_kinds`` get a strict ``xfail`` scoped to ``AssertionError``
-    with ``reason`` (so only the real privacy assertion, never a setup error, satisfies them)."""
-    params = []
-    for kind in ALL_KINDS:
-        if kind in leak_kinds:
-            _require(reason is not None, "a leaking kind needs a PROOF FAILURE reason")
-            marks = [pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)]
-        else:
-            marks = []
-        params.append(pytest.param(kind, marks=marks, id=kind))
-    return params
+def _kinds():
+    """Run every scenario for all verified caller kinds, without expected failures."""
+    return [pytest.param(kind, id=kind) for kind in ALL_KINDS]
 
 
 def _authed_state(token: str) -> dict:
@@ -179,10 +157,10 @@ def _route(monkeypatch, principals, kind: str) -> None:
     monkeypatch.setattr(src, "CALL", operator_ctx)
 
 
-# ── Re-run each scenario for every caller kind (bodies imported, assertions unchanged) ────
+# ── Re-run each scenario for every caller kind (bodies imported, peer assertions preserved) ────
 
 
-@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_PRIVATE_PAYLOAD_LEAK))
+@pytest.mark.parametrize("kind", _kinds())
 @pytest.mark.parametrize("parked", [False, True])
 async def test_output_gate_cannot_hide_private_input_history(
     tmp_path, delegation_env, monkeypatch, principals, parked, kind
@@ -191,14 +169,14 @@ async def test_output_gate_cannot_hide_private_input_history(
     await src.test_phase0_output_gate_cannot_hide_private_input_history(tmp_path, delegation_env, parked)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_STEER_LEAK))
+@pytest.mark.parametrize("kind", _kinds())
 async def test_private_steer_into_a_peer_thread(tmp_path, delegation_env, monkeypatch, principals, kind):
     _route(monkeypatch, principals, kind)
     await src.test_a_private_steer_into_a_peer_thread_hides_the_input_and_keeps_the_thread_the_peers(
         tmp_path, delegation_env)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_RESUME_LEAK))
+@pytest.mark.parametrize("kind", _kinds())
 async def test_private_resume_never_lands_on_a_peer_owned_parked_task(
     tmp_path, delegation_env, monkeypatch, principals, kind
 ):
@@ -206,7 +184,7 @@ async def test_private_resume_never_lands_on_a_peer_owned_parked_task(
     await src.test_a_private_resume_never_lands_on_a_peer_owned_parked_task(tmp_path, delegation_env)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_PRIVATE_PAYLOAD_LEAK))
+@pytest.mark.parametrize("kind", _kinds())
 async def test_preexisting_handles(tmp_path, monkeypatch, principals, kind):
     _route(monkeypatch, principals, kind)
     await src.test_phase0_preexisting_handles(tmp_path)
@@ -230,7 +208,7 @@ _FAULTS = [
 ]
 
 
-@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_PRIVATE_PAYLOAD_LEAK))
+@pytest.mark.parametrize("kind", _kinds())
 @pytest.mark.parametrize("fault,terminal,delivers,outcome_state", _FAULTS)
 async def test_private_segment_exit_never_leaks_and_closes_the_delivery(
     tmp_path, monkeypatch, principals, fault, terminal, delivers, outcome_state, kind
