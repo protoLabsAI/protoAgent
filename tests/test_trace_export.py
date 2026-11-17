@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -207,3 +208,146 @@ def test_export_never_raises_on_bad_checkpointer(tmp_path, monkeypatch):
     # Must not propagate — export is best-effort.
     trace_export.export_turn(_Outcome(), checkpointer=_Boom(), graph_config=_Cfg())
     assert not list(tmp_path.glob("*.jsonl"))
+
+
+def _partitioned_checkpoint(context_id, task_id, *, incognito=False):
+    """Trusted-runner fixture: compact each audience independently before export."""
+    from langgraph.checkpoint.base import empty_checkpoint
+
+    from graph.compaction_engine import summary_message
+
+    checkpoint = empty_checkpoint()
+    private = [
+        HumanMessage(content="PRIVATE_STEERING_CANARY"),
+        AIMessage(content="PRIVATE_REPLY_CANARY", tool_calls=[
+            {"name": "private_tool", "args": {"text": "PRIVATE_ARGUMENT_CANARY"}, "id": "private-call"},
+        ]),
+        ToolMessage(content="PRIVATE_RESULT_CANARY", tool_call_id="private-call"),
+    ]
+    public_messages = [summary_message("Public request summary"), *_MESSAGES]
+    values = {
+        "messages": public_messages,
+        "orient": "Public plan",
+        "tools": [{"type": "function", "function": {"name": "public_tool", "parameters": {}}}],
+        "metadata": {
+            **vars(_Outcome(context_id=context_id, task_id=task_id)),
+            "teacher": "public-agent", "trace_id": "public-trace", "thinking": "on",
+        },
+    }
+    checkpoint["channel_values"] = {
+        "incognito": incognito,
+        # The exporter must not assume these raw/legacy channels are safe, even
+        # after a later public turn clears incognito and compacts its context.
+        "messages": [summary_message("PRIVATE_COMPACTION_CANARY"), *private, *_MESSAGES],
+        "audience_partitions": {"console": {"messages": private, "archive": private}},
+        "fleet_export_projection": {
+            "version": 1, "context_id": context_id, "task_id": task_id,
+            **{key: {"audience": "public", "source_version": checkpoint["id"], "value": value}
+               for key, value in values.items()},
+        },
+    }
+    return checkpoint
+
+
+@pytest.mark.parametrize("context_id", ["sess-1", "background:proof-1"])
+def test_later_public_terminal_export_uses_only_public_bytes(tmp_path, monkeypatch, context_id):
+    """Refs #5403: private turn → restart → public turn, including background IDs."""
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from runtime.state import STATE
+    from server.a2a import _record_a2a_telemetry
+
+    _enable(tmp_path, monkeypatch)
+    # Poison every live auxiliary source, including the process-wide tools cache.
+    monkeypatch.setenv("AGENT_NAME", "PRIVATE_TEACHER_CANARY")
+    monkeypatch.setattr(trace_export, "_tool_schema_cache", [{"description": "PRIVATE_SCHEMA_CANARY"}])
+    monkeypatch.setattr("observability.tracing.current_trace_id", lambda: "PRIVATE_TRACE_CANARY")
+
+    class _PrivatePlan:
+        def read_plan(self, sid):
+            return "PRIVATE_PLAN_CANARY"
+
+    monkeypatch.setattr("graph.goals.store.GoalStore", _PrivatePlan)
+    monkeypatch.setattr("server.turn_telemetry.record_turn", lambda **kwargs: None)
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(thinking="PRIVATE_CONFIG_CANARY"))
+    monkeypatch.setattr(STATE, "graph", SimpleNamespace(bound_tools=[{"description": "PRIVATE_TOOL_CANARY"}]))
+    outcome = SimpleNamespace(**{
+        **vars(_Outcome(context_id=context_id)), "usage": {}, "incognito": True,
+        "models": ["PRIVATE_MODEL_CANARY"], "trigger": "PRIVATE_TRIGGER_CANARY",
+        "origin": "PRIVATE_ORIGIN_CANARY", "priority": "PRIVATE_PRIORITY_CANARY",
+    })
+    config = {"configurable": {"thread_id": f"a2a:{context_id}", "checkpoint_ns": ""}}
+    db = str(tmp_path / "checkpoint.db")
+    with SqliteSaver.from_conn_string(db) as saver:
+        private = _partitioned_checkpoint(context_id, outcome.task_id, incognito=True)
+        saver.put(config, private, {}, {})
+        monkeypatch.setattr(STATE, "checkpointer", saver)
+        _record_a2a_telemetry(outcome)
+        assert not list(tmp_path.glob("*.jsonl"))
+
+    # Reopen the persisted checkpoint: privacy must not depend on a process flag.
+    with SqliteSaver.from_conn_string(db) as saver:
+        later = _partitioned_checkpoint(context_id, outcome.task_id)
+        retained = saver.get_tuple(config).checkpoint["channel_values"]["audience_partitions"]
+        later["channel_values"]["audience_partitions"] = retained
+        saver.put(config, later, {}, {})
+        outcome.incognito = False
+        monkeypatch.setattr(STATE, "checkpointer", saver)
+        _record_a2a_telemetry(outcome)
+
+    (row,) = _read_rows(tmp_path)
+    exported = next(tmp_path.glob("*.jsonl")).read_bytes()
+    assert b"PRIVATE_" not in exported
+    assert b"Public request summary" in exported
+    assert row["meta"]["orient"] == "Public plan"
+    assert row["meta"]["session_id"] == context_id
+    assert row["meta"]["model"] == "claude-opus-4-8"
+    assert row["tools"][0]["function"]["name"] == "public_tool"
+    assert row["teacher"] == "public-agent"
+    assert row["id"] == "fleet__public-trace"
+
+
+@pytest.mark.parametrize("component", ["messages", "orient", "tools", "metadata"])
+@pytest.mark.parametrize("fault", ["missing", "missing_lineage", "mixed", "stale"])
+def test_partitioned_export_refuses_unverified_component(tmp_path, monkeypatch, component, fault):
+    _enable(tmp_path, monkeypatch)
+    checkpoint = _partitioned_checkpoint("sess-1", "task-1")
+    projection = checkpoint["channel_values"]["fleet_export_projection"]
+    if fault == "missing":
+        del projection[component]
+    elif fault == "missing_lineage":
+        del projection[component]["source_version"]
+    elif fault == "mixed":
+        projection[component]["audience"] = "mixed"
+    else:
+        projection[component]["source_version"] = "older-checkpoint"
+    saver = SimpleNamespace(get_tuple=lambda config: SimpleNamespace(checkpoint=checkpoint))
+    trace_export.export_turn(_Outcome(), checkpointer=saver, graph_config=_Cfg())
+    assert not list(tmp_path.glob("*.jsonl"))
+
+
+@pytest.mark.parametrize("fault", ["missing", "malformed", "version", "context", "task", "read_failure"])
+def test_partitioned_export_refuses_unknown_or_mismatched_snapshot(tmp_path, monkeypatch, fault, caplog):
+    _enable(tmp_path, monkeypatch)
+    checkpoint = _partitioned_checkpoint("sess-1", "task-1")
+    channels = checkpoint["channel_values"]
+    projection = channels["fleet_export_projection"]
+    if fault == "missing":
+        del channels["fleet_export_projection"]
+    elif fault == "malformed":
+        channels["fleet_export_projection"] = None
+    elif fault == "version":
+        projection["version"] = 99
+    elif fault == "context":
+        projection["context_id"] = "another-context"
+    elif fault == "task":
+        projection["task_id"] = "previous-task"
+
+    def read(config):
+        if fault == "read_failure":
+            raise ValueError("PRIVATE_EXCEPTION_CANARY")
+        return SimpleNamespace(checkpoint=checkpoint)
+
+    trace_export.export_turn(_Outcome(), checkpointer=SimpleNamespace(get_tuple=read), graph_config=_Cfg())
+    assert not list(tmp_path.glob("*.jsonl"))
+    assert "PRIVATE_" not in caplog.text

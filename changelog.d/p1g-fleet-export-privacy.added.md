@@ -1,0 +1,1 @@
+- **Public-only fleet export proof (#5403).** Add a dormant checkpoint projection contract that exports only verified public messages and auxiliary state, refusing missing, mixed or stale lineage. Byte-level tests cover private turns followed by public terminal and background exports after compaction; ordinary unpartitioned exports remain unchanged.

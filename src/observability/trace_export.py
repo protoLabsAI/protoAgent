@@ -38,6 +38,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from tools.a2a_parse import drop_peer_markers
@@ -257,6 +258,47 @@ def _thinking_mode(graph_config: Any) -> str | None:
     return None
 
 
+def _public_export(checkpoint: dict, session_id: str, task_id: str) -> dict:
+    """Validate the dormant, trusted-runner fleet projection contract (P1g).
+
+    No production writer emits this yet. A partitioned checkpoint must retain
+    the ``audience_partitions`` marker on every subsequent write, including
+    compaction. Its ``fleet_export_projection`` is an atomic snapshot, never a
+    redaction of the runner's mixed input. Each component attests that *all* its
+    sources (including summaries and cached auxiliary data) are public at this
+    checkpoint version. Missing, mixed or stale attestations refuse the row.
+
+    The trusted writer supplies messages, orient, OpenAI tools and metadata;
+    metadata contains the public outcome fields plus teacher/thinking/trace_id.
+    No auxiliary value may fall back to live state for a protected checkpoint.
+    These server-only channels are not an intake API or an enable/disable flag.
+    """
+    projection = checkpoint["channel_values"]["fleet_export_projection"]
+    version = checkpoint.get("id")
+    if (
+        not version
+        or type(projection["version"]) is not int
+        or projection["version"] != 1
+        or projection["context_id"] != session_id
+        or projection["task_id"] != task_id
+    ):
+        raise ValueError("Invalid fleet projection binding")
+    result = {}
+    for key in ("messages", "orient", "tools", "metadata"):
+        component = projection[key]
+        if component["audience"] != "public" or component["source_version"] != version:
+            raise ValueError("Unverified fleet projection")
+        result[key] = component["value"]
+    if (
+        not isinstance(result["messages"], list)
+        or not isinstance(result["orient"], str)
+        or not isinstance(result["tools"], list)
+        or not isinstance(result["metadata"], dict)
+    ):
+        raise ValueError("Invalid fleet projection values")
+    return result
+
+
 def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_tools: Any = None) -> None:
     """Append one canonical Trajectory row for a terminal A2A turn.
 
@@ -278,14 +320,24 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
         # default, which is what the dev/prod template instances use.
         messages: list = []
         incognito = False
+        public = None
         if checkpointer is not None and session_id:
             try:
                 tup = checkpointer.get_tuple({"configurable": {"thread_id": f"a2a:{session_id}"}})
-                channel_values = (getattr(tup, "checkpoint", None) or {}).get("channel_values", {}) if tup else {}
+                checkpoint = (getattr(tup, "checkpoint", None) or {}) if tup else {}
+                channel_values = checkpoint.get("channel_values", {})
                 incognito = bool(channel_values.get("incognito"))
-                messages = channel_values.get("messages", []) or []
+                if "audience_partitions" in channel_values or "fleet_export_projection" in channel_values:
+                    public = _public_export(checkpoint, session_id, task_id)
+                    messages = public["messages"]
+                    # Even terminal metadata can derive from private tools/inputs.
+                    # Never combine the public transcript with the raw outcome.
+                    outcome = SimpleNamespace(**public["metadata"])
+                    state = getattr(outcome, "state", "") or ""
+                else:
+                    messages = channel_values.get("messages", []) or []
             except Exception:  # noqa: BLE001 — no checkpoint → skip, don't crash the hook
-                messages = []
+                return
 
         # Incognito threads (ADR 0069 D3b) leave no memory trail — honour that
         # here too; never export a turn the user asked to be forgotten.
@@ -298,13 +350,14 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
 
         # Orient artifact: the durable goal-plan snapshot. Its presence is our
         # ReAct-vs-OODA label (goals subsystem active ⇒ OODA/Orient turn).
-        orient = ""
-        try:
-            from graph.goals.store import GoalStore
+        orient = public["orient"] if public is not None else ""
+        if public is None:
+            try:
+                from graph.goals.store import GoalStore
 
-            orient = (GoalStore().read_plan(session_id) or "").strip()
-        except Exception:  # noqa: BLE001 — plan is optional
-            orient = ""
+                orient = (GoalStore().read_plan(session_id) or "").strip()
+            except Exception:  # noqa: BLE001 — plan is optional
+                orient = ""
         orient, _ = _cap(orient, _ORIENT_CAP)
         loop_shape = "ooda" if orient else "react"
 
@@ -319,25 +372,26 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
         # Trace id ties this row to the distributed Langfuse trace (and to any
         # cross-agent delegation rows that share it). Best-effort — the trace
         # contextvar is still set inside the terminal hook's scope.
-        trace_id = ""
-        try:
-            from observability import tracing
+        trace_id = (getattr(outcome, "trace_id", "") or "") if public is not None else ""
+        if public is None:
+            try:
+                from observability import tracing
 
-            trace_id = tracing.current_trace_id() or ""
-        except Exception:  # noqa: BLE001
-            trace_id = ""
+                trace_id = tracing.current_trace_id() or ""
+            except Exception:  # noqa: BLE001
+                trace_id = ""
         row_id = f"fleet__{trace_id or task_id}"
 
         row = {
             "id": row_id,
             "source": "protoagent-fleet",
-            "teacher": os.environ.get("AGENT_NAME", "protoagent"),
+            "teacher": getattr(outcome, "teacher", "") if public is not None else os.environ.get("AGENT_NAME", "protoagent"),
             "domain": "unknown",  # skill/domain inference is a follow-up
             "messages": oai_messages,
-            "tools": _tool_schemas(bound_tools),
+            "tools": public["tools"] if public is not None else _tool_schemas(bound_tools),
             "verified": verified,
             "reward": reward,
-            "thinking": _thinking_mode(graph_config),
+            "thinking": _thinking_mode(outcome if public is not None else graph_config),
             "split": "train",  # fleet reality is always train-split
             "license_note": None,
             "meta": {
@@ -370,7 +424,8 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
         with _daily_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
     except Exception:  # noqa: BLE001 — export must never affect a turn
-        log.exception("[trace_export] failed to export turn %s", getattr(outcome, "task_id", "?"))
+        # Exceptions/identifiers can themselves contain private tool or input text.
+        log.warning("[trace_export] failed to export turn")
 
 
 def _reset_for_test() -> None:
