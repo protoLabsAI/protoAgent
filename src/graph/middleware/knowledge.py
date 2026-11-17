@@ -69,6 +69,46 @@ _PRIOR_SESSIONS_TTL_S = 60.0
 # every model call of the same turn: ``{"text": str, "sections": list | None}``.
 TURN_PROJECTION_KEY = "protoagent_turn_projection"
 
+# Memory delivery follows the caller's principal (ADR 0066 / ADR 0131). A turn whose
+# VERIFIED trust tier is the federation peer gets no prior-session digest and does not
+# have these two tools bound — both read the operator's OWN prior conversations, which
+# the federation principal's memory delivery is scoped away from.
+_FEDERATION_DENIED_TOOLS = frozenset({"recall_session", "session_search"})
+
+
+def _federation_caller() -> bool:
+    """Is THIS turn's verified principal the federation peer (ADR 0066)?
+
+    Read from the server-set trust-tier contextvar (:func:`observability.tracing.
+    current_trust_tier` — stamped by ``A2AAuthMiddleware`` in ``src/a2a_impl/auth.py``
+    from the matched credential). NEVER from request metadata, a header the graph
+    parsed, or graph-state input a caller can set. The contextvar is bound per request,
+    so the decision is per TURN — it rides the run, never this instance, which one
+    compiled graph shares across every concurrent turn.
+
+    Every other principal reads False and keeps today's delivery: the shared operator
+    bearer (console) and fleet service token (both ``operator`` tier), paired devices
+    (``operator`` tier), and local/self-invocation turns (tier ``""``). The read does
+    not raise in practice; if it ever did, preserving today's delivery is the safe
+    default (gating would narrow every turn, not just the federation peer's)."""
+    try:
+        from observability.tracing import current_trust_tier
+
+        return current_trust_tier() == "federation"
+    except Exception:  # noqa: BLE001 — a telemetry read must never break a model call
+        return False
+
+
+def _bound_tool_name(tool) -> str | None:
+    """Name of a ``ModelRequest.tools`` entry — a BaseTool or a provider tool-spec dict
+    (mirrors ``graph.middleware.subagent_fence._bound_tool_name``)."""
+    name = getattr(tool, "name", None)
+    if name:
+        return str(name)
+    if isinstance(tool, dict):
+        return tool.get("name") or (tool.get("function") or {}).get("name")
+    return None
+
 
 class KnowledgeState(AgentState):
     """The private, never-checkpointed channel carrying this turn's projection.
@@ -320,6 +360,13 @@ class KnowledgeMiddleware(AgentMiddleware):
         # Apply after model-specific options are resolved, so a per-chat override
         # cannot reactivate recall on an operational-state-only projection.
         if not self._prior_sessions_enabled:
+            opts = replace(opts, prior_sessions_policy="off")
+        # Memory delivery follows the caller's principal (ADR 0066 / ADR 0131): a
+        # federation peer's turn never composes the operator's prior-session digest.
+        # Decided per turn from the server-verified tier (never this shared instance),
+        # so concurrent operator and federation turns each get the right policy, and the
+        # composer then skips the digest loader entirely (``policy == "off"``).
+        if _federation_caller():
             opts = replace(opts, prior_sessions_policy="off")
         if self._bound_tool_names is not None and opts.bound_tool_names is None:
             opts = replace(opts, bound_tool_names=self._bound_tool_names)
@@ -684,8 +731,29 @@ class KnowledgeMiddleware(AgentMiddleware):
             return request.override(messages=cleaned)
         return request
 
+    @staticmethod
+    def _scrub_federation_tools(request):
+        """Drop ``recall_session``/``session_search`` from a federation peer's model
+        request (ADR 0066 / ADR 0131).
+
+        Both tools read the operator's OWN prior conversations, so a federation-token
+        turn must not have them bound. Decided per turn from the server-verified tier
+        (:func:`_federation_caller`), never by mutating this shared-across-turns
+        instance, and a no-op for every other caller and whenever neither tool is bound
+        (so a provider never sees a history with tool calls but an emptied ``tools``)."""
+        if not _federation_caller():
+            return request
+        tools = getattr(request, "tools", None)
+        if not tools:
+            return request
+        kept = [t for t in tools if _bound_tool_name(t) not in _FEDERATION_DENIED_TOOLS]
+        if len(kept) == len(tools):
+            return request
+        log.debug("[knowledge] federation turn — unbinding %d session-recall tool(s)", len(tools) - len(kept))
+        return request.override(tools=kept)
+
     def wrap_model_call(self, request, handler):
-        return handler(self._project_messages(request))
+        return handler(self._scrub_federation_tools(self._project_messages(request)))
 
     async def awrap_model_call(self, request, handler):
         # The working-state refresh reads sqlite stores (tasks, goals, schedules) — keep
@@ -698,4 +766,4 @@ class KnowledgeMiddleware(AgentMiddleware):
             text, sections = await asyncio.to_thread(
                 refresh_working_state, text, sections, getattr(request, "state", None)
             )
-        return await handler(self._deliver(request, msgs, text, sections))
+        return await handler(self._scrub_federation_tools(self._deliver(request, msgs, text, sections)))
