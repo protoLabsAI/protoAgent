@@ -342,3 +342,13 @@ def test_instruction_contract_keeps_quote_scope_and_conditions(runtime):
     )
     assert reply.instruction.model_dump() == instruction
     assert reply.job is None and reply.followup is None
+
+
+@pytest.mark.parametrize("repeat", ["59/15 * * * *", "*/15 * * * *", "0 9 * * 1", "15 7,12 * * *"])
+def test_time_cron_ambiguity_guard(repeat):
+    args = dict(first_run="2026-11-16T12:00:00+00:00", repeat=repeat, repeat_label="Repeat", timezone="UTC")
+    if repeat.startswith("59/"):
+        with pytest.raises(ValueError, match="for every 15 minutes"):
+            wi.Time(**args)
+    else:
+        assert wi.Time(**args).repeat == repeat

@@ -21,6 +21,7 @@ from graph.goals.verifiers import plugin_verifier_names, verifier_catalog
 from graph.middleware.tool_call_repair import repair_messages, reorder_tool_results
 from graph.llm import create_llm
 from graph.tool_access import NEVER_INHERITED, is_read_tool
+from scheduler.cron_validation import cron_ambiguity_problem
 from runtime import local_turns
 from runtime.state import STATE
 from server import turn_control
@@ -81,6 +82,8 @@ class Time(Contract):
             raise ValueError("timezone must be a valid IANA name") from exc
         if self.repeat != "once" and (len(self.repeat.split()) != 5 or not croniter.is_valid(self.repeat)):
             raise ValueError("repeat must be once or a valid cron expression")
+        if problem := cron_ambiguity_problem(self.repeat):
+            raise ValueError(problem)
         return self
 
 

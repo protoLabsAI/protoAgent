@@ -47,6 +47,7 @@ from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
 from infra import keep_awake, job_sessions
 from infra.sqlite_locks import file_lock
+from scheduler.cron_validation import cron_ambiguity_problem
 from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
 from observability.sqlite_migrate import add_missing_columns
 
@@ -480,12 +481,22 @@ class LocalScheduler:
         self._adopt_existing_jobs = adopt_existing_jobs
         self._init_db(adopt_existing_jobs=adopt_existing_jobs)
         if adopt_existing_jobs:
+            self._warn_ambiguous_cron_jobs()
             from scheduler import followup_backoff
 
             try:
                 followup_backoff._register_store(self)
             except sqlite3.DatabaseError:
                 log.exception("[scheduler] could not load follow-up backoffs at %s", self.path)
+
+    def _warn_ambiguous_cron_jobs(self) -> None:
+        try:
+            with closing(self._connect()) as db:
+                for row in db.execute("SELECT id, schedule FROM jobs"):
+                    if problem := cron_ambiguity_problem(row["schedule"]):
+                        log.warning("[scheduler] stored job %s: %s", row["id"], problem)
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not inspect stored cron expressions at %s", self.path)
 
     # ── DB plumbing ─────────────────────────────────────────────────────────
 

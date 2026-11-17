@@ -200,3 +200,19 @@ def test_routes_absent_when_accessors_not_wired() -> None:
     client = TestClient(app)
     assert client.get("/api/scheduler/jobs").status_code == 404
     assert client.put("/api/scheduler/jobs/x", json={"prompt": "p", "schedule": "0 9 * * *"}).status_code == 404
+
+
+def test_cron_ambiguity_rejected_on_create_and_update():
+    sched = _FakeScheduler()
+    client = _client(sched)
+    for expression in ("*/15 * * * *", "0 9 * * 1", "15 7,12 * * *"):
+        assert client.post("/api/scheduler/jobs", json={"prompt": "p", "schedule": expression}).status_code == 200
+    payload = {"prompt": "p", "schedule": "59/15 * * * *"}
+    for response in (
+        client.post("/api/scheduler/jobs", json=payload),
+        client.put("/api/scheduler/jobs/job-1", json=payload),
+    ):
+        assert response.status_code == 400
+        assert "`*/15` for every 15 minutes" in response.json()["detail"]
+    assert len(sched._jobs) == 3
+    assert sched._jobs["job-1"].schedule == "*/15 * * * *"

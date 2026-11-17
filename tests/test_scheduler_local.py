@@ -2076,3 +2076,25 @@ async def test_cron_resume_during_turn_preserves_settlement(tmp_path, monkeypatc
         assert db.execute("SELECT state FROM occurrences").fetchone()["state"] == "settled"
     await s._tick()
     assert calls == [1]
+
+
+@pytest.mark.parametrize("expression", ["* 23/6 * * *", "59/15 23/6 * * *"])
+def test_load_warns_once_per_ambiguous_job_without_changing_it(tmp_path, caplog, expression):
+    scheduler = _make_scheduler(tmp_path)
+    job = scheduler.add_job("legacy", "* 23/6 * * *", job_id="legacy-max-step")
+    scheduler.add_job("valid", "23/6 * * * *", job_id="valid-minute-step")
+    # Include paused jobs and multiple offending terms, still one warning per job.
+    with sqlite3.connect(scheduler.path) as db:
+        db.execute("UPDATE jobs SET schedule = ?, enabled = 0 WHERE id = ?", (expression, job.id))
+        before = db.execute("SELECT * FROM jobs ORDER BY id").fetchall()
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="scheduler.local"):
+        loaded = _make_scheduler(tmp_path)
+    warnings = [r for r in caplog.records if "ambiguous in cron" in r.message]
+    assert len(warnings) == 1
+    assert warnings[0].levelname == "WARNING"
+    assert job.id in warnings[0].message
+    assert "`*/6` for every 6 hours" in warnings[0].message
+    assert "`23` for hour 23 only" in warnings[0].message
+    with sqlite3.connect(loaded.path) as db:
+        assert db.execute("SELECT * FROM jobs ORDER BY id").fetchall() == before

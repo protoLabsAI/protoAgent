@@ -292,3 +292,16 @@ def test_wait_result_stays_parseable_by_wait_turn_reply():
     sched = _FakeScheduler()
     out = asyncio.run(_wait_tool(sched).ainvoke({"seconds": 2700, "then": "Check the board.", "state": {}}))
     assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["59/15 * * * *", "*/15 * * * *", "0 9 * * 1", "15 7,12 * * *"])
+async def test_schedule_cron_ambiguity_guard(when):
+    sched = _FakeScheduler()
+    out = await _schedule_tool(sched).ainvoke({"prompt": "Follow up", "when": when})
+    if when.startswith("59/"):
+        assert "`*/15` for every 15 minutes" in out
+        assert "`59` for minute 59 only" in out
+        assert sched.last_context_id == "__unset__"
+    else:
+        assert out.startswith("Scheduled job ")
