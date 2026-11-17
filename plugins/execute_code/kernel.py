@@ -46,6 +46,7 @@ from .engine import (
     _record_bridged_call,
     _resolve_child_interpreter,
     _truncate_or_spill,
+    _tool_help,
 )
 
 #: Exact refusal text for a bridged call that arrives while no execute_code call is
@@ -107,14 +108,14 @@ def _send(_obj):
         _REQ.write(_data)
         _REQ.flush()
 
-def _tool_call(_name, **kwargs):
+def _tool_request(_kind, _name, kwargs):
     global _tool_seq
     with _tool_lock:
         _tool_seq += 1
         _rid = _tool_seq
         _waiter = [threading.Event(), None]
         _tool_pending[_rid] = _waiter
-    _send({"type": "tool_call", "id": _rid, "tool": _name, "args": kwargs})
+    _send({"type": _kind, "id": _rid, "tool": _name, "args": kwargs})
     _waiter[0].wait()
     _resp = _waiter[1]
     if not _resp.get("ok"):
@@ -123,13 +124,15 @@ def _tool_call(_name, **kwargs):
 
 class _ToolProxies:
     """Attribute access returns a callable that RPCs the named tool."""
+    def help(self, name=None):
+        return _tool_request("help", name, {})
     def __getattr__(self, _name):
         def _proxy(**kwargs):
-            return _tool_call(_name, **kwargs)
+            return _tool_request("tool_call", _name, kwargs)
         _proxy.__name__ = _name
         return _proxy
     def __call__(self, _name, **kwargs):  # tools("name", **kw) also works
-        return _tool_call(_name, **kwargs)
+        return _tool_request("tool_call", _name, kwargs)
 
 # The one persistent namespace: variables, imports and functions carry over here.
 _G = {"__name__": "__main__", "tools": _ToolProxies()}
@@ -380,6 +383,13 @@ class Kernel:
                     fut = self._exec_future
                     if fut is not None and not fut.done() and msg.get("cid") == self._exec_cid:
                         fut.set_result(msg)
+                elif kind == "help":
+                    # Help uses only the current bridge, never a previous run's map.
+                    ctx = self._active
+                    await self._send({
+                        "type": "tool_reply", "id": msg.get("id"), "ok": True,
+                        "result": _tool_help(ctx["tool_map"] if ctx else {}, msg.get("tool")),
+                    })
                 elif kind == "tool_call":
                     task = asyncio.create_task(self._dispatch_tool(msg))
                     self._pending.add(task)
