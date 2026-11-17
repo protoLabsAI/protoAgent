@@ -1351,6 +1351,20 @@ class ProtoAgentExecutor(AgentExecutor):
                 requested_model=str(_md.get("model") or "").strip(),
             )
 
+        def _private() -> bool:
+            """Whether this turn runs inside the dormant private partition (P1e): its
+            content frames are quarantined and only a sealed delivery may publish, so an
+            abnormal exit discards the unsent buffers and closes the delivery record rather
+            than surfacing a partial private answer or an error string."""
+            return projection is not None and bool(projection.private_ref)
+
+        def _discard_private_buffers() -> None:
+            """Drop any unflushed answer/reasoning text on an abnormal private exit — it is
+            never published (the projection quarantines it) and must not be retained as a
+            trailing partial either; the peer gets only the content-free terminal."""
+            nonlocal _text_buf, _reasoning_buf
+            _text_buf = _reasoning_buf = ""
+
         # What the turn was last seen doing — read only when the stall guard trips,
         # so the failure names the step that never returned instead of just "stalled".
         last_activity = ["starting up"]
@@ -1631,11 +1645,19 @@ class ProtoAgentExecutor(AgentExecutor):
                     return
 
                 elif event_type == "error":
-                    # Keep whatever the turn said before it failed (#3940) — a `/<workflow>`
-                    # streams its whole output as text, then a short `error`.
-                    await _flush_reasoning()
-                    await _flush_text()
-                    await updater.failed(message=updater.new_agent_message([_text_part(str(payload))]))
+                    if _private():
+                        # A private segment's error text never reaches the peer (#5400): discard
+                        # the unsent buffers and fail content-free; the delivery record is closed
+                        # in the `finally`. The error itself is retained privately by the
+                        # projection's `consume`, so the operator can still see why it failed.
+                        _discard_private_buffers()
+                        await updater.failed()
+                    else:
+                        # Keep whatever the turn said before it failed (#3940) — a `/<workflow>`
+                        # streams its whole output as text, then a short `error`.
+                        await _flush_reasoning()
+                        await _flush_text()
+                        await updater.failed(message=updater.new_agent_message([_text_part(str(payload))]))
                     _notify_terminal(_outcome("failed", accumulated, error=str(payload)))
                     return
 
@@ -1652,6 +1674,10 @@ class ProtoAgentExecutor(AgentExecutor):
             # CancelledError here. Record a terminal outcome so the turn isn't an
             # observability hole and a canceled background job settles — then re-raise so
             # the SDK's cancel flow (the `canceled` frame) completes normally.
+            if _private():
+                # Drop the unsent private buffers; the delivery record is closed in the
+                # `finally` so a sealed-but-undelivered result can't ship after the cancel.
+                _discard_private_buffers()
             _notify_terminal(_outcome("canceled", accumulated))
             raise
 
@@ -1662,9 +1688,15 @@ class ProtoAgentExecutor(AgentExecutor):
             # spinning, and telemetry finally gets a turn row for the hang (#2344),
             # which is what made this class of failure invisible.
             logger.warning("[a2a] task %s stalled — failing it: %s", context.task_id, exc)
-            await _flush_reasoning()
-            await _flush_text()  # keep whatever the turn did manage to say
-            await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
+            if _private():
+                # A wedged private segment fails content-free (#5400): discard the unsent
+                # buffers, don't surface the stall text, and close the delivery in `finally`.
+                _discard_private_buffers()
+                await updater.failed()
+            else:
+                await _flush_reasoning()
+                await _flush_text()  # keep whatever the turn did manage to say
+                await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
             _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
 
         except Exception as exc:  # noqa: BLE001 — surface to the task, fail loud
@@ -1672,10 +1704,17 @@ class ProtoAgentExecutor(AgentExecutor):
             from observability import tracing
             from observability.error_text import safe_error_text
 
-            # Raw exception text can carry a provider's error body or a keyed URL: whole
-            # for the operator (the console), redacted for a federation peer.
-            shown = str(exc) if tracing.current_trust_tier() == "operator" else safe_error_text(exc)
-            await updater.failed(message=updater.new_agent_message([_text_part(shown)]))
+            if _private():
+                # A crash inside a private segment never surfaces its exception text to the
+                # peer (#5400): discard the unsent buffers, fail content-free, and close the
+                # delivery record in `finally` so nothing private publishes after the crash.
+                _discard_private_buffers()
+                await updater.failed()
+            else:
+                # Raw exception text can carry a provider's error body or a keyed URL: whole
+                # for the operator (the console), redacted for a federation peer.
+                shown = str(exc) if tracing.current_trust_tier() == "operator" else safe_error_text(exc)
+                await updater.failed(message=updater.new_agent_message([_text_part(shown)]))
             _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
 
         finally:
@@ -1707,6 +1746,15 @@ class ProtoAgentExecutor(AgentExecutor):
                     context.task_id,
                     {"phase": "turn_ended", "origin": _origin, "state": ended_state[0]},
                 )
+            # A private segment that ended abnormally (error, cancel, timeout) closes its
+            # delivery record without delivering (#5400) — a clean completion delivered in
+            # `_finalize`, and a park keeps the record open for the resume. Best-effort: a
+            # close failure must not mask the turn's already-recorded outcome.
+            if _private() and ended_state[0] in ("failed", "canceled"):
+                try:
+                    await projection.close()
+                except Exception:  # noqa: BLE001
+                    logger.exception("[a2a] closing private delivery record failed for task %s", context.task_id)
             # Every `_outcome` read happens in the except/return paths above, so
             # disarming here can never lose a turn's samples. Also covers the
             # input_required park — the resumed execute() re-arms with the parked files.

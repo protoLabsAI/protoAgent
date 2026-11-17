@@ -74,7 +74,7 @@ async def _drain():
 
 
 def _handler(stream_fn, *, routing: bool = True, task_store=None, push_config_store=None, push_sender=None,
-             requester_projection_factory=None, structured_finalizer=None):
+             requester_projection_factory=None, structured_finalizer=None, stall_timeout_provider=None):
     card = pa.build_agent_card(
         name="t",
         description="d",
@@ -85,7 +85,8 @@ def _handler(stream_fn, *, routing: bool = True, task_store=None, push_config_st
     )
     handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(stream_fn, requester_projection_factory=requester_projection_factory,
-                                          structured_finalizer=structured_finalizer),
+                                          structured_finalizer=structured_finalizer,
+                                          stall_timeout_provider=stall_timeout_provider),
         task_store=task_store or InMemoryTaskStore(),
         agent_card=card,
         push_config_store=push_config_store or InMemoryPushNotificationConfigStore(),
@@ -1167,4 +1168,193 @@ async def test_private_final_envelope_keeps_selected_files_across_resume(tmp_pat
     assert "STRUCTURED-CANARY" in str(retained.private_payload)
     assert binding["principal"] == "device:one"
     media._PRIVATE_READERS.clear()
+    await store.engine.dispose()
+
+
+# ── P1e.2: a private segment exits honestly — no content leaks through progress, errors,
+# cancellation or tool output, and the delivery record closes without delivering (#5400) ──
+# P1e.1 proved a clean completion delivers only the sealed result. This proves the OTHER
+# exits: a tool error, a model error, a crash, a cancel and a timeout each leave the peer a
+# content-free terminal, with tool args / tool output / reply text / error strings absent
+# from every peer surface (live stream, resubscribe, poll, push, history) and the sealed
+# candidate never shipped once the turn gave up.
+_C = {
+    "steer": "STEER-SECRET-CANARY",
+    "tool_arg": "TOOL-ARG-CANARY",
+    "tool_out": "TOOL-OUTPUT-CANARY",
+    "reply": "PRIVATE-REPLY-CANARY",
+    "model_err": "MODEL-ERROR-CANARY",
+    "crash": "CRASH-MESSAGE-CANARY",
+}
+_PUBLIC_RESULT = "The requested public result."
+
+
+def _snapshot(event):
+    copy = type(event)()
+    copy.CopyFrom(event)
+    return copy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault,terminal,delivers,outcome_state",
+    [
+        ("completion", TaskState.TASK_STATE_COMPLETED, True, "completed"),
+        ("tool_error", TaskState.TASK_STATE_COMPLETED, True, "completed"),
+        ("model_error", TaskState.TASK_STATE_FAILED, False, "failed"),
+        ("crash", TaskState.TASK_STATE_FAILED, False, "failed"),
+        ("cancel", TaskState.TASK_STATE_CANCELED, False, "canceled"),
+        ("timeout", TaskState.TASK_STATE_FAILED, False, "failed"),
+    ],
+)
+async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
+    tmp_path, fault, terminal, delivers, outcome_state
+):
+    import httpx
+    from a2a.types import CancelTaskRequest, TaskPushNotificationConfig
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_impl import private_intake, stores
+    from a2a_impl.requester_delivery import RequesterProjection
+
+    store = stores.ReasoningCoalescingTaskStore(
+        stores.make_sqlite_engine(str(tmp_path / "exit.db")), owner_resolver=stores.resolve_task_owner,
+    )
+    await store.initialize()
+    peer = ServerCallContext(state={"requester_principal": "device:one", "principal_kind": "paired-agent"})
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    ref = await private_intake.record_private_steer(
+        store, session_id=CTX, text=_C["steer"], msg_id="steer", context=op)
+
+    projections, pushes, progress, outcomes = [], [], [], []
+    ready, proceed = asyncio.Event(), asyncio.Event()
+    config = TaskPushNotificationConfig(id="original", url="https://8.8.8.8/hook")
+    gated = fault != "timeout"  # the stall guard conflicts with holding the turn open
+
+    async def factory(context, queue):
+        config.task_id = context.task_id
+        await push_store.set_info(context.task_id, config, peer)
+        projection = await RequesterProjection.accept(
+            store, context, queue, agent_id="agent:owner", operator=op, push_configs=[config])
+        projections.append(projection)
+        return projection
+
+    async def stream(*args, **kwargs):
+        projection = projections[0]
+        await projection.begin_private(ref)
+        # Private tool args + output, a usage row, and the private answer text — all canaried.
+        yield "tool_start", {"id": "c1", "name": "toolx", "input": _C["tool_arg"]}
+        yield "usage", {"input_tokens": 5, "output_tokens": 2, "cost_usd": 0.1, "model": "m-priv"}
+        yield "tool_end", {"id": "c1", "name": "toolx", "output": _C["tool_out"],
+                           "error": fault == "tool_error", "duration_ms": 4}
+        yield "text", _C["reply"]
+        # The agent seals the intended public result on EVERY path — so a fault proves a
+        # sealed-but-undelivered result is never shipped once the turn gives up.
+        assert await projection.prepare_result(_PUBLIC_RESULT)
+        ready.set()
+        if fault == "cancel":
+            await proceed.wait()  # the test cancels the turn while it holds here
+            return
+        if fault == "timeout":
+            await asyncio.sleep(3600)  # the stall guard fails it
+            return
+        await proceed.wait()
+        if fault in ("completion", "tool_error"):
+            yield "done", _C["reply"]
+        elif fault == "model_error":
+            yield "error", _C["model_err"]
+        elif fault == "crash":
+            raise RuntimeError(_C["crash"])
+
+    set_progress_hook(lambda *a: progress.append(a))
+    set_terminal_hook(outcomes.append)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: (pushes.append(request.content.decode()), httpx.Response(200))[1]))
+    push_store = InMemoryPushNotificationConfigStore()
+    sender = stores.ValidatingPushNotificationSender(client, push_store, delivery_store=store)
+    handler, router = _handler(
+        stream, task_store=store, push_config_store=push_store, push_sender=sender,
+        requester_projection_factory=factory,
+        stall_timeout_provider=(lambda: 0.3) if fault == "timeout" else None)
+
+    frames, sub_frames = [], []
+
+    async def collect(iterator, target):
+        async for event in iterator:
+            target.append(_snapshot(event))
+
+    req = _msg("please proceed", mid="request", ctx=CTX)
+    running = asyncio.create_task(collect(handler.on_message_send_stream(req, peer), frames))
+    await asyncio.wait_for(ready.wait(), 5)
+    task_id = projections[0].binding["task_id"]
+
+    watching = None
+    if gated:
+        # A live re-attach while the turn is still working: the snapshot is content-free and
+        # every frame after it must stay that way too.
+        subscribed = handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), peer)
+        sub_frames.append(_snapshot(await asyncio.wait_for(anext(subscribed), 5)))
+        watching = asyncio.create_task(collect(subscribed, sub_frames))
+
+    if fault == "cancel":
+        cancelled = await asyncio.wait_for(handler.on_cancel_task(CancelTaskRequest(id=task_id), peer), 5)
+        assert cancelled.status.state == TaskState.TASK_STATE_CANCELED
+    elif gated:
+        proceed.set()
+    # timeout: the stall guard ends it with no further prompting.
+
+    await asyncio.wait_for(asyncio.gather(*( [running] + ([watching] if watching else []) ),
+                                          return_exceptions=True), 15)
+    await router.drain()
+
+    # Every peer-readable surface: poll, (content-free) resubscribe snapshot, reopened history.
+    got = await handler.on_get_task(GetTaskRequest(id=task_id), peer)
+    assert got.status.state == terminal
+    history = await store.history_records(CTX, peer)
+
+    surfaces = {
+        "stream": [MessageToDict(f) for f in frames],
+        "subscription": [MessageToDict(f) for f in sub_frames],
+        "poll": MessageToDict(got),
+        "push": pushes,
+        "history": str(history),
+        "progress": progress,
+        "outcomes": [vars(o) for o in outcomes],
+    }
+    for name, surface in surfaces.items():
+        blob = str(surface)
+        for canary in _C.values():
+            assert canary not in blob, (fault, name, canary)
+
+    # The sealed public result is delivered exactly once on a clean exit, and NEVER on a fault.
+    peer_blob = str([surfaces[k] for k in ("stream", "subscription", "poll", "push", "history")])
+    assert (_PUBLIC_RESULT in peer_blob) is delivers
+    if delivers:
+        assert [p.text for a in got.artifacts for p in a.parts] == [_PUBLIC_RESULT]
+        assert sum(_PUBLIC_RESULT in body for body in pushes) == 1
+    else:
+        assert not got.artifacts
+
+    # The delivery record is terminal either way, and a crash-recovery deliver can no longer
+    # publish: delivered on a clean exit, closed (candidate dropped) on a fault.
+    record = None
+    for _ in range(200):
+        _, record = await store.delivery_data(task_id)
+        if record and record.get("state") in ("delivered", "closed"):
+            break
+        await asyncio.sleep(0.02)
+    assert record["state"] == ("delivered" if delivers else "closed")
+    recovery = RequesterProjection(store, projections[0].context, projections[0].queue,
+                                   projections[0].binding, op)
+    recovery.private_ref = ref
+    assert not await recovery.deliver_to_requester(record.get("id"))
+
+    # The private turn is isolated, not untelemetered: its spend reaches the terminal row with
+    # the content stripped off, so nothing private rides it either.
+    row = outcomes[-1]
+    assert row.state == outcome_state
+    assert row.text == "" and row.error == ""
+    assert row.usage["input_tokens"] == 5 and row.tool_calls == 1 and row.llm_calls == 1
+
+    await client.aclose()
     await store.engine.dispose()

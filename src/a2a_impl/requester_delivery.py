@@ -114,6 +114,29 @@ class RequesterProjection:
         if record and record.get("state") == "prepared":
             await self.deliver_to_requester(record["id"])
 
+    async def close(self):
+        """Seal the delivery terminally on an abnormal turn exit (error, cancel, timeout).
+
+        The executor only ever ``finalize``s — the single publish path — on a clean
+        completion; an error, cancel or timeout never reaches it, so an already-sealed
+        ``prepared`` result must not be shippable afterwards by a crash-recovery
+        ``deliver_to_requester``. This drops the unsent candidate and moves the record to a
+        terminal ``closed`` state so nothing private can publish after the turn gave up —
+        the peer keeps only the content-free terminal the executor already sent.
+
+        Idempotent and best-effort: a delivery already ``dispatching``/``delivered`` is left
+        intact (never resent, never reopened), and a lost CAS just means the record already
+        moved on. Nothing private is published here."""
+        if not self.private_ref:
+            return
+        binding, previous = await self.store.delivery_data(self.binding["task_id"])
+        if (binding != self.binding or not previous or previous.get("version") != 1
+                or previous.get("private_turn_id") != ref_task_id(self.private_ref)
+                or previous.get("state") in ("dispatching", "delivered", "closed")):
+            return
+        closed = {**previous, "state": "closed", "payload": None, "digest": None}
+        await self.store.cas_delivery(binding["task_id"], binding, previous, closed)
+
     async def retain(self, event, payload):
         record = await self.store.get_record(ref_task_id(self.private_ref), self.operator)
         if record is None:
