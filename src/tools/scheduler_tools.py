@@ -19,6 +19,7 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from scheduler.cron_validation import cron_ambiguity_problem
 from scheduler.interface import is_cron, parse_ttl
 from tools.session import _origin_session_from, _session_id_from
 
@@ -136,6 +137,8 @@ def _build_scheduler_tools(scheduler) -> list:
         Before you end the turn, tell the user what you scheduled — and if it follows a failure,
         what failed and what will run when it fires; never reply with only "I'll pick this back up".
         """
+        if problem := cron_ambiguity_problem(when):
+            return f"Error: {problem}"
         # Validate expiry knobs up front — a clean error string beats a
         # backend-specific failure surfacing later.
         if ttl is not None:

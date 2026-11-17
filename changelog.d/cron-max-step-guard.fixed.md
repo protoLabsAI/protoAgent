@@ -1,0 +1,1 @@
+- **Reject ambiguous cron steps.** Schedule creation and edits reject maximum-value step expressions with explicit rewrite hints after the croniter 7 upgrade (#5398). Scheduler startup warns about affected stored jobs without modifying or disabling them.

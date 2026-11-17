@@ -135,7 +135,9 @@ def _schedule_problem(schedule: str | None, timezone: str | None) -> str | None:
     if is_cron(text):
         from croniter import croniter
 
-        return None if croniter.is_valid(text) else bad
+        from scheduler.cron_validation import cron_ambiguity_problem
+
+        return cron_ambiguity_problem(text) or (None if croniter.is_valid(text) else bad)
     try:
         parse_iso_to_utc(text)
     except (ValueError, OverflowError):
