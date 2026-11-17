@@ -283,6 +283,44 @@ describe("resume on wake (ADR 0130 D3)", () => {
   });
 });
 
+describe("reconnect on a new credential (#5405)", () => {
+  it("a login reconnects at once with a fresh token instead of waiting out the backoff", async () => {
+    vi.useFakeTimers();
+    const { onTopic } = await loadEvents();
+    const { CREDENTIAL_CHANGED_EVENT } = await import("./credentials");
+    onTopic("#", () => {});
+    // The gate is up: every attempt fails and the backoff climbs 1s, 2s, 4s, 8s → next is 16s.
+    for (const wait of [1000, 2000, 4000, 8000]) {
+      await vi.waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+      FakeEventSource.instances[FakeEventSource.instances.length - 1].onerror?.({});
+      FakeEventSource.instances = [];
+      await vi.advanceTimersByTimeAsync(wait);
+    }
+    FakeEventSource.instances[FakeEventSource.instances.length - 1].onerror?.({});
+    FakeEventSource.instances = [];
+
+    sseToken.mockResolvedValue({ token: "fresh" });
+    window.dispatchEvent(new Event(CREDENTIAL_CHANGED_EVENT));
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    expect(FakeEventSource.instances[0].url).toBe("/api/events?token=fresh");
+    // The old backoff timer was cancelled: it never opens a second stream.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(FakeEventSource.instances.length).toBe(1);
+  });
+
+  it("leaves a healthy OPEN stream alone (a rotated device token)", async () => {
+    const { onTopic } = await loadEvents();
+    const { CREDENTIAL_CHANGED_EVENT } = await import("./credentials");
+    onTopic("#", () => {});
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    FakeEventSource.instances[0].onopen?.({});
+    FakeEventSource.instances = [];
+    window.dispatchEvent(new Event(CREDENTIAL_CHANGED_EVENT));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(FakeEventSource.instances.length).toBe(0);
+  });
+});
+
 describe("dispatch isolates listeners (ADR 0114 D1)", () => {
   it("a throwing listener neither starves the others nor skips the lastSeq update", async () => {
     vi.useFakeTimers();

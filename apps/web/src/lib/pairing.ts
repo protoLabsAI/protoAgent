@@ -19,7 +19,7 @@
 
 import { AGENT_CODE_LENGTH, formatAgentCode, isCompleteAgentCode, normalizeAgentCode } from "./agentPairing";
 import { apiUrl } from "./api/routing";
-import { storeDeviceAddresses, storeDeviceCredential } from "./credentials";
+import { announceCredentialChange, storeDeviceAddresses, storeDeviceCredential } from "./credentials";
 
 /** A pairing code — device or agent — is 10 Crockford chars shown as `XXXXX-XXXXX`. The
  *  shape is shared with agent codes (one minting path server-side), so are the helpers. */
@@ -157,6 +157,7 @@ export async function claimPairingCode(code: string): Promise<ClaimResult> {
     // Its own key, never the operator's (#4336 S3).
     const id = typeof data?.device?.id === "string" ? data.device.id : undefined;
     storeDeviceCredential(data.token, id);
+    announceCredentialChange();
     // The agent's other origins (ADR 0121 D1), for the offline notice and "Move this phone to…".
     storeDeviceAddresses(data?.addresses);
     const name = typeof data?.device?.name === "string" && data.device.name ? data.device.name : deviceName();

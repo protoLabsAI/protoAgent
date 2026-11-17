@@ -24,6 +24,15 @@ listed as open in the [decision map](#decision-map-settled-and-open).
 1. **Who "the operator" is.** For private steering, "the operator" is the
    human's own console session only. Any agent, including one with operator
    rights (the fleet service token, paired agent devices), is treated as a peer.
+
+   **Clarified by Josh, 2026-11-16.** "for this, are we including devices that
+   I've authorized for myself, like my phone? that should be 'operator' as
+   well". The human operator therefore includes the operator's own paired
+   personal devices of kind `device` (a phone or browser), not only the console
+   browser session; paired `agent` devices stay peers, matching the decision
+   text above. [Section 3](#3-human-console-identity-and-delegation) carries the
+   full definition and its limit, and the decision map's identity row records
+   this clarification.
 2. **Privacy contract.** Steering text and the turns it triggers are never
    delivered on peer channels (stream, poll, push, history, tool output). The
    agent may act on what it was told and deliver intended results. Relaying
@@ -303,47 +312,75 @@ operator-tier fleet/paired variants of `test_phase0_preexisting_handles`.
 The prototype classifier is not installed in HTTP middleware and has no
 credential lifecycle; no transport identity has been proven.
 
-**Proposed design.** Add a distinct console-session capability, orthogonal to the
-existing privilege tier. Issue it only after interactive console enrollment with
-a separate human enrollment secret or OS-user verification, not possession of a
-fleet token, shared operator bearer, or paired-agent credential. Keep enrollment
-and signing secrets out of model prompts, workspaces, tool environments and
-agent-readable config. Store only token hashes/session IDs, generation, expiry
-and revocation state server-side; use a secure HttpOnly, SameSite browser cookie
-with CSRF protection (or OS-protected desktop equivalent), not a URL token or
-local-storage bearer. Proposal: 15-minute access lifetime, rotating refresh
-capability capped at 12 hours before re-enrollment. Rotation invalidates the old
-refresh generation; logout, explicit revoke and enrollment reset revoke the
-session family. Recheck liveness on reads, sends, release dispatch and stream
-heartbeats; failures deny access and close the private stream.
+**Proposed design.** The distinction decision 1 needs already exists in the
+credentials and does **not** require a new console-only credential. Per Josh's
+2026-11-16 clarification, **the human operator is the console's shared operator
+bearer plus the operator's own paired devices of kind `device`** (phones and
+browsers). **Peers are the fleet service token, paired devices of kind `agent`,
+and the federation token.** The seam is that `_classify_token`
+([auth.py](../../src/a2a_impl/auth.py) line 481) gives every paired device the
+**operator** tier — a phone resolves to scope `device`, an agent device to
+`full` (lines 506–515) — and the shared operator bearer and fleet service token
+also resolve to operator (lines 496–505), while the federation token is its own
+`federation` tier (lines 498–500). The trust tier therefore cannot tell the
+human's phone from an agent's hub; the **device kind can**. That kind is fixed
+when the pairing code is minted and copied onto the device at claim time
+([devices.py](../../src/security/devices.py) lines 27–28 and 131–133), "never
+from anything the claimer sent", so a claimer cannot relabel an `agent` code as
+`device`. Propagate a verified **principal kind** (shared-bearer, `device`-kind
+device, fleet-service, `agent`-kind device, federation) from `_classify_token`
+and the device record, alongside and separate from `trust_tier`, and gate
+private reads, sends and release grants on principal kind, not on tier.
 
-The fleet proxy must strip untrusted console headers, authenticate the console
-session and mint a short-lived, signed delegation for the specific member,
-method, context and operation. The owner verifies issuer, target audience,
-expiry, nonce and revocation generation; a swapped fleet bearer alone remains a
-peer. Private access fails closed if revocation cannot be checked. Loopback uses
-a single-operation delegation bound to the persisted private-input ID and task,
-redeemed idempotently; localhost and `self_invocation_headers` do not confer
-human-console status. Ordinary self-invocations keep their existing powers but
-cannot read private partitions or mint release grants.
+Issuance, rotation and revocation reuse the **existing device lifecycle** rather
+than a new one: a human's device is enrolled by an operator-authed pairing with a
+`device`-kind code (ADR 0087); tokens rotate with reuse-detection grace (ADR 0121
+D5, `prev_token_sha256`/`rotated_at`); removal or a rotation-reuse hit revokes the
+device; the shared operator bearer rotates via the existing wizard/drawer path.
+Keep the bearer and pairing secrets out of model prompts, workspaces, tool
+environments and agent-readable config, and keep storing only token hashes
+server-side, as devices.py already does. No new server-held console secret,
+HttpOnly session cookie or enrollment ceremony is proposed for the paired-phone
+case; hardening the shared bearer's transport (cookie, lifetime, liveness
+recheck) is a separate, optional security change that this definition does not
+depend on, and nothing here is proposed beyond this definition.
+
+The fleet proxy must strip untrusted principal headers, authenticate the caller
+and mint a short-lived, signed delegation for the specific member, method,
+context and operation. The owner verifies issuer, target audience, expiry, nonce
+and revocation generation; a swapped fleet bearer alone remains a peer — fleet is
+a peer kind whatever operator tier it earns. Private access fails closed if
+revocation cannot be checked. Loopback uses a single-operation delegation bound
+to the persisted private-input ID and task, redeemed idempotently; localhost and
+`self_invocation_headers` do not confer human-operator status. Ordinary
+self-invocations keep their existing powers but cannot read private partitions or
+mint release grants.
 
 **Seams.** [auth.py](../../src/a2a_impl/auth.py) `_classify_token` (481), request
 classification, SSE identity and `self_invocation_headers` (1145);
+[devices.py](../../src/security/devices.py) `kind`/`effective_scope` (153);
 [stores.py](../../src/a2a_impl/stores.py) `tier_context_builder` (445);
 [fleet/proxy.py](../../src/graph/fleet/proxy.py) credential swapping; and
 [server/chat.py](../../src/server/chat.py) loopback intake. Propagate verified
-principal kind and capability separately from `trust_tier`. Fleet service tokens
-and paired agent devices always remain peers for private content (decision 1).
+principal kind and capability separately from `trust_tier`. The shared operator
+bearer and paired `device`-kind devices are the human operator; the fleet service
+token, paired `agent`-kind devices and the federation token always remain peers
+for private content (decision 1, as clarified by Josh 2026-11-16).
 
-**Rejected alternatives and risk.** Operator tier, a browser user-agent string,
-loopback origin and a client-set audience header prove no human identity. A
-capability proves a request derives from an enrolled console, **not that a human
-is present, attentive or unautomated**. Agents with access to the human's browser,
-credential files, signing process or credential-management powers can impersonate
-it. Private steering must remain disabled where those resources cannot be
-isolated from agents; a token classifier cannot solve same-OS-user compromise.
-Enrollment/revocation are security design work, not a reason to relabel an agent
-as human or reopen decision 1.
+**Rejected alternatives and risk.** A new console-only credential or enrollment
+ceremony for the paired-phone case is rejected: the device kind already carries an
+unforgeable (claimer-cannot-relabel) human-versus-agent distinction, so a second
+secret only duplicates the pairing trust root — and the prototype's standalone
+`classify_console` secret was never installed in middleware. Operator tier, a
+browser user-agent string, loopback origin and a client-set audience header prove
+no human identity. The device kind proves a credential was **paired for the
+operator's personal device use, not that a human is present, attentive or
+unautomated**, and not *who* holds it. Agents with access to the human's browser,
+bearer, credential files or credential-management powers can impersonate it.
+Private steering must remain disabled where those resources cannot be isolated
+from agents; a classifier cannot solve same-OS-user compromise. The
+kind-records-pairing-not-user limit is raised under Questions for Josh; it is not
+a reason to relabel an agent as human or reopen decision 1.
 
 ### 4. One audience per turn, durably scheduled
 
@@ -520,6 +557,16 @@ recorded decisions:
 - **Deployment boundary:** #5402 cannot distinguish a human from an agent that
   steals console authority. Accept disabling private steering where credential
   and tool isolation cannot be established, rather than weakening decision 1?
+- **Device kind records pairing, not who uses it:** section 3 treats the shared
+  operator bearer and paired `device`-kind devices as the human operator. A
+  device's kind is set at pairing time (src/security/devices.py; fixed when the
+  code is minted, so the claimer cannot relabel it) and records *how* a
+  credential was paired, not *who* uses it. An agent paired with a `device`-kind
+  code — an automation or recorder handed a phone-style pairing — or any agent
+  holding the shared operator bearer, would be treated as the human operator.
+  Accept this for v1 (operator-authed pairing and bearer custody are the trust
+  boundary), or require a stronger per-human proof before private release? This
+  is a limit to weigh, not a decision taken here; decision 1 is unchanged.
 - **Steering latency:** #5400's mixed-input counterexample motivates a new private
   execution segment at a safe boundary; parked segments reserve the runner. Is
   delayed steering/queued peer work acceptable for v1? No implicit interrupt
@@ -540,7 +587,7 @@ Josh's CONTINUE decision. A green run alone does not authorize further phases.
 
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
-| P1a identity proof | Console enrollment/revoke, verified principal propagation and scoped loopback; no private UI. Prove fleet/agent rejection before private reads. | proposed, needs Josh's go |
+| P1a identity proof | Propagate a verified principal kind from `_classify_token`/the device record, separate from the operator tier: the shared bearer and `device`-kind devices read as the human operator; the fleet service token, `agent`-kind devices and federation read as peers. Scoped loopback; reuse existing device pairing/rotation/revoke, **no new console credential**, no private UI. Prove fleet-token and `agent`-device rejection and `device`-kind acceptance before private reads. | proposed, needs Josh's go |
 | P1b private persistence proof | Private input/reply partition and public history projection on existing task records; idle and guarded parked resume, with original resolver binding. Depends on P1a. | proposed, needs Josh's go |
 | P1c scheduling proof | Durable sequence/segment claim, safe boundaries, deduplication, park/resume and crash recovery on the existing runner. Depends on P1b. | proposed, needs Josh's go |
 | P1d delivery proof | Immutable payload grant, original-requester binding, recipient projection, retry/revoke and durable delivery state. Depends on P1a–c. | proposed, needs Josh's go |
@@ -568,7 +615,7 @@ paired-agent and enrolled-console callers; no operator-tier shortcut.
 | Idle and parked/resume | Replace the leak assertions in `test_phase0_output_gate_cannot_hide_private_input_history[False/True]` with privacy assertions at intake and every peer read, not only output. Prove console recovery of input and reply, task/interrupt binding, private files and a subsequent peer follow-up. Preserve #5380 ownership. |
 | Both queue orders and completion race | Extend `tests/test_steering.py` and `tests/test_steer_idle_starts_turn.py`: peer then private, private then peer, steer exactly as completion commits, duplicate POST, failed loopback/requeue, matching resume behind queued input, and a long-running tool. Inspect actual model inputs: no mixed audience. One durable turn per message ID in acceptance order. |
 | Actual process restart | Kill/restart the runner after accepted input, during claimed execution, while parked, after grant commit and after external send before acknowledgment. Reopen checkpoint and task stores; recover original resolver metadata, audience, queue order and private transcript. No duplicate effect, unauthorized send or fallback public input. Reopened SQLite alone is insufficient. |
-| Identity lifecycle | Extend `tests/test_a2a_stores.py` and `tests/test_chat_routes.py` with authenticated HTTP/SSE and proxy/loopback integration: issuance, rotation, logout/revoke, expiry, missing revocation service, forged delegation, wrong target and replay. Fleet and paired agents cannot mint console authority or read private history. |
+| Identity lifecycle | Extend `tests/test_a2a_stores.py` and `tests/test_chat_routes.py` with authenticated HTTP/SSE and proxy/loopback integration: `device`-kind pairing issuance, device token rotation (reuse-detection grace), logout/revoke, expiry, missing revocation service, forged delegation, wrong target, replay, and a claimer attempting to relabel an `agent` code as `device`. A shared operator bearer and a `device`-kind device read as the human operator; the fleet service token, `agent`-kind devices and federation cannot mint operator-console authority or read private history. |
 | Every derived reader on a later ordinary turn | Execute separate cases for gist, digest (open/closed/relevant), harvest, facts, tracing, prompt capture and fleet export. Seed private canaries in retained private messages/replies/tool output and legacy mixed archives/cards; run a public turn with `incognito=False`, compaction and restart. Assert canaries absent from derived stores, search/recall, composed peer prompts and actual exported bytes; stale gist timers and unknown provenance cannot restore them. These tests supply the currently missing #5403 execution evidence. |
 | Other exits and termination | Inject private values into structured DataParts, file contents/names/URLs, tool args/output, outbound tool effects, errors, stalls, implicit stream end and cancellation. Capture final serialized artifacts, download responses, side-effect requests and terminal hooks. Deny ungranted exits, preserve authorized results, and ensure Stop never flushes private data or restarts canceled input. |
 | Missing/stale state and deletion | Missing private record/checkpoint, conflicting audience version and unsupported resolver fail closed. × deletes both partitions and leaves Work unavailable; stale derived readers cannot resurrect them. Automatic sweep and recovery do not release active-work retention references. |
@@ -1076,7 +1123,7 @@ See [Phase 0 outcome](#phase-0-outcome) for the historical result.
 | ADR 0129 D8 structured controls and missing-origin fallback in v1 | **Decided by Josh 2026-11-16 (5)** | — |
 | What merging this proposal means; when work starts | **Decided by Josh 2026-11-16 (6)** | — |
 | Explicit relay permission flow and UI ("tell them the deadline moved") | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Section 1 proposes exact-payload console grants, immutable requester binding and durable delivery records. Unstructured instructions prepare drafts, not grants; the UI still needs design approval. |
-| Human-console identity mechanism (decision 1 is unchanged) | Proposed in design revision (pending Josh) — [#5402](https://github.com/protoLabsAI/protoAgent/issues/5402) | Section 3: separate enrollment, rotation/revocation and scoped proxy/loopback delegation; possession does not prove human presence. |
+| Human-console identity mechanism (decision 1 unchanged; Clarified by Josh, 2026-11-16) | Proposed in design revision (pending Josh) — [#5402](https://github.com/protoLabsAI/protoAgent/issues/5402) | Section 3: the human operator is the shared operator bearer plus paired `device`-kind devices (phones/browsers); the fleet service token, `agent`-kind devices and federation stay peers. The unforgeable device kind and credential type carry the distinction, propagated separately from the operator tier — no new console credential. Scoped proxy/loopback delegation; possession does not prove human presence. Limit in Questions for Josh: kind records how a device was paired, not who uses it. |
 | Private idle/parked transcript storage | Proposed in design revision (pending Josh) — [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Section 2: private partitions on existing records under one original identity; no private SDK history/shared checkpoint messages. |
 | Gist, digest, harvest and facts across later turns | Proposed in design revision (pending Josh) — [#5403](https://github.com/protoLabsAI/protoAgent/issues/5403), inspection-only | Section 5: public projections, source-versioned derived records, stale-record quarantine and no private fact extraction. |
 | Files, structured output, tools and terminal exits | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Section 6: exact-payload grants at finalization and before external effects; private errors/cancellation cannot flush to peers. |

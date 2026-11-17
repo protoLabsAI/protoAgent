@@ -1,4 +1,5 @@
 import { api, apiUrl } from "../lib/api";
+import { onCredentialChange } from "../lib/credentials";
 
 // Session-attendance presence client (#3110). While a chat session is on screen the console
 // holds ONE SSE stream open to `GET /api/chat/attend?session=<id>`. For the whole life of that
@@ -95,6 +96,28 @@ async function connect() {
   };
 }
 
+/** A new bearer (login, pairing, rotation — #5405). While the AuthGate was up every attempt
+ *  401'd and the backoff climbed toward 30s — all that time the on-screen session read as
+ *  UNATTENDED, so a background resume would take the autonomous auto-answer instead of parking
+ *  for the operator who is looking at it. Reconnect now. A healthy stream is left alone; an
+ *  attempt already in flight (token fetched under the old credential) fails and retries 1s later
+ *  because the backoff is reset. */
+function reconnectOnCredential() {
+  reconnectAttempts = 0;
+  if (wantSession === null || connecting) return;
+  if (source && source.readyState !== 2 /* CLOSED */) return;
+  teardownSource();
+  clearReconnect();
+  void connect();
+}
+
+let credentialHooked = false;
+function hookCredential() {
+  if (credentialHooked) return;
+  credentialHooked = true;
+  onCredentialChange(reconnectOnCredential);
+}
+
 /** Point attendance at `sessionId` (a blank/whitespace id or `null` stops attending). Idempotent:
  *  re-asserting the same session leaves the live stream untouched. Call with `null` on unmount so
  *  the stream is released and the session falls back to unattended. */
@@ -105,7 +128,10 @@ export function setAttendedSession(sessionId: string | null): void {
   clearReconnect();
   reconnectAttempts = 0;
   teardownSource();
-  if (next !== null) void connect();
+  if (next !== null) {
+    hookCredential();
+    void connect();
+  }
 }
 
 /** The session the live attendance stream is currently open for, or null. Exported for tests. */

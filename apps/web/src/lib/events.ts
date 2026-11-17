@@ -1,4 +1,5 @@
 import { api, apiUrl } from "./api";
+import { onCredentialChange } from "./credentials";
 import { agentSlug, hydrateCursor, loadCursor, rememberCursor, resetCursor } from "./syncCursor";
 
 // Client for the server→client event bus (ADR 0003, extended ADR 0039). One EventSource
@@ -226,6 +227,15 @@ async function connect() {
   };
 }
 
+/** A new bearer (login, pairing, rotation — #5405): the gate may have kept this stream failing
+ *  long enough to back off for up to 30s, so reconnect NOW with a fresh sse-token. An attempt
+ *  already in flight fetched its token under the OLD credential and will fail; resetting the
+ *  backoff makes its retry come 1s later instead of 30s. A healthy stream is left alone. */
+function reconnectOnCredential() {
+  reconnectAttempts = 0;
+  reconnectOnWake();
+}
+
 /** A tab regaining focus, becoming visible, or waking from sleep: if the stream is down and
  *  something still wants it, resume from the cursor NOW rather than waiting out the backoff —
  *  a slept laptop may never have fired the `onerror` that would have rescheduled it (ADR 0130
@@ -260,6 +270,7 @@ function hookWake() {
     // iOS/desktop restore from the page cache (sleep, back-forward) fires `pageshow`, not
     // always `focus`/`visibilitychange`.
     window?.addEventListener?.("pageshow", reconnectOnWake);
+    onCredentialChange(reconnectOnCredential);
   } catch {
     /* non-browser context (SSR / node test env) */
   }
