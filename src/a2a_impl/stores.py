@@ -486,7 +486,8 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
 
     Old SDK-only databases have no partition columns and keep their behavior. A partial
     schema or unknown audience/version refuses protected rows, never guessing a format.
-    Tombstones hide both partitions even when a chat deletion only partly completed.
+    Tombstones hide both partitions of protected records after incomplete deletion.
+    Ordinary records retain the SDK's read behavior, including after chat deletion.
     """
     from sqlalchemy import Column, MetaData, String, Table, and_, exists, false, inspect, literal_column, true
 
@@ -506,10 +507,10 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
         )
         if not include_private:
             supported = and_(supported, c["public_visible"] == 1)
+        if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
+            tombstones = Table(CHAT_TOMBSTONE_TABLE, MetaData(), Column("context_id", String(255)))
+            supported = supported & ~exists().where(tombstones.c.context_id == task_model.context_id)
         predicate = or_(ordinary, supported)
-    if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
-        tombstones = Table(CHAT_TOMBSTONE_TABLE, MetaData(), Column("context_id", String(255)))
-        predicate = predicate & ~exists().where(tombstones.c.context_id == task_model.context_id)
     return predicate
 
 

@@ -1349,6 +1349,8 @@ async def test_private_partition_delete_and_incomplete_chat_delete(tmp_path, mon
     store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
     try:
         assert await store.get_record(task.id, ctx) is None
+        assert await store.get(task.id, ctx) is None
+        assert not (await store.list(a2a_pb2.ListTasksRequest(context_id=task.context_id), ctx)).total_size
         assert await store.history_records(task.context_id, ctx) == []
         with pytest.raises(PermissionError):
             await store.save(task, ctx)
@@ -1428,9 +1430,15 @@ async def test_ordinary_save_after_chat_deletion_persists_final_state(tmp_path, 
         task.status.state = a2a_pb2.TASK_STATE_COMPLETED
         task.history.append(_text_msg("final result"))
         await store.save(task, ctx)
-        # Raw SDK read proves persistence; the public reader still honors deletion.
+        # Ordinary records retain SDK read behavior after chat deletion.
         raw = DatabaseTaskStore(engine, owner_resolver=stores.resolve_task_owner)
         assert await raw.get(task.id, ctx) == task
-        assert await store.get(task.id, ctx) is None
+        assert await store.get(task.id, ctx) == task
+        page = await store.list(a2a_pb2.ListTasksRequest(context_id=task.context_id), ctx)
+        assert list(page.tasks) == [task]
+        assert page.total_size == 1
+        records = await store.history_records(task.context_id, ctx)
+        assert [record.task for record in records] == [task]
+        assert records[0].private_payload is None
     finally:
         await engine.dispose()
