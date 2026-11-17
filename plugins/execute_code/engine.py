@@ -227,6 +227,41 @@ def _deny_reason(name: str, gate, fence) -> str | None:
     return None
 
 
+async def _invoke_bridged(name: str, args: dict, tool_map: dict, *, session_id: str, gate, fence) -> tuple[bool, str]:
+    """Run one bridged tool call under call-bound policy and record its audit row.
+
+    The single home for the binding-path contract (ADR 0103 S4): resolve the tool
+    in the allowlist, apply the fence then the enforcement gate, invoke the real
+    async tool, and write the ``ptc:`` audit/metrics row (ADR 0103 S3). Returns
+    ``(ok, payload)`` where ``payload`` is the result text on success or the error
+    string on failure — the one-shot service (:func:`_service_rpc`) and the session
+    kernel (``kernel.py``) both frame it onto their own wire, so a bridged call is
+    the same path with the same policy whichever harness runs it."""
+    import time
+
+    tool = tool_map.get(name)
+    if tool is None:
+        return False, f"tool '{name}' not available"
+    denied = _deny_reason(name, gate, fence)
+    if denied:
+        # Same "Blocked by policy:" prefix the enforcement/fence ToolMessages carry —
+        # and the denial is a RECORDED bridged call (success=False), so policy blocks
+        # are as observable on this path as on the direct one.
+        err = f"Blocked by policy: {denied}"
+        _record_bridged_call(session_id, name, args, err, 0, False)
+        return False, err
+    started = time.monotonic()
+    try:
+        result = await tool.ainvoke(args)
+        text = result if isinstance(result, str) else str(result)
+        _record_bridged_call(session_id, name, args, text, int((time.monotonic() - started) * 1000), True)
+        return True, text
+    except Exception as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        _record_bridged_call(session_id, name, args, err, int((time.monotonic() - started) * 1000), False)
+        return False, err
+
+
 # The request id at the head of a child frame (`{"id": 7, ...`) — the prelude's
 # json.dumps puts it first — so even an unparseable frame can be answered by id.
 _FRAME_ID_RE = re.compile(rb'\s*\{\s*"id"\s*:\s*(\d+)')
@@ -239,8 +274,6 @@ async def _service_rpc(
     req_reader: asyncio.StreamReader, resp_writer, tool_map: dict, *, session_id: str = "", gate=None, fence=None
 ):
     """Read RPC requests from the child, invoke real tools, write back results."""
-    import time
-
     semaphore = asyncio.Semaphore(_MAX_PARALLEL_CALLS)
     write_lock = asyncio.Lock()
     pending: set[asyncio.Task] = set()
@@ -257,28 +290,8 @@ async def _service_rpc(
     async def dispatch(msg):
         async with semaphore:
             rid, name, args = msg.get("id"), msg.get("tool"), msg.get("args") or {}
-            tool = tool_map.get(name)
-            denied = _deny_reason(name, gate, fence) if tool is not None else None
-            if tool is None:
-                resp = {"id": rid, "ok": False, "error": f"tool '{name}' not available"}
-            elif denied:
-                # Same "Blocked by policy:" prefix the enforcement/fence ToolMessages
-                # carry — and the denial is a RECORDED bridged call (success=False),
-                # so policy blocks are as observable on this path as on the direct one.
-                err = f"Blocked by policy: {denied}"
-                resp = {"id": rid, "ok": False, "error": err}
-                _record_bridged_call(session_id, name, args, err, 0, False)
-            else:
-                started = time.monotonic()
-                try:
-                    result = await tool.ainvoke(args)
-                    text = result if isinstance(result, str) else str(result)
-                    resp = {"id": rid, "ok": True, "result": text}
-                    _record_bridged_call(session_id, name, args, text, int((time.monotonic() - started) * 1000), True)
-                except Exception as exc:
-                    err = f"{type(exc).__name__}: {exc}"
-                    resp = {"id": rid, "ok": False, "error": err}
-                    _record_bridged_call(session_id, name, args, err, int((time.monotonic() - started) * 1000), False)
+            ok, payload = await _invoke_bridged(name, args, tool_map, session_id=session_id, gate=gate, fence=fence)
+            resp = {"id": rid, "ok": ok, ("result" if ok else "error"): payload}
             await respond(resp)
 
     try:
@@ -325,6 +338,17 @@ def _resolve_child_interpreter() -> str | None:
 
     exe = managed_python_exe()
     return str(exe) if exe is not None else None
+
+
+# The managed Python runtime isn't provisioned yet (packaged desktop, ADR 0094).
+# Returned as a tool RESULT (not a raise) so the tool_call is answered and the thread
+# can't be left with a dangling tool_call that 400s every later turn — and it points
+# at the one-time fix instead of a dead end. Shared by the one-shot path and the kernel.
+_NO_RUNTIME_MESSAGE = (
+    "Error: execute_code needs the managed Python runtime, which isn't provisioned "
+    "on this machine yet. Install it once from Settings ▸ Tools (a ~35 MB, "
+    "hash-verified download) or run `protoagent runtime install-python`, then retry."
+)
 
 
 # --- stdout spill (#3701) ----------------------------------------------------
@@ -396,6 +420,20 @@ def _spill_stdout(full: str, truncate: int, *, session_id: str) -> str:
     )
 
 
+def _truncate_or_spill(out: str, truncate: int, *, session_id: str) -> str:
+    """Return ``out`` unchanged if within ``truncate``; otherwise spill the full text
+    to a scratch file and return the head plus a recovery marker (#3701), falling back
+    to a plain truncation marker if the store is broken. Shared by the one-shot path
+    and the session kernel so both overflow the same way."""
+    if len(out) <= truncate:
+        return out
+    try:
+        return _spill_stdout(out, truncate, session_id=session_id)
+    except Exception:  # noqa: BLE001 — a broken store falls back, never fails the run
+        log.debug("[execute_code] stdout spill failed; using plain truncation", exc_info=True)
+        return out[:truncate] + f"\n\n…[truncated to {truncate} chars]"
+
+
 async def run_code(
     code: str,
     tool_map: dict,
@@ -416,14 +454,7 @@ async def run_code(
     """
     interpreter = _resolve_child_interpreter()
     if interpreter is None:
-        # Refuse cleanly with a tool RESULT (so the tool_call is answered and the
-        # thread can't be left with a dangling tool_call that 400s every later turn)
-        # — and point at the one-time fix instead of a dead end (ADR 0094).
-        return (
-            "Error: execute_code needs the managed Python runtime, which isn't provisioned "
-            "on this machine yet. Install it once from Settings ▸ Tools (a ~35 MB, "
-            "hash-verified download) or run `protoagent runtime install-python`, then retry."
-        )
+        return _NO_RUNTIME_MESSAGE
     path = _build_runner_file(code)
     # A loopback TCP server the child connects back to for tool-RPC. TCP (not
     # anonymous pipes + fd inheritance) is what makes the bridge portable to Windows.
@@ -519,13 +550,7 @@ async def run_code(
             if not out:
                 out = "(script produced no stdout)"
 
-        if len(out) > truncate:
-            try:
-                out = _spill_stdout(out, truncate, session_id=session_id)
-            except Exception:  # noqa: BLE001 — a broken store falls back, never fails the run
-                log.debug("[execute_code] stdout spill failed; using plain truncation", exc_info=True)
-                out = out[:truncate] + f"\n\n…[truncated to {truncate} chars]"
-        return out
+        return _truncate_or_spill(out, truncate, session_id=session_id)
     finally:
         if proc is not None:
             if proc.returncode is not None:
@@ -631,7 +656,13 @@ def _build_enforcement_gate(graph_config):
 
 
 def build_execute_code_tool(
-    all_tools: list, *, tools=None, timeout: float = 30.0, truncate: int = 6000, graph_config=None
+    all_tools: list,
+    *,
+    tools=None,
+    timeout: float = 30.0,
+    truncate: int = 6000,
+    graph_config=None,
+    session_state: bool = False,
 ):
     """Build the ``execute_code`` LangChain tool over an allowlist of tools.
 
@@ -642,6 +673,10 @@ def build_execute_code_tool(
     (seconds) and ``truncate`` (chars of stdout) come from the plugin's
     ``execute_code`` config section. ``graph_config`` (the full graph config the
     late-tools seam passes) supplies the enforcement fields for S4 parity.
+
+    ``session_state`` (ADR 0134 D1, experimental, default off) keeps a long-lived
+    kernel per session so variables carry across calls; with it off the tool is
+    unchanged — a fresh subprocess each call, and ``fresh`` is a no-op.
     """
     from langchain_core.tools import tool
 
@@ -659,6 +694,22 @@ def build_execute_code_tool(
         sig_lines.append(f"(+{len(overflow)} more, same calling shape: {', '.join(overflow)})")
     available = "\n".join(f"  {line}" for line in sig_lines) or "  (none)"
 
+    if session_state:
+        # State persists across calls in the session (ADR 0134 D1); explain the
+        # carry-over, when it's lost, and the `fresh` escape hatch.
+        state_text = (
+            "and a scrubbed environment (no credentials). State PERSISTS across calls in "
+            "this session: variables, imports and functions you define carry over to your "
+            "next execute_code call, so fetch a large result once, keep it in a variable, "
+            "and filter it again later without re-fetching or re-printing it. State is lost "
+            "when a call times out or the kernel restarts, and never survives a server "
+            "restart; the first call in a fresh kernel is prefixed `new kernel: no earlier "
+            "state`. Pass `fresh=True` to restart this session's kernel and start from a "
+            "clean slate. "
+        )
+    else:
+        state_text = "and a scrubbed environment (no credentials), fresh each call (no state persists between runs). "
+
     description = (
         "Run a Python script in a sandboxed subprocess and get its stdout — a "
         "general-purpose code interpreter. Two main uses:\n"
@@ -675,8 +726,8 @@ def build_execute_code_tool(
         f"tools.* calls are thread-safe and run concurrently (up to {_MAX_PARALLEL_CALLS} per run). "
         "Use concurrent.futures.ThreadPoolExecutor for independent calls.\n\n"
         f"The script runs in an isolated subprocess with a {timeout:.0f}s timeout "
-        "and a scrubbed environment (no credentials), fresh each call (no state "
-        "persists between runs). You may set `result = {...}` to return structured "
+        + state_text
+        + "You may set `result = {...}` to return structured "
         "data as JSON instead of printing. If you also print, stdout precedes a "
         "`--- result ---` line and the JSON. Output over the truncate limit is returned as a head plus a marker "
         "naming a scratch file that holds the FULL output (read it if you need the rest). "
@@ -684,7 +735,9 @@ def build_execute_code_tool(
     )
 
     @tool("execute_code", description=description)
-    async def execute_code(code: str, state: Annotated[Any, InjectedState] = None) -> str:
+    async def execute_code(
+        code: str, fresh: bool = False, state: Annotated[Any, InjectedState] = None
+    ) -> str:
         if not code or not code.strip():
             return "Error: execute_code called with empty code."
         # Session attribution for the run's bridged calls (ADR 0103 S3) — the
@@ -698,6 +751,23 @@ def build_execute_code_tool(
         raw_fence = state.get("subagent_fence") if isinstance(state, dict) else None
         fence = frozenset(raw_fence) if raw_fence else None
         try:
+            # ADR 0134 D1: with session_state on and a real session, run in the
+            # session's long-lived kernel so state carries across calls. An empty
+            # session_id (direct ainvoke, unattributed turn) stays on the one-shot
+            # path — there is no session to key a kernel by. `fresh` is kernel-only.
+            if session_state and sid:
+                from .kernel import run_in_kernel
+
+                return await run_in_kernel(
+                    code,
+                    tool_map,
+                    timeout=timeout,
+                    truncate=truncate,
+                    session_id=sid,
+                    gate=enforcement_gate,
+                    fence=fence,
+                    fresh=fresh,
+                )
             return await run_code(
                 code,
                 tool_map,
