@@ -1,1 +1,1 @@
-- **Public memory projection proof (#5403).** Adds a dormant, version-checked reader boundary for gist and digest derivation, with coverage for retained private text, stale timers, compaction and restart. Existing unpartitioned conversations retain their behavior.
+- **Public memory projection proof.** Refs #5403. Adds a dormant, version-checked reader boundary for gist and digest derivation, with coverage for retained private text, stale timers, compaction and restart. Existing unpartitioned conversations retain their behavior.
