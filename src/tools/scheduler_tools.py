@@ -382,6 +382,15 @@ def _build_task_tools(tasks_store) -> list:
         # backlog is queryable; from injected graph state (current_session_id() is empty in a
         # tool body). Empty when there's no session context — an instance-global task, as before.
         session_id = _session_id_from(state) or ""
+        correlation = {}
+        if session_id.startswith("job:"):
+            try:
+                from runtime.state import STATE
+
+                if STATE.inbox_store is not None:
+                    correlation = STATE.inbox_store.request_for_context(session_id)
+            except Exception:  # noqa: BLE001 — unavailable provenance must not prevent task creation
+                pass
         if session_id.startswith(("job:", "background:")):
             session_id = _origin_session_from(state)
         try:
@@ -392,6 +401,8 @@ def _build_task_tools(tasks_store) -> list:
                 issue_type=issue_type,
                 session_id=session_id,
                 links=links,
+                request=correlation.get("request"),
+                requester=correlation.get("requester"),
             )
         except ValueError as exc:
             return f"Error: {exc}"

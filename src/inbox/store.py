@@ -752,6 +752,38 @@ class InboxStore:
         finally:
             db.close()
 
+    def request_for_context(self, context_id: str) -> dict:
+        """Return the durable request and requester behind an inbox execution.
+
+        Unknown contexts (including executions whose item is gone) return ``{}``.
+        The accepted task handle is included only when recorded. Like origin, this
+        is provenance only, never authorization.
+        """
+        context_id = (context_id or "").strip()
+        if not context_id:
+            return {}
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT e.item_id, e.context_id, e.message_id, e.task_id, i.origin_meta "
+                "FROM inbox_executions e JOIN inbox i ON i.id = e.item_id "
+                "WHERE e.context_id = ? LIMIT 1",
+                (context_id,),
+            ).fetchone()
+            if row is None:
+                return {}
+            request = {
+                "kind": "inbox",
+                "item_id": row["item_id"],
+                "context_id": row["context_id"],
+                "message_id": row["message_id"],
+            }
+            if row["task_id"]:
+                request["task_id"] = row["task_id"]
+            return {"request": request, "requester": origin_meta_fields(row["origin_meta"])}
+        finally:
+            db.close()
+
     def record_execution_acceptance(self, item_id: int, task_id: str, *, now: datetime | None = None) -> None:
         """Persist the accepted task handle for an item's execution identity (ADR 0129).
 
