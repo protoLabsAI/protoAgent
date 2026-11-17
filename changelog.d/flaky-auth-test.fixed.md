@@ -1,0 +1,1 @@
+- **Stabilize desktop self-auth unit tests.** Finish pending lazy imports before replacing auth modules and mocks so an earlier store cannot consume the next test's shell token. Replace timing-based waits with import completion barriers.

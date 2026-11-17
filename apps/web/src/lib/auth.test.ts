@@ -139,13 +139,18 @@ describe("stale 401s", () => {
 // that token is saved it must recover like the manual prompt does, refetching every query; a
 // 401 never retries, so a panel that 401'd would otherwise stay errored (#5408).
 describe("desktop self-auth", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await vi.dynamicImportSettled();
     vi.doUnmock("./desktop");
     vi.doUnmock("./queryClient");
     vi.resetModules();
   });
 
   async function load(shellToken: string) {
+    // Earlier store tests start self-auth without awaiting its lazy import. Finish it
+    // before replacing modules/mocks: otherwise the old store can consume this token,
+    // invalidate queries and leave the NEW store's gate up because the token now matches.
+    await vi.dynamicImportSettled();
     vi.resetModules();
     window.localStorage.clear();
     const invalidateQueries = vi.fn(async () => {});
@@ -158,7 +163,8 @@ describe("desktop self-auth", () => {
   it("saves the shell's token, clears the gate and refetches every query", async () => {
     const { auth, invalidateQueries } = await load("shell-token");
     auth.notifyAuthRequired();
-    await vi.waitFor(() => expect(invalidateQueries).toHaveBeenCalledTimes(1));
+    await vi.dynamicImportSettled();
+    expect(invalidateQueries).toHaveBeenCalledTimes(1);
     expect(window.localStorage.getItem("protoagent.authToken")).toBe("shell-token");
     expect(auth.authRequired()).toBe(false);
   });
@@ -166,7 +172,7 @@ describe("desktop self-auth", () => {
   it("refetches nothing when the shell has no token to offer (the gate stays up)", async () => {
     const { auth, invalidateQueries } = await load("");
     auth.notifyAuthRequired();
-    await new Promise((r) => setTimeout(r, 20));
+    await vi.dynamicImportSettled();
     expect(invalidateQueries).not.toHaveBeenCalled();
     expect(auth.authRequired()).toBe(true);
   });
