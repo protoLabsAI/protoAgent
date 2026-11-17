@@ -101,3 +101,73 @@ describe("saveAuthToken on a full quota", () => {
     expect(saveAuthToken("t")).toEqual({ ok: true });
   });
 });
+
+// A 401 for a credential that was replaced while the request was in flight is stale (#5408):
+// it must not put the gate back up over a console that is already signed in.
+describe("stale 401s", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    clearAuthRequired();
+  });
+
+  it("ignores a 401 for a token that has since been replaced", () => {
+    saveAuthToken("new-token");
+    notifyAuthRequired("Bearer old-token");
+    expect(authRequired()).toBe(false);
+    notifyAuthRequired(null); // sent no credential, but one is stored now
+    expect(authRequired()).toBe(false);
+  });
+
+  it("prompts for a 401 on the credential still stored, or with none stored", () => {
+    saveAuthToken("cur");
+    notifyAuthRequired("Bearer cur");
+    expect(authRequired()).toBe(true);
+    clearAuthRequired();
+    saveAuthToken("");
+    notifyAuthRequired(null);
+    expect(authRequired()).toBe(true);
+  });
+
+  it("an untagged 401 (no header given) always counts", () => {
+    saveAuthToken("cur");
+    notifyAuthRequired();
+    expect(authRequired()).toBe(true);
+  });
+});
+
+// Desktop self-auth (#2055): the first 401 tries the shell's own token before prompting. Once
+// that token is saved it must recover like the manual prompt does, refetching every query; a
+// 401 never retries, so a panel that 401'd would otherwise stay errored (#5408).
+describe("desktop self-auth", () => {
+  afterEach(() => {
+    vi.doUnmock("./desktop");
+    vi.doUnmock("./queryClient");
+    vi.resetModules();
+  });
+
+  async function load(shellToken: string) {
+    vi.resetModules();
+    window.localStorage.clear();
+    const invalidateQueries = vi.fn(async () => {});
+    vi.doMock("./desktop", () => ({ desktopAuthToken: async () => shellToken }));
+    vi.doMock("./queryClient", () => ({ queryClient: { invalidateQueries } }));
+    const auth = await import("./auth");
+    return { auth, invalidateQueries };
+  }
+
+  it("saves the shell's token, clears the gate and refetches every query", async () => {
+    const { auth, invalidateQueries } = await load("shell-token");
+    auth.notifyAuthRequired();
+    await vi.waitFor(() => expect(invalidateQueries).toHaveBeenCalledTimes(1));
+    expect(window.localStorage.getItem("protoagent.authToken")).toBe("shell-token");
+    expect(auth.authRequired()).toBe(false);
+  });
+
+  it("refetches nothing when the shell has no token to offer (the gate stays up)", async () => {
+    const { auth, invalidateQueries } = await load("");
+    auth.notifyAuthRequired();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    expect(auth.authRequired()).toBe(true);
+  });
+});

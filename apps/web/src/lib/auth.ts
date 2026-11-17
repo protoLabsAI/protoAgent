@@ -38,8 +38,18 @@ export function authRequired(): boolean {
  *
  * In the desktop app, try the shell's own token FIRST (#2055): it spawned the server and
  * knows the secret, so prompting the operator for it is asking them to look up something
- * their own machine already has. Only if that yields nothing does the gate go up. */
-export function notifyAuthRequired() {
+ * their own machine already has. Only if that yields nothing does the gate go up.
+ *
+ * `sentAuthorization` is the `Authorization` header the 401'd request carried (null when it
+ * sent none). A 401 for a credential that has since been REPLACED is stale, not a reason to
+ * prompt: requests already in flight when the token changed (a desktop self-auth, a Connect in
+ * the AuthGate) come back 401 after the new token is stored, and used to put the gate straight
+ * back up over a console that was already signed in (#5408). Omitted = always counts. */
+export function notifyAuthRequired(sentAuthorization?: string | null) {
+  if (sentAuthorization !== undefined) {
+    const current = effectiveToken();
+    if ((sentAuthorization || "") !== (current ? `Bearer ${current}` : "")) return;
+  }
   if (needed) return;
   void tryDesktopSelfAuth();
   needed = true;
@@ -92,6 +102,11 @@ async function tryDesktopSelfAuth(): Promise<void> {
   if (!token || token === existing) return;
   // A token the browser couldn't keep recovers nothing — leave the prompt to say so.
   if (!saveAuthToken(token).ok) return;
-  // Same recovery path the manual prompt takes: everything refetches with the new bearer.
-  window.dispatchEvent(new CustomEvent("protoagent:auth-recovered"));
+  // Same recovery the manual prompt does (AuthGate's connect/pair): refetch every query with the
+  // new bearer. A 401 never retries (queryClient.ts), so without this every panel that 401'd
+  // stayed errored after the gate went away (#5408). This used to dispatch a
+  // `protoagent:auth-recovered` event that nothing listened for. Imported lazily: queryClient
+  // imports api, which imports this module.
+  const { queryClient } = await import("./queryClient");
+  void queryClient.invalidateQueries();
 }
