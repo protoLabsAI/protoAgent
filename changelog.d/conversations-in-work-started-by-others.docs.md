@@ -1,0 +1,1 @@
+- **Conversations in Work: routine threads get a home.** Records Josh's 2026-11-17 decision 7: threads someone else started that ask for nothing are listed in Chat's own list under a **Started by others** group, unopened ones included, with no pinned tab or badge, and never in Work. This settles the precondition for removing the From others tab. It authorizes no implementation.

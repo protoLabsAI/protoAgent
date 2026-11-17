@@ -52,6 +52,24 @@ listed as open in the [decision map](#decision-map-settled-and-open).
    from Josh, beginning with a time-boxed Phase 0 isolation prototype that ends
    in continue-or-revise.
 
+## Decision recorded 2026-11-17
+
+**Decided by Josh, 2026-11-17:** "approve the started by others group."
+
+7. **Routine threads live in Chat's list under Started by others.** The approved
+   home for threads someone else started that ask for nothing (routine messages,
+   never Work items) is a **Started by others** group in Chat's own list, below the
+   operator's own chats, as preview `a-1794812482334-68d817` v4 state 12 shows. It
+   has no pinned tab and no badge, and those threads never appear in Work. Each row
+   reads "From {origin} · {when}", like today's From others rows. Unopened threads
+   are listed too, so nothing is reachable only by search. Two things follow
+   existing rules rather than new ones: which threads count as routine is the open
+   "actionable request vs routine" row in the decision map (a thread promoted to
+   Work leaves the group), and how long a routine thread stays listed follows
+   today's outside-thread window (7 days). This settles the precondition for
+   removing the From others tab; per decision 6 it does not by itself start any
+   build.
+
 ## Phase 0 outcome
 
 **Verdict: REVISE (2026-11-16).** Per decision 6, Josh gave the go for Phase 0
@@ -699,7 +717,7 @@ readiness, authorization, privacy, retention, or actual-device acceptance.
 | Historical conversation approval | [other-conversations.md](./other-conversations.md), revisions 1–5, describes the pinned read-only From others tab, Continue in a new chat, and links between threads and jobs. That approval remains recorded; this proposal explicitly replaces that interaction rather than claiming it meets the new contract. |
 | Newer accepted architecture | [ADR 0130](../adr/0130-server-authoritative-live-sync.md) makes server state and resync authoritative. [ADR 0132](../adr/0132-chat-context-carryover.md) covers memory, gists, digests and checkpoint recovery, not full-history preservation or private peer conversations. [ADR 0133](../adr/0133-model-roles-with-fallback-chains.md) covers model chains, not conversation audiences. |
 | Review evidence on record | The 2026-11-16 steelman review confirmed the code claims in the findings table against `main` at `d05f32262` and added the operator-tier, ownership, ×-delete and v1-scope findings folded in below. The 2026-11-16 final planning audit added the participant-capability, derived-content, observability, read-only-milestone, prototype and two-audience gaps, and verified the live board. Both are inspection-only. |
-| Preview proposals, not separately confirmed decisions | Routine threads in a Started by others group in the Chat list; the preview's completed-work presentation; unknown output audience defaulting to private. These remain open in the decision map. |
+| Preview proposals, not separately confirmed decisions | The preview's completed-work presentation; unknown output audience defaulting to private. These remain open in the decision map. The Started by others group for routine threads was approved on 2026-11-17 (decision 7). |
 
 ### Lineage and supersession
 
@@ -843,8 +861,8 @@ Phone: Work is the full-screen sheet with pushed details, no Expand/Dock control
 rows at least 48px tall and full-width stacked `md` actions. Open in chat leaves
 the sheet for the original main Chat; Back restores the same detail. Keep drafts
 bound to the owning conversation through agent changes and navigation. The
-preview's Started by others Chat-list group is a candidate replacement for
-routine-thread discovery, not an approved prerequisite silently added here.
+preview's Started by others Chat-list group is the approved home for
+routine-thread discovery (decision 7, 2026-11-17).
 
 Use the existing DS rows, `Badge`, `StatusDot`, `Callout`, `Alert`, `Skeleton`
 and `Button`; no new DS components or tokens are proposed. The supplied preview
@@ -1089,7 +1107,7 @@ the only navigation that may precede it.
 | 2. Durable work relationships | Add request correlation, role-labelled original links and idempotent promotion to existing stores. Can be designed with 1; no interactive UI enabled. | Retry/restart/multiple-job fixtures prove identity, provenance and counts; owner authorization rejects forged links. |
 | 3. Retention and continuation | Implement the decision 3 sweep invariant for all linked originals; reconcile references and closure; validate checkpoint metadata binding and #5365 interaction; apply the Phase 0 stall-release rule. Depends on 2. | Full-history and shared-link tests across TTL boundaries and restarts; missing checkpoint fails safely; × delete shows unavailable in Work. |
 | 4. Original-chat navigation | Extend openSourceChat/hydration/registry with owner routing, durable reopen, capability checks and return-to-Work state. Depends on 2–3; the composer additionally depends on 1. | Fresh-client, reconnect, owner switch, missing data and parked-resume scenarios pass without a new chat. |
-| Optional milestone: read-only Open in chat | Open the original in main Chat with the composer disabled. Depends **only on phases 2–4**: isolation matters only once the operator can send. Accept or reject this milestone in Phase 0. Removing From others still waits for a routine-thread home. | Read-only open preserves identity, history and return-to-Work; no send path exists. |
+| Optional milestone: read-only Open in chat | Open the original in main Chat with the composer disabled. Depends **only on phases 2–4**: isolation matters only once the operator can send. Accept or reject this milestone in Phase 0. Removing From others still waits for the Started by others group (decision 7) to ship. | Read-only open preserves identity, history and return-to-Work; no send path exists. |
 | 5. Work presentation and migration | Add conversation rows (capability table), request promotion presentation, replace Open conversation / Continue in a new chat entry points per decision 5, and update the stale docs listed under migration. Depends on 4 and approved routine/completed discovery. | Desktop/phone/accessibility review plus focused integration tests; old links still resolve safely. |
 | 6. Remote and non-A2A participants | Upgrade unavailable capability rows (remote A2A, ACP coder, board coder, plugin reviewer, Discord) only as their transcripts become durable and owner guarantees are verified. | Per-type capability evidence; unsupported rows stay truthfully unavailable. |
 
@@ -1127,8 +1145,9 @@ facilities so a crash can resume migration before sweeps or promotion run.
 Preserve old `#/conversations/<id>` links as compatibility routes to the authorized
 original or its truthful unavailable state. Migrate only explicit opens into the
 Chat registry; do not register every hidden/system session. Removing the standalone
-From others tab must wait for an approved route to routine conversations, including
-unopened ones, so discoverability is not lost during migration.
+From others tab must wait until the approved route to routine conversations, the
+Started by others group (decision 7), ships and lists unopened threads, so
+discoverability is not lost during migration.
 
 These recently landed docs describe the superseded interaction and go stale when
 implementation ships; revise them in the same change:
@@ -1155,8 +1174,8 @@ and applying any ADR amendments require a reviewed implementation change.
 ## Decision map: settled and open
 
 Every product decision this proposal touches, disposed one way or the other.
-"Decided" rows cite the numbered decisions of 2026-11-16; nothing else is
-approved. Recommendations on open rows are labelled proposals, not approvals.
+"Decided" rows cite the numbered decisions of 2026-11-16 and 2026-11-17; nothing
+else is approved. Recommendations on open rows are labelled proposals, not approvals.
 Rows informed by the [design revision](#design-revision-after-phase-0) read
 **Proposed in design revision (pending Josh)**. Their issue references distinguish
 executed Phase 0 evidence from inspection. Unrelated rows, including ADR 0131
@@ -1181,7 +1200,7 @@ See [Phase 0 outcome](#phase-0-outcome) for the historical result.
 | One request producing several jobs | Open — not informed by Phase 0 prototype | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
 | What makes an incoming thread an actionable request rather than routine conversation | Open — not informed by Phase 0 prototype | Require durable work intent/evidence; do not classify every A2A thread as Work or guess from a title. |
 | Remote original capability beyond v1 (read, retention, steering) | Open — not informed by Phase 0 prototype | v1 shows remote rows unavailable (decision 4). Advertise verified owner capabilities separately; read-only where authorized; no composer until privacy and continuation are proven. |
-| Routine-thread discoverability after From others is removed | Open — not informed by Phase 0 prototype | Evaluate the preview's Started by others group in Chat; approve its eligibility and visibility before removing the old entry point. |
+| Routine-thread discoverability after From others is removed | **Decided by Josh, 2026-11-17 (7)** | A Started by others group in Chat's list, unopened threads included, no pinned tab or badge. Eligibility follows the open request-vs-routine row; listing time follows the 7-day outside-thread window. |
 | Completed work/history placement | Open — not informed by Phase 0 prototype | Keep finished work out of active counts as already designed; choose the history destination and stale return-link behavior explicitly. |
 | Closed-chat clock after last closure vs the 14-day closed-chat digest window (#5387) | Open — not informed by Phase 0 prototype | Define one truthful clock; never promise deletion while retaining data. |
 | Do traces, captured prompts and fleet trace export follow the incognito rule for private steering? | Proposed in design revision (pending Josh) — [#5403](https://github.com/protoLabsAI/protoAgent/issues/5403), inspection-only | Section 5 proposes data-lifetime audience partitions and source-versioned projections, with no content tracing/capture for private reads and public-only fleet export. Each derived surface still needs executed later-turn evidence. |
