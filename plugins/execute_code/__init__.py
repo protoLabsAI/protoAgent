@@ -104,6 +104,7 @@ def register(registry) -> None:
             timeout=float(cfg.get("timeout", 30.0)),
             truncate=int(cfg.get("output_truncate", 6000)),
             graph_config=config,
+            session_state=bool(cfg.get("session_state", False)),
         )
 
     registry.register_late_tool_factory(_factory)

@@ -1,7 +1,7 @@
 """Durable one-audience-per-segment scheduling over the P1b.1 partition (ADR 0131 P1c; dormant).
 
 A conversation's original thread runs ONE serialized runner. Every accepted input is persisted
-as a *pending turn* on the existing task records (``stores.save_private`` — a
+as a *pending turn* on the existing task records (a
 ``public_visible=False`` shell, operator-only), carrying a monotonic acceptance ``seq``, its
 fixed ``audience`` (peer or private), the verified ``principal``, the message-id ``dedupe`` key,
 the ``checkpoint`` binding, the ``interrupt_id`` it resumes, and its ``state``
@@ -10,7 +10,7 @@ projection of durable task state, and the ACTIVE SEGMENT is one more record keye
 carrying a monotonic ``generation``.
 
 **One transactional ordering.** Every segment transition — claim, fold-in, complete, park,
-resume — is a compare-and-set on that ``generation`` (``stores.cas_private_payload``), not a
+resume — is a compare-and-set on that ``generation``, not a
 process lock. "Accept-and-queue wins or completion-and-next-start wins" is that one CAS: a steer
 arriving as a turn completes either folds into the running segment (its fold bumps the
 generation, so the completion's CAS loses and the turn keeps running) or does not (the
@@ -36,13 +36,7 @@ is resumed through the private path and never falls back to a public input.
 
 from __future__ import annotations
 
-import logging
-
-from a2a.types import a2a_pb2
-
 from a2a_impl.stores import PRIVATE_SCHEMA_VERSION
-
-log = logging.getLogger(__name__)
 
 KIND_PENDING_TURN = "pending-turn"
 KIND_SEGMENT = "active-segment"
@@ -80,10 +74,6 @@ def _is_kind(record, kind: str) -> bool:
     )
 
 
-def _empty_shell(task_id: str, session_id: str):
-    return a2a_pb2.Task(id=task_id, context_id=session_id)
-
-
 # ── the durable pending-turn queue ──────────────────────────────────────────────
 
 
@@ -94,29 +84,11 @@ async def pending_turns(task_store, session_id: str, context, *, states=None) ->
     partition timeline; raises on an unreadable partition so the caller can fail closed."""
     wanted = set(states) if states is not None else set(_NON_TERMINAL)
     out: list[dict] = []
-    for record in await task_store.history_records(session_id, context, limit=200):
-        if _is_kind(record, KIND_PENDING_TURN) and record.private_payload.get("state") in wanted:
-            out.append(dict(record.private_payload))
+    for payload in (await task_store.scheduling_payloads(session_id, context)).values():
+        if payload.get("kind") == KIND_PENDING_TURN and payload.get("state") in wanted:
+            out.append(dict(payload))
     out.sort(key=lambda p: p.get("seq", 0))
     return out
-
-
-async def _find_by_dedupe(task_store, session_id: str, dedupe: str, context) -> dict | None:
-    dedupe = str(dedupe or "")
-    if not dedupe:
-        return None
-    for record in await task_store.history_records(session_id, context, limit=200):
-        if _is_kind(record, KIND_PENDING_TURN) and record.private_payload.get("dedupe") == dedupe:
-            return dict(record.private_payload)
-    return None
-
-
-async def _next_seq(task_store, session_id: str, context) -> int:
-    highest = 0
-    for record in await task_store.history_records(session_id, context, limit=200):
-        if _is_kind(record, KIND_PENDING_TURN):
-            highest = max(highest, int(record.private_payload.get("seq") or 0))
-    return highest + 1
 
 
 async def accept_pending_turn(
@@ -135,18 +107,13 @@ async def accept_pending_turn(
 
     Idempotent on the message-id ``dedupe`` key: a retried input with a key already recorded
     reuses the one pending turn (one turn per message id) instead of minting a second. The
-    acceptance ``seq`` is monotonic; accept runs under the thread's serialized runner, so two
-    accepts never race the same ``seq``. The record is a ``public_visible=False`` shell — its
+    acceptance ``seq`` is monotonic; sequence allocation and dedupe run in one database
+    transaction. The record is a ``public_visible=False`` shell — its
     audience, principal, checkpoint and interrupt binding live only in the private payload, so no
     peer-readable projection is ever exposed. Raises on a write failure; the caller fails closed."""
-    existing = await _find_by_dedupe(task_store, session_id, dedupe, context)
-    if existing is not None:
-        return existing
-    seq = await _next_seq(task_store, session_id, context)
     payload = {
         "version": PRIVATE_SCHEMA_VERSION,
         "kind": KIND_PENDING_TURN,
-        "seq": seq,
         "audience": audience,
         "principal": str(principal or ""),
         "dedupe": str(dedupe or ""),
@@ -155,10 +122,17 @@ async def accept_pending_turn(
         "input_ref": str(input_ref or ""),
         "state": STATE_QUEUED,
     }
-    await task_store.save_private(
-        _empty_shell(pending_task_id(session_id, seq), session_id), payload, context, public_visible=False
-    )
-    return payload
+
+    def accept(records):
+        turns = [p for p in records.values() if p.get("kind") == KIND_PENDING_TURN]
+        for turn in turns:
+            if dedupe and turn.get("dedupe") == dedupe:
+                return dict(turn)
+        payload["seq"] = max((int(p["seq"]) for p in turns), default=0) + 1
+        records[pending_task_id(session_id, payload["seq"])] = payload
+        return dict(payload)
+
+    return await task_store.update_scheduling_payloads(session_id, context, accept)
 
 
 async def set_turn_state(task_store, session_id: str, seq: int, state: str, context, **extra) -> bool:
@@ -195,19 +169,14 @@ async def read_segment(task_store, session_id: str, context) -> dict:
 
 
 async def _ensure_segment(task_store, session_id: str, context) -> dict:
-    """Create the idle (``generation`` 0) segment record if absent, and return it.
+    """Create once under the database writer reservation; never reset a live claim."""
+    default = await read_segment(task_store, session_id, context)
 
-    Called under the thread's serialized runner, so there is no concurrent create to clobber a
-    live claim; concurrent CLAIMS then race cleanly on the generation CAS of the one record."""
-    seg = await read_segment(task_store, session_id, context)
-    if seg.get("exists"):
-        return seg
-    payload = {k: v for k, v in seg.items() if k != "exists"}
-    await task_store.save_private(
-        _empty_shell(segment_task_id(session_id), session_id), payload, context, public_visible=False
-    )
-    seg["exists"] = True
-    return seg
+    def ensure(records):
+        payload = records.setdefault(segment_task_id(session_id), {k: v for k, v in default.items() if k != "exists"})
+        return {**payload, "exists": True}
+
+    return await task_store.update_scheduling_payloads(session_id, context, ensure)
 
 
 async def claim_segment(
@@ -237,7 +206,7 @@ async def claim_segment(
     return generation + 1 if won else None
 
 
-async def try_fold(task_store, session_id: str, *, generation: int, audience: str, context) -> int | None:
+async def try_fold(task_store, session_id: str, *, generation: int, audience: str, seq: int, context) -> int | None:
     """Attach a newly-accepted input to the RUNNING segment, or decline. One ordering decision.
 
     Folds only when the segment is still running at ``generation`` under the SAME ``audience`` —
@@ -245,16 +214,20 @@ async def try_fold(task_store, session_id: str, *, generation: int, audience: st
     on the old generation loses and the turn keeps running to drain the fold. Returns the new
     generation on a fold, or None when the segment already moved on (completed, or a different
     audience) — then the input stays queued for its own segment."""
-    seg = await read_segment(task_store, session_id, context)
-    if seg["state"] != STATE_RUNNING or seg["audience"] != audience or int(seg["generation"]) != generation:
-        return None
-    won = await task_store.cas_private_payload(
-        segment_task_id(session_id),
-        guard={"generation": generation, "audience": audience},
-        updates={"generation": generation + 1},
-        context=context,
-    )
-    return generation + 1 if won else None
+    def fold(records):
+        seg = records.get(segment_task_id(session_id), {})
+        turn = records.get(pending_task_id(session_id, seq), {})
+        if (seg.get("state") != STATE_RUNNING or seg.get("audience") != audience
+                or seg.get("generation") != generation or turn.get("state") != STATE_QUEUED
+                or turn.get("audience") != audience):
+            return None
+        seg["generation"] = generation + 1
+        # The accepted input belongs to this execution from this commit onward. A crash
+        # exposes it as suspended, never as fresh work to dispatch again.
+        turn.update(state=STATE_RUNNING, segment_seq=seg["seq"])
+        return generation + 1
+
+    return await task_store.update_scheduling_payloads(session_id, context, fold)
 
 
 async def complete_segment(task_store, session_id: str, *, generation: int, context) -> bool:
@@ -351,3 +324,39 @@ async def recover_undrained_segments(task_store, session_id: str, context) -> di
         "audience": audience,
         "reserved": reserved,
     }
+
+
+async def dispatch_pending_turn(task_store, session_id: str, context, send) -> str | None:
+    """Dormant runner seam. ``send`` returns a task id or None for a PROVEN refusal.
+
+    Exceptions/ambiguous delivery leave the execution reserved for reconciliation, never
+    retry automatically. The caller must not translate a timeout into a proven refusal.
+    """
+    def claim(records):
+        seg = records[segment_task_id(session_id)]
+        queued = sorted((p for p in records.values() if p.get("kind") == KIND_PENDING_TURN
+                         and p.get("state") == STATE_QUEUED), key=lambda p: p["seq"])
+        if seg["state"] != SEGMENT_IDLE or not queued:
+            return None
+        turn = queued[0]
+        seg.update(generation=seg["generation"] + 1, state=STATE_RUNNING,
+                   audience=turn["audience"], seq=turn["seq"], interrupt_id=turn["interrupt_id"])
+        turn["state"] = STATE_RUNNING
+        return dict(turn), seg["generation"]
+
+    await _ensure_segment(task_store, session_id, context)
+    claimed = await task_store.update_scheduling_payloads(session_id, context, claim)
+    if claimed is None:
+        return None
+    turn, generation = claimed
+    task_id = await send(turn)
+    if task_id is None:
+        def requeue(records):
+            seg = records[segment_task_id(session_id)]
+            if seg["generation"] != generation or seg["state"] != STATE_RUNNING:
+                return
+            records[pending_task_id(session_id, turn["seq"])]["state"] = STATE_QUEUED
+            seg.update(generation=generation + 1, state=SEGMENT_IDLE, audience="", seq=None, interrupt_id="")
+
+        await task_store.update_scheduling_payloads(session_id, context, requeue)
+    return task_id

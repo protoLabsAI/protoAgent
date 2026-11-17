@@ -2319,7 +2319,7 @@ def test_sse_verified_principal_from_pairing_and_minter(caller, tmp_path, monkey
             response = client.get("/api/events", params={"token": stream_token, "principal_kind": "device"})
             assert response.status_code == 200
             kind = {"shared": "shared-operator-bearer", "agent": "agent-device",
-                    "fleet": "fleet-service", "legacy": "open/unknown"}.get(caller, caller)
+                    "fleet": "fleet-service", "legacy": "legacy-api-key"}.get(caller, caller)
             assert _sse_data(response.text) == [[kind, caller in ("shared", "device"),
                                                "operator", "device" if caller == "device" else "full"]]
             if caller == "device":

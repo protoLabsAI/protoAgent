@@ -385,10 +385,10 @@ def _device_for_token(token: str):
 
 
 PrincipalKind = Literal[
-    "shared-operator-bearer", "device", "fleet-service", "agent-device", "federation", "open/unknown"
+    "shared-operator-bearer", "device", "fleet-service", "agent-device", "federation", "legacy-api-key", "open/unknown"
 ]
 _PRINCIPAL_KINDS = frozenset({
-    "shared-operator-bearer", "device", "fleet-service", "agent-device", "federation", "open/unknown"
+    "shared-operator-bearer", "device", "fleet-service", "agent-device", "federation", "legacy-api-key", "open/unknown"
 })
 
 
@@ -408,7 +408,7 @@ class Credential:
     who can get in). Orthogonal: a paired phone is ``operator`` tier with ``device`` scope.
     ``device_id`` is set for a device token (self rename / unpair, stream re-verification).
     ``principal_kind`` identifies the matched credential independently of both permissions;
-    legacy API keys and unauthenticated requests remain unknown."""
+    legacy API keys have their own kind; unauthenticated requests remain unknown."""
 
     tier: str
     scope: str = SCOPE_FULL
@@ -883,7 +883,10 @@ class A2AAuthMiddleware:
             await send(message)
 
         async def call_next(_request: Request) -> None:
-            await self.app(scope, receive, tracking_send)
+            from graph.middleware.request_context import verified_principal_scope
+
+            with verified_principal_scope(getattr(_request.state, "principal_kind", "open/unknown")):
+                await self.app(scope, receive, tracking_send)
 
         request = Request(scope, receive)
         refusal = await self.dispatch(request, call_next)
@@ -1156,7 +1159,7 @@ def _classify_request_credential(request) -> Credential | None:
     if api_key:
         presented = request.headers.get("x-api-key", "") or ""
         if presented and _same_secret(presented, api_key):
-            return Credential("operator", SCOPE_FULL)
+            return Credential("operator", SCOPE_FULL, principal_kind="legacy-api-key")
 
     active = _BEARER[0]
     if not active:

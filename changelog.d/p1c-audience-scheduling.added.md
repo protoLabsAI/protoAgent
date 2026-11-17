@@ -9,3 +9,6 @@
   replayed tool effect and no public fallback. The mechanism stays dormant — only the P1c tests
   exercise it; there is no user-reachable private-steering surface and no disable switch. Refs
   #5400, Refs #5401.
+  Acceptance and segment creation are serialized by a database transaction; queue recovery and
+  deduplication cover the complete private partition. Folded turns are attached atomically so
+  they cannot dispatch twice, and proven dispatch refusals release and requeue the same input.

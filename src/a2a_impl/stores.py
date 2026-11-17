@@ -588,6 +588,68 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             ), {"version": PRIVATE_SCHEMA_VERSION, "audience": PRIVATE_AUDIENCE,
                 "payload": encoded, "visible": int(public_visible), "id": task.id})
 
+    async def scheduling_payloads(self, context_id, context):
+        """Read the complete private scheduling partition, independent of UI history limits."""
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            return await self._scheduling_payloads(session, context_id, context)
+
+    async def _scheduling_payloads(self, session, context_id, context):
+        from a2a_impl.auth import is_human_operator
+        from sqlalchemy import literal_column
+
+        if not is_human_operator((getattr(context, "state", None) or {}).get("principal_kind")):
+            raise PermissionError("Private task access requires a human operator")
+        conn = await session.connection()
+        visible = await task_public_filter(conn, self.task_model, include_private=True)
+        owners = [self.owner_resolver(context)]
+        if owners == [OPERATOR_OWNER]:
+            owners.append(FEDERATION_OWNER)
+        rows = (await session.execute(
+            select(self.task_model.id, literal_column("private_payload"))
+            .where(self.task_model.context_id == context_id, self.task_model.owner.in_(owners),
+                   visible, literal_column("public_visible") == 0,
+                   literal_column("private_version") == PRIVATE_SCHEMA_VERSION)
+        )).all()
+        return {key: json.loads(raw) for key, raw in rows}
+
+    async def update_scheduling_payloads(self, context_id, context, mutate):
+        """Commit a synchronous scheduling decision and all its task changes atomically.
+
+        SQLite's writer reservation is acquired BEFORE reading, including on independent
+        engines/processes. This covers sequence allocation, dedupe, create-if-absent and
+        segment/turn attachment; no process-local lock or merge can lose accepted input.
+        This dormant mechanism uses the runtime's SQLite task store only.
+        """
+        from a2a.types import a2a_pb2
+
+        await self._ensure_initialized()
+        if self.engine.dialect.name != "sqlite":
+            raise NotImplementedError("Durable scheduling requires the SQLite task store")
+        async with self.async_session_maker.begin() as session:
+            await session.execute(text("BEGIN IMMEDIATE"))
+            payloads = await self._scheduling_payloads(session, context_id, context)
+            before = {key: json.dumps(value, allow_nan=False) for key, value in payloads.items()}
+            result = mutate(payloads)
+            conn = await session.connection()
+            table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
+            for key, value in payloads.items():
+                encoded = json.dumps(value, allow_nan=False)
+                if before.get(key) == encoded:
+                    continue
+                task = a2a_pb2.Task(id=key, context_id=context_id)
+                await self._check_write(session, conn, task, context, private=True)
+                if key not in before:
+                    # INSERT, never merge: an unrelated/inaccessible id must fail closed.
+                    session.add(self._to_orm(task, self.owner_resolver(context)))
+                    await session.flush()
+                await session.execute(text(
+                    f"UPDATE {table} SET private_version=:version, private_audience=:audience, "
+                    "private_payload=:payload, public_visible=0 WHERE id=:id"
+                ), {"version": PRIVATE_SCHEMA_VERSION, "audience": PRIVATE_AUDIENCE,
+                    "payload": encoded, "id": key})
+            return result
+
     async def cas_private_payload(
         self, task_id: str, *, guard: dict, updates: dict, context: ServerCallContext,
     ) -> bool:
