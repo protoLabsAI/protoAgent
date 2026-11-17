@@ -271,6 +271,79 @@ async def test_turn_stream_sanitizes_and_forwards_consumed_steers(monkeypatch):
     assert ("steer_consumed", {"items": [{"id": "s1", "text": "first"}, {"id": "7", "text": "9"}]}) in frames
 
 
+# ── one audience per segment: the queue + drain (ADR 0131 P1c) ──────────────────
+
+
+def test_enqueue_leaves_peer_items_untagged_and_tags_private():
+    # A peer steer is the default and carries NO audience key — the whole existing queue shape
+    # (and every pre-P1c item) is untouched; only a private steer is tagged.
+    steering.enqueue("s1", "peer one", msg_id="p1")
+    steering.enqueue("s1", "private one", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+    items = steering.pending_items("s1")
+    assert items[0] == {"id": "p1", "text": "peer one"}  # untagged peer item, unchanged shape
+    assert items[1] == {"id": "v1", "text": "private one", "audience": "private"}
+
+
+def test_drain_scoped_to_one_audience_leaves_the_other_queued():
+    steering.enqueue("s1", "peer one", msg_id="p1")
+    steering.enqueue("s1", "private one", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+    steering.enqueue("s1", "peer two", msg_id="p2")
+    # Draining the peer audience folds only the peer items; the private one waits for its segment.
+    assert steering.drain("s1", steering.AUDIENCE_PEER) == [
+        {"id": "p1", "text": "peer one"},
+        {"id": "p2", "text": "peer two"},
+    ]
+    assert steering.pending_items("s1") == [{"id": "v1", "text": "private one", "audience": "private"}]
+    # Then the private audience drains its own, and the queue empties (no empty list lingers).
+    assert steering.drain("s1", steering.AUDIENCE_PRIVATE) == [
+        {"id": "v1", "text": "private one", "audience": "private"}
+    ]
+    assert "s1" not in steering._QUEUES
+
+
+def test_unscoped_drain_still_takes_everything():
+    # No audience → the whole queue, exactly as every ordinary turn drains it.
+    steering.enqueue("s1", "peer", msg_id="p1")
+    steering.enqueue("s1", "private", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+    assert len(steering.drain("s1")) == 2
+    assert steering.pending("s1") == 0
+
+
+@pytest.mark.parametrize("audience", ["peer", "private"])
+def test_middleware_drain_never_mixes_audiences(audience):
+    # The middleware folds in ONLY the segment's fixed audience; the other stays queued, so the
+    # model call it builds can never carry both.
+    steering.enqueue("sess", "peer text", msg_id="p1")
+    steering.enqueue("sess", "private text", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+    out = SteeringMiddleware._inject({"session_id": "sess", "segment_audience": audience, "messages": []})
+    content = out["messages"][0].content
+    if audience == "peer":
+        assert "peer text" in content and "private text" not in content
+        assert steering.pending_items("sess") == [{"id": "v1", "text": "private text", "audience": "private"}]
+    else:
+        assert "private text" in content and "peer text" not in content
+        assert steering.pending_items("sess") == [{"id": "p1", "text": "peer text"}]
+
+
+def test_middleware_without_segment_audience_drains_everything():
+    # An ordinary turn (no segment audience) is unchanged — it still folds the whole queue.
+    steering.enqueue("sess", "a", msg_id="p1")
+    steering.enqueue("sess", "b", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+    out = SteeringMiddleware._inject({"session_id": "sess", "messages": []})
+    assert "a" in out["messages"][0].content and "b" in out["messages"][0].content
+    assert steering.pending("sess") == 0
+
+
+def test_take_unfenced_never_takes_a_private_item():
+    # The in-memory turn-end restart runs a PUBLIC turn; a private-audience item must never ride
+    # it into a peer-readable turn — it is left queued for the durable private recovery instead.
+    steering.enqueue("s1", "peer", msg_id="p1")
+    steering.enqueue("s1", "private", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+    taken = steering.take_unfenced("s1")
+    assert [t["id"] for t in taken] == ["p1"]
+    assert steering.pending_items("s1") == [{"id": "v1", "text": "private", "audience": "private"}]
+
+
 # ── end-to-end in a REAL graph ─────────────────────────────────────────────────
 # Drive a real create_agent graph: model call 1 invokes a tool; while the tool
 # "runs" the user steers (enqueue); SteeringMiddleware.before_model must fold that
@@ -342,3 +415,59 @@ async def test_steering_message_injected_mid_turn():
 
     # The queue is drained — nothing left to leak into a later turn.
     assert steering.pending("sess-1") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("segment_audience", ["peer", "private"])
+async def test_no_model_call_mixes_audiences_in_a_real_graph(segment_audience):
+    # The P1c proof on ACTUAL model inputs: a long tool runs while BOTH a peer and a private
+    # steer arrive; the segment's fixed audience decides which one the next model call sees, and
+    # the other stays queued. Covers both queue orders (peer-then-private vs private-then-peer)
+    # and the long-running-tool case — no model call ever carries both audiences.
+    from unittest.mock import patch
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from graph.config import LangGraphConfig
+
+    sid = f"seg-{segment_audience}"
+
+    @tool
+    def long_task() -> str:
+        """A long step; both audiences steer the agent while it runs."""
+        # Order deliberately interleaves the two audiences to prove ordering is by audience,
+        # not arrival: peer first for the private segment, private first for the peer segment.
+        if segment_audience == "private":
+            steering.enqueue(sid, "PEER-STEER", msg_id="p1")
+            steering.enqueue(sid, "PRIVATE-STEER", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+        else:
+            steering.enqueue(sid, "PRIVATE-STEER", msg_id="v1", audience=steering.AUDIENCE_PRIVATE)
+            steering.enqueue(sid, "PEER-STEER", msg_id="p1")
+        return "long_task step done"
+
+    fake = _ToolFake(
+        messages=iter(
+            [
+                AIMessage(content="", tool_calls=[{"name": "long_task", "args": {}, "id": "c1", "type": "tool_call"}]),
+                AIMessage(content="done"),
+            ]
+        )
+    )
+    with patch("graph.agent.create_llm", lambda *a, **k: fake):
+        from graph.agent import create_agent_graph
+
+        graph = create_agent_graph(
+            LangGraphConfig(), include_subagents=False, checkpointer=MemorySaver(), extra_tools=[long_task]
+        )
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage("start")], "session_id": sid, "segment_audience": segment_audience},
+        config={"configurable": {"thread_id": "t1"}},
+    )
+    folded = "\n".join(m.content for m in result["messages"] if isinstance(m, HumanMessage) and isinstance(m.content, str))
+    if segment_audience == "peer":
+        assert "PEER-STEER" in folded and "PRIVATE-STEER" not in folded
+        # The private steer never reached a model call — it waits for its own segment.
+        assert steering.pending_items(sid) == [{"id": "v1", "text": "PRIVATE-STEER", "audience": "private"}]
+    else:
+        assert "PRIVATE-STEER" in folded and "PEER-STEER" not in folded
+        assert steering.pending_items(sid) == [{"id": "p1", "text": "PEER-STEER"}]
