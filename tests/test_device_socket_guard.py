@@ -204,12 +204,28 @@ async def test_a_device_socket_closes_1008_within_one_interval_of_a_revoke(
     await sock.finished()  # the handler unwound
 
 
-async def test_a_bearer_header_device_socket_closes_on_revoke(auth, devices, clock, ttl):
+async def test_a_bearer_header_device_socket_closes_on_revoke(auth, devices, clock, ttl, guard, monkeypatch):
+    # Step the guard's timer by hand (#5442): a 10-tick wall-clock timeout can lapse on a
+    # loaded runner before the guard's tick is even scheduled.
+    ticks = asyncio.Queue()
+
+    async def next_tick(delay):
+        ready = asyncio.get_running_loop().create_future()
+        await ticks.put((delay, ready))
+        await ready
+
+    timer = SimpleNamespace(**vars(asyncio))
+    timer.sleep = next_tick
+    monkeypatch.setattr(guard, "asyncio", timer)
     device, token = _phone(devices)
     sock = Socket(_echo_app(auth), "/ws", headers={"authorization": f"Bearer {token}"})
     await sock.accepted()
+
+    delay, tick = await asyncio.wait_for(ticks.get(), 5)
+    assert delay == TICK
     devices.revoke_device(device["id"])
-    assert (await sock.until_closed(timeout=TICK * 10))["code"] == 1008
+    tick.set_result(None)  # the next recheck closes it
+    assert (await sock.until_closed(timeout=5))["code"] == 1008
     await sock.finished()
 
 
