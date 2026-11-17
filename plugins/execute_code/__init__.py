@@ -27,9 +27,40 @@ from __future__ import annotations
 import logging
 import sys
 
+from . import kernel
 from .engine import _DEFAULT_BRIDGE_TOOLS, build_execute_code_tool
 
 log = logging.getLogger("protoagent.plugins.execute_code")
+
+
+async def _on_session_event(payload) -> None:
+    """Stop a session's kernel when its chat ends (ADR 0134 D2 teardown).
+
+    Subscribed in :func:`register` to BOTH bus topics; the plugin never reads chat
+    state directly, it matches the publishers' payloads (read both to confirm the
+    shape before matching):
+
+    * ``session.changed`` with ``status == "deleted"`` — the chat was deleted or
+      cleared (``server.session_state.note_session_deleted`` publishes the deleted
+      status for a delete AND a ``retire=false`` clear). A status-only transition
+      (idle/running/paused) is active use and is left alone.
+    * ``session.closed`` — the tab closed (``server.session_registry``); ALWAYS stop,
+      which covers ADR 0134's "always when an incognito chat closes" without the
+      plugin reading incognito state.
+
+    The payload is the bus envelope ``{event, data, seq, ts}``; the entity lives under
+    ``data`` (``session_id`` key, ``status`` field). Best-effort — the bus isolates a
+    raised handler, but the chat is already gone, so swallow and log."""
+    try:
+        data = (payload or {}).get("data") or {}
+        event = (payload or {}).get("event") or ""
+        session_id = str(data.get("session_id") or "").strip()
+        if not session_id:
+            return
+        if event == "session.closed" or data.get("status") == "deleted":
+            await kernel.stop_session(session_id)
+    except Exception:  # noqa: BLE001 — a teardown handler must never break the bus
+        log.exception("[execute_code] session-end kernel teardown failed")
 
 
 def _effective_tools(explicit, extra, all_tools):
@@ -98,6 +129,14 @@ def register(registry) -> None:
         # instead of waiting for a full plugin reload (ADR 0103 S4). `config` is
         # the full graph config the seam passes — the enforcement-parity source.
         cfg = registry.live_config() if hasattr(registry, "live_config") else registry.config
+        # ADR 0134 D2: push the operator's kernel limits into the process-wide pool on
+        # each (re)build, so an edited idle TTL / cap takes effect without a restart.
+        # Clamp to sane floors — a zero/negative TTL would sweep a just-used kernel and
+        # a zero cap would stop every kernel the moment it starts.
+        kernel.configure(
+            idle_ttl=max(1.0, float(cfg.get("kernel_idle_ttl", 600.0))),
+            max_kernels=max(1, int(cfg.get("max_kernels", 4))),
+        )
         return build_execute_code_tool(
             all_tools,
             tools=_effective_tools(cfg.get("tools") or None, cfg.get("extra_tools") or [], all_tools),
@@ -108,3 +147,21 @@ def register(registry) -> None:
         )
 
     registry.register_late_tool_factory(_factory)
+
+    # ADR 0134 D2 chat teardown: stop a session's kernel when its chat is deleted or
+    # cleared (session.changed → deleted) or its tab closes (session.closed). Bundle-
+    # owned during register() (ADR 0039 — the server binds these after the bus is up).
+    registry.on("session.changed", _on_session_event)
+    registry.on("session.closed", _on_session_event)
+
+    # Periodic idle-sweep backstop, plus stop-every-kernel on plugin unload/reload and
+    # server shutdown. Fresh closures each register() so a reload is a "different stop"
+    # (register_surface #3593): the outgoing surface's stop() runs — stopping every
+    # kernel — before the reloaded one starts its sweeper, so no process is orphaned.
+    def _start_surface():
+        kernel.start_sweeper()
+
+    async def _stop_surface():
+        await kernel.shutdown()
+
+    registry.register_surface(_start_surface, stop=_stop_surface, name="execute_code-kernels")

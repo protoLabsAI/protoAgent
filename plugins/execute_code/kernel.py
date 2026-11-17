@@ -35,6 +35,7 @@ import logging
 import os
 import secrets as _secrets
 import tempfile
+import time
 
 from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree, untrack_when_reaped
 
@@ -52,6 +53,17 @@ log = logging.getLogger(__name__)
 #: authenticate before giving up. A healthy child connects in milliseconds; the
 #: generous bound only covers a cold interpreter on a loaded CI box.
 _KERNEL_START_TIMEOUT = 30.0
+
+#: D2 limits (ADR 0134), overridden by the plugin's ``kernel_idle_ttl`` /
+#: ``max_kernels`` config. A kernel unused for ``idle_ttl`` seconds is stopped;
+#: at ``max_kernels`` live kernels a new one evicts the least-recently-used first.
+_DEFAULT_IDLE_TTL = 600.0
+_DEFAULT_MAX_KERNELS = 4
+
+#: The periodic idle-sweep backstop runs at most this often. The per-call lazy sweep
+#: handles the common case (a session that keeps calling); this only catches a chat
+#: that goes idle and never calls again, so a coarse cadence is enough.
+_SWEEP_INTERVAL_CAP = 60.0
 
 
 # The driver program the kernel child runs. Stdlib-only (like the one-shot
@@ -260,6 +272,9 @@ class Kernel:
         self._ctx: dict = {"tool_map": {}, "session_id": "", "gate": None, "fence": None}
         self._alive = False
         self._closed = False
+        #: Monotonic stamp (the pool's clock) of this kernel's last use — set when the
+        #: pool hands it out and when a call finishes, read by the idle TTL / LRU sweeps.
+        self.last_used: float = 0.0
 
     @property
     def pid(self) -> int | None:
@@ -465,11 +480,22 @@ class Kernel:
 
 
 class KernelPool:
-    """Session_id -> live kernel. S1b adds the idle TTL, the per-instance cap and
-    teardown on chat delete/clear; S1a keeps only start/stop/stop_all."""
+    """Session_id -> live kernel, bounded by the ADR 0134 D2 limits: a kernel unused
+    for ``idle_ttl`` is swept, and a new kernel over ``max_kernels`` evicts the
+    least-recently-used one first. Teardown on chat delete/clear is wired by the
+    plugin (``__init__.py``), which calls :meth:`stop` on the bus event."""
 
     def __init__(self):
         self.kernels: dict[str, Kernel] = {}
+        self.idle_ttl: float = _DEFAULT_IDLE_TTL
+        self.max_kernels: int = _DEFAULT_MAX_KERNELS
+        # The monotonic clock the TTL/LRU stamps are measured on. An attribute (not a
+        # bare time.monotonic call) so a test can drive idle expiry with a fake clock
+        # instead of a real sleep, which the test-policy gate bans (check_test_policy).
+        self._clock = time.monotonic
+        # The periodic idle-sweep backstop task (the plugin's background surface starts
+        # it; stop_sweeper cancels it). Bound per running loop like the lock below.
+        self._sweeper: asyncio.Task | None = None
         # Created lazily and rebound per running loop: the pool is a module-level
         # singleton that outlives any single test's event loop, and an asyncio.Lock
         # bound to a dead loop would raise when awaited in the next one.
@@ -483,20 +509,84 @@ class KernelPool:
             self._lock_loop = loop
         return self._lock
 
+    def configure(self, *, idle_ttl: float, max_kernels: int) -> None:
+        """Apply the operator's kernel limits (ADR 0134 D2). Called at each graph
+        build from live config, so an edited limit takes effect on reload."""
+        self.idle_ttl = float(idle_ttl)
+        self.max_kernels = int(max_kernels)
+
+    def _idle_sids(self, now: float) -> list[str]:
+        """Session ids whose kernel has been unused for at least ``idle_ttl`` (snapshot
+        of the keys so a caller can pop while iterating)."""
+        return [sid for sid, k in list(self.kernels.items()) if now - k.last_used >= self.idle_ttl]
+
     async def get_or_start(self, session_id: str, *, interpreter: str) -> tuple[Kernel, bool]:
         """Return the session's kernel, starting one if none is alive. The bool is
-        True when this call started a fresh kernel (so the caller can say so)."""
+        True when this call started a fresh kernel (so the caller can say so).
+
+        Before deciding, a lazy sweep stops every kernel idle past ``idle_ttl`` (so the
+        next call in a long-idle session reports ``no earlier state``), and starting a
+        new kernel at the ``max_kernels`` cap first stops the least-recently-used one."""
         async with self._get_lock():
+            now = self._clock()
+            # Lazy idle sweep (ADR 0134 D2): close kernels unused past the TTL — their
+            # state is gone, so the next call in that session starts fresh.
+            for sid in self._idle_sids(now):
+                await self.kernels.pop(sid).close()
             kernel = self.kernels.get(session_id)
             if kernel is not None and kernel.alive:
+                kernel.last_used = now
                 return kernel, False
             if kernel is not None:  # a dead kernel lingering in the map — clear it
                 self.kernels.pop(session_id, None)
                 await kernel.close()
+            # Cap (ADR 0134 D2): at the per-instance limit, stop the least-recently-used
+            # kernel before starting a new one so the live count never exceeds the cap.
+            while self.kernels and len(self.kernels) >= self.max_kernels:
+                lru = min(self.kernels, key=lambda s: self.kernels[s].last_used)
+                await self.kernels.pop(lru).close()
             kernel = Kernel(session_id, interpreter)
             await kernel.start()
+            kernel.last_used = self._clock()
             self.kernels[session_id] = kernel
             return kernel, True
+
+    async def sweep_idle(self) -> None:
+        """Stop every kernel unused past ``idle_ttl`` (the periodic backstop path; the
+        same rule :meth:`get_or_start` applies lazily). Closes outside the lock."""
+        now = self._clock()
+        async with self._get_lock():
+            victims = [self.kernels.pop(sid) for sid in self._idle_sids(now)]
+        for kernel in victims:
+            await kernel.close()
+
+    async def _sweep_loop(self) -> None:
+        """Periodic idle sweep so a chat that goes idle and never calls again still
+        has its kernel reclaimed without waiting for the next (never-coming) call."""
+        try:
+            while True:
+                await asyncio.sleep(max(1.0, min(self.idle_ttl, _SWEEP_INTERVAL_CAP)))
+                try:
+                    await self.sweep_idle()
+                except Exception:  # noqa: BLE001 — a bad sweep must not kill the backstop
+                    log.exception("[execute_code] periodic kernel sweep failed")
+        except asyncio.CancelledError:
+            raise
+
+    def start_sweeper(self) -> None:
+        """Start the periodic backstop (idempotent — a live sweeper is left running)."""
+        if self._sweeper is not None and not self._sweeper.done():
+            return
+        self._sweeper = asyncio.ensure_future(self._sweep_loop())
+
+    async def stop_sweeper(self) -> None:
+        """Cancel the periodic backstop and await its exit (no-op if not running)."""
+        task = self._sweeper
+        self._sweeper = None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
     async def stop(self, session_id: str) -> None:
         async with self._get_lock():
@@ -555,16 +645,36 @@ async def run_in_kernel(
     except _KernelDied as exc:
         await _pool.stop(session_id)
         return f"Error: execute_code kernel exited unexpectedly ({exc}). kernel restarted: earlier variables are gone"
+    kernel.last_used = _pool._clock()  # reset the idle timer to this call's end
     body = _truncate_or_spill(body, truncate, session_id=session_id)
     return f"{notice}\n{body}" if notice else body
 
 
+def configure(*, idle_ttl: float, max_kernels: int) -> None:
+    """Apply the operator's kernel limits to the process-wide pool (ADR 0134 D2).
+    The plugin's late-tool factory calls this from live config on each graph build."""
+    _pool.configure(idle_ttl=idle_ttl, max_kernels=max_kernels)
+
+
+def start_sweeper() -> None:
+    """Start the periodic idle-sweep backstop. The plugin's background surface start
+    runs this once the server loop is up; :func:`shutdown` stops it."""
+    _pool.start_sweeper()
+
+
 async def stop_session(session_id: str) -> None:
     """Stop and forget the kernel for ``session_id`` (no-op if none). S1b calls this
-    on chat delete/clear; tests call it (or :func:`stop_all`) to leave no process."""
+    on chat delete/clear/tab close; tests call it (or :func:`stop_all`) to leave no process."""
     await _pool.stop(session_id)
 
 
 async def stop_all() -> None:
     """Stop every kernel. For server shutdown and test teardown."""
+    await _pool.stop_all()
+
+
+async def shutdown() -> None:
+    """Stop the periodic sweeper and every kernel — the plugin's surface ``stop`` runs
+    this on plugin unload/reload and server shutdown, leaving no long-lived process."""
+    await _pool.stop_sweeper()
     await _pool.stop_all()
