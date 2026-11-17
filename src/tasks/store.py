@@ -303,6 +303,8 @@ class TaskStore:
                 )
             if role not in roles:
                 roles.append(role)
+        if not roles:
+            raise ValueError("conversation link requires at least one role")
         return {
             "ref": f"conv:{owner}/{context_id}",
             "kind": "conversation",
@@ -367,22 +369,29 @@ class TaskStore:
             prev = old.get(entry["ref"])
             if prev is None:
                 continue
-            if entry.get("kind") == "conversation" and prev.get("kind") == "conversation":
+            if prev.get("kind") == "conversation":
                 # One original, several roles: a replacement keeps the roles the task
-                # already carries and adds any new ones. owner/context_id are fixed by
-                # the ref, so a replacement can never change the original's identity;
-                # carry them (and any recorded state/reason) forward defensively.
+                # already carries and adds any new ones. A conversation's identity
+                # (owner/context_id, and the fact that it is a conversation) is fixed by
+                # its ref, so a replacement can NEVER change it or downgrade it to a work
+                # link — not even a bare string ref that happens to equal the conv ref
+                # (which _norm_links would otherwise classify as a kind-'job' link). Carry
+                # the stored conversation forward and union in any new roles.
                 roles = list(prev.get("roles") or [])
                 for role in entry.get("roles") or []:
                     if role not in roles:
                         roles.append(role)
-                entry["roles"] = roles
-                entry["owner"] = prev.get("owner", entry.get("owner"))
-                entry["context_id"] = prev.get("context_id", entry.get("context_id"))
-                if not entry.get("state") and prev.get("state"):
-                    entry["state"] = prev["state"]
-                if not entry.get("reason") and prev.get("reason"):
-                    entry["reason"] = prev["reason"]
+                merged = dict(prev)
+                merged["roles"] = roles
+                # A replacement that is itself a conversation dict may refresh its own
+                # state/reason; a bare/non-conversation ref leaves the provenance intact.
+                if entry.get("kind") == "conversation":
+                    if entry.get("state"):
+                        merged["state"] = entry["state"]
+                    if entry.get("reason"):
+                        merged["reason"] = entry["reason"]
+                entry.clear()
+                entry.update(merged)
             elif prev.get("state") == "done" and entry["state"] != "done":
                 entry["state"] = "done"
                 entry["reason"] = str(prev.get("reason") or "")

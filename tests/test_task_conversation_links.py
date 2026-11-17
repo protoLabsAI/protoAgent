@@ -140,6 +140,13 @@ def test_missing_context_id_raises(store):
         store.create("bad", links=[{"kind": "conversation", "role": "coder", "owner": "a", "context_id": "  "}])
 
 
+def test_empty_roles_list_raises(store):
+    # A conversation link must carry at least one role (the card's rule); an empty
+    # ``roles`` list is zero roles, not a valid provenance record.
+    with pytest.raises(ValueError, match="role"):
+        store.create("bad", links=[{"kind": "conversation", "roles": [], "owner": "a", "context_id": "c"}])
+
+
 def test_unknown_role_on_update_raises_and_leaves_row_unchanged(store):
     row = store.create(
         "keep me",
@@ -149,6 +156,23 @@ def test_unknown_role_on_update_raises_and_leaves_row_unchanged(store):
         store.update(row["id"], links=[{"kind": "conversation", "role": "nope", "owner": "a", "context_id": "c"}])
     # The failed write rolled back: the original role is intact.
     assert _conv(store.get(row["id"]))["conv:a/c"]["roles"] == ["requester"]
+
+
+def test_bare_string_ref_cannot_clobber_a_conversation_identity(store, db_path):
+    # A replacement cannot change the owner/context of an existing ref (goal #4): a
+    # bare string equal to a conversation ref — which would otherwise normalize to a
+    # kind-'job' work link — must leave the stored conversation (owner, context_id,
+    # roles, kind) intact rather than downgrading it.
+    row = store.create(
+        "transcript only",
+        links=[{"kind": "conversation", "role": "requester", "owner": "a", "context_id": "c"}],
+    )
+    store.update(row["id"], links=["conv:a/c"])  # plain string, not a conversation dict
+    reopened = TaskStore(db_path=db_path)
+    entry = _conv(reopened.get(row["id"]))["conv:a/c"]
+    assert entry["kind"] == "conversation"
+    assert entry["owner"] == "a" and entry["context_id"] == "c"
+    assert entry["roles"] == ["requester"]  # unchanged, not dropped
 
 
 # ── r4: owner is part of identity ────────────────────────────────────────────────

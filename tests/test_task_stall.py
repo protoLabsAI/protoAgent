@@ -59,6 +59,24 @@ def test_links_drive_until_resolved(links, expected):
     assert is_driven(_task(links=links), sources=_sources()) is expected
 
 
+@pytest.mark.parametrize(
+    "links",
+    [
+        pytest.param('[{"ref": "https://example.com/notes", "kind": "url", "state": ""}]', id="url-only"),
+        pytest.param(
+            '[{"ref": "conv:codex/chat-1", "kind": "conversation", "roles": ["coder"],'
+            ' "owner": "codex", "context_id": "chat-1", "state": "", "reason": ""}]',
+            id="conversation-only",
+        ),
+    ],
+)
+def test_informational_links_never_drive_a_task(links):
+    # Plain URLs and related-conversation links (P2b) carry no work to finish; a task
+    # whose only links are informational has nothing driving it, so with no live signal
+    # it reads as undriven (and so can be found stalled).
+    assert is_driven(_task(links=links), sources=_sources()) is False
+
+
 def test_empty_session_is_judged_on_links_only():
     # No session to match → the session-scoped sources can't apply; a live turn in some
     # OTHER session must not count. Resolved link + blank session → undriven.
@@ -134,6 +152,18 @@ def test_undriven_task_is_stalled_at_31_minutes_not_29():
 def test_driven_old_task_is_not_stalled():
     old = _task(updated_at=(NOW - timedelta(hours=5)).isoformat())
     assert find_stalled([old], now=NOW, sources=_sources(turn_running=lambda _sid: True)) == []
+
+
+def test_conversation_only_old_task_is_stalled():
+    # A task whose only links are related conversations (informational, state "") has
+    # nothing driving it: left untouched past the threshold it must be found stalled,
+    # not shielded by the provenance link.
+    links = (
+        '[{"ref": "conv:codex/chat-1", "kind": "conversation", "roles": ["coder"],'
+        ' "owner": "codex", "context_id": "chat-1", "state": "", "reason": ""}]'
+    )
+    old = _task(updated_at=(NOW - timedelta(hours=5)).isoformat(), links=links)
+    assert [t["id"] for t in find_stalled([old], now=NOW, sources=_sources())] == ["task-1"]
 
 
 @pytest.mark.parametrize("status", ["open", "blocked", "waiting", "deferred", "closed"])
