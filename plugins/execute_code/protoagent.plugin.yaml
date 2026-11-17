@@ -28,8 +28,12 @@ config:
   tools: []
   extra_tools: []
   session_state: false
+  kernel_idle_ttl: 600
+  max_kernels: 4
 settings:
   - { key: session_state, label: "Keep state across a session's runs (experimental)", type: bool, description: "EXPERIMENTAL (ADR 0134, default off). When on, the first execute_code call in a session starts a long-lived Python kernel keyed by session; later calls run in its globals, so variables, imports and functions carry over — fetch a large result once and filter it again without re-fetching or re-printing it. State is lost when a call times out or the kernel restarts, and never survives a server restart. A call can pass fresh=true to start from a clean slate. Off keeps today's behaviour: every call runs in a fresh subprocess with no state." }
+  - { key: kernel_idle_ttl, label: "Session kernel idle timeout (s)", type: number, description: "ADR 0134 D2. Only when session kernels are on. A session kernel left unused this many seconds is stopped and its state discarded, so an idle or forgotten chat never keeps a Python process alive; the next call in that session gets a fresh kernel (prefixed `new kernel: no earlier state`). Default 600 (10 min)." }
+  - { key: max_kernels, label: "Max concurrent session kernels", type: number, description: "ADR 0134 D2. Only when session kernels are on. The most session kernels this instance keeps running at once; starting one past the cap first stops the least-recently-used kernel (its state is lost). Default 4." }
   - { key: timeout, label: "Script timeout (s)", type: number, description: "Hard timeout (seconds) before the subprocess is killed." }
   - { key: output_truncate, label: "Output truncate (chars)", type: number, description: "Max characters of stdout returned inline. When stdout exceeds this, the head is returned with a marker and the FULL output is spilled to a scratch file under the plugin store (spill/) whose absolute path the marker names. Recover the rest with a PAGED read that starts past the head (offset = this limit, one page at a time) so each follow-up returns fresh tail and never re-spills. Spill files are capped at 5 MB and pruned after 24h; a failed spill falls back to plain truncation." }
   - { key: tools, label: "Exposed tools", type: string_list, description: "Tools the script may call. Empty means the curated read-only default set (ADR 0103 D3); a non-empty list REPLACES that default with exactly the names you list." }
