@@ -93,7 +93,7 @@ def _restrict_prior_session_memory() -> bool:
         # protected server. Only the former retains the existing memory delivery.
         return False
     if principal is not None:
-        return principal not in {"shared-operator-bearer", "fleet-service", "device", "agent-device"}
+        return principal not in {"shared-operator-bearer", "fleet-service", "device", "agent-device", "legacy-api-key"}
     return current_trust_tier() == "federation"
 
 

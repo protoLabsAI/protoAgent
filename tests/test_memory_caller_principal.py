@@ -119,6 +119,7 @@ def test_federation_turn_gets_no_digest_and_neither_recall_tool(memory_env):
     assert "session_search" not in result["tools"]
     # Only the two session-recall tools are pulled — the rest of the memory surface stays.
     assert "memory_search" in result["tools"]
+    assert "memory_recall" not in result["tools"]
 
 
 def test_operator_bearer_turn_keeps_the_digest_and_both_tools(memory_env):
@@ -203,20 +204,18 @@ def test_federation_turn_receives_no_closed_chat_card(memory_env):
     assert "CLOSEDCARD-CANARY" not in _deliver({"Authorization": "Bearer federation-test"})["context"]
 
 
-@pytest.mark.parametrize("open_mode", [True, False])
-def test_open_mode_keeps_memory_but_unclassified_protected_turn_fails_closed(memory_env, open_mode):
+@pytest.mark.parametrize("bearer,api_key", [("", ""), ("", "legacy-key"), ("operator-test", "legacy-key")])
+def test_self_invocation_keeps_digest_and_recall_tools(memory_env, bearer, api_key):
     _write_session(memory_env, "operator-session", _CANARY)
     auth.configure(
-        bearer_token="", federation_token="", fleet_token="",
-        api_key="" if open_mode else "legacy-key", allowed_origins_raw="",
+        bearer_token=bearer, federation_token="", fleet_token="",
+        api_key=api_key, allowed_origins_raw="",
     )
 
-    result = _deliver({} if open_mode else {"X-API-Key": "legacy-key"})
+    result = _deliver(auth.self_invocation_headers())
 
-    assert result["principal_kind"] == "open/unknown"
-    assert (_CANARY in result["context"]) is open_mode
-    recall_tools = {"recall_session", "session_search"} & set(result["tools"])
-    assert recall_tools == ({"recall_session", "session_search"} if open_mode else set())
+    assert _CANARY in result["context"]
+    assert {"recall_session", "session_search"} <= set(result["tools"])
 
     # The HTTP scope resets: a subsequent local invocation retains memory delivery.
     tools = _build_memory_tools(None)
@@ -227,3 +226,19 @@ def test_open_mode_keeps_memory_but_unclassified_protected_turn_fails_closed(mem
     delivered = mw.wrap_model_call(request, lambda req: req)
     assert _CANARY in "\n".join(str(m.content) for m in delivered.messages)
     assert {"recall_session", "session_search"} <= {t.name for t in delivered.tools}
+
+
+def test_unclassified_protected_turn_fails_closed(memory_env):
+    from graph.middleware.request_context import verified_principal_scope
+
+    _write_session(memory_env, "operator-session", _CANARY)
+    auth.configure(bearer_token="operator-test", api_key="", allowed_origins_raw="")
+    tools = _build_memory_tools(None)
+    mw = KnowledgeMiddleware(None, bound_tool_names=frozenset(t.name for t in tools))
+    state = {"session_id": "unknown-turn", "messages": [HumanMessage(content="hello")]}
+    with verified_principal_scope("open/unknown"):
+        state.update(mw.before_agent(state, None))
+        request = ModelRequest(model=None, messages=state["messages"], tools=tools, state=state, runtime=None)
+        delivered = mw.wrap_model_call(request, lambda req: req)
+    assert _CANARY not in "\n".join(str(m.content) for m in delivered.messages)
+    assert not {"recall_session", "session_search"} & {t.name for t in delivered.tools}
