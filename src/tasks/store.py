@@ -214,8 +214,8 @@ class TaskStore:
             if "stall_nudges" not in cols:
                 self._conn.execute("ALTER TABLE issues ADD COLUMN stall_nudges INTEGER NOT NULL DEFAULT 0")
 
-            # Relationship metadata is unknown on legacy rows; only new creates
-            # opt into version 1. Provenance is never an authorization input.
+            # Relationship metadata is unknown on legacy rows.
+            # Provenance is never an authorization input.
             if "rel_version" not in cols:
                 self._conn.execute("ALTER TABLE issues ADD COLUMN rel_version INTEGER NOT NULL DEFAULT 0")
             for column in ("request_ref", "requester", "promotion_key"):
@@ -225,6 +225,10 @@ class TaskStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS issues_promotion_key "
                 "ON issues (promotion_key) WHERE promotion_key != ''"
             )
+            # Adopt the relationship model without inventing provenance: session_id
+            # is origin, not requester evidence. Preserve links and timestamps too.
+            # The schema write transaction makes this atomic and retryable.
+            self._conn.execute("UPDATE issues SET rel_version = 1 WHERE rel_version = 0")
 
             # Persist the high-water mark independently of surviving tasks. Seed
             # existing boards from their rows without lowering it on restart.
