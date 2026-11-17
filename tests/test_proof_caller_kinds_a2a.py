@@ -1,31 +1,20 @@
 """P1 proof K1: the A2A privacy proofs hold for every KIND of caller, not one identity.
 
-The proof matrix in ``docs/design/conversations-in-work-proposal.md`` ("Proof that turns
-REVISE into CONTINUE") requires each identity-sensitive scenario to run "for federation,
-fleet-service, paired-agent and enrolled-console callers; no operator-tier shortcut." The
-Phase-0/P1b scenarios in ``tests/test_a2a_hitl_parked_routing.py`` each prove privacy with
-ONE hand-set caller, so no pass may rest on that single identity.
-
-This file RE-RUNS six of those scenarios without copying their bodies: it imports each source
-test and, for every caller kind, routes the source's inline ``ServerCallContext(state=...)``
-constructions to principals built through the REAL auth path — never a hand-set tier:
-
-* the three PEER kinds come straight through ``a2a_impl.auth.A2AAuthMiddleware`` exactly as
-  ``tests/test_a2a_auth.py::test_verified_principal_in_http_call_context`` classifies them —
-  ``federation`` (a federation bearer → ``trust_tier="federation"``), ``fleet-service`` (the
-  ADR 0089 service token) and ``paired-agent`` (an ``agent``-kind device pairing →
-  ``agent-device``). All three are NON-human (``auth.is_human_operator`` is False), which is
-  the whole point of "no operator-tier shortcut".
-* the ``enrolled-console`` kind is the human operator, reached the only way a human's authority
-  crosses a trust hop — a verified ``fleet-proxy`` delegation (ADR 0131 P1a.2,
-  ``graph.fleet.proxy.mint_member_delegation`` → ``auth.resolve_human_operator``). It carries the
-  private content as the OPERATOR in EVERY run, so the operator tier is never hand-set; its own
-  param run pairs that delegated operator with a representative (federation) peer.
-
-Original assertions are kept verbatim — the source bodies are imported and awaited unchanged.
-Where a scenario's ORIGINAL assertion fails for an operator-tier peer because the leak is real,
-that case is a strict ``xfail`` named "PROOF FAILURE" (see the PR body's ``## Proof failures``) —
-never fixed here, and never in ``src/``.
+The proof matrix in ``docs/design/conversations-in-work-proposal.md`` ("Proof that turns REVISE
+into CONTINUE") requires each identity-sensitive scenario to run "for federation, fleet-service,
+paired-agent and enrolled-console callers; no operator-tier shortcut." The Phase-0/P1b scenarios in
+``tests/test_a2a_hitl_parked_routing.py`` each prove privacy with ONE hand-set caller.
+This file RE-RUNS six of them without copying their bodies: it imports each source test and routes
+the inline ``ServerCallContext(state=...)`` constructions to principals built through the REAL auth
+path (``A2AAuthMiddleware``, classified as ``test_a2a_auth::test_verified_principal_in_http_call_
+context``), never a hand-set tier. The PEER is authenticated as each kind — ``federation`` (own
+partition); ``fleet-service``/``paired-agent`` (an ``agent``-device), operator tier and non-human;
+and ``enrolled-console``, a paired HUMAN ``device`` (``is_human_operator`` True) in the PEER role,
+NOT the operator — while the private-content operator is a human reached via a verified fleet-proxy
+delegation (ADR 0131 P1a.2); its private ops AND its sends (the source's ``CALL``) run as that human.
+Original assertions are kept verbatim. A real leak for a caller kind is a strict ``xfail`` named
+"PROOF FAILURE" (PR body ``## Proof failures``), scoped with ``raises=AssertionError`` so only the
+privacy assertion — never a setup error — satisfies it. Never fixed here, never in ``src/``.
 """
 
 from __future__ import annotations
@@ -49,45 +38,54 @@ from security import devices
 from tests import test_a2a_hitl_parked_routing as src
 from tests.test_a2a_hitl_parked_routing import _drain, _hooks  # noqa: F401 — re-export autouse fixtures
 
-# The auth classifier reaches the device registry and HMAC-verifies tokens, like the auth suite
-# itself, and the source bodies are async; mark the module accordingly.
-pytestmark = [pytest.mark.platform_sensitive, pytest.mark.asyncio]
+pytestmark = [pytest.mark.platform_sensitive, pytest.mark.asyncio]  # HMAC token verify + async bodies
 
-PEER_KINDS = ("federation", "fleet-service", "paired-agent")
+FEDERATION = "federation"
 ENROLLED_CONSOLE = "enrolled-console"
-_OPERATOR_TIER_PEERS = ("fleet-service", "paired-agent")
+ALL_KINDS = (FEDERATION, "fleet-service", "paired-agent", ENROLLED_CONSOLE)
+# All operator TIER → resolve_task_owner (keyed on trust_tier=="federation" alone) puts all three in
+# the operator's OPERATOR_OWNER ("") partition; only a federation peer gets its own.
+_OPERATOR_TIER_PEERS = ("fleet-service", "paired-agent", ENROLLED_CONSOLE)
 
-# fleet-service and agent-device are operator TIER but NOT human operators. ``resolve_task_owner``
-# keys the owner partition on ``trust_tier == "federation"`` alone, so both land in the human
-# operator's ``OPERATOR_OWNER`` ("") partition. A peer in that partition sees the operator's
-# private steer task in its context listing / owner-scoped parked read, and (#5380, ADR 0131
-# P1b.2) the guarded private resume can re-point onto its parked task — the isolation keys on
-# trust tier, not ``is_human_operator``. Named, not fixed (LEAK RULE). federation (its own
-# partition) and the enrolled console (the human operator itself) are isolated and pass.
-_LEAK = (
-    "PROOF FAILURE: an operator-tier but non-human peer (fleet-service / agent-device) shares the "
-    "human operator's OPERATOR_OWNER ('') partition, because resolve_task_owner keys the partition "
-    "on trust_tier=='federation' alone. So an owner-scoped privacy boundary cannot tell such a peer "
-    "from the operator: the peer sees the operator's private steer task and a guarded private resume "
-    "can land on the peer's own parked task. Isolation keys on trust tier, not is_human_operator."
+# Real product defects, named not fixed (LEAK RULE).
+_STEER_LEAK = (
+    "PROOF FAILURE: an operator-tier peer (fleet-service / agent-device / human 'device' console) "
+    "shares the operator's OPERATOR_OWNER ('') partition (resolve_task_owner keys on trust_tier), so "
+    "the operator's private steer — a PUBLIC operator-owned task in the peer's context — shows up in "
+    "the peer's own on_list_tasks/on_get_task. Only a federation peer is isolated; keys on tier."
+)
+_RESUME_LEAK = (
+    "PROOF FAILURE: an operator-tier peer (fleet-service / agent-device / human 'device' console) "
+    "shares the operator's OPERATOR_OWNER ('') partition, so the peer's parked task appears in the "
+    "operator's OWNER-SCOPED parked read (parked_tasks owner_scoped=True); the assertion that the "
+    "operator owns no parked task there fails at that read, before the guarded resume. Keys on tier."
+)
+_PRIVATE_PAYLOAD_LEAK = (
+    "PROOF FAILURE: an enrolled-console (paired human 'device') peer is is_human_operator AND shares "
+    "the operator's OPERATOR_OWNER ('') partition, so a server/console read (history_records / "
+    "get_record / get) returns the operator's private_payload — the private steer input and reply. "
+    "The gate keys on is_human_operator (a CREDENTIAL kind) plus the trust-tier owner, not identity, "
+    "so a DIFFERENT human-operator credential in the same partition reads it; others are gated out."
 )
 
 
-def _kinds(*, leak: bool):
-    """The four caller-kind params. ``leak`` xfails the two operator-tier peer kinds whose
-    owner-partition sharing defeats a scenario's isolation boundary."""
+def _kinds(*, leak_kinds=(), reason=None):
+    """The four caller-kind params; ``leak_kinds`` are strict ``xfail``s scoped to ``AssertionError``
+    (so only the real privacy assertion, never a setup error, satisfies them) with ``reason``."""
     params = []
-    for kind in PEER_KINDS:
-        bad = leak and kind in _OPERATOR_TIER_PEERS
-        marks = [pytest.mark.xfail(strict=True, reason=_LEAK)] if bad else []
+    for kind in ALL_KINDS:
+        if kind in leak_kinds:
+            assert reason is not None, "a leaking kind needs a PROOF FAILURE reason"
+            marks = [pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)]
+        else:
+            marks = []
         params.append(pytest.param(kind, marks=marks, id=kind))
-    params.append(pytest.param(ENROLLED_CONSOLE, id=ENROLLED_CONSOLE))
     return params
 
 
 def _authed_state(token: str) -> dict:
-    """The call-context state the REAL ``A2AAuthMiddleware`` + ``tier_context_builder`` stamp for
-    ``token`` — the verified principal kind and trust tier, never a hand-set value."""
+    """The context state the REAL ``A2AAuthMiddleware`` + ``tier_context_builder`` stamp for
+    ``token`` — the verified principal kind and trust tier, never hand-set."""
     captured: dict = {}
 
     def inspect(request):
@@ -104,9 +102,8 @@ def _authed_state(token: str) -> dict:
 
 @pytest.fixture
 def principals(delegation_env, tmp_path, monkeypatch):
-    """Factory for real-auth participants: three peer kinds straight through ``A2AAuthMiddleware``,
-    the human operator via a verified fleet-proxy delegation. ``delegation_env`` (tests/conftest.py)
-    is the deterministic hub keypair the fleet-proxy suite uses. No hand-set tier anywhere."""
+    """Factory for real-auth participants: the four peer kinds through ``A2AAuthMiddleware``, and the
+    human operator via a verified fleet-proxy delegation (``delegation_env``, tests/conftest.py)."""
     monkeypatch.setattr(devices, "_registry_path", lambda: tmp_path / "caller-devices.json")
     for name in ("A2A_AUTH_TOKEN", "A2A_FEDERATION_TOKEN"):
         monkeypatch.delenv(name, raising=False)
@@ -123,8 +120,8 @@ def principals(delegation_env, tmp_path, monkeypatch):
                    api_key="", allowed_origins_raw="")
 
     def human_operator() -> ServerCallContext:
-        """The enrolled console's human operator: the hub classifies the shared bearer as a human
-        kind, mints a one-member delegation, and the member redeems that VERIFIED delegation to a
+        """The private-content operator: the hub classifies the shared bearer as human and mints a
+        one-member delegation; the member redeems that VERIFIED delegation to a
         ``shared-operator-bearer`` principal (ADR 0131 P1a.2). Never a hand-set operator tier."""
         from graph.fleet.proxy import mint_member_delegation
 
@@ -142,16 +139,20 @@ def principals(delegation_env, tmp_path, monkeypatch):
         return ServerCallContext(state={"principal_kind": grant.principal_kind})
 
     def peer(kind: str, *, requester_principal: str | None = None) -> ServerCallContext:
-        """A verified NON-human peer of ``kind``. ``enrolled-console`` is the human operator (never
-        a denied peer), so its runs use a representative federation peer while the human operator
-        carries the private content."""
+        """A verified peer of ``kind`` through the real middleware. ``enrolled-console`` is a paired
+        HUMAN ``device`` (is_human_operator True) in the PEER role, not the operator."""
         if kind == "fleet-service":
             state = _authed_state("fleet")
         elif kind == "paired-agent":
             code, _ = devices.start_pairing(kind="agent")
             _, token = devices.claim_pairing(code, "proof-agent")
             state = _authed_state(token)
-        else:  # federation, and the enrolled-console stand-in peer
+        elif kind == ENROLLED_CONSOLE:
+            code, _ = devices.start_pairing(kind="device")
+            _, token = devices.claim_pairing(code, "proof-console")
+            state = _authed_state(token)
+            assert auth.is_human_operator(state["principal_kind"])  # the console IS a human operator
+        else:  # federation
             state = _authed_state("fed")
         if requester_principal is not None:
             state["requester_principal"] = requester_principal
@@ -161,26 +162,35 @@ def principals(delegation_env, tmp_path, monkeypatch):
     _reset()
 
 
+# The genuine class, captured before any patch, so unmarked/internal constructions pass through.
+_REAL_SCC = ServerCallContext
+
+
 def _route(monkeypatch, principals, kind: str) -> None:
-    """Route the source test's inline ``ServerCallContext(state=...)`` constructions to real-auth
-    contexts: the ``shared-operator-bearer`` operator → the delegated human; every peer → ``kind``.
-    Patches both the class's home module and the source module's bound name."""
+    """Route the source's inline ``ServerCallContext(state=...)`` constructions to real-auth contexts:
+    the ``shared-operator-bearer`` operator (and the source's module-level ``CALL``, so its SENDS run
+    through the delegation too) → the delegated human; every peer-shaped state → ``kind``; anything
+    unmarked (the SDK's own internal constructions) → the real class, unchanged."""
     operator_ctx = principals.human_operator()
 
     def fake(state=None, **kwargs):
         s = dict(state or {})
-        if s.get("principal_kind") == "shared-operator-bearer":
+        pk, tt = s.get("principal_kind"), s.get("trust_tier")
+        if pk == "shared-operator-bearer":
             return operator_ctx
-        return principals.peer(kind, requester_principal=s.get("requester_principal"))
+        if pk in ("federation", "paired-agent") or tt == "federation" or "requester_principal" in s:
+            return principals.peer(kind, requester_principal=s.get("requester_principal"))
+        return _REAL_SCC(state=state, **kwargs)
 
     monkeypatch.setattr(_scc, "ServerCallContext", fake)
     monkeypatch.setattr(src, "ServerCallContext", fake)
+    monkeypatch.setattr(src, "CALL", operator_ctx)
 
 
 # ── Re-run each scenario for every caller kind (bodies imported, assertions unchanged) ────
 
 
-@pytest.mark.parametrize("kind", _kinds(leak=False))
+@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_PRIVATE_PAYLOAD_LEAK))
 @pytest.mark.parametrize("parked", [False, True])
 async def test_output_gate_cannot_hide_private_input_history(
     tmp_path, delegation_env, monkeypatch, principals, parked, kind
@@ -189,14 +199,14 @@ async def test_output_gate_cannot_hide_private_input_history(
     await src.test_phase0_output_gate_cannot_hide_private_input_history(tmp_path, delegation_env, parked)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak=True))
+@pytest.mark.parametrize("kind", _kinds(leak_kinds=_OPERATOR_TIER_PEERS, reason=_STEER_LEAK))
 async def test_private_steer_into_a_peer_thread(tmp_path, delegation_env, monkeypatch, principals, kind):
     _route(monkeypatch, principals, kind)
     await src.test_a_private_steer_into_a_peer_thread_hides_the_input_and_keeps_the_thread_the_peers(
         tmp_path, delegation_env)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak=True))
+@pytest.mark.parametrize("kind", _kinds(leak_kinds=_OPERATOR_TIER_PEERS, reason=_RESUME_LEAK))
 async def test_private_resume_never_lands_on_a_peer_owned_parked_task(
     tmp_path, delegation_env, monkeypatch, principals, kind
 ):
@@ -204,13 +214,13 @@ async def test_private_resume_never_lands_on_a_peer_owned_parked_task(
     await src.test_a_private_resume_never_lands_on_a_peer_owned_parked_task(tmp_path, delegation_env)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak=False))
+@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_PRIVATE_PAYLOAD_LEAK))
 async def test_preexisting_handles(tmp_path, monkeypatch, principals, kind):
     _route(monkeypatch, principals, kind)
     await src.test_phase0_preexisting_handles(tmp_path)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak=False))
+@pytest.mark.parametrize("kind", _kinds())
 async def test_private_final_envelope_keeps_selected_files_across_resume(
     tmp_path, monkeypatch, principals, kind
 ):
@@ -228,7 +238,7 @@ _FAULTS = [
 ]
 
 
-@pytest.mark.parametrize("kind", _kinds(leak=False))
+@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_PRIVATE_PAYLOAD_LEAK))
 @pytest.mark.parametrize("fault,terminal,delivers,outcome_state", _FAULTS)
 async def test_private_segment_exit_never_leaks_and_closes_the_delivery(
     tmp_path, monkeypatch, principals, fault, terminal, delivers, outcome_state, kind

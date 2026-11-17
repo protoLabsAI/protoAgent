@@ -1,0 +1,1 @@
+- **Conversation privacy proof coverage.** Exercise retained console hooks, stalls, implicit stream endings and outbound tool effects for four requester kinds; record unresolved proof failures as strict expected failures without changing product code.
