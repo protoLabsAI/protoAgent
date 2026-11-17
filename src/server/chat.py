@@ -997,6 +997,7 @@ async def _start_steer_turn(
     settings: dict | None = None,
     private_ref: str | None = None,
     delegation: str | None = None,
+    hitl_resume: bool = False,
 ) -> str:
     """Run a steer as an ordinary operator turn; return its A2A task id ("" on failure).
 
@@ -1057,6 +1058,11 @@ async def _start_steer_turn(
 
         meta["private_input"] = True
         meta[DELEGATION_HEADER] = delegation
+        if hitl_resume:
+            # A parked session's private steer rides the guarded resume path: the parked-task
+            # router points this at the original checkpoint, so it continues THAT task rather
+            # than minting a fresh turn (ADR 0131 P1b.2; a2a_impl.hitl_routing).
+            meta["hitl_resume"] = True
     if meta:
         message["metadata"] = meta
     body = {
@@ -1141,14 +1147,23 @@ async def _await_started_task(session_id: str, msg_id: str) -> str:
 async def _private_steer_or_start(
     session_id: str, text: str, mid: str, *, store, context, settings: dict | None = None
 ) -> dict[str, Any]:
-    """Dormant private idle-steer intake (ADR 0131 P1b.2; r1/r3).
+    """Dormant private idle / parked-steer intake (ADR 0131 P1b.2; r1/r2/r3).
 
     Records the steer and its dedupe key into the P1b.1 partition BEFORE any turn starts, then
-    — when the session is idle — starts an ordinary operator turn carrying only the opaque
-    reference bound to a single-use delegation, never the text. Fail-closed: with no partition
-    store/context, or if recording fails, nothing is sent and no ordinary SendMessage falls
-    back. A non-idle session only records (the parked/live delivery is the guarded resume path,
-    ``a2a_impl.hitl_routing``) — private text is never queued in the in-memory steering queue."""
+    delivers it carrying ONLY the opaque reference bound to a single-use delegation, never the
+    text:
+
+    - an IDLE session starts a fresh operator turn;
+    - a live or HITL-parked session rides the guarded resume path
+      (``a2a_impl.hitl_routing``): a ``hitl_resume`` loopback the parked-task router points at
+      the ORIGINAL checkpoint, so the private prompt never reaches a peer-readable part.
+
+    Idempotent: the dedupe key is consulted first (``find_private_steer``), so a retried msg_id
+    — even after a restart, once the in-memory start guard is gone — reuses the one record
+    rather than minting a second shell, and a steer whose turn already folded in its reply
+    starts no second turn. Fail-closed: with no partition store/context, or if the record
+    cannot be read or written, nothing is sent and no ordinary SendMessage falls back (r3).
+    Private text is never queued in the in-memory steering queue."""
     from graph import steering
 
     from a2a_impl import private_intake
@@ -1160,26 +1175,38 @@ async def _private_steer_or_start(
     if started:
         return {"ok": True, "id": mid, "started_turn": started, "private": True, "pending": steering.pending(session_id)}
     try:
-        ref = await private_intake.record_private_steer(
-            store, session_id=session_id, text=text, msg_id=mid, context=context
+        ref, replied = await private_intake.find_private_steer(
+            store, session_id=session_id, msg_id=mid, context=context
         )
-    except Exception:  # noqa: BLE001 — a failed record must never fall back to sending text
+        if not ref:
+            ref = await private_intake.record_private_steer(
+                store, session_id=session_id, text=text, msg_id=mid, context=context
+            )
+    except Exception:  # noqa: BLE001 — a failed read/write must never fall back to sending text
         log.exception("[steer] could not record a private steer for %s — refusing (fail-closed)", session_id)
         return {"ok": False, "id": mid, "private": True, "pending": steering.pending(session_id)}
-    if not await _session_turn_idle(session_id):
+    if replied:
+        # A retry of a steer whose turn already folded its reply into the record: the input and
+        # the reply are the operator's to recover — start no second turn (durable idempotency).
         return {"ok": True, "id": mid, "private_ref": ref, "private": True, "pending": steering.pending(session_id)}
+    # IDLE → a fresh operator turn; non-idle (live / HITL-parked) → the guarded resume path.
+    # Either way the loopback carries only the reference, so the input is delivered, never
+    # silently dropped and never queued as peer-readable text.
+    resume = not await _session_turn_idle(session_id)
     steering.note_starting(session_id, [mid])
     # Bind the delegation to the context + the opaque reference (operation). The reference
     # already names a single private record uniquely, and the runner redeems it without
     # knowing the loopback message id — so no task-id binding (which the runner couldn't match).
     token = _mint_loopback_delegation(context=session_id, operation=ref)
-    task_id = await _start_steer_turn(session_id, "", mid, settings=settings, private_ref=ref, delegation=token)
+    task_id = await _start_steer_turn(
+        session_id, "", mid, settings=settings, private_ref=ref, delegation=token, hitl_resume=resume
+    )
     if task_id:
         steering.note_started(session_id, mid, task_id)
         return {"ok": True, "id": mid, "started_turn": task_id, "private_ref": ref, "private": True,
                 "pending": steering.pending(session_id)}
     steering.clear_starting(session_id, [mid])
-    log.warning("[steer] session %s idle but a private turn could not be started — refusing", session_id)
+    log.warning("[steer] a private turn could not be started for %s — refusing (fail-closed)", session_id)
     return {"ok": False, "id": mid, "private_ref": ref, "private": True, "pending": steering.pending(session_id)}
 
 
@@ -2089,12 +2116,13 @@ async def _chat_langgraph_stream_impl(
                 yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
-    # ADR 0131 P1b.2 (dormant): a private steer arrives as an opaque reference plus a
-    # single-use delegation in the request metadata. Resolve it to the private text ONLY here,
-    # inside this trusted runner, before any turn work — fail-closed, never running the
-    # reference as a literal message and never falling back to an ordinary send (r1/r3). Inert
-    # for every ordinary turn: no live route produces a private reference.
-    if message.startswith(_PRIVATE_INPUT_PREFIX):
+    # ADR 0131 P1b.2 (dormant): a private steer arrives MARKED (``private_input`` metadata) as
+    # an opaque reference plus a single-use delegation in the request metadata. Resolve it to
+    # the private text ONLY here, inside this trusted runner, before any turn work — fail-closed,
+    # never running the reference as a literal message and never falling back to an ordinary
+    # send (r1/r3). Gated on the marker so an ordinary turn whose text merely begins with the
+    # prefix is untouched (no live route produces a private reference).
+    if (request_metadata or {}).get("private_input") and message.startswith(_PRIVATE_INPUT_PREFIX):
         _ok, _resolved = await _resolve_private_turn_input(message, session_id, request_metadata)
         if not _ok:
             yield ("error", _PRIVATE_UNAVAILABLE)

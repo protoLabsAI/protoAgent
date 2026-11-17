@@ -396,8 +396,8 @@ async def test_private_idle_steer_records_before_start_and_sends_only_a_referenc
     captured: dict = {}
 
     async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None,
-                          private_ref=None, delegation=None):
-        captured.update(text=text, ref=private_ref, delegation=delegation, images=images)
+                          private_ref=None, delegation=None, hitl_resume=False):
+        captured.update(text=text, ref=private_ref, delegation=delegation, images=images, hitl_resume=hitl_resume)
         return "task-1"
 
     monkeypatch.setattr(chat_mod, "_start_steer_turn", _fake_start)
@@ -407,8 +407,9 @@ async def test_private_idle_steer_records_before_start_and_sends_only_a_referenc
     assert body["started_turn"] == "task-1" and body["private"] is True
     ref = body["private_ref"]
     # The loopback carries ONLY the opaque reference + a single-use delegation — never the text,
-    # never images (intake assertion).
+    # never images (intake assertion). An IDLE session starts a FRESH turn, not a resume.
     assert captured["text"] == "" and captured["ref"] == ref and captured["images"] is None
+    assert captured["hitl_resume"] is False
     assert captured["delegation"] and "SECRET-STEER" not in str(captured)
     # The steer + its dedupe key were recorded into the partition BEFORE the start; the console
     # recovers the input (and later the reply) from there.
@@ -426,6 +427,105 @@ async def test_private_idle_steer_records_before_start_and_sends_only_a_referenc
     )
     assert await private_intake.resolve_private_input(store, ref, delegation=deleg, context=op) == "SECRET-STEER"
     assert await private_intake.resolve_private_input(store, ref, delegation=None, context=op) is None
+    await engine.dispose()
+    steering._reset()
+
+
+def test_runner_private_input_prefix_mirrors_the_partition_module():
+    # chat.py's runner-gate prefix is a local mirror of the one wire constant; pin it to the
+    # canonical so the two copies can never drift (r1 review).
+    from a2a_impl import private_intake
+
+    assert chat_mod._PRIVATE_INPUT_PREFIX == private_intake.PRIVATE_INPUT_PREFIX
+
+
+@pytest.mark.asyncio
+async def test_private_parked_steer_rides_the_guarded_resume(tmp_path, monkeypatch, delegation_env):
+    # A private steer to a HITL-parked session is recorded, then DELIVERED through the guarded
+    # resume path (not silently dropped, r1): a hitl_resume loopback carrying ONLY the opaque
+    # reference bound to the single-use delegation — never the text.
+    from a2a_impl import private_intake
+
+    steering._reset()
+    engine, store = await _partition(tmp_path)
+    monkeypatch.setattr(STATE, "graph", _Graph(_parked_snapshot()), raising=False)
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
+    op = _operator_ctx()
+    captured: dict = {}
+
+    async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None,
+                          private_ref=None, delegation=None, hitl_resume=False):
+        captured.update(text=text, ref=private_ref, delegation=delegation, hitl_resume=hitl_resume)
+        return "task-resume"
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _fake_start)
+    body = await chat_mod.steer_or_start_turn(
+        "chat-parked", "SECRET-PARKED", "m1", private=True, private_store=store, private_context=op
+    )
+    assert body["started_turn"] == "task-resume" and body["private"] is True
+    # The non-idle path rides the guarded RESUME (hitl_resume=True), carrying only the reference.
+    assert captured["hitl_resume"] is True
+    assert captured["text"] == "" and captured["ref"] == body["private_ref"]
+    assert captured["delegation"] and "SECRET-PARKED" not in str(captured)
+    # The steer + its dedupe key were recorded BEFORE the resume; the console recovers them.
+    rec = await store.get_record(private_intake.ref_task_id(body["private_ref"]), op)
+    assert rec.private_payload["input"] == "SECRET-PARKED" and rec.private_payload["dedupe"] == "m1"
+    await engine.dispose()
+    steering._reset()
+
+
+@pytest.mark.asyncio
+async def test_private_steer_is_idempotent_across_a_retry(tmp_path, monkeypatch, delegation_env):
+    # The dedupe key persisted in the partition — not only the in-memory start guard — keeps a
+    # retried msg_id from minting a second shell or starting a second turn (r2 review).
+    from sqlalchemy import text as _sql
+
+    from a2a_impl import private_intake
+
+    steering._reset()
+    engine, store = await _partition(tmp_path)
+    monkeypatch.setattr(STATE, "graph", _Graph(_idle_snapshot()), raising=False)
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
+    op = _operator_ctx()
+    starts: list = []
+
+    async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None,
+                          private_ref=None, delegation=None, hitl_resume=False):
+        starts.append(private_ref)
+        return f"task-{len(starts)}"
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _fake_start)
+    first = await chat_mod.steer_or_start_turn(
+        "chat-dup", "SECRET-ONCE", "m1", private=True, private_store=store, private_context=op
+    )
+    ref = first["private_ref"]
+    # Within the process the in-memory start guard already joins a retry to the first turn.
+    again = await chat_mod.steer_or_start_turn(
+        "chat-dup", "SECRET-ONCE", "m1", private=True, private_store=store, private_context=op
+    )
+    assert again["started_turn"] == first["started_turn"] and len(starts) == 1
+
+    async def _n_shells() -> int:
+        async with store.engine.connect() as conn:
+            return (await conn.execute(_sql("SELECT COUNT(*) FROM tasks WHERE public_visible=0"))).scalar()
+
+    # A restart drops the in-memory guard; the persisted dedupe key still reuses the ONE record
+    # (same reference, no second shell).
+    steering._reset()
+    third = await chat_mod.steer_or_start_turn(
+        "chat-dup", "SECRET-ONCE", "m1", private=True, private_store=store, private_context=op
+    )
+    assert third["private_ref"] == ref and await _n_shells() == 1
+
+    # Once the turn has folded its reply into the record, a retry starts NO further turn.
+    assert await private_intake.record_private_reply(store, ref, "done, privately", op)
+    starts.clear()
+    steering._reset()
+    replayed = await chat_mod.steer_or_start_turn(
+        "chat-dup", "SECRET-ONCE", "m1", private=True, private_store=store, private_context=op
+    )
+    assert replayed["ok"] is True and "started_turn" not in replayed and replayed["private_ref"] == ref
+    assert starts == [] and await _n_shells() == 1
     await engine.dispose()
     steering._reset()
 

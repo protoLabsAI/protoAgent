@@ -2,7 +2,9 @@
 
 A private steer never travels as text. The console-authenticated sender records the steer
 — and its deduplication key — into the private partition (``stores.save_private``, a
-``public_visible=False`` shell) BEFORE any turn starts, and the loopback self-POST carries
+``public_visible=False`` shell) BEFORE any turn starts (consulting that key first via
+:func:`find_private_steer`, so a retried steer reuses the one record instead of minting a
+second shell or starting a second turn), and the loopback self-POST carries
 only an OPAQUE reference bound to a single-use delegation (``graph.fleet.delegation``). The
 trusted runner redeems that delegation and resolves the reference back to the text, and the
 console recovers both the input and the reply from the same partition record
@@ -57,13 +59,41 @@ def _private_task_id(session_id: str) -> str:
     return f"private:{session_id}:{uuid.uuid4().hex}"
 
 
+async def find_private_steer(task_store, *, session_id, msg_id, context, kind=PRIVATE_KIND_STEER) -> tuple[str, bool]:
+    """Resolve an already-recorded private steer by its dedupe key (its ``msg_id``).
+
+    Returns ``(reference, replied)`` for the stored record, or ``("", False)`` when none —
+    ``replied`` is True once a turn folded its reply into the record. Consulted BEFORE
+    recording so a retried steer with the SAME msg_id — a transport retry, or a re-send after
+    a restart once the in-memory start guard is gone — reuses the one record instead of minting
+    a second private shell (and so a steer whose turn already replied starts no second turn).
+
+    Scans this session's operator-visible timeline (``history_records``, newest-first). Raises
+    on an unreadable partition; the caller folds that into its fail-closed refusal (r3)."""
+    dedupe = str(msg_id or "")
+    if not dedupe:
+        return "", False
+    for record in await task_store.history_records(session_id, context):
+        payload = getattr(record, "private_payload", None)
+        if (
+            isinstance(payload, dict)
+            and payload.get("version") == PRIVATE_SCHEMA_VERSION
+            and payload.get("kind") == kind
+            and payload.get("dedupe") == dedupe
+        ):
+            return private_ref(record.task.id), payload.get("reply") is not None
+    return "", False
+
+
 async def record_private_steer(task_store, *, session_id, text, msg_id, context, kind=PRIVATE_KIND_STEER) -> str:
     """Persist a private steer and its dedupe key into the partition, transactionally, and
     return the opaque reference bound to it.
 
     The record is a ``public_visible=False`` shell — an EMPTY SDK ``Task`` plus the private
-    JSON — so no peer-readable projection is ever exposed (``stores.save_private``). Raises on
-    any failure; the caller must then NOT send an ordinary SendMessage (r3 fail-closed)."""
+    JSON — so no peer-readable projection is ever exposed (``stores.save_private``). The dedupe
+    key is consulted by :func:`find_private_steer` BEFORE this is called, so a retried msg_id
+    reuses the one record rather than minting a second shell. Raises on any failure; the caller
+    must then NOT send an ordinary SendMessage (r3 fail-closed)."""
     task_id = _private_task_id(session_id)
     shell = a2a_pb2.Task(id=task_id, context_id=session_id)
     payload = {

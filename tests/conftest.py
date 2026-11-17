@@ -157,6 +157,26 @@ def _reset_session_state():
 
 
 @pytest.fixture(autouse=True)
+def _reset_resolver_metadata():
+    """Reset the per-session resolver-input cache (``graph.thread_ids._RESOLVER_METADATA``,
+    ADR 0131 P1b.2) around every test.
+
+    It is a process global: metadata a turn persists so a later idle start / parked resume
+    resolves the ORIGINAL checkpointer thread (#571) would otherwise leak into the next test's
+    ``_session_turn_idle`` thread resolution, nondeterministically under xdist. Lazy via
+    ``sys.modules``: a test that never imports the module pays nothing and starts empty."""
+
+    def _reset():
+        mod = sys.modules.get("graph.thread_ids")
+        if mod is not None:
+            mod._RESOLVER_METADATA.clear()
+
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_injection_log(tmp_path, monkeypatch):
     """Point the per-turn injection log (ADR 0069 D6) at a per-test temp DB.
 
