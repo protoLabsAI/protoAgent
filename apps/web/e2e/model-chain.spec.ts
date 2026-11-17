@@ -57,6 +57,10 @@ test("model chain ids wrap at 390px and phone controls retain touch targets", as
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
   await page.keyboard.press("Escape");
   await expect(fallback).toBeFocused();
+  const edit = main.getByRole("button", { name: "Edit Main chain", exact: true });
+  expect((await edit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await edit.click();
+  await expect(main.getByRole("button", { name: "Change", exact: true })).toBeFocused();
   await main.getByRole("button", { name: "Change", exact: true }).click();
   expect((await main.getByRole("combobox").boundingBox())!.height).toBeGreaterThanOrEqual(44);
 });

@@ -45,7 +45,7 @@ function useIsPhone(): boolean {
   return phone;
 }
 
-type PendingFocus = { row: number; dir: "up" | "down" | "input" } | null;
+type PendingFocus = { row: number; dir: "up" | "down" | "input" } | "edit" | null;
 
 export function ModelChainInput({
   field,
@@ -83,6 +83,7 @@ export function ModelChainInput({
   // When a currently-empty role is switched to its own chain (the inherited chain was itself
   // empty, so there is nothing to pre-fill) we still open the editor with one blank row to type.
   const [editing, setEditing] = useState(false);
+  const [chainOpen, setChainOpen] = useState(!persisted.some((model) => model.trim()));
   // Phone only (§2 item 11): which row's full-width Combobox is open, and the value it rolls back
   // to on Cancel.
   const [phoneEdit, setPhoneEdit] = useState<{ row: number; original: string } | null>(null);
@@ -99,6 +100,8 @@ export function ModelChainInput({
   useEffect(() => {
     if (persistedKey !== JSON.stringify(lastEmitted.current)) {
       setRows(persisted);
+      setChainOpen(false);
+      setPhoneEdit(null);
       lastEmitted.current = persisted;
       if (persisted.length === 0) setEditing(false); // reverted to inheriting
     }
@@ -109,10 +112,14 @@ export function ModelChainInput({
     const target = pendingFocus.current;
     if (!target) return;
     pendingFocus.current = null;
+    if (target === "edit") {
+      rootRef.current?.querySelector<HTMLButtonElement>(".model-chain__edit")?.focus();
+      return;
+    }
     const row = rootRef.current?.querySelector<HTMLElement>(`[data-chain-row="${target.row}"]`);
     if (!row) return;
     if (target.dir === "input") {
-      row.querySelector<HTMLElement>("input")?.focus();
+      row.querySelector<HTMLElement>("input, .model-chain__change")?.focus();
       return;
     }
     // Keep focus on the moved row's button. If the move put the row on a boundary its same-
@@ -130,7 +137,7 @@ export function ModelChainInput({
         return;
       }
     }
-  }, [rows]);
+  }, [rows, chainOpen]);
 
   const emit = (next: string[]) => {
     const clean = next.filter((model) => model.trim() !== "");
@@ -172,6 +179,7 @@ export function ModelChainInput({
   };
 
   const addFallback = () => {
+    setChainOpen(true);
     const next = [...rows, ""];
     setRows(next);
     setEditing(true);
@@ -181,6 +189,7 @@ export function ModelChainInput({
 
   // Non-main roles only: build / clear an own chain (§2 item 4).
   const setOwnChain = () => {
+    setChainOpen(true);
     const seed = parentChain.length ? parentChain : [""];
     setRows(seed);
     setEditing(true);
@@ -189,6 +198,8 @@ export function ModelChainInput({
     pendingFocus.current = { row: 0, dir: "input" };
   };
   const useParentChain = () => {
+    setChainOpen(false);
+    setPhoneEdit(null);
     setRows([]);
     setEditing(false);
     emit([]);
@@ -232,168 +243,214 @@ export function ModelChainInput({
       aria-label={groupLabel}
       className={`model-chain${phone ? " model-chain--phone" : ""}`}
     >
-      {rows.map((item, i) => {
-        const removeDisabled = isMain && (rows.length <= 1 || (!!item.trim() && nonblankCount <= 1));
-        const name = item.trim() || "New model";
-        const positionLabel = i === 0 ? "Primary" : "then";
-        const unknown = item.trim() !== "" && options.length > 0 && !options.includes(item);
-        const editingPhoneRow = phone && phoneEdit?.row === i;
-        const { prefix, name: modelName } = splitModelId(item);
-        const combobox = (
-          <Combobox
-            className="setting-input model-chain__combobox"
-            options={options}
-            value={item}
-            aria-label={`${field.label} model ${i + 1} of ${total}`}
-            placeholder="type or pick a model"
-            onValueChange={(v) => setRowValue(i, v)}
-          />
-        );
-        const controls = (
-          <div className="model-chain__controls">
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              data-dir="up"
-              aria-label={`Move ${name} up`}
-              disabled={i === 0}
-              onClick={() => move(i, -1, "up")}
-            >
-              <ChevronUp size={14} aria-hidden />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              data-dir="down"
-              aria-label={`Move ${name} down`}
-              disabled={i === total - 1}
-              onClick={() => move(i, 1, "down")}
-            >
-              <ChevronDown size={14} aria-hidden />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              className="model-chain__remove"
-              aria-label={`Remove ${name}`}
-              disabled={removeDisabled}
-              onClick={() => removeRow(i)}
-            >
-              <X size={14} aria-hidden />
-            </Button>
-          </div>
-        );
-        return (
-          <div className="model-chain__row" data-chain-row={i} key={i}>
-            <span className="model-chain__position">{positionLabel}</span>
-            {phone ? (
-              // Phone card (§2 item 11): the id wraps across its own two lines, and the controls
-              // live on their own line below it so they can never squeeze it. Change swaps the id
-              // for a full-width Combobox with Cancel / Done.
-              editingPhoneRow ? (
-                <div className="model-chain__phone-edit">
-                  {combobox}
-                  <div className="model-chain__phone-edit-actions">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      onClick={() => {
-                        if (phoneEdit) setRowValue(i, phoneEdit.original);
-                        setPhoneEdit(null);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button variant="primary" size="sm" type="button" onClick={() => setPhoneEdit(null)}>
-                      Done
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <>
+      {!chainOpen ? (
+        <>
+          <ol className="model-chain__summary">
+            {rows.filter((model) => model.trim()).map((item, i) => {
+              const { prefix, name } = splitModelId(item);
+              const unknown = options.length > 0 && !options.includes(item);
+              return (
+                <li className="model-chain__summary-item" key={i}>
+                  {i > 0 ? <span className="model-chain__summary-sep" aria-hidden>→</span> : null}
                   <div className="model-chain__id-lines">
                     {prefix ? <span className="model-chain__id model-chain__id-prefix">{prefix}:</span> : null}
-                    <span className="model-chain__id model-chain__id-name">{modelName || "—"}</span>
+                    <span className="model-chain__id model-chain__id-name">{name}</span>
                   </div>
-                  <div className="model-chain__controls">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      onClick={() => setPhoneEdit({ row: i, original: item })}
-                    >
-                      Change
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      data-dir="up"
-                      aria-label={`Move ${name} up`}
-                      disabled={i === 0}
-                      onClick={() => move(i, -1, "up")}
-                    >
-                      <ChevronUp size={16} aria-hidden />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      data-dir="down"
-                      aria-label={`Move ${name} down`}
-                      disabled={i === total - 1}
-                      onClick={() => move(i, 1, "down")}
-                    >
-                      <ChevronDown size={16} aria-hidden />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      className="model-chain__remove"
-                      aria-label={`Remove ${name}`}
-                      disabled={removeDisabled}
-                      onClick={() => removeRow(i)}
-                    >
-                      <X size={16} aria-hidden />
-                    </Button>
-                  </div>
-                </>
-              )
-            ) : (
-              <>
-                {combobox}
-                {controls}
-              </>
-            )}
-            {unknown ? (
-              <p className="model-chain__warning setting-desc" role="note">
-                Not a model on any of your connections. It will be skipped until it is.
-              </p>
+                  {unknown ? (
+                    <p className="model-chain__warning setting-desc" role="note">
+                      Not a model on any of your connections. It will be skipped until it is.
+                    </p>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+          <Button variant="ghost" size="sm" type="button" className="model-chain__edit"
+            aria-label={`Edit ${field.label} chain`}
+            onClick={() => {
+              setChainOpen(true);
+              pendingFocus.current = { row: 0, dir: "input" };
+            }}
+          >
+            Edit
+          </Button>
+        </>
+      ) : (
+        <>
+          {rows.map((item, i) => {
+            const removeDisabled = isMain && (rows.length <= 1 || (!!item.trim() && nonblankCount <= 1));
+            const name = item.trim() || "New model";
+            const positionLabel = i === 0 ? "Primary" : "then";
+            const unknown = item.trim() !== "" && options.length > 0 && !options.includes(item);
+            const editingPhoneRow = phone && phoneEdit?.row === i;
+            const { prefix, name: modelName } = splitModelId(item);
+            const combobox = (
+              <Combobox
+                className="setting-input model-chain__combobox"
+                options={options}
+                value={item}
+                aria-label={`${field.label} model ${i + 1} of ${total}`}
+                placeholder="type or pick a model"
+                onValueChange={(v) => setRowValue(i, v)}
+              />
+            );
+            const controls = (
+              <div className="model-chain__controls">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  data-dir="up"
+                  aria-label={`Move ${name} up`}
+                  disabled={i === 0}
+                  onClick={() => move(i, -1, "up")}
+                >
+                  <ChevronUp size={14} aria-hidden />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  data-dir="down"
+                  aria-label={`Move ${name} down`}
+                  disabled={i === total - 1}
+                  onClick={() => move(i, 1, "down")}
+                >
+                  <ChevronDown size={14} aria-hidden />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  className="model-chain__remove"
+                  aria-label={`Remove ${name}`}
+                  disabled={removeDisabled}
+                  onClick={() => removeRow(i)}
+                >
+                  <X size={14} aria-hidden />
+                </Button>
+              </div>
+            );
+            return (
+              <div className="model-chain__row" data-chain-row={i} key={i}>
+                <span className="model-chain__position">{positionLabel}</span>
+                {phone ? (
+                  // Phone card (§2 item 11): the id wraps across its own two lines, and the controls
+                  // live on their own line below it so they can never squeeze it. Change swaps the id
+                  // for a full-width Combobox with Cancel / Done.
+                  editingPhoneRow ? (
+                    <div className="model-chain__phone-edit">
+                      {combobox}
+                      <div className="model-chain__phone-edit-actions">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            if (phoneEdit) setRowValue(i, phoneEdit.original);
+                            setPhoneEdit(null);
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button variant="primary" size="sm" type="button" onClick={() => setPhoneEdit(null)}>
+                          Done
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="model-chain__id-lines">
+                        {prefix ? <span className="model-chain__id model-chain__id-prefix">{prefix}:</span> : null}
+                        <span className="model-chain__id model-chain__id-name">{modelName || "—"}</span>
+                      </div>
+                      <div className="model-chain__controls">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          className="model-chain__change"
+                          onClick={() => setPhoneEdit({ row: i, original: item })}
+                        >
+                          Change
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          data-dir="up"
+                          aria-label={`Move ${name} up`}
+                          disabled={i === 0}
+                          onClick={() => move(i, -1, "up")}
+                        >
+                          <ChevronUp size={16} aria-hidden />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          data-dir="down"
+                          aria-label={`Move ${name} down`}
+                          disabled={i === total - 1}
+                          onClick={() => move(i, 1, "down")}
+                        >
+                          <ChevronDown size={16} aria-hidden />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          className="model-chain__remove"
+                          aria-label={`Remove ${name}`}
+                          disabled={removeDisabled}
+                          onClick={() => removeRow(i)}
+                        >
+                          <X size={16} aria-hidden />
+                        </Button>
+                      </div>
+                    </>
+                  )
+                ) : (
+                  <>
+                    {combobox}
+                    {controls}
+                  </>
+                )}
+                {unknown ? (
+                  <p className="model-chain__warning setting-desc" role="note">
+                    Not a model on any of your connections. It will be skipped until it is.
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+          <div className="model-chain__actions">
+            <Button variant="ghost" size="sm" type="button" className="model-chain__done"
+              onClick={() => {
+                setChainOpen(false);
+                setPhoneEdit(null);
+                pendingFocus.current = "edit";
+              }}
+            >
+              Done
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              className="model-chain__add"
+              onClick={addFallback}
+            >
+              <Plus size={14} aria-hidden /> Add fallback
+            </Button>
+            {!isMain ? (
+              <Button variant="ghost" size="sm" type="button" className="model-chain__use-parent" onClick={useParentChain}>
+                Use {parent}&rsquo;s chain
+              </Button>
             ) : null}
           </div>
-        );
-      })}
-      <div className="model-chain__actions">
-        <Button
-          variant="ghost"
-          size="sm"
-          type="button"
-          className="model-chain__add"
-          onClick={addFallback}
-        >
-          <Plus size={14} aria-hidden /> Add fallback
-        </Button>
-        {!isMain ? (
-          <Button variant="ghost" size="sm" type="button" className="model-chain__use-parent" onClick={useParentChain}>
-            Use {parent}&rsquo;s chain
-          </Button>
-        ) : null}
-      </div>
+        </>
+      )}
       {/* Reorder announcement (§3). Visually hidden — the console ships no sr-only utility. */}
       <div className="model-chain__live" role="status" aria-live="polite">
         {live}
