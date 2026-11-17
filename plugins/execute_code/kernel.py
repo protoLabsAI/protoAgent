@@ -43,9 +43,16 @@ from .engine import (
     _MAX_PARALLEL_CALLS,
     _NO_RUNTIME_MESSAGE,
     _invoke_bridged,
+    _record_bridged_call,
     _resolve_child_interpreter,
     _truncate_or_spill,
 )
+
+#: Exact refusal text for a bridged call that arrives while no execute_code call is
+#: running (ADR 0134 D3). A thread a previous script left behind has no active policy
+#: context to bind to, so the bridge refuses it outright rather than binding it to a
+#: stale call's context — the bridge is never softer than the direct tool path.
+_NO_ACTIVE_CALL_MESSAGE = "Blocked by policy: no execute_code call is active"
 
 log = logging.getLogger(__name__)
 
@@ -268,8 +275,11 @@ class Kernel:
         self._pending: set[asyncio.Task] = set()
         self._exec_future: asyncio.Future | None = None
         self._exec_cid = 0
-        # The context of the call running now (ADR 0134 D3) — bridged calls bind to it.
-        self._ctx: dict = {"tool_map": {}, "session_id": "", "gate": None, "fence": None}
+        # The ACTIVE-CALL slot (ADR 0134 D3): the policy context of the execute_code
+        # call running right now, or None between calls. ``run`` sets it on entry and
+        # clears it on exit (success, timeout, error or cancel); every bridged call
+        # binds to it, and a call that arrives while it is None is refused.
+        self._active: dict | None = None
         self._alive = False
         self._closed = False
         #: Monotonic stamp (the pool's clock) of this kernel's last use — set when the
@@ -385,10 +395,22 @@ class Kernel:
     async def _dispatch_tool(self, msg: dict) -> None:
         async with self._semaphore:
             rid, name, args = msg.get("id"), msg.get("tool"), msg.get("args") or {}
-            ctx = self._ctx
-            ok, payload = await _invoke_bridged(
-                name, args, ctx["tool_map"], session_id=ctx["session_id"], gate=ctx["gate"], fence=ctx["fence"]
-            )
+            # Bind to the call running right now (ADR 0134 D3). Read the slot here,
+            # under the semaphore, so a call that finished while this dispatch queued
+            # is treated as inactive — the bridge checks the policy of the live call,
+            # never a stale one.
+            ctx = self._active
+            if ctx is None:
+                # No call is active: this bridged call came from a thread a previous
+                # script left behind. Refuse it outright and record the refusal as a
+                # failed ptc: audit row under this kernel's session — the tool never
+                # runs, exactly as a denied direct call would be recorded.
+                ok, payload = False, _NO_ACTIVE_CALL_MESSAGE
+                _record_bridged_call(self.session_id, name, args, payload, 0, False)
+            else:
+                ok, payload = await _invoke_bridged(
+                    name, args, ctx["tool_map"], session_id=ctx["session_id"], gate=ctx["gate"], fence=ctx["fence"]
+                )
             reply = {"type": "tool_reply", "id": rid, "ok": ok, ("result" if ok else "error"): payload}
             with contextlib.suppress(Exception):
                 await self._send(reply)
@@ -412,8 +434,11 @@ class Kernel:
         async with self._call_lock:
             if not self.alive:
                 raise _KernelDied("kernel is not running")
-            # Bind this call's policy context (ADR 0134 D3) before any bridged call can arrive.
-            self._ctx = {"tool_map": tool_map, "session_id": session_id, "gate": gate, "fence": fence}
+            # Open the active-call slot (ADR 0134 D3) before any bridged call can arrive,
+            # and close it in the finally — so on a clean return, a timeout, a script
+            # exception or a cancel, a thread this script leaves behind finds no active
+            # call and is refused. Bridged calls from THIS call bind to THIS context.
+            self._active = {"tool_map": tool_map, "session_id": session_id, "gate": gate, "fence": fence}
             loop = asyncio.get_running_loop()
             self._exec_cid += 1
             cid = self._exec_cid
@@ -425,6 +450,7 @@ class Kernel:
             except asyncio.TimeoutError as exc:
                 raise _KernelTimeout() from exc
             finally:
+                self._active = None
                 self._exec_future = None
             return _format_kernel_output(msg)
 
