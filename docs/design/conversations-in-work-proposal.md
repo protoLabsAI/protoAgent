@@ -652,6 +652,32 @@ execute the next section; production integration, migration and UI enablement
 (P1h) wait for the proof gate's evidence and Josh's CONTINUE decision. A green run
 alone does not authorize further phases.
 
+**Conditional CONTINUE for P1h (Josh, 2026-11-17).** On 2026-11-17 Josh said,
+verbatim: "CONTINUE if its valuable and not breaking our entire system". This is a
+**conditional CONTINUE for P1h only** — not a go for any other phase, surface or
+default. P1h cards are built and judged against the conditions below; no wider go
+is implied by it.
+
+The conditions on that CONTINUE, as Josh set them:
+
+- **Gate before any P1h code card:** the K1 leak fix (bd-oy2pm) and K2 (bd-1funj)
+  merged; the rerun proof-gate report sent per scenario with no open PROOF
+  FAILURE; retention and × delete stay deferred; a new leak stops P1h and gets its
+  own fix card.
+- **Not breaking the system:** the dormant partition (residual-risk review F12) is
+  wired behind ONE config flag, default off; flag off is byte-identical to today
+  (ordinary chats, A2A, fleet delegation, board coders, Work, inbox), proven by a
+  test on each wiring card; migrations are additive, idempotent and reversible
+  with the flag off; each card passes the full gate on main.
+- **Before the default can be on anywhere:** a dev-instance run (scripts/dev.sh,
+  :7871) with the flag on, covering a private steer into a peer thread, a parked
+  resume, a restart and ordinary chats, with results posted. Flipping the default
+  on is a separate go from Josh.
+- **Valuable:** each card moves "a private steer stays private end to end on the
+  real path", or the migration and diagnostics it needs. Nothing else.
+- **Still not authorized:** release UI, a Work composer, Phases 3–6, Started by
+  others.
+
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
 | P1a identity proof | Propagate a verified principal kind from `_classify_token`/the device record, separate from the operator tier: the shared bearer and `device`-kind devices read as the human operator; the fleet service token, `agent`-kind devices and federation read as peers. Scoped loopback; reuse existing device pairing/rotation/revoke, **no new console credential**, no private UI. Prove fleet-token and `agent`-device rejection and `device`-kind acceptance before private reads. | authorized: proof slice (Josh, 2026-11-16) |
@@ -661,7 +687,7 @@ alone does not authorize further phases.
 | P1e other-exit proof | Seal structured/files at finalization; private tool/effect restrictions, error/cancel cleanup and scoped downloads. Depends on P1d. | authorized: proof slice (Josh, 2026-11-16) |
 | P1f derived-memory proof | Public projection for gist/digest, then harvest/archives/facts in a separate small slice; test later ordinary turns and stale records. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-16) |
 | P1g observability proof | Trace/prompt suppression and public-only fleet export, including background/terminal paths and later turns. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-16) |
-| P1h integration, only after proof gate | Reviewed schema migration/reconciliation, compatibility refusal, rollback gating and operator diagnostics. Release UI requires its own approved spec/preview before boarding; no Work composer yet. Waits for the proof gate below and Josh's CONTINUE. | proposed, needs Josh's go |
+| P1h integration, only after proof gate | Reviewed schema migration/reconciliation, compatibility refusal, rollback gating and operator diagnostics. Release UI requires its own approved spec/preview before boarding; no Work composer yet. Waits for the proof gate below and Josh's CONTINUE. | authorized, conditional (Josh, 2026-11-17); flag default off |
 
 ## Proof that turns REVISE into CONTINUE
 
