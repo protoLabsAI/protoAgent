@@ -639,9 +639,10 @@ export const chatApi = {
       return;
     }
 
+    const streamHeaders = applyAuth(new Headers({ "Content-Type": "application/json", "A2A-Version": "1.0" }));
     const response = await fetch(a2aTarget, {
       method: "POST",
-      headers: applyAuth(new Headers({ "Content-Type": "application/json", "A2A-Version": "1.0" })),
+      headers: streamHeaders,
       signal: handlers.signal,
       // A2A 1.0 streaming RPC `SendStreamingMessage`; body built by buildBody()
       // (shared with the desktop path) — ROLE_USER, member-discriminated parts,
@@ -653,7 +654,7 @@ export const chatApi = {
       // token-gated chat turn (#873) — but a member-scoped 401 is the focused remote's bad
       // token, not the hub's, so don't hijack the hub AuthGate (the boot gate owns that).
       // A DM (opts.agentSlug) is member-scoped by construction.
-      if (response.status === 401 && !opts.agentSlug && !isMemberScoped("/a2a")) notifyAuthRequired();
+      if (response.status === 401 && !opts.agentSlug && !isMemberScoped("/a2a")) notifyAuthRequired(streamHeaders.get("Authorization"));
       throw new Error(`${response.status} ${response.statusText}`);
     }
 

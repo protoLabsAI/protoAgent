@@ -93,9 +93,10 @@ export const decisionsApi = {
     body: { option_id: string; surface?: AnswerSurface },
   ): Promise<AnswerResult> {
     const path = `/api/decisions/${encodeURIComponent(id)}/answer`;
+    const headers = applyAuth(new Headers({ "Content-Type": "application/json" }));
     const response = await fetch(apiUrl(path), {
       method: "POST",
-      headers: applyAuth(new Headers({ "Content-Type": "application/json" })),
+      headers,
       body: JSON.stringify({ option_id: body.option_id, surface: body.surface ?? "console" }),
     });
     if (response.status === 409) {
@@ -108,7 +109,7 @@ export const decisionsApi = {
     if (!response.ok) {
       const raw = await response.text().catch(() => "");
       const { detail, code } = parseErrorBody(raw, `${response.status} ${response.statusText}`);
-      if (response.status === 401 && !isMemberScoped(path)) notifyAuthRequired();
+      if (response.status === 401 && !isMemberScoped(path)) notifyAuthRequired(headers.get("Authorization"));
       throw new ApiError(response.status, detail || "request failed", code);
     }
     const data = (await response.json()) as { decision: DecisionRow; resumed: boolean; delivering?: boolean };

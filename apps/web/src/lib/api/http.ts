@@ -203,7 +203,7 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
     // token prompt (#873) instead of leaving per-panel 401 cards as the only signal.
     // But a MEMBER-scoped 401 is the focused remote's bad token, not the hub's — don't
     // hijack the hub AuthGate; the boot gate / fleet panel own that recovery.
-    if (response.status === 401 && !isMemberScoped(path, host)) notifyAuthRequired();
+    if (response.status === 401 && !isMemberScoped(path, host)) notifyAuthRequired(headers.get("Authorization"));
     // A device-scope refusal always reads as a sentence, never a bare code (ADR 0121 D4).
     const message = code === DEVICE_SCOPE_CODE && (!detail || detail === code) ? DEVICE_SCOPE_MESSAGE : detail;
     throw new ApiError(response.status, message || "request failed", code);
@@ -228,7 +228,7 @@ export async function requestForm<T>(path: string, form: FormData, opts: { host?
     // real HTTP detail and skipped the 401 AuthGate). Mirror `request`.
     const raw = await response.text().catch(() => "");
     const { detail, code } = parseErrorBody(raw, `${response.status} ${response.statusText}`);
-    if (response.status === 401 && !isMemberScoped(path, opts.host)) notifyAuthRequired();
+    if (response.status === 401 && !isMemberScoped(path, opts.host)) notifyAuthRequired(headers.get("Authorization"));
     throw new ApiError(response.status, detail || "request failed", code);
   }
   return (await response.json()) as T;
