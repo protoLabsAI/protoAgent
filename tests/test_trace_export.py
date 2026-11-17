@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -207,3 +208,131 @@ def test_export_never_raises_on_bad_checkpointer(tmp_path, monkeypatch):
     # Must not propagate — export is best-effort.
     trace_export.export_turn(_Outcome(), checkpointer=_Boom(), graph_config=_Cfg())
     assert not list(tmp_path.glob("*.jsonl"))
+
+
+def _public_source(messages=_MESSAGES):
+    from graph.public_memory import FleetExport, PublicSource
+
+    return PublicSource("retained-version-2", tuple(messages), fleet=FleetExport(
+        task_id="task-1", orient="Public plan",
+        tools=[{"type": "function", "function": {"name": "public_tool", "parameters": {}}}],
+        metadata={**vars(_Outcome()), "teacher": "public-agent", "trace_id": "public-trace", "thinking": "on"},
+    ))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_id", ["sess-1", "background:proof-1"])
+async def test_later_public_terminal_export_uses_only_public_bytes(tmp_path, monkeypatch, context_id):
+    """Real private task storage survives restart and a later compacted public turn."""
+    from a2a.server.context import ServerCallContext
+    from a2a.types import a2a_pb2
+    from langchain_core.messages import messages_from_dict, messages_to_dict
+
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, make_sqlite_engine
+    from graph import public_memory
+    from graph.compaction_engine import summarize_span, summary_message
+    from runtime.state import STATE
+    from server.a2a import _record_a2a_telemetry
+
+    _enable(tmp_path, monkeypatch)
+    operator = ServerCallContext(state={"principal_kind": "device"})
+    db = str(tmp_path / "tasks.db")
+    engine = make_sqlite_engine(db)
+    store = ReasoningCoalescingTaskStore(engine)
+    task = a2a_pb2.Task(id="task-1", context_id=context_id, history=[
+        a2a_pb2.Message(role=a2a_pb2.ROLE_USER, parts=[a2a_pb2.Part(text="Public request")]),
+    ])
+    private = [HumanMessage(content="PRIVATE_STEERING_CANARY"), AIMessage(
+        content="PRIVATE_REPLY_CANARY", tool_calls=[
+            {"name": "private_tool", "args": {"text": "PRIVATE_ARGUMENT_CANARY"}, "id": "private-call"},
+        ]), ToolMessage(content="PRIVATE_RESULT_CANARY", tool_call_id="private-call")]
+    # Actually run the engine: its output retains the operator's private canary.
+    private_summary = summarize_span(private, lambda prompt: "PRIVATE_COMPACTION_CANARY")
+    assert "PRIVATE_STEERING_CANARY" in private_summary
+    await store.save_private(task, {"messages": messages_to_dict(private), "summary": private_summary}, operator)
+    await engine.dispose()
+
+    engine = make_sqlite_engine(db)
+    store = ReasoningCoalescingTaskStore(engine)
+    try:
+        record = await store.get_record(task.id, operator)
+        retained_private = messages_from_dict(record.private_payload["messages"])
+        assert retained_private[0].content == "PRIVATE_STEERING_CANARY"
+        public_messages = [HumanMessage(content=m.parts[0].text) for m in record.task.history]
+        prompts = []
+
+        def summarize(prompt):
+            prompts.append(prompt)
+            return "Public request summary"
+
+        compacted = summary_message(summarize_span(public_messages, summarize))
+        assert prompts and all("PRIVATE_" not in prompt for prompt in prompts)
+        task.history.append(a2a_pb2.Message(role=a2a_pb2.ROLE_AGENT, parts=[a2a_pb2.Part(text="Public reply")]))
+        await store.save(task, operator)
+        assert (await store.get_record(task.id, operator)).private_payload["summary"] == private_summary
+        # Test-only trusted adapter: public SDK history and independently compacted
+        # public summary become the shared reader's atomic public source.
+        source = _public_source([compacted, *_MESSAGES])
+        monkeypatch.setattr(public_memory, "_source_reader", lambda sid: source)
+        monkeypatch.setenv("AGENT_NAME", "PRIVATE_TEACHER_CANARY")
+        monkeypatch.setattr(trace_export, "_tool_schema_cache", [{"description": "PRIVATE_SCHEMA_CANARY"}])
+        monkeypatch.setattr("observability.tracing.current_trace_id", lambda: "PRIVATE_TRACE_CANARY")
+        monkeypatch.setattr("graph.goals.store.GoalStore", lambda: SimpleNamespace(read_plan=lambda sid: "PRIVATE_PLAN_CANARY"))
+        monkeypatch.setattr("server.turn_telemetry.record_turn", lambda **kwargs: None)
+        monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(thinking="PRIVATE_CONFIG_CANARY"))
+        monkeypatch.setattr(STATE, "graph", SimpleNamespace(bound_tools=[]))
+        outcome = SimpleNamespace(**{**vars(_Outcome(context_id=context_id)), "usage": {}, "incognito": True,
+                                    "models": ["PRIVATE_MODEL_CANARY"], "trigger": "PRIVATE_TRIGGER_CANARY"})
+        checkpoint = {"channel_values": {"incognito": True, "messages": retained_private}}
+        monkeypatch.setattr(STATE, "checkpointer", SimpleNamespace(get_tuple=lambda config: SimpleNamespace(checkpoint=checkpoint)))
+        _record_a2a_telemetry(outcome)
+        assert not list(tmp_path.glob("*.jsonl"))
+        checkpoint["channel_values"].update(incognito=False, messages=[summary_message(private_summary), *_MESSAGES])
+        outcome.incognito = False
+        _record_a2a_telemetry(outcome)
+    finally:
+        await engine.dispose()
+
+    (row,) = _read_rows(tmp_path)
+    exported = next(tmp_path.glob("*.jsonl")).read_bytes()
+    assert b"PRIVATE_" not in exported
+    assert b"Public request summary" in exported
+    assert row["meta"]["session_id"] == context_id
+    assert row["meta"]["orient"] == "Public plan"
+    assert row["meta"]["model"] == "claude-opus-4-8"
+    assert row["meta"]["cost_usd"] == 0.02
+    assert row["tools"][0]["function"]["name"] == "public_tool"
+    assert row["teacher"] == "public-agent"
+    assert row["id"] == "fleet__public-trace"
+
+
+@pytest.mark.parametrize("fault", ["missing", "mixed", "version", "auxiliary", "metadata", "task", "stale"])
+def test_partitioned_export_refuses_unverified_source(tmp_path, monkeypatch, fault, caplog):
+    from dataclasses import replace
+
+    from graph import public_memory
+
+    _enable(tmp_path, monkeypatch)
+    source = _public_source()
+    if fault == "mixed":
+        source = replace(source, audience="mixed")
+    elif fault == "version":
+        source = replace(source, version="")
+    elif fault == "auxiliary":
+        source = replace(source, fleet=None)
+    elif fault == "metadata":
+        del source.fleet.metadata["models"]
+    elif fault == "task":
+        source = replace(source, fleet=replace(source.fleet, task_id="previous-task"))
+
+    def read(sid):
+        if fault in {"missing", "stale"}:
+            # The shared contract makes unavailable/stale authoritative data an
+            # error, never None (which means known unpartitioned).
+            raise ValueError("PRIVATE_SOURCE_FAILURE_CANARY")
+        return source
+
+    monkeypatch.setattr(public_memory, "_source_reader", read)
+    trace_export.export_turn(_Outcome(), checkpointer=_Checkpointer(_MESSAGES), graph_config=_Cfg())
+    assert not list(tmp_path.glob("*.jsonl"))
+    assert "PRIVATE_" not in caplog.text

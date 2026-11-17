@@ -18,6 +18,7 @@ from pathlib import Path
 from graph.middleware.memory import digest_entry, is_safe_session_id, memory_path
 from graph.middleware.redaction import redact
 from graph.output_format import strip_reasoning
+from graph.public_memory import public_card
 
 
 _INDEX_FILENAME = ".session-search.sqlite3"
@@ -180,12 +181,14 @@ def _sync_index(conn: sqlite3.Connection, memory_dir: str) -> None:
                 continue
             seen.add(filename)
             old = cached.get(filename)
-            if old is not None and old["mtime_ns"] == stat.st_mtime_ns and old["size"] == stat.st_size:
-                continue
 
             try:
                 with open(fpath, encoding="utf-8") as fh:
                     summary = json.load(fh)
+                if not public_card(summary):
+                    raise ValueError("unverified session summary")
+                if old is not None and old["mtime_ns"] == stat.st_mtime_ns and old["size"] == stat.st_size:
+                    continue
                 if not isinstance(summary, dict):
                     raise ValueError("session summary is not an object")
                 session_id = str(summary.get("session_id") or "")
