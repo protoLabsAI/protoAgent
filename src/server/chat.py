@@ -871,6 +871,63 @@ def _vision_human_message(
     return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message, additional_kwargs=sent_at_kwargs())
 
 
+# ── loopback human-operator delegation (ADR 0131 P1a.2; dormant) ─────────────────
+# The loopback self-POST runs as an ordinary operator turn (_start_steer_turn below) and keeps
+# doing so unchanged for every non-private steer. A PRIVATE steer (later, P1b) cannot ride the
+# shared operator bearer alone — that credential is operator TIER but a self-invocation, not a
+# human (auth.self_invocation_headers), so it never confers human-operator status by itself.
+# Instead the console-authenticated sender mints a single-operation delegation bound to an
+# opaque operation reference and the task id; the loopback intake redeems it idempotently (a
+# transport retry re-presents the SAME token and gets the SAME grant, never a replay refusal).
+# P1b.2 binds the operation reference to the persisted private-input id; here it is an opaque
+# string. Both helpers are dormant — only the P1a.2 proof tests exercise them today.
+_LOOPBACK_AUDIENCE = "loopback-self"
+
+
+def _mint_loopback_delegation(*, context: str, operation: str, task_id: str = "") -> str:
+    """Mint the single-operation loopback delegation a private self-POST carries (dormant)."""
+    from graph.fleet.delegation import ISSUER_LOOPBACK, mint_delegation
+
+    return mint_delegation(
+        audience=_LOOPBACK_AUDIENCE,
+        method="SendMessage",
+        context=context,
+        operation=operation,
+        task_id=task_id,
+        issuer=ISSUER_LOOPBACK,
+    )
+
+
+def _redeem_loopback_delegation(headers, *, context: str, operation: str, task_id: str = "", revocation_check=None):
+    """Idempotently redeem a loopback delegation from ``headers``; the verified grant or None.
+
+    Only a loopback-issued delegation bound to this context/operation/task is honored, and it is
+    redeemed idempotently so a retried self-POST does not trip replay rejection. A missing header
+    or any verification failure — forged, wrong target, expired, revoked, or an unreadable
+    revocation service — returns None (fails CLOSED). Localhost and ``self_invocation_headers``
+    confer nothing here; the delegation is the only thing that does."""
+    from graph.fleet.delegation import DELEGATION_HEADER, ISSUER_LOOPBACK, DelegationError
+    from graph.fleet.delegation import current_revocation_generation, redeem_delegation
+
+    token = (headers or {}).get(DELEGATION_HEADER, "") or ""
+    if not token:
+        return None
+    try:
+        return redeem_delegation(
+            token,
+            audience=_LOOPBACK_AUDIENCE,
+            method="SendMessage",
+            context=context,
+            operation=operation,
+            task_id=task_id,
+            idempotent=True,
+            allowed_issuers=frozenset({ISSUER_LOOPBACK}),
+            revocation_check=revocation_check or current_revocation_generation,
+        )
+    except DelegationError:
+        return None
+
+
 # ── steering a session with NO live turn (bd-0ad5v) ─────────────────────────────
 # A console with a stale 'streaming' bubble steers a session whose turn is long over; the
 # queued message then has nothing left to drain it and sits ``pending`` forever, with the

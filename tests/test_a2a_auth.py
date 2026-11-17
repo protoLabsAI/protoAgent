@@ -1605,3 +1605,115 @@ def test_device_principal_lifecycle(transition, tmp_path, monkeypatch):
         assert len(reached) == before  # no principal reaches a handler
         if transition == "rotate":
             assert read(replacement).status_code == 401  # late reuse revokes the device
+
+
+# ── P1a.2: human-operator delegation, self-invocation, loopback intake (ADR 0131) ──────────
+#
+# is_human_operator (P1a.1) classifies a CREDENTIAL. P1a.2 carries that human identity across
+# the two hops a credential cannot: the fleet proxy (hub→member) and the loopback self-POST.
+# Human-operator status for private content is conferred ONLY by a verified delegation — never
+# by localhost, never by self_invocation_headers, never by a swapped fleet bearer.
+
+
+@pytest.fixture
+def _delegation_env(monkeypatch):
+    import graph.fleet.service_token as st
+    from graph.fleet import delegation
+
+    monkeypatch.setattr(st, "resolve_service_token", lambda: "TEST-FLEET-KEY")
+    delegation._revocation_generation[0] = 0
+    delegation.reset_ledger()
+    yield delegation
+    delegation.reset_ledger()
+
+
+def test_spoofed_principal_header_is_ignored_by_the_middleware(_delegation_env):
+    """A client-set X-Principal-Kind never upgrades the verified kind: a peer (fleet) bearer
+    with a spoofed human principal header stays a peer through the real middleware."""
+    from starlette.responses import JSONResponse
+
+    auth.configure(bearer_token="shared", fleet_token="fleet", api_key="", allowed_origins_raw="")
+
+    def inspect(request):
+        kind = request.state.principal_kind
+        return JSONResponse({"kind": kind, "human": auth.is_human_operator(kind)})
+
+    app = Starlette(routes=[Route("/a2a", inspect)])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    with TestClient(app) as client:
+        r = client.get(
+            "/a2a", headers={"Authorization": "Bearer fleet", "X-Principal-Kind": "shared-operator-bearer"}
+        )
+    assert r.json() == {"kind": "fleet-service", "human": False}
+
+
+def test_self_invocation_headers_never_confer_human_operator(_delegation_env):
+    """A self-invocation presents the shared operator bearer: operator TIER (keeps its powers),
+    human AS A CREDENTIAL, but NOT a human operator for private content — it carries no
+    delegation. The header shape is unchanged (the golden in test_a2a_auth_conformance)."""
+    auth.configure(bearer_token="shared", api_key="", allowed_origins_raw="")
+    headers = auth.self_invocation_headers()
+    assert headers == {"Authorization": "Bearer shared"}
+
+    cred = auth._classify_token("shared")
+    assert cred.tier == "operator" and auth.is_human_operator(cred.principal_kind)
+
+    req = SimpleNamespace(headers=headers)  # shared bearer, no delegation
+    assert auth.resolve_human_operator(req, audience="loopback-self", operation="op-1") is None
+
+
+def test_localhost_never_confers_human_operator(_delegation_env):
+    """Being on loopback with the shared bearer is not a human operator — no delegation."""
+    auth.configure(bearer_token="shared", api_key="", allowed_origins_raw="")
+    req = SimpleNamespace(headers={"Authorization": "Bearer shared"}, client=SimpleNamespace(host="127.0.0.1"))
+    assert auth.resolve_human_operator(req, audience="loopback-self", operation="op") is None
+
+
+def test_loopback_delegation_round_trip_is_idempotent(_delegation_env):
+    """The chat.py loopback intake redeems a single-operation delegation idempotently."""
+    from server.chat import _mint_loopback_delegation, _redeem_loopback_delegation
+
+    token = _mint_loopback_delegation(context="sess-1", operation="op-7", task_id="task-7")
+    headers = {_delegation_env.DELEGATION_HEADER: token}
+    grant = _redeem_loopback_delegation(headers, context="sess-1", operation="op-7", task_id="task-7")
+    assert grant is not None and grant.operation == "op-7" and grant.task_id == "task-7"
+    assert auth.is_human_operator(grant.principal_kind)
+
+    # A retried self-POST re-presents the SAME token and gets the SAME grant — not a replay refusal.
+    again = _redeem_loopback_delegation(headers, context="sess-1", operation="op-7", task_id="task-7")
+    assert again is not None and again.nonce == grant.nonce
+
+    # Bound to the operation + task: a different task id for the same token is refused.
+    assert _redeem_loopback_delegation(headers, context="sess-1", operation="op-7", task_id="other") is None
+
+    # A loopback owner does not honor a proxy-issued delegation (issuer is pinned).
+    proxy_token = _delegation_env.mint_delegation(
+        audience="loopback-self", method="SendMessage", context="sess-1", operation="op-7", task_id="task-7",
+        issuer=_delegation_env.ISSUER_PROXY,
+    )
+    assert _redeem_loopback_delegation(
+        {_delegation_env.DELEGATION_HEADER: proxy_token}, context="sess-1", operation="op-7", task_id="task-7"
+    ) is None
+
+
+def test_resolve_human_operator_fails_closed(_delegation_env):
+    """Forged target, unreadable revocation and expiry all deny; only the genuine grant resolves."""
+    from server.chat import _mint_loopback_delegation
+
+    assert auth.resolve_human_operator(SimpleNamespace(headers={}), audience="loopback-self", operation="op") is None
+
+    token = _mint_loopback_delegation(context="s", operation="op", task_id="t")
+    req = SimpleNamespace(headers={_delegation_env.DELEGATION_HEADER: token})
+    common = dict(operation="op", context="s", task_id="t", idempotent=True)
+
+    assert auth.resolve_human_operator(req, audience="someone-else", **common) is None  # wrong target
+
+    def boom():
+        raise RuntimeError("revocation down")
+
+    assert auth.resolve_human_operator(req, audience="loopback-self", revocation_check=boom, **common) is None
+    future = time.time() + _delegation_env._DELEGATION_TTL + 1
+    assert auth.resolve_human_operator(req, audience="loopback-self", now=future, **common) is None
+
+    ok = auth.resolve_human_operator(req, audience="loopback-self", **common)
+    assert ok is not None and ok.operation == "op"

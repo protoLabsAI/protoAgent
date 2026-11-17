@@ -856,3 +856,147 @@ async def test_real_proxy_releases_member_stream_when_the_client_leaves(monkeypa
         assert live["n"] == 0, f"{live['n']} member stream(s) still held after their clients left"
     finally:
         stop()
+
+
+# --- Human-operator delegation across the proxy hop (ADR 0131 P1a.2) ------------------------
+#
+# The hub strips any principal/delegation header a caller sent, authenticates the caller, and
+# mints ONE short-lived signed delegation bound to a member/method/context/operation. The owner
+# verifies issuer, target audience, expiry, nonce (replay) and revocation generation, and fails
+# closed when revocation can't be read. A swapped fleet bearer is a peer and gets no delegation.
+
+from types import SimpleNamespace
+
+from a2a_impl.auth import is_human_operator
+
+
+@pytest.fixture
+def delegation_env(monkeypatch):
+    """Deterministic signing key + a clean redemption ledger and revocation generation."""
+    import graph.fleet.service_token as st
+    from graph.fleet import delegation
+
+    monkeypatch.setattr(st, "resolve_service_token", lambda: "TEST-FLEET-KEY")
+    delegation._revocation_generation[0] = 0
+    delegation.reset_ledger()
+    yield delegation
+    delegation.reset_ledger()
+
+
+def _human_request(principal="shared-operator-bearer", headers=None):
+    req = FakeRequest(method="POST", headers=headers or {}, body=b"{}")
+    req.state = SimpleNamespace(principal_kind=principal, trust_tier="operator")
+    return req
+
+
+def _mint(delegation_env, slug="alice"):
+    return proxy.mint_member_delegation(
+        slug, _human_request(), method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1"
+    )
+
+
+def test_proxy_strips_untrusted_principal_headers(delegation_env):
+    req = FakeRequest(
+        headers={
+            "Authorization": "Bearer caller",
+            "X-Principal-Kind": "shared-operator-bearer",
+            "X-Human-Operator": "1",
+            "X-Fleet-Delegation": "forged.token",
+            "X-Custom": "keep",
+        }
+    )
+    out = {k.lower() for k in proxy._proxy_headers(req, None)}
+    assert "x-custom" in out and "authorization" in out
+    assert not (out & delegation_env.PRINCIPAL_HEADERS)
+    # A hub-minted delegation applied as an override survives the strip (it is added AFTER).
+    out2 = proxy._proxy_headers(req, {"x-fleet-delegation": "hub.minted"})
+    assert out2["x-fleet-delegation"] == "hub.minted"
+
+
+async def test_forward_strips_principal_headers_end_to_end(monkeypatch, delegation_env):
+    """Through the real forward path: a caller-smuggled principal/delegation never reaches a member."""
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {"alice": {"port": 7001, "pid": 42}})
+    monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: True)
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
+    client = FakeClient(upstream=FakeUpstream(headers={"content-type": "application/json"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(
+        method="POST",
+        headers={"Authorization": "Bearer HUB", "X-Principal-Kind": "shared-operator-bearer", "X-Fleet-Delegation": "sneaky"},
+        body=b"{}",
+    )
+    req.state = SimpleNamespace(trust_tier="operator")
+    await proxy.forward_to("alice", req, "api/plugins/foo")
+    sent = {k.lower() for k in client.built["headers"]}
+    assert "x-principal-kind" not in sent and "x-fleet-delegation" not in sent and "x-human-operator" not in sent
+
+
+def test_mint_only_for_human_then_owner_verifies(delegation_env):
+    token = _mint(delegation_env)
+    assert token
+    grant = delegation_env.verify_delegation(
+        token, audience="alice", method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1"
+    )
+    assert grant.audience == "alice" and grant.operation == "op-1" and grant.task_id == "task-1"
+    assert is_human_operator(grant.principal_kind)  # the grant conveys a human-operator kind
+
+
+def test_fleet_bearer_swap_stays_a_peer(delegation_env):
+    """A swapped-in fleet service token resolves to the fleet-service PEER kind; the proxy
+    refuses to mint a human-operator delegation for it (fleet is a peer whatever tier it earns).
+    Every other peer kind is likewise refused."""
+    for peer in ("fleet-service", "agent-device", "federation", "open/unknown"):
+        req = _human_request(principal=peer)
+        assert proxy.mint_member_delegation("alice", req, method="SendMessage", context="c", operation="o") is None
+
+
+def test_owner_refuses_wrong_target_member(delegation_env):
+    token = _mint(delegation_env, slug="alice")
+    with pytest.raises(delegation_env.DelegationError):
+        delegation_env.verify_delegation(token, audience="bob")
+
+
+def test_owner_refuses_forged_delegation(delegation_env):
+    token = _mint(delegation_env)
+    payload, _sig = token.split(".", 1)
+    with pytest.raises(delegation_env.DelegationError):
+        delegation_env.verify_delegation(payload + ".AAAA", audience="alice")  # tampered signature
+    # A token signed with a key the attacker chose (they lack the real signing key) is forged too.
+    forged = delegation_env.mint_delegation(
+        audience="alice", method="SendMessage", context="c", operation="o", key=b"attacker-key"
+    )
+    with pytest.raises(delegation_env.DelegationError):
+        delegation_env.verify_delegation(forged, audience="alice")
+
+
+def test_owner_rejects_replayed_delegation(delegation_env):
+    token = _mint(delegation_env)
+    assert delegation_env.redeem_delegation(token, audience="alice").audience == "alice"
+    with pytest.raises(delegation_env.DelegationError):
+        delegation_env.redeem_delegation(token, audience="alice")  # second redemption = replay
+
+
+def test_owner_refuses_expired_delegation(delegation_env):
+    token = _mint(delegation_env)
+    future = time.time() + delegation_env._DELEGATION_TTL + 1
+    with pytest.raises(delegation_env.DelegationError):
+        delegation_env.verify_delegation(token, audience="alice", now=future)
+
+
+def test_owner_refuses_revoked_generation(delegation_env):
+    token = _mint(delegation_env)
+    delegation_env.bump_revocation_generation()  # every delegation minted before now is revoked
+    with pytest.raises(delegation_env.DelegationError):
+        delegation_env.verify_delegation(token, audience="alice")
+
+
+def test_owner_fails_closed_when_revocation_unavailable(delegation_env):
+    token = _mint(delegation_env)
+
+    def boom():
+        raise RuntimeError("revocation service down")
+
+    with pytest.raises(delegation_env.RevocationUnavailable):
+        delegation_env.verify_delegation(token, audience="alice", revocation_check=boom)
+    with pytest.raises(delegation_env.RevocationUnavailable):
+        delegation_env.verify_delegation(token, audience="alice", revocation_check=lambda: None)
