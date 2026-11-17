@@ -1354,6 +1354,8 @@ async def test_private_partition_delete_and_incomplete_chat_delete(tmp_path, mon
             await store.save(task, ctx)
         with pytest.raises(PermissionError):
             await store.save_private(task, {"text": "restored"}, ctx)
+        with pytest.raises(PermissionError):
+            await store.save_private(shell, {"text": "restored"}, ctx, public_visible=False)
         await store.delete(task.id, ctx)
         async with engine.connect() as conn:
             assert (await conn.execute(text("SELECT count(*) FROM tasks"))).scalar() == 0
@@ -1380,6 +1382,15 @@ async def test_private_partition_additive_schema_and_visibility_guard(tmp_path):
         async with engine.connect() as conn:
             row = (await conn.execute(text("SELECT private_version, private_payload FROM tasks"))).one()
             assert tuple(row) == (None, None)
+        replacement = a2a_pb2.Task(id=task.id, context_id=task.context_id)
+        with pytest.raises(PermissionError, match="visibility"):
+            await store.save_private(replacement, {"text": "PRIVATE-CANARY"}, ctx, public_visible=False)
+        peer = ServerCallContext(state={"principal_kind": "fleet-service"})
+        assert await store.get(task.id, peer) == task
+        assert (await store.get_record(task.id, ctx)).private_payload is None
+        # Adding a private partition while keeping the public projection is supported.
+        await store.save_private(task, {"text": "PRIVATE-CANARY"}, ctx)
+        assert await store.get(task.id, peer) == task
         shell = a2a_pb2.Task(id="hidden", context_id=task.context_id)
         await store.save_private(shell, {"text": "PRIVATE-CANARY"}, ctx, public_visible=False)
         with pytest.raises(PermissionError):
@@ -1387,5 +1398,39 @@ async def test_private_partition_additive_schema_and_visibility_guard(tmp_path):
         with pytest.raises(PermissionError):
             await store.save_private(shell, {}, ctx, public_visible=True)
         assert (await store.get_record(shell.id, ctx)).private_payload == {"text": "PRIVATE-CANARY"}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_context", [None, "chat-gone", "chat-live"])
+async def test_ordinary_save_after_chat_deletion_persists_final_state(tmp_path, initial_context):
+    from a2a.types import a2a_pb2
+    from datetime import UTC, datetime
+    from operator_api.chat_routes import _ensure_chat_tombstones
+
+    db = str(tmp_path / "deleted-chat.db")
+    engine = make_sqlite_engine(db)
+    ctx = ServerCallContext()
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    task = a2a_pb2.Task(id="detached", context_id=initial_context or "chat-gone")
+    await store.initialize()
+    if initial_context is not None:
+        await store.save(task, ctx)
+    async with engine.begin() as conn:
+        tombstones = await _ensure_chat_tombstones(conn)
+        await conn.execute(tombstones.insert().values(context_id="chat-gone", deleted_at=datetime.now(UTC)))
+    await engine.dispose()
+    engine = make_sqlite_engine(db)
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    try:
+        task.context_id = "chat-gone"
+        task.status.state = a2a_pb2.TASK_STATE_COMPLETED
+        task.history.append(_text_msg("final result"))
+        await store.save(task, ctx)
+        # Raw SDK read proves persistence; the public reader still honors deletion.
+        raw = DatabaseTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+        assert await raw.get(task.id, ctx) == task
+        assert await store.get(task.id, ctx) is None
     finally:
         await engine.dispose()

@@ -376,6 +376,41 @@
   margin-top: var(--pl-space-1);
 }
 
+/* Read mode (bd-xyc4p): a set chain reads as one short wrapping line — the model ids in order,
+   joined by a muted arrow — with a ghost Edit button beside it. Read mode is the only state that
+   renders a `.model-chain__summary`, so `:has(>)` flips the container to a wrapping row just for it;
+   the editor rows and the inheriting variant keep the base column. No list bullets, no indent, and
+   ids keep the wrap-never-clip rule above — never ellipsis/clip (§2 item 11, criterion 9). */
+.model-chain:has(> .model-chain__summary) {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.model-chain__summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pl-space-1) var(--pl-space-2);
+  min-width: 0;
+}
+.model-chain__summary-item {
+  display: inline-flex;
+  flex-wrap: wrap; /* an unknown-model warning (flex-basis:100%) drops to its own line under the id */
+  align-items: baseline;
+  gap: var(--pl-space-1);
+  min-width: 0;
+}
+.model-chain__summary-sep {
+  color: var(--pl-color-fg-muted);
+}
+/* Hug the content at the start of the row so Edit never stretches to match a multi-line summary. */
+.model-chain__edit {
+  align-self: flex-start;
+}
+
 /* Inheriting role: the "Inherits <parent>" toggletip + the quiet "Set its own chain". */
 .model-chain--inherited {
   flex-direction: row;

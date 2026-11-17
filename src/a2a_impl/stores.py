@@ -549,7 +549,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     async def save_private(
         self, task: Task, payload: dict, context: ServerCallContext, *, public_visible: bool = True,
     ) -> None:
-        """Dormant trusted intake: persist a PUBLIC Task and separate private JSON atomically.
+        """Dormant trusted intake: persist an SDK projection and private JSON atomically.
 
         No route calls this. Private-only turns supply an empty SDK shell; private input
         and output go only in payload. Existing tasks retain their owner and visibility.
@@ -570,8 +570,12 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
             previous_visibility = (await session.execute(
                 text(f"SELECT public_visible FROM {table} WHERE id=:id"), {"id": task.id}
-            )).scalar()
-            if previous_visibility is not None and previous_visibility != int(public_visible):
+            )).first()
+            # NULL partitions are existing public tasks, not new private-only shells.
+            if previous_visibility is not None and (
+                (1 if previous_visibility.public_visible is None else previous_visibility.public_visible)
+                != int(public_visible)
+            ):
                 raise PermissionError("Task visibility cannot change")
             existing = await session.get(self.task_model, task.id)
             owner = existing.owner if existing else self.owner_resolver(context)
@@ -587,25 +591,27 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         # Refuse stale writes to protected/retired rows; never turn a private shell public.
         from sqlalchemy import inspect
 
-        if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
-            if (await session.execute(text(
-                f"SELECT 1 FROM {CHAT_TOMBSTONE_TABLE} WHERE context_id=:id"
-            ), {"id": task.context_id})).first():
-                raise PermissionError("Conversation unavailable")
         table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
         row = (await session.execute(text(
             f"SELECT owner, context_id, private_version, private_audience, private_payload, public_visible "
             f"FROM {table} WHERE id=:id"
         ), {"id": task.id})).first()
-        if row is None:
+        protected = row is not None and any(value is not None for value in row[2:])
+        # Detached ordinary turns must still persist their final state after deletion.
+        # Private intake and existing protected rows must never revive a deleted chat.
+        if not private and not protected:
             return
-        if row.context_id != task.context_id:
-            if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
+        if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
+            context_ids = {task.context_id}
+            if row is not None:
+                context_ids.add(row.context_id)
+            for context_id in context_ids:
                 if (await session.execute(text(
                     f"SELECT 1 FROM {CHAT_TOMBSTONE_TABLE} WHERE context_id=:id"
-                ), {"id": row.context_id})).first():
+                ), {"id": context_id})).first():
                     raise PermissionError("Conversation unavailable")
-        protected = any(value is not None for value in row[2:])
+        if row is None:
+            return
         if protected and (
             row.private_version != PRIVATE_SCHEMA_VERSION or row.private_audience != PRIVATE_AUDIENCE
             or row.private_payload is None or row.public_visible not in (0, 1)
