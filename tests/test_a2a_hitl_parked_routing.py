@@ -773,3 +773,63 @@ async def test_a_private_steer_into_a_peer_thread_hides_the_input_and_keeps_the_
     assert all(_SECRET not in str(c["text"]) for c in seen)
     await router.drain()
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_private_resume_never_lands_on_a_peer_owned_parked_task(tmp_path, delegation_env):
+    """#5380 / ADR 0131 P1b.2: when a PEER owns the only parked task in a context and the
+    operator has none, a private steer taking the guarded resume path must NOT be re-pointed
+    onto the peer's parked task — the operator→federation read fallback would otherwise do
+    that and land the private reply on a peer-readable task. It runs as the operator's own
+    task instead; the peer's parked task and its requires_input message keep no private input
+    or reply, and an operator turn ending in the peer's context never settles the peer's pause."""
+    from a2a.server.context import ServerCallContext
+    from a2a.types import ListTasksRequest
+    from a2a.utils.errors import TaskNotFoundError
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_impl import private_intake, stores
+
+    engine = stores.make_sqlite_engine(str(tmp_path / "peer-parked.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    await store.initialize()
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    fed = ServerCallContext(state={"trust_tier": "federation"})
+    seen: list = []
+    handler, router = _handler(_private_steer_stream(seen), task_store=store)
+
+    # The PEER parks a HITL turn in its own context; the operator owns no parked task here, but
+    # the operator's read of the context DOES see the peer's via the federation fallback.
+    peer_parked = await handler.on_message_send(_msg("ask me something", mid="p1", ctx="fed-ctx"), fed)
+    assert peer_parked.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    assert await _parked(handler, "fed-ctx") == [peer_parked.id]
+    owner_scoped = await hitl_routing.ParkedTaskRouter(handler).parked_tasks("fed-ctx", CALL, owner_scoped=True)
+    assert owner_scoped == []  # the operator owns no parked task — the fallback is skipped
+
+    ref = await private_intake.record_private_steer(store, session_id="fed-ctx", text=_SECRET, msg_id="m0", context=op)
+    steer = await handler.on_message_send(_ref_msg(ref, mid="o1", hitl_resume=True, ctx="fed-ctx"), CALL)
+    await router.drain()
+
+    # The private resume ran as the operator's OWN fresh task — never the peer's parked one.
+    assert steer.id != peer_parked.id
+    assert steer.status.state == TaskState.TASK_STATE_COMPLETED
+
+    # The peer's parked task is untouched: still input-required (never settled by the operator
+    # turn), its requires_input message / history hold no private input or reply, and the
+    # private reference is invisible to the peer.
+    peer_view = await handler.on_get_task(GetTaskRequest(id=peer_parked.id), fed)
+    assert peer_view.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    dumped = str(MessageToDict(peer_view))
+    assert _SECRET not in dumped and ref not in dumped
+    peer_tasks = (await handler.on_list_tasks(ListTasksRequest(context_id="fed-ctx"), fed)).tasks
+    assert steer.id not in {t.id for t in peer_tasks}
+    assert all(_SECRET not in str(MessageToDict(t)) and ref not in str(MessageToDict(t)) for t in peer_tasks)
+    with pytest.raises(TaskNotFoundError):  # the operator's private turn stays out of the peer's reads
+        await handler.on_get_task(GetTaskRequest(id=steer.id), fed)
+
+    # The runner only ever saw the opaque reference, never the private text; the operator still
+    # recovers the input from the partition.
+    assert any(c["text"] == ref for c in seen) and all(_SECRET not in str(c["text"]) for c in seen)
+    assert (await store.get_record(private_intake.ref_task_id(ref), op)).private_payload["input"] == _SECRET
+    await router.drain()
+    await engine.dispose()

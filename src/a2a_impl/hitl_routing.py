@@ -301,14 +301,23 @@ class ParkedTaskRouter:
         if deferred is not None:
             self.schedule_settle(ctx, *deferred)
 
-    async def parked_tasks(self, context_id: str, call_context: Any) -> list[Task]:
-        """The context's input-required tasks, newest first."""
+    async def parked_tasks(self, context_id: str, call_context: Any, *, owner_scoped: bool = False) -> list[Task]:
+        """The context's input-required tasks, newest first.
+
+        ``owner_scoped`` lists only the caller's OWN tier's tasks — no operator→federation
+        fallback (``stores.list_owner_scoped``). A private steer's guarded resume uses it so
+        the resume can never be re-pointed onto a peer-owned parked task, and an operator
+        turn's settle never completes one (#5380, ADR 0131 P1b.2). A task store without that
+        method (the SDK in-memory store used in tests) has no cross-owner fallback anyway, so
+        it keeps the plain list."""
         if not context_id:
             return []
-        page = await self._handler.task_store.list(
-            ListTasksRequest(context_id=context_id, status=TaskState.TASK_STATE_INPUT_REQUIRED, page_size=50),
-            call_context,
+        store = self._handler.task_store
+        params = ListTasksRequest(
+            context_id=context_id, status=TaskState.TASK_STATE_INPUT_REQUIRED, page_size=50
         )
+        lister = getattr(store, "list_owner_scoped", None) if owner_scoped else None
+        page = await (lister(params, call_context) if lister is not None else store.list(params, call_context))
         return list(page.tasks)
 
     async def route(self, params: SendMessageRequest, call_context: Any) -> None:
@@ -334,8 +343,14 @@ class ParkedTaskRouter:
                 )
         if not _is_hitl_resume(message) or not message.context_id:
             return
+        # A private steer / resume (ADR 0131 P1b.2) may only ever continue a parked task the
+        # OPERATOR owns: scope the lookup to the operator's own tier so the operator→federation
+        # read fallback can never re-point the private turn — and so its private reply — onto a
+        # peer-owned parked task (#5380). With no operator pause to resume it runs as a fresh
+        # operator-owned task below (never onto a peer's), the way an idle private steer does.
+        private = bool(private_input_ref(message))
         try:
-            parked = await self.parked_tasks(message.context_id, call_context)
+            parked = await self.parked_tasks(message.context_id, call_context, owner_scoped=private)
             if named is not None and named.status.state in _PAUSED and (not parked or parked[0].id == named.id):
                 return  # continues THE paused task — the spec's own path
             # Otherwise the named task ended, or is an OLDER pause a newer task took over
@@ -405,7 +420,11 @@ class ParkedTaskRouter:
         parked after the cutoff is a newer pause, not a stale one. Returns the ids settled."""
         cutoff = cutoff or datetime.now(UTC)
         settled: list[str] = []
-        for task in await self.parked_tasks(context_id, call_context):
+        # Owner-scoped: a turn settles only parked tasks of its OWN tier. Without this an
+        # operator turn ending in a peer's context would, through the operator→federation read
+        # fallback, complete (and re-own) the PEER's parked task — a private steer that ran as
+        # a fresh operator turn there would force-settle the peer's pause (#5380, ADR 0131 P1b.2).
+        for task in await self.parked_tasks(context_id, call_context, owner_scoped=True):
             if task.id == keep_task_id or _parked_at(task) > cutoff:
                 continue
             busy = await self._busy(task.id)

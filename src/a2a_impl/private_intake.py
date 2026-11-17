@@ -93,7 +93,7 @@ async def record_private_steer(task_store, *, session_id, text, msg_id, context,
     JSON — so no peer-readable projection is ever exposed (``stores.save_private``). The dedupe
     key is consulted by :func:`find_private_steer` BEFORE this is called, so a retried msg_id
     reuses the one record rather than minting a second shell. Raises on any failure; the caller
-    must then NOT send an ordinary SendMessage (r3 fail-closed)."""
+    must then NOT fall back to an ordinary SendMessage (fail closed)."""
     task_id = _private_task_id(session_id)
     shell = a2a_pb2.Task(id=task_id, context_id=session_id)
     payload = {

@@ -394,9 +394,17 @@ async def test_private_idle_steer_records_before_start_and_sends_only_a_referenc
     monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
     op = _operator_ctx()
     captured: dict = {}
+    # Kept out of ``captured`` on purpose: the value is the private text, which the wire-field
+    # assertion below proves is absent from everything the loopback carries.
+    at_start: dict = {}
 
     async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None,
                           private_ref=None, delegation=None, hitl_resume=False):
+        # Ordering proof: at the instant the start is invoked the partition record ALREADY
+        # exists (the steer is recorded BEFORE any turn starts). A record written only after
+        # this call returns would read None here and fail the assertion below.
+        rec = await store.get_record(private_intake.ref_task_id(private_ref), op)
+        at_start["input"] = rec.private_payload["input"] if rec is not None else None
         captured.update(text=text, ref=private_ref, delegation=delegation, images=images, hitl_resume=hitl_resume)
         return "task-1"
 
@@ -411,6 +419,8 @@ async def test_private_idle_steer_records_before_start_and_sends_only_a_referenc
     assert captured["text"] == "" and captured["ref"] == ref and captured["images"] is None
     assert captured["hitl_resume"] is False
     assert captured["delegation"] and "SECRET-STEER" not in str(captured)
+    # The record was already in the partition WHEN the start ran — recorded before the turn.
+    assert at_start["input"] == "SECRET-STEER"
     # The steer + its dedupe key were recorded into the partition BEFORE the start; the console
     # recovers the input (and later the reply) from there.
     rec = await store.get_record(private_intake.ref_task_id(ref), op)
@@ -452,9 +462,13 @@ async def test_private_parked_steer_rides_the_guarded_resume(tmp_path, monkeypat
     monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
     op = _operator_ctx()
     captured: dict = {}
+    at_start: dict = {}  # the private text — kept out of ``captured`` (the wire-field capture)
 
     async def _fake_start(session_id, text, msg_id, *, images=None, incognito=False, settings=None,
                           private_ref=None, delegation=None, hitl_resume=False):
+        # Ordering proof: the partition record already exists when the resume start is invoked.
+        rec = await store.get_record(private_intake.ref_task_id(private_ref), op)
+        at_start["input"] = rec.private_payload["input"] if rec is not None else None
         captured.update(text=text, ref=private_ref, delegation=delegation, hitl_resume=hitl_resume)
         return "task-resume"
 
@@ -467,6 +481,7 @@ async def test_private_parked_steer_rides_the_guarded_resume(tmp_path, monkeypat
     assert captured["hitl_resume"] is True
     assert captured["text"] == "" and captured["ref"] == body["private_ref"]
     assert captured["delegation"] and "SECRET-PARKED" not in str(captured)
+    assert at_start["input"] == "SECRET-PARKED"  # recorded before the resume start ran
     # The steer + its dedupe key were recorded BEFORE the resume; the console recovers them.
     rec = await store.get_record(private_intake.ref_task_id(body["private_ref"]), op)
     assert rec.private_payload["input"] == "SECRET-PARKED" and rec.private_payload["dedupe"] == "m1"
