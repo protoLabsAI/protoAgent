@@ -4,6 +4,7 @@ These run real child processes (the Docker CI image has python), exercising
 the subprocess + fd-based tool-RPC bridge end to end with fake tools.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -36,6 +37,62 @@ _TOOL_MAP = {"echo_tool": echo_tool, "boom_tool": boom_tool}
 async def test_plain_stdout_no_tools():
     out = await run_code("print('hello world')", {})
     assert out == "hello world"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression, expected", [
+    ('{"a": 1, "b": [1, 2]}', {"a": 1, "b": [1, 2]}),
+    ('["caf\\u00e9", 2]', ["café", 2]),
+    ('{"values": {1}}', {"values": "{1}"}),
+    ("None", None),
+])
+async def test_structured_result(expression, expected):
+    out = await run_code(f"result = {expression}", {})
+    assert json.loads(out) == expected
+    assert "\\u00e9" not in out
+
+
+@pytest.mark.asyncio
+async def test_stdout_and_structured_result():
+    out = await run_code('print("gathered", end="")\nresult = {"a": 1}', {})
+    assert out == 'gathered\n--- result ---\n{"a": 1}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending, error", [
+    ("raise ValueError('bad script')", "Error: script exited with code 1."),
+    ("import sys; sys.exit(2)", "Error: script exited with code 2."),
+    ("import sys; sys.exit(0)", None),
+    ("", None),
+])
+async def test_result_cleanup_and_early_exit(ending, error):
+    code = 'import os\nprint(os.environ["EC_RESULT_PATH"])\nresult = {"a": 1}\n' + ending
+    out = await run_code(code, {})
+    if ending:
+        assert "--- result ---" not in out
+        assert '{"a": 1}' not in out
+    if error:
+        assert out.startswith(error)
+        path_text = out.split("--- stdout before failure ---\n", 1)[1]
+    elif ending:
+        path_text = out
+    else:
+        path_text, result_text = out.split("\n--- result ---\n")
+        assert json.loads(result_text) == {"a": 1}
+    assert not Path(path_text).parent.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["", "print('gathered')\n"])
+async def test_oversized_result_spills(tmp_path, monkeypatch, prefix):
+    monkeypatch.setattr("graph.sdk.plugin_store", lambda **kwargs: tmp_path)
+    full = ('gathered\n--- result ---\n' if prefix else '') + json.dumps({"a": "x" * 100})
+    out = await run_code(prefix + 'result = {"a": "x" * 100}', {}, truncate=20)
+    assert out.startswith(full[:20])
+    assert f"of {len(full)} chars" in out
+    spill, = tmp_path.glob("ec-*.txt")
+    assert str(spill) in out
+    assert spill.read_text(encoding="utf-8") == full
 
 
 @pytest.mark.asyncio

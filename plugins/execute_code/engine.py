@@ -156,12 +156,16 @@ tools = _ToolProxies()
 
 
 def _build_runner_file(code: str) -> str:
-    """Write prelude + user code to a temp .py file; return its path."""
+    """Write prelude + user code + result epilogue to a temp .py file."""
     fd, path = tempfile.mkstemp(prefix="ec_", suffix=".py")
     with os.fdopen(fd, "w") as f:
         f.write(_RUNNER_PRELUDE)
         f.write("\n")
         f.write(code)
+        # Exceptions and sys.exit() (even sys.exit(0)) skip this epilogue.
+        f.write('\n\nif "result" in globals():\n'
+                '    with open(_os.environ["EC_RESULT_PATH"], "w", encoding="utf-8") as _ec_result_file:\n'
+                '        _ec_result_file.write(_json.dumps(result, default=str, ensure_ascii=False))\n')
     return path
 
 
@@ -392,7 +396,7 @@ async def run_code(
     gate=None,
     fence=None,
 ) -> str:
-    """Run ``code`` in a child process with a tool-RPC bridge; return its stdout.
+    """Run ``code`` with a tool-RPC bridge; return stdout and any JSON result.
 
     ``session_id`` attributes the run's bridged tool calls in the audit log
     (ADR 0103 S3); empty degrades to the literal ``"ptc"`` bucket. ``gate``
@@ -450,7 +454,11 @@ async def run_code(
 
     proc = None
     service = None
+    result_dir = None
     try:
+        result_dir = tempfile.TemporaryDirectory(prefix="ec_result_")
+        result_path = Path(result_dir.name) / "result.json"
+        child_env["EC_RESULT_PATH"] = str(result_path)
         proc = await asyncio.create_subprocess_exec(
             interpreter,
             "-u",
@@ -494,8 +502,12 @@ async def run_code(
             if out:
                 body += f"\n\n--- stdout before failure ---\n{out}"
             out = body
-        elif not out:
-            out = "(script produced no stdout)"
+        else:
+            if result_path.exists():
+                result_text = result_path.read_text(encoding="utf-8")
+                out = f"{out}\n--- result ---\n{result_text}" if out else result_text
+            if not out:
+                out = "(script produced no stdout)"
 
         if len(out) > truncate:
             try:
@@ -515,6 +527,8 @@ async def run_code(
             await server.wait_closed()
         with contextlib.suppress(OSError):
             os.unlink(path)
+        if result_dir is not None:
+            result_dir.cleanup()
 
 
 # Never bridgeable, regardless of configuration (ADR 0103 D3, #2807):
@@ -652,9 +666,10 @@ def build_execute_code_tool(
         "Use concurrent.futures.ThreadPoolExecutor for independent calls.\n\n"
         f"The script runs in an isolated subprocess with a {timeout:.0f}s timeout "
         "and a scrubbed environment (no credentials), fresh each call (no state "
-        "persists between runs). Only stdout is returned; write your result with "
-        "print(). Output over the truncate limit is returned as a head plus a marker "
-        "naming a scratch file that holds the FULL stdout (read it if you need the rest). "
+        "persists between runs). You may set `result = {...}` to return structured "
+        "data as JSON instead of printing. If you also print, stdout precedes a "
+        "`--- result ---` line and the JSON. Output over the truncate limit is returned as a head plus a marker "
+        "naming a scratch file that holds the FULL output (read it if you need the rest). "
         "Exceptions and a non-zero exit are reported back to you."
     )
 
