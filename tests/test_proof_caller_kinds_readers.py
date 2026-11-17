@@ -1,14 +1,15 @@
-"""K2 caller-kind proofs; strict xfails expose admission/delivery gaps."""
-
 from collections import namedtuple
 from contextlib import contextmanager
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, messages_from_dict, messages_to_dict
+from starlette.testclient import TestClient
+from a2a_impl import auth, segment_schedule as ss
+from security import devices
 
 from tests.test_conversation_harvest import _ARCHIVE_CANARY, test_harvest_excludes_private_canaries_from_every_derived_reader as _src_harvest
 from tests.test_digest_gating import _write
-from tests.test_prompt_capture_middleware import test_private_partition_captures_nothing_and_drops_the_private_buffers as _src_prompt
+from tests.test_prompt_capture_middleware import _Req, _response, _run_chained, test_private_partition_captures_nothing_and_drops_the_private_buffers as _src_prompt
 from tests.test_session_gist import harness, test_private_source_survives_public_turn_compaction_restart_and_stale_timer as _src_gist  # noqa: F401
 from tests.test_steer_idle_starts_turn import _partition
 from tests.test_steering import _clear_queue, test_no_model_call_mixes_audiences_in_a_real_graph as _src_no_mix  # noqa: F401  (autouse: resets the steering queue)
@@ -17,13 +18,10 @@ from tests.test_tracing import _restore_tracing_module, session_langfuse, test_a
 
 # Auth fixtures exercise the platform-branching device registry.
 pytestmark = pytest.mark.platform_sensitive
-# case, resolved kind, operator access; ids name the four proof-matrix callers.
-CALLER_KINDS = [
-    pytest.param(("federation", "federation", False), id="federation"),
-    pytest.param(("fleet", "fleet-service", False), id="fleet-service"),
-    pytest.param(("agent", "agent-device", False), id="paired-agent"),
-    pytest.param(("device", "device", True), id="enrolled-console"),
-]
+CALLER_KINDS = [pytest.param((case, kind, operator), id=label) for case, kind, operator, label in (
+    ("federation", "federation", False, "federation"), ("fleet", "fleet-service", False, "fleet-service"),
+    ("agent", "agent-device", False, "paired-agent"), ("device", "device", True, "enrolled-console"),
+)]
 _Caller = namedtuple("_Caller", "ctx principal is_operator token")
 
 @contextmanager
@@ -35,20 +33,14 @@ def _caller_scope(caller):
 @pytest.fixture
 def queue_caller(caller, request):
     if not caller.is_operator:
-        request.node.add_marker(pytest.mark.xfail(
-            strict=True, raises=PermissionError,
-            reason="PROOF FAILURE: scheduler admission requires a human operator; authenticated peer cannot queue",
-        ))
+        request.node.add_marker(pytest.mark.xfail(strict=True, raises=PermissionError, reason="PROOF FAILURE: scheduler admission requires a human operator; authenticated peer cannot queue"))
     return caller
 
 def _resolve(case):
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Route
-    from starlette.testclient import TestClient
-    from a2a_impl import auth
     from a2a_impl.stores import tier_context_builder
-    from security import devices
     token = {"federation": "fed"}.get(case, case)
     device_id = ""
     if case in ("device", "agent"):
@@ -68,8 +60,6 @@ def _resolve(case):
 
 @pytest.fixture
 def auth_env(tmp_path, monkeypatch):
-    from a2a_impl import auth
-    from security import devices
     monkeypatch.setattr(devices, "_registry_path", lambda: tmp_path / "caller-devices.json")
     cells = (auth._BEARER, auth._FEDERATION, auth._FLEET, auth._API_KEY, auth._ALLOWED_ORIGINS)
     snap = [cell[0] for cell in cells]
@@ -80,11 +70,9 @@ def auth_env(tmp_path, monkeypatch):
 
 @pytest.fixture(params=CALLER_KINDS)
 def caller(request, auth_env):
-    from a2a_impl.auth import is_human_operator
     case, expected_kind, is_operator = request.param
     ctx, device_id, token = _resolve(case)
-    assert ctx.state["principal_kind"] == expected_kind
-    assert is_human_operator(ctx.state["principal_kind"]) is is_operator
+    assert ctx.state["principal_kind"] == expected_kind and auth.is_human_operator(ctx.state["principal_kind"]) is is_operator
     principal = f"{expected_kind}:{device_id}" if device_id else expected_kind
     return _Caller(ctx, principal, is_operator, token)
 
@@ -109,7 +97,6 @@ async def test_no_model_call_mixes_audiences_per_caller_kind(caller, segment_aud
         await _src_no_mix(segment_audience)
 
 async def test_cross_audience_steer_queues_behind_running_segment_per_caller_kind(queue_caller, server_op, partition):
-    from a2a_impl import segment_schedule as ss
     priv = await ss.accept_pending_turn(partition, session_id="chat-q", audience=ss.AUDIENCE_PRIVATE, principal="shared-operator-bearer", dedupe="m1", input_ref="private-input:x", context=server_op)
     gen = await ss.claim_segment(partition, "chat-q", audience=ss.AUDIENCE_PRIVATE, seq=priv["seq"], context=server_op)
     await ss.set_turn_state(partition, "chat-q", priv["seq"], ss.STATE_RUNNING, server_op)
@@ -122,7 +109,6 @@ async def test_cross_audience_steer_queues_behind_running_segment_per_caller_kin
 
 async def test_duplicate_message_id_gives_one_pending_turn_per_caller_kind(queue_caller, partition):
     from sqlalchemy import text as sql
-    from a2a_impl import segment_schedule as ss
     first = await ss.accept_pending_turn(partition, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal=queue_caller.principal, dedupe="m1", context=queue_caller.ctx)
     again = await ss.accept_pending_turn(partition, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal=queue_caller.principal, dedupe="m1", context=queue_caller.ctx)
     assert again["seq"] == first["seq"]  # the retry reuses the one turn
@@ -137,15 +123,11 @@ def test_private_source_survives_public_turn_per_caller_kind(caller, harness, tm
 @pytest.mark.parametrize("provenance", [None, {"audience": "mixed", "version": "1"}, {"audience": "public", "version": "old"}])
 def test_public_projection_filters_prompts_per_caller_kind(caller, tmp_path, monkeypatch, provenance, request):
     if caller.ctx.state["principal_kind"] == "federation":
-        request.node.add_marker(pytest.mark.xfail(
-            strict=True, raises=_DigestDeliveryFailure,
-            reason="PROOF FAILURE: federation suppresses even public prior-session digest delivery",
-        ))
+        request.node.add_marker(pytest.mark.xfail(strict=True, raises=_DigestDeliveryFailure, reason="PROOF FAILURE: federation suppresses even public prior-session digest delivery"))
     with _caller_scope(caller):
         _digest_scenario(tmp_path, monkeypatch, provenance)
 
 def test_harvest_excludes_private_canaries_per_caller_kind(caller, tmp_path, monkeypatch):
-    from a2a_impl.auth import is_human_operator
     from graph.middleware.request_context import current_verified_principal
     from knowledge.history import HistoryStore
     from runtime.state import STATE
@@ -154,7 +136,7 @@ def test_harvest_excludes_private_canaries_per_caller_kind(caller, tmp_path, mon
     monkeypatch.setenv("MEMORY_PATH", str(tmp_path / "memory"))
     with _caller_scope(caller):
         _src_harvest(tmp_path, store)
-        arcs = store.list_for_session("chat-9", kinds=["archive"], include_private=is_human_operator(current_verified_principal()))
+        arcs = store.list_for_session("chat-9", kinds=["archive"], include_private=auth.is_human_operator(current_verified_principal()))
     if caller.is_operator:
         assert len(arcs) == 2  # the console recovers both the public and retained-private spans
     else:
@@ -167,15 +149,9 @@ async def test_private_partition_records_no_trace_content_per_caller_kind(caller
 
 def test_private_partition_captures_nothing_per_caller_kind(caller, monkeypatch):
     from fastapi import FastAPI
-    from starlette.testclient import TestClient
-    from a2a_impl.auth import A2AAuthMiddleware
     from operator_api.prompt_routes import register_prompt_routes
-    from tests.test_prompt_capture_middleware import _Req, _response, _run_chained
     from graph.middleware.request_context import request_metadata_scope
-    from langchain_core.messages import SystemMessage
-
-    # Capture itself is principal-independent. Keep its original assertions,
-    # then exercise the identity-sensitive reader with the SAME real credential.
+    # Read captured prompts with the same authenticated credential.
     with _caller_scope(caller):
         _src_prompt(monkeypatch)
         monkeypatch.setattr("observability.tracing.current_session_id", lambda: "chat-public")
@@ -183,20 +159,16 @@ def test_private_partition_captures_nothing_per_caller_kind(caller, monkeypatch)
             _run_chained(_Req("gpt-x", SystemMessage(content="PUBLIC_CONTROL")), _response())
     app = FastAPI()
     register_prompt_routes(app)
-    app.add_middleware(A2AAuthMiddleware)
+    app.add_middleware(auth.A2AAuthMiddleware)
     with TestClient(app) as client:
-        headers = {"Authorization": f"Bearer {caller.token}"}
-        private = client.get("/api/prompts/task-private", headers=headers)
-        public = client.get("/api/prompts/task-public", headers=headers)
-        latest = client.get("/api/prompts/last?session_id=chat-public", headers=headers)
+        private, public, latest = [client.get(f"/api/prompts/{path}", headers={"Authorization": f"Bearer {caller.token}"})
+                                   for path in ("task-private", "task-public", "last?session_id=chat-public")]
     for response in (private, public, latest):
-        assert "PRIVATE_CONTEXT_CANARY" not in response.text
-        assert "PRIVATE_WIRE_CANARY" not in response.text
+        assert all(canary not in response.text for canary in ("PRIVATE_CONTEXT_CANARY", "PRIVATE_WIRE_CANARY"))
     if caller.ctx.state["principal_kind"] == "federation":
         assert [r.status_code for r in (private, public, latest)] == [403, 403, 403]
     else:
-        assert private.status_code == 404
-        assert private.json()["detail"] == "no prompt snapshots for that task"
+        assert private.status_code == 404 and private.json()["detail"] == "no prompt snapshots for that task"
         assert public.status_code == latest.status_code == 200
         assert public.json()["calls"][0]["system"]["stable"] == "PUBLIC_CONTROL"
         assert latest.json()["call"]["system"]["stable"] == "PUBLIC_CONTROL"
@@ -204,7 +176,6 @@ def test_private_partition_captures_nothing_per_caller_kind(caller, monkeypatch)
 @pytest.mark.parametrize("context_id", ["sess-1", "background:proof-1"])
 async def test_later_public_terminal_export_per_caller_kind(caller, server_op, partition, tmp_path, monkeypatch, context_id):
     from a2a.types import a2a_pb2
-    from langchain_core.messages import messages_from_dict, messages_to_dict
     task = a2a_pb2.Task(id="task-c", context_id=context_id)
     await partition.save_private(task, {"messages": messages_to_dict([HumanMessage(content="PRIVATE_STEERING_CANARY")]), "summary": "PRIVATE_SUMMARY_CANARY"}, server_op)
     recovered = (await partition.get_record(task.id, server_op)).private_payload
@@ -250,8 +221,7 @@ def _digest_scenario(tmp_path, monkeypatch, provenance):
     (closed / path.name).write_text(json.dumps({**old, "closed_at": now}))
     assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now)
     assert search_session_summaries("PRIVATE", memory_dir=str(tmp_path)) == []
-    assert memory.digest_entry(old)["topic"] == ""
-    assert memory.format_session_summary(old) == ""
+    assert memory.digest_entry(old)["topic"] == "" and memory.format_session_summary(old) == ""
     assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now, source_card=old, audience="public", source_version=1)
     for policy in ("newest", "relevant"):
         assert memory.load_digest(policy, query="PRIVATE", memory_dir=str(tmp_path)).entries == []
@@ -274,8 +244,7 @@ def _digest_scenario(tmp_path, monkeypatch, provenance):
     delivered = "rocket launch" in context["context"]
     source.path.unlink()  # failed source read must also invalidate cached delivery
     memory._persist_session({"session_id": "chat-1", "incognito": False, "messages": [HumanMessage(content="PRIVATE-UNKNOWN")]}, "trace")
-    assert not path.exists()
-    assert memory.load_digest(memory_dir=str(tmp_path)).entries == []
+    assert not path.exists() and memory.load_digest(memory_dir=str(tmp_path)).entries == []
     assert "rocket launch" not in restarted.compose_context({"session_id": "peer", "messages": []}, record=False)["context"]
     if not delivered:
         raise _DigestDeliveryFailure("Public digest was not delivered")
