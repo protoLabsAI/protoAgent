@@ -82,6 +82,7 @@ const text = (el: Element | null) => el?.textContent ?? "";
 describe("the chain rows (criterion 1)", () => {
   it("renders one Combobox per model labelled Primary then then, with ↑ ↓ ✕ a11y names", async () => {
     await render(<ModelChainInput field={field()} value={["one", "two"]} onChange={vi.fn()} />);
+    await click(q(".model-chain__edit"));
 
     const group = q('[role="group"]');
     expect(group?.getAttribute("aria-label")).toBe("Main model chain");
@@ -111,6 +112,7 @@ describe("+ Add fallback (criterion 2)", () => {
   it("appends an empty row, focuses it, and never saves the empty row", async () => {
     const onChange = vi.fn();
     await render(<ModelChainInput field={field()} value={["one", "two"]} onChange={onChange} />);
+    await click(q(".model-chain__edit"));
 
     const add = [...document.querySelectorAll("button")].find((b) => text(b).includes("Add fallback"));
     await click(add);
@@ -138,6 +140,7 @@ describe("reorder (criterion 3)", () => {
   it("uses moveListItem, keeps focus on the moved row's button, and announces the new position", async () => {
     const onChange = vi.fn();
     await render(<ModelChainInput field={field()} value={["one", "two", "three"]} onChange={onChange} />);
+    await click(q(".model-chain__edit"));
 
     await click(byLabel("Move one down"));
 
@@ -203,6 +206,7 @@ describe("a blank inheriting role (criterion 4)", () => {
     await click(setOwn);
     expect(onChange).toHaveBeenCalledWith(["one", "two"]); // pre-filled with the parent chain
     expect(qa<HTMLInputElement>(".model-chain__combobox").map((i) => i.value)).toEqual(["one", "two"]);
+    expect(document.activeElement).toBe(q(".model-chain__combobox"));
   });
 
   it("Use <parent>'s chain clears an own chain back to inheriting", async () => {
@@ -210,6 +214,7 @@ describe("a blank inheriting role (criterion 4)", () => {
     await render(
       <ModelChainInput field={compaction()} value={["one"]} onChange={onChange} parentChain={["two"]} />,
     );
+    await click(q(".model-chain__edit"));
 
     const useParent = [...document.querySelectorAll("button")].find((b) => text(b).includes("Use aux"));
     await click(useParent);
@@ -221,11 +226,13 @@ describe("a blank inheriting role (criterion 4)", () => {
 describe("the main chain (criterion 5)", () => {
   it("disables ✕ on the last remaining row so the main chain can't be emptied", async () => {
     await render(<ModelChainInput field={field()} value={["one"]} onChange={vi.fn()} />);
+    await click(q(".model-chain__edit"));
     expect(byLabel("Remove one")!.disabled).toBe(true);
   });
 
   it("keeps ✕ enabled while more than one model remains", async () => {
     await render(<ModelChainInput field={field()} value={["one", "two"]} onChange={vi.fn()} />);
+    await click(q(".model-chain__edit"));
     expect(byLabel("Remove one")!.disabled).toBe(false);
     expect(byLabel("Remove two")!.disabled).toBe(false);
   });
@@ -235,6 +242,7 @@ describe("the main chain (criterion 5)", () => {
     await render(
       <ModelChainInput field={field()} value={["one"]} onChange={onChange} legacyFallbacks={["two"]} />,
     );
+    await click(q(".model-chain__edit"));
     // The legacy fallback shows as a row after the primary…
     expect(qa<HTMLInputElement>(".model-chain__combobox").map((i) => i.value)).toEqual(["one", "two"]);
     // …and the next edit folds the whole chain into model.name.
@@ -247,6 +255,7 @@ describe("the main chain (criterion 5)", () => {
 describe("an unknown model (criterion 6)", () => {
   it("shows the warning under an entry that is not in field.options and keeps the entry", async () => {
     await render(<ModelChainInput field={field()} value={["one", "mystery-model"]} onChange={vi.fn()} />);
+    await click(q(".model-chain__edit"));
 
     const warnings = qa(".model-chain__warning");
     expect(warnings).toHaveLength(1); // only the unknown row warns
@@ -267,6 +276,7 @@ describe("the phone card layout (criterion 8)", () => {
     await render(
       <ModelChainInput field={field()} value={["anthropic-oauth:claude-haiku-5-5"]} onChange={vi.fn()} />,
     );
+    await click(q(".model-chain__edit"));
 
     expect(q(".model-chain--phone")).not.toBeNull();
     // The id is split into a muted prefix line and a name line — no inline combobox until Change.
@@ -285,6 +295,7 @@ describe("the phone card layout (criterion 8)", () => {
 
   it("an id with no connection prefix shows only the name line", async () => {
     await render(<ModelChainInput field={field()} value={["protolabs/fast"]} onChange={vi.fn()} />);
+    await click(q(".model-chain__edit"));
     expect(q(".model-chain__id-prefix")).toBeNull();
     expect(text(q(".model-chain__id-name"))).toBe("protolabs/fast");
   });
@@ -339,7 +350,8 @@ it("resolves unsaved ancestors and folds legacy models when another role is save
   const button = (label: string) => qa<HTMLButtonElement>("button").find((b) => text(b).includes(label));
   const trigger = q<HTMLButtonElement>(".pl-accordion__trigger");
   if (trigger?.getAttribute("aria-expanded") !== "true") await click(trigger);
-  expect(qa<HTMLInputElement>(".model-chain__combobox").map((i) => i.value)).toEqual(["one", "two"]);
+  expect(qa(".model-chain__summary .model-chain__id-name").map(text)).toEqual(["one", "two"]);
+  await click(byLabel("Edit Main chain"));
   await click(q('[aria-label="Compaction model chain"] .model-chain__set-own'));
   await click(button("Save & apply"));
   expect(save.mock.calls.some(([updates]) => JSON.stringify(updates["model.name"]) === '["one","two"]')).toBe(true);
@@ -350,13 +362,15 @@ it("resolves unsaved ancestors and folds legacy models when another role is save
   await click(q('[aria-label="Auxiliary model chain"] .model-chain__set-own'));
   expect(qa<HTMLInputElement>('[aria-label="Auxiliary model chain"] input').map((i) => i.value)).toEqual(["two", "one"]);
   await click(button("Discard"));
-  expect(qa<HTMLInputElement>('[aria-label="Main model chain"] input').map((i) => i.value)).toEqual(["one", "two"]);
+  expect(qa('[aria-label="Main model chain"] .model-chain__summary .model-chain__id-name').map(text)).toEqual(["one", "two"]);
+  expect(q('[aria-label="Main model chain"] input')).toBeNull();
   client.clear();
 });
 
 it("protects the main model while a blank fallback is being edited", async () => {
   const onChange = vi.fn();
   await render(<ModelChainInput field={field()} value={["one"]} onChange={onChange} />);
+  await click(q(".model-chain__edit"));
   await click(q(".model-chain__add"));
   expect(byLabel("Remove one")!.disabled).toBe(true);
   await click(byLabel("Remove New model"));
@@ -367,10 +381,45 @@ it("phone Cancel follows its model when another row moves past it, and Add focus
   stubMatchMedia(true);
   const onChange = vi.fn();
   await render(<ModelChainInput field={field()} value={["one", "two"]} onChange={onChange} />);
+  await click(q(".model-chain__edit"));
   await click(qa("button").find((b) => text(b) === "Change"));
   await click(byLabel("Move two up"));
   await click(qa("button").find((b) => text(b) === "Cancel"));
   expect(onChange).toHaveBeenLastCalledWith(["two", "one"]);
   await click(q(".model-chain__add"));
   expect(document.activeElement).toBe(q(".model-chain__combobox"));
+});
+
+
+it.each([false, true])("summarizes saved chains and focuses Edit / Done locally (phone=%s)", async (phone) => {
+  stubMatchMedia(phone);
+  const onChange = vi.fn();
+  await render(<>
+    <ModelChainInput field={field()} value={["one", " ", "connection:mystery"]} onChange={onChange} />
+    <ModelChainInput field={field({ key: "routing.aux_model", label: "Auxiliary", inherits: "main" })}
+      value={["two"]} onChange={onChange} />
+  </>);
+  const main = q('[aria-label="Main model chain"]')!;
+  expect(main.id).toBe("set-model.name");
+  expect([...main.querySelectorAll("ol > li .model-chain__id-name")].map(text)).toEqual(["one", "mystery"]);
+  expect(text(main.querySelector(".model-chain__id-prefix"))).toBe("connection:");
+  expect(main.querySelector(".model-chain__summary-sep")?.getAttribute("aria-hidden")).toBe("true");
+  expect(main.querySelectorAll(".model-chain__warning")).toHaveLength(1);
+  expect(main.querySelector("input, .model-chain__controls")).toBeNull();
+  await click(byLabel("Edit Main chain"));
+  expect(document.activeElement).toBe(main.querySelector(phone ? ".model-chain__change" : "input"));
+  expect(q('[aria-label="Auxiliary model chain"] .model-chain__summary')).not.toBeNull();
+  await click(main.querySelector(".model-chain__done"));
+  expect(main.querySelector("input, .model-chain__controls")).toBeNull();
+  expect(document.activeElement).toBe(byLabel("Edit Main chain"));
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+it.each([[["three"]], [[]]])("closes the editor on an external change to %j", async (value) => {
+  const props = { field: field({ inherits: "main" }), onChange: vi.fn() };
+  await render(<ModelChainInput {...props} value={["one", "two"]} />);
+  await click(q(".model-chain__edit"));
+  await render(<ModelChainInput {...props} value={value} />);
+  expect(q("input, .model-chain__done")).toBeNull();
+  expect(q(value.length ? ".model-chain__summary" : ".model-chain__inherits")).not.toBeNull();
 });
