@@ -169,3 +169,55 @@ describe("reconnect + race fallback", () => {
     expect(attendedSessionForTest()).toBe("sess-2");
   });
 });
+
+describe("reconnect on a new credential (#5405)", () => {
+  // This file runs in the node environment: give the module a window to hear the event on.
+  const EVENT = "protoagent:credential";
+  beforeEach(() => {
+    (globalThis as unknown as { window: EventTarget }).window = new EventTarget();
+  });
+  afterEach(() => {
+    delete (globalThis as unknown as { window?: EventTarget }).window;
+  });
+
+  it("a login re-attends at once instead of reading unattended through the backoff", async () => {
+    vi.useFakeTimers();
+    sseToken.mockRejectedValue(new Error("401")); // the gate is up
+    const { setAttendedSession } = await loadAttend();
+    setAttendedSession("sess-1");
+    for (const wait of [1000, 2000, 4000, 8000]) {
+      await vi.waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+      FakeEventSource.instances[FakeEventSource.instances.length - 1].onerror?.({});
+      FakeEventSource.instances = [];
+      await vi.advanceTimersByTimeAsync(wait);
+    }
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    FakeEventSource.instances[0].onerror?.({}); // next retry would be 16s away
+    FakeEventSource.instances = [];
+
+    sseToken.mockReset();
+    sseToken.mockResolvedValue({ token: "fresh" });
+    window.dispatchEvent(new Event(EVENT));
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    expect(FakeEventSource.instances[0].url).toBe("/api/chat/attend?session=sess-1&token=fresh");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(FakeEventSource.instances.length).toBe(1); // the stale backoff timer was cleared
+  });
+
+  it("leaves a healthy stream alone, and does nothing when no session is attended", async () => {
+    sseToken.mockResolvedValue({ token: "t" });
+    const { setAttendedSession } = await loadAttend();
+    setAttendedSession("sess-1");
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    FakeEventSource.instances[0].onopen?.({});
+    FakeEventSource.instances = [];
+    window.dispatchEvent(new Event(EVENT));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(FakeEventSource.instances.length).toBe(0);
+
+    setAttendedSession(null);
+    window.dispatchEvent(new Event(EVENT));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(FakeEventSource.instances.length).toBe(0);
+  });
+});
