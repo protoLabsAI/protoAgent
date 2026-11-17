@@ -1152,6 +1152,49 @@ async def test_failed_dispatch_requeues_only_a_proven_refusal(tmp_path, ambiguou
 
 
 @pytest.mark.asyncio
+async def test_refusal_after_a_fold_requeues_both_and_never_wedges_the_runner(tmp_path):
+    # The round-2 blocker: a same-audience steer FOLDS into the claimed segment while the head's
+    # dispatch is still in flight (bumping the generation), and then the loopback PROVES refusal
+    # (send returns None). The head never ran, so the folded input never ran either — both must
+    # return to the queue and the runner to idle. The segment must NOT be left running at the
+    # bumped generation with no completer (a wedged runner that never dispatches again).
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    head = await ss.accept_pending_turn(
+        store, session_id="chat-wedge", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op
+    )
+
+    async def send(pending):
+        # In-flight: a second same-audience steer is accepted and folded into the running segment,
+        # bumping the generation the dispatch claimed at.
+        assert pending["seq"] == head["seq"] and pending["state"] == "running"
+        await ss.accept_pending_turn(
+            store, session_id="chat-wedge", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m2", context=op
+        )
+        seg = await ss.read_segment(store, "chat-wedge", op)
+        folded = await ss.try_fold(
+            store, "chat-wedge", generation=seg["generation"], audience=ss.AUDIENCE_PEER, seq=2, context=op
+        )
+        assert folded == seg["generation"] + 1  # the fold committed; the segment moved on
+        return None  # …but the loopback then PROVES refusal (nothing started)
+
+    assert await ss.dispatch_pending_turn(store, "chat-wedge", op, send) is None
+    # Neither input is left running: both are back in the queue in acceptance order, the runner is
+    # idle (not stuck at the folded generation), and next_dispatch can cleanly re-claim the head.
+    seg = await ss.read_segment(store, "chat-wedge", op)
+    assert seg["state"] == "idle" and seg["audience"] == "" and seg["seq"] is None
+    queued = await ss.pending_turns(store, "chat-wedge", op, states=(ss.STATE_QUEUED,))
+    assert [t["dedupe"] for t in queued] == ["m1", "m2"]
+    assert all("segment_seq" not in t for t in queued)  # the fold marker is cleared on requeue
+    assert await ss.pending_turns(store, "chat-wedge", op, states=(ss.STATE_RUNNING,)) == []
+    nxt = await ss.next_dispatch(store, "chat-wedge", op)
+    assert nxt["dedupe"] == "m1"  # the runner re-claims the head cleanly — not wedged
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_recover_durable_steers_fails_closed_without_a_partition(idle_server):
     # The server-layer recovery seam is fail-closed: with no partition store/context there is
     # nothing durable to recover, so it returns None rather than guessing a public restart.

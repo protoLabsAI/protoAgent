@@ -331,6 +331,11 @@ async def dispatch_pending_turn(task_store, session_id: str, context, send) -> s
 
     Exceptions/ambiguous delivery leave the execution reserved for reconciliation, never
     retry automatically. The caller must not translate a timeout into a proven refusal.
+
+    A fold may attach a fresh same-audience input to the claimed segment while ``send`` is in
+    flight (bumping the generation). On a PROVEN refusal nothing this dispatch owned ever ran —
+    not the head, not a folded input — so the head AND every folded turn return to the queue and
+    the runner is released to idle. The segment is never left ``running`` with no completer.
     """
     def claim(records):
         seg = records[segment_task_id(session_id)]
@@ -342,21 +347,34 @@ async def dispatch_pending_turn(task_store, session_id: str, context, send) -> s
         seg.update(generation=seg["generation"] + 1, state=STATE_RUNNING,
                    audience=turn["audience"], seq=turn["seq"], interrupt_id=turn["interrupt_id"])
         turn["state"] = STATE_RUNNING
-        return dict(turn), seg["generation"]
+        return dict(turn)
 
     await _ensure_segment(task_store, session_id, context)
-    claimed = await task_store.update_scheduling_payloads(session_id, context, claim)
-    if claimed is None:
+    turn = await task_store.update_scheduling_payloads(session_id, context, claim)
+    if turn is None:
         return None
-    turn, generation = claimed
     task_id = await send(turn)
     if task_id is None:
         def requeue(records):
             seg = records[segment_task_id(session_id)]
-            if seg["generation"] != generation or seg["state"] != STATE_RUNNING:
+            # A proven refusal: this dispatch never started, so nothing it owned ran. A fold that
+            # landed while send was in flight bumped the generation, so the claim is identified by
+            # the head turn's seq (a fold never changes the segment's seq), NOT the now-stale
+            # generation. If a different claim has taken the runner, leave it alone.
+            head_seq = turn["seq"]
+            if seg["state"] != STATE_RUNNING or seg.get("seq") != head_seq:
                 return
-            records[pending_task_id(session_id, turn["seq"])]["state"] = STATE_QUEUED
-            seg.update(generation=generation + 1, state=SEGMENT_IDLE, audience="", seq=None, interrupt_id="")
+            # Requeue the refused head AND every input folded into this segment: none executed, so
+            # none may be left running with no completer. Then release the runner to idle for a
+            # clean re-dispatch in the recovered acceptance order.
+            for pending in records.values():
+                if pending.get("kind") != KIND_PENDING_TURN or pending.get("state") != STATE_RUNNING:
+                    continue
+                if pending.get("seq") == head_seq or pending.get("segment_seq") == head_seq:
+                    pending["state"] = STATE_QUEUED
+                    pending.pop("segment_seq", None)
+            seg.update(generation=seg["generation"] + 1, state=SEGMENT_IDLE,
+                       audience="", seq=None, interrupt_id="")
 
         await task_store.update_scheduling_payloads(session_id, context, requeue)
     return task_id
