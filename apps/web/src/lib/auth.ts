@@ -13,7 +13,7 @@
 // localhost-default + default-deny bearer-gate posture; the real lever beyond localhost is
 // a CSP connect-src egress limit. See docs/guides/deploy-docker.md → "Where the operator
 // token lives".
-import { effectiveToken, forgetDeviceCredential, OPERATOR_TOKEN_KEY } from "./credentials";
+import { announceCredentialChange, effectiveToken, forgetDeviceCredential, OPERATOR_TOKEN_KEY } from "./credentials";
 import { removeKeyStrict, writeKeyStrict } from "./storage";
 
 const TOKEN_KEY = OPERATOR_TOKEN_KEY;
@@ -72,6 +72,7 @@ export function saveAuthToken(token: string): { ok: true } | { ok: false; error:
   }
   forgetDeviceCredential();
   clearAuthRequired();
+  announceCredentialChange();
   return { ok: true };
 }
 

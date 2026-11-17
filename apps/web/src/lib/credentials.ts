@@ -32,9 +32,32 @@ export const DEVICE_ADDRESSES_KEY = "protoagent.deviceAddresses";
 /** Where this phone moved to (a handoff, ADR 0121 D1): written on the OLD origin just before
  *  navigating, so when that origin is opened again it can point at the new home. */
 export const DEVICE_MOVED_KEY = "protoagent.deviceMovedTo";
-/** Fired on `window` when this tab swaps in a rotated device token, so anything holding a
- *  copy of the bearer (an open plugin frame) can pick up the new one. */
+/** Fired on `window` when this tab's bearer changes: a token saved in the AuthGate (or handed
+ *  over by the desktop shell), a pairing claim, or a rotated device token. Anything holding a
+ *  copy of the bearer (an open plugin frame) picks up the new one, and the SSE clients
+ *  (`events.ts`, `attendSession.ts`) reconnect at once instead of waiting out a backoff of up
+ *  to 30s built up while the gate was showing (#5405). */
 export const CREDENTIAL_CHANGED_EVENT = "protoagent:credential";
+
+/** Tell this tab its bearer changed (see CREDENTIAL_CHANGED_EVENT). */
+export function announceCredentialChange(): void {
+  try {
+    window.dispatchEvent(new Event(CREDENTIAL_CHANGED_EVENT));
+  } catch {
+    /* no window (a worker) — nothing to tell */
+  }
+}
+
+/** Run `fn` whenever this tab's bearer changes. Returns an unsubscribe function; a no-op
+ *  outside a browser. */
+export function onCredentialChange(fn: () => void): () => void {
+  try {
+    window.addEventListener(CREDENTIAL_CHANGED_EVENT, fn);
+    return () => window.removeEventListener(CREDENTIAL_CHANGED_EVENT, fn);
+  } catch {
+    return () => {};
+  }
+}
 
 function read(key: string): string {
   try {
@@ -240,10 +263,6 @@ export function replaceDeviceToken(previous: string, next: string): ReplaceResul
   } catch {
     return "store-failed";
   }
-  try {
-    window.dispatchEvent(new Event(CREDENTIAL_CHANGED_EVENT));
-  } catch {
-    /* no window (a worker) — nothing to tell */
-  }
+  announceCredentialChange();
   return "replaced";
 }
