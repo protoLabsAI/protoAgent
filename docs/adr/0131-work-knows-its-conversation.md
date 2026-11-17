@@ -111,7 +111,7 @@ Each phase is boarded as small or medium cards (four files or fewer each, per th
 - Status: Accepted by Josh as direction (2026-11-17, answer 5 "as recommended": record the private-steering design here as an amendment rather than a new ADR). The Phase 1 implementation proof is authorized and in progress (Josh's Phase 1 go, 2026-11-17); **CONTINUE — the decision that would carry this past the bounded Phase 1 proof slices into production — has not been made.**
 - Date: 2026-11-17
 - Deciders: Josh Mabry; protoAgent maintainers
-- Source: [docs/design/conversations-in-work-proposal.md](../design/conversations-in-work-proposal.md), "Design revision after Phase 0" sections 2–4 and "Decisions recorded 2026-11-16" (including the decision-1 clarification). That proposal records the Phase 0 (bd-h6gka) REVISE verdict, the Model B recommendation, and the four Phase 0 issues (#5400–#5403) this design answers.
+- Source: the Conversations in Work proposal, `docs/design/conversations-in-work-proposal.md`, "Design revision after Phase 0" sections 2–4 and "Decisions recorded 2026-11-16" (including the decision-1 clarification). That proposal records the Phase 0 (bd-h6gka) REVISE verdict, the Model B recommendation, and the four Phase 0 issues (#5400–#5403) this design answers.
 
 This amendment records the private-steering design for Conversations in Work on the stores ADR 0131 already commits to. It does not change D1–D6, the phases, or any other ADR; it extends them with how a private audience is identified, stored and scheduled. Nothing here authorizes the build beyond the Phase 1 proof slices named in the proposal.
 
