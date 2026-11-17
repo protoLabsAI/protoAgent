@@ -800,7 +800,8 @@ def test_public_projection_filters_open_closed_relevant_and_cached_prompts(tmp_p
     assert search_session_summaries("PRIVATE", memory_dir=str(tmp_path)) == []
     assert memory.digest_entry(old)["topic"] == ""
     assert memory.format_session_summary(old) == ""
-    assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now, source_card=old)
+    assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now, source_card=old,
+                                            audience="public", source_version=1)
     for policy in ("newest", "relevant"):
         assert load_digest(policy, query="PRIVATE", memory_dir=str(tmp_path)).entries == []
     assert "PRIVATE" not in (mw.compose_context({"session_id": "peer", "messages": []}, record=False) or {}).get("context", "")
@@ -810,7 +811,11 @@ def test_public_projection_filters_open_closed_relevant_and_cached_prompts(tmp_p
     assert "PRIVATE" not in json.dumps(card)
     for policy in ("newest", "relevant"):
         assert "rocket launch" in load_digest(policy, query="rocket", memory_dir=str(tmp_path)).block
-    assert memory.record_closed_session("chat-1", topic="ignored", gist="ignored", closed_at=now, source_card=card)
+    card.update(audience="public", source_version=1)
+    assert memory.record_closed_session("chat-1", topic="ignored", gist="ignored", closed_at=now, source_card=card,
+                                        audience="mixed", source_version=0)
+    closed_card = json.loads((closed / path.name).read_text())
+    assert closed_card["audience"] == "public" and closed_card["source_version"] == 1
     path.unlink()  # closed record outlives the open card
     monkeypatch.setattr(public_memory, "_source_reader", PublicMemorySource(source.path))
     restarted = KnowledgeMiddleware(None)

@@ -326,6 +326,12 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
 
         env, argv = manager.run_exec(wid, ["--ui", "none"])
         full_env = {**os.environ, **env}
+        # Delegation signing authority belongs to the hub. Never hand its private seed
+        # to a member, or inherit the hub's workspace root where the persisted key lives.
+        # With its own PROTOAGENT_HOME, the member resolves its own workspace/key store.
+        full_env.pop("PROTOAGENT_FLEET_DELEGATION_SEED", None)
+        if "PROTOAGENT_WORKSPACES_DIR" not in env:
+            full_env.pop("PROTOAGENT_WORKSPACES_DIR", None)
         # Fleet service token (ADR 0089): the instance's internal, loopback-only credential.
         # A hub-spawned member binds loopback and is reached in-process (the fleet proxy) or by
         # its own PM/delegates. It used to run OPEN — inheriting the hub's inbound

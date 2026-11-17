@@ -7,6 +7,12 @@ import re
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from graph.conversation_audience import (
+    PUBLIC_AUDIENCE,
+    SOURCE_VERSION,
+    public_messages,
+    public_projection,
+)
 from graph.message_blocks import text_of
 from graph.output_format import extract_output
 from knowledge.store import (
@@ -131,8 +137,14 @@ def archive_payload(
     and records the known message date span. Each transcript line also carries
     its own day; undated messages remain explicitly undated.
 
+    Conversations in Work (ADR 0131 §5): private-partition messages never enter a shared
+    archive. They are dropped before rendering, and the row records the public audience and
+    projection version. A conversation without a private partition is unaffected — it has no
+    private messages to drop.
+
     ``trailing_date`` defaults to today (see :func:`message_dates`)."""
     today = _today()
+    messages = public_messages(messages)
     trailing = trailing_date if _DAY.match(trailing_date or "") else today
     dates = message_dates(messages, session_id, trailing_date=trailing)
     lines: list[str] = []
@@ -169,6 +181,8 @@ def archive_payload(
         "span_end": max(days) if days else None,
         "heading": f"Conversation archive ({prefix}{session_id}, {label})",
         "namespace": f"chat-archive:{session_id}",
+        "audience": PUBLIC_AUDIENCE,
+        "source_version": SOURCE_VERSION,
     }
 
 
@@ -801,9 +815,19 @@ async def harvest_thread(
         import asyncio
 
         session_id = str(channel_values.get("session_id") or thread_id)
-        archives = await asyncio.to_thread(history_store.list_for_session, session_id, kinds=["archive"])
+        # Conversations in Work (ADR 0131 §5): a later ordinary turn can clear `incognito`
+        # while older private messages remain in the checkpoint (#5403), so protection can't
+        # ride the thread flag above — it follows the retained data. Read archives INCLUDING
+        # private spans so the projection can both detect a private partition and exclude it,
+        # then derive only from public messages and public archive spans. Without a private
+        # partition the projection returns everything, exactly as before.
+        archives = await asyncio.to_thread(
+            history_store.list_for_session, session_id, kinds=["archive"], include_private=True
+        )
+        projection = public_projection(messages, archives)
+        messages = projection.messages
         transcript = "\n\n".join(
-            [entry.content for entry in archives] + [render_transcript(messages, max_chars=None)]
+            [entry.content for entry in projection.archives] + [render_transcript(messages, max_chars=None)]
         )
         if not transcript.strip():
             return None
@@ -832,6 +856,8 @@ async def harvest_thread(
             heading=f"Conversation summary ({thread_id}" + (f", last active {as_of})" if as_of else ")"),
             span_end=as_of or None,
             namespace=namespace,
+            audience=PUBLIC_AUDIENCE,
+            source_version=SOURCE_VERSION,
         )
         log.info("[harvest] summarized thread %s into history (entry %s)", thread_id, entry_id)
 
@@ -848,11 +874,13 @@ async def harvest_thread(
                 await asyncio.to_thread(
                     record_closed_session,
                     session_id,
-                    topic=_first_user_text(messages),
+                    topic=_first_user_text(messages),  # public messages only (see projection above)
                     gist=gist,
                     closed_at=_now_iso(),
                     message_count=len(messages),
                     closed_days=closed_days,
+                    audience=PUBLIC_AUDIENCE,
+                    source_version=SOURCE_VERSION,
                 )
         except Exception:  # noqa: BLE001 — the closed-digest record is best-effort
             log.warning("[harvest] could not record the closed-session entry for %s", thread_id, exc_info=True)
@@ -866,6 +894,15 @@ async def harvest_thread(
                 log.info("[harvest] thread %s is not an operator chat — skipping fact extraction", thread_id)
             elif memory_store is None:
                 log.info("[harvest] no memory store — skipping fact extraction for thread %s", thread_id)
+            elif not projection.facts_ok:
+                # Conversations in Work (ADR 0131 §5): a private partition with unknown/mixed
+                # provenance fails closed — the public part cannot be cleanly isolated, so no
+                # facts are extracted (fail-closed omission over an unsupported privacy promise).
+                log.info(
+                    "[harvest] thread %s has %s provenance — skipping fact extraction",
+                    thread_id,
+                    projection.lineage,
+                )
             else:
                 from graph.memory_facts import extract_and_store_facts
 
@@ -875,6 +912,11 @@ async def harvest_thread(
                     "namespace": namespace,
                     "source": thread_id,
                     "as_of": as_of,
+                    # The extractor's input is the public transcript (private messages and
+                    # non-public archive spans were already dropped by the projection above);
+                    # stamp the stored facts with the public lineage so a private fact can
+                    # never later merge into or supersede one of them (ADR 0131 §5).
+                    "audience": PUBLIC_AUDIENCE,
                 }
                 if fact_extractor is not None:
                     kwargs["extractor"] = fact_extractor

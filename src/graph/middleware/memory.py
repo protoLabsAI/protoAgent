@@ -802,6 +802,8 @@ def record_closed_session(
     closed_days: int = 14,
     base: str | None = None,
     source_card: dict | None = None,
+    audience: str | None = None,
+    source_version: int | None = None,
 ) -> bool:
     """Write the chat's "closed" digest record (ADR 0132 D3b). Best-effort: returns True
     when a record was written, False (with a log) otherwise — a harvest must never fail
@@ -832,6 +834,8 @@ def record_closed_session(
             "gist": gist or "",
             "timestamp": closed_at,
             "closed_at": closed_at,
+            "audience": audience,
+            "source_version": source_version,
         }
         if source_card is not None:
             if source_card.get("session_id") != session_id or not public_card(source_card):
