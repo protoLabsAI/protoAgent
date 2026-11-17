@@ -119,6 +119,22 @@ async def test_result_does_not_leak_into_the_next_call():
 
 
 @pytest.mark.asyncio
+async def test_large_stdout_over_64kib_does_not_kill_the_kernel():
+    # The exec_result frame carries the WHOLE stdout as one JSON line. Above
+    # asyncio's default 64 KiB StreamReader limit, readline() would raise and
+    # kill the kernel; the parent must read the frame whole (parity with the
+    # one-shot communicate() path) so a big-output exec keeps its state.
+    n = 200_000  # comfortably over 64 KiB, before and after JSON-encoding
+    out = await _run(f"keep = 'kept'\nprint('a' * {n})", "sbig", truncate=10 * n)
+    assert "a" * 1000 in out  # the big output came back…
+    assert "kernel restarted" not in out  # …not a kernel-died error
+    # The kernel survived the large reply, so the same call's variable persists.
+    nxt = await _run("print(keep)", "sbig")
+    assert "kept" in nxt
+    assert "new kernel" not in nxt  # the kernel was reused, not restarted
+
+
+@pytest.mark.asyncio
 async def test_bridged_tool_call_works_in_kernel():
     out = await _run("print(tools.echo_tool(text='hi'))", "sb1", tool_map={"echo_tool": echo_tool})
     assert "HI" in out

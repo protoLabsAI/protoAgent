@@ -182,6 +182,35 @@ def _write_driver_file() -> str:
     return path
 
 
+async def _read_frame(reader: asyncio.StreamReader) -> bytes:
+    """Read one newline-terminated frame from ``reader`` with NO size ceiling.
+
+    An ``exec_result`` frame carries the call's WHOLE stdout as a single JSON
+    line, so a script that prints more than asyncio's default 64 KiB
+    ``StreamReader`` limit would make ``StreamReader.readline()`` raise
+    ``ValueError`` — and that escapes the read loop, kills the kernel and wipes
+    the session's state even though the exec succeeded. Reassemble the line from
+    the ``LimitOverrunError`` chunks instead, so a kernel reply is as unbounded as
+    the one-shot path's ``proc.communicate()``. Returns ``b""`` at a clean EOF.
+    """
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = await reader.readuntil(b"\n")
+        except asyncio.LimitOverrunError as exc:
+            # The newline isn't within the limit yet: drain exactly the bytes
+            # scanned so far (already buffered, so this returns at once) and keep
+            # reading for the separator.
+            chunks.append(await reader.readexactly(exc.consumed))
+            continue
+        except asyncio.IncompleteReadError as exc:
+            # EOF before a newline — return whatever remained (b"" at a clean EOF).
+            chunks.append(exc.partial)
+            return b"".join(chunks)
+        chunks.append(chunk)
+        return b"".join(chunks)
+
+
 def _format_kernel_output(msg: dict) -> str:
     """Turn an ``exec_result`` frame into the same shaped text the one-shot path
     returns: stdout, an optional ``--- result ---`` block, or an error report."""
@@ -311,7 +340,10 @@ class Kernel:
         reader = self._conn[0]  # type: ignore[index]
         try:
             while True:
-                line = await reader.readline()
+                # Unbounded: an exec_result frame carries the full stdout, which can
+                # exceed asyncio's 64 KiB readline limit — reading it whole keeps a
+                # large-output exec from killing the kernel (parity with communicate()).
+                line = await _read_frame(reader)
                 if not line:
                     break
                 try:
