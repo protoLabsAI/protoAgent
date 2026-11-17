@@ -1615,19 +1615,11 @@ def test_device_principal_lifecycle(transition, tmp_path, monkeypatch):
 # by localhost, never by self_invocation_headers, never by a swapped fleet bearer.
 
 
-@pytest.fixture
-def _delegation_env(monkeypatch):
-    import graph.fleet.service_token as st
-    from graph.fleet import delegation
-
-    monkeypatch.setattr(st, "resolve_service_token", lambda: "TEST-FLEET-KEY")
-    delegation._revocation_generation[0] = 0
-    delegation.reset_ledger()
-    yield delegation
-    delegation.reset_ledger()
+# ``delegation_env`` (deterministic Ed25519 hub keypair + clean ledger/revocation generation)
+# is the shared fixture in tests/conftest.py — the same one test_fleet_proxy uses.
 
 
-def test_spoofed_principal_header_is_ignored_by_the_middleware(_delegation_env):
+def test_spoofed_principal_header_is_ignored_by_the_middleware(delegation_env):
     """A client-set X-Principal-Kind never upgrades the verified kind: a peer (fleet) bearer
     with a spoofed human principal header stays a peer through the real middleware."""
     from starlette.responses import JSONResponse
@@ -1647,34 +1639,39 @@ def test_spoofed_principal_header_is_ignored_by_the_middleware(_delegation_env):
     assert r.json() == {"kind": "fleet-service", "human": False}
 
 
-def test_self_invocation_headers_never_confer_human_operator(_delegation_env):
-    """A self-invocation presents the shared operator bearer: operator TIER (keeps its powers),
-    human AS A CREDENTIAL, but NOT a human operator for private content — it carries no
-    delegation. The header shape is unchanged (the golden in test_a2a_auth_conformance)."""
+def test_self_invocation_headers_never_confer_human_operator(delegation_env):
+    """A self-invocation presents the shared operator bearer: it KEEPS its operator tier/powers
+    (ordinary self-invocations are unchanged), but it NEVER confers human-operator status for a
+    private op — that status comes only from a verified delegation, which these headers never
+    carry. The header shape is unchanged (the golden in test_a2a_auth_conformance)."""
     auth.configure(bearer_token="shared", api_key="", allowed_origins_raw="")
     headers = auth.self_invocation_headers()
     assert headers == {"Authorization": "Bearer shared"}
 
+    # The shared bearer is a human-CAPABLE credential kind, but that is not the same as a human
+    # being present for a private op. The self-invocation keeps its operator tier (its powers)...
     cred = auth._classify_token("shared")
-    assert cred.tier == "operator" and auth.is_human_operator(cred.principal_kind)
-
+    assert cred.tier == "operator"
+    # ...yet confers NO human-operator status: resolve_human_operator (the gate) sees no
+    # delegation on a request bearing only these headers, so it denies. This is the behaviour the
+    # test is named for — never self-invocation, never localhost; only a verified delegation.
     req = SimpleNamespace(headers=headers)  # shared bearer, no delegation
     assert auth.resolve_human_operator(req, audience="loopback-self", operation="op-1") is None
 
 
-def test_localhost_never_confers_human_operator(_delegation_env):
+def test_localhost_never_confers_human_operator(delegation_env):
     """Being on loopback with the shared bearer is not a human operator — no delegation."""
     auth.configure(bearer_token="shared", api_key="", allowed_origins_raw="")
     req = SimpleNamespace(headers={"Authorization": "Bearer shared"}, client=SimpleNamespace(host="127.0.0.1"))
     assert auth.resolve_human_operator(req, audience="loopback-self", operation="op") is None
 
 
-def test_loopback_delegation_round_trip_is_idempotent(_delegation_env):
+def test_loopback_delegation_round_trip_is_idempotent(delegation_env):
     """The chat.py loopback intake redeems a single-operation delegation idempotently."""
     from server.chat import _mint_loopback_delegation, _redeem_loopback_delegation
 
     token = _mint_loopback_delegation(context="sess-1", operation="op-7", task_id="task-7")
-    headers = {_delegation_env.DELEGATION_HEADER: token}
+    headers = {delegation_env.DELEGATION_HEADER: token}
     grant = _redeem_loopback_delegation(headers, context="sess-1", operation="op-7", task_id="task-7")
     assert grant is not None and grant.operation == "op-7" and grant.task_id == "task-7"
     assert auth.is_human_operator(grant.principal_kind)
@@ -1687,24 +1684,29 @@ def test_loopback_delegation_round_trip_is_idempotent(_delegation_env):
     assert _redeem_loopback_delegation(headers, context="sess-1", operation="op-7", task_id="other") is None
 
     # A loopback owner does not honor a proxy-issued delegation (issuer is pinned).
-    proxy_token = _delegation_env.mint_delegation(
+    proxy_token = delegation_env.mint_delegation(
         audience="loopback-self", method="SendMessage", context="sess-1", operation="op-7", task_id="task-7",
-        issuer=_delegation_env.ISSUER_PROXY,
+        issuer=delegation_env.ISSUER_PROXY,
     )
     assert _redeem_loopback_delegation(
-        {_delegation_env.DELEGATION_HEADER: proxy_token}, context="sess-1", operation="op-7", task_id="task-7"
+        {delegation_env.DELEGATION_HEADER: proxy_token}, context="sess-1", operation="op-7", task_id="task-7"
     ) is None
 
 
-def test_resolve_human_operator_fails_closed(_delegation_env):
-    """Forged target, unreadable revocation and expiry all deny; only the genuine grant resolves."""
+def test_resolve_human_operator_fails_closed(delegation_env):
+    """Forged signature, forged target, unreadable revocation and expiry all deny; only the
+    genuine grant resolves — all through resolve_human_operator (the owner-side middleware)."""
     from server.chat import _mint_loopback_delegation
 
     assert auth.resolve_human_operator(SimpleNamespace(headers={}), audience="loopback-self", operation="op") is None
 
     token = _mint_loopback_delegation(context="s", operation="op", task_id="t")
-    req = SimpleNamespace(headers={_delegation_env.DELEGATION_HEADER: token})
+    req = SimpleNamespace(headers={delegation_env.DELEGATION_HEADER: token})
     common = dict(operation="op", context="s", task_id="t", idempotent=True)
+
+    payload, _sig = token.split(".", 1)  # a tampered signature resolves to None
+    forged_req = SimpleNamespace(headers={delegation_env.DELEGATION_HEADER: payload + ".AAAA"})
+    assert auth.resolve_human_operator(forged_req, audience="loopback-self", **common) is None
 
     assert auth.resolve_human_operator(req, audience="someone-else", **common) is None  # wrong target
 
@@ -1712,7 +1714,7 @@ def test_resolve_human_operator_fails_closed(_delegation_env):
         raise RuntimeError("revocation down")
 
     assert auth.resolve_human_operator(req, audience="loopback-self", revocation_check=boom, **common) is None
-    future = time.time() + _delegation_env._DELEGATION_TTL + 1
+    future = time.time() + delegation_env._DELEGATION_TTL + 1
     assert auth.resolve_human_operator(req, audience="loopback-self", now=future, **common) is None
 
     ok = auth.resolve_human_operator(req, audience="loopback-self", **common)

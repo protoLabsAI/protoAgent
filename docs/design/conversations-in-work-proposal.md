@@ -207,34 +207,34 @@ holders cannot establish a narrower recipient: refuse private release until a
 stable device/service principal is enrolled. Delivery is only to that original
 requester's authorized task handles and registered, revalidated push destination;
 a second peer in the same context gains no right to it. Recipient changes require
-a new explicit grant, not a model-edited URL, role or context field.
+a new server-side delivery record, not a model-edited URL, role or context field.
 
-Ordinary private output, including a purported “intended result,” is retained as
-a private draft. For the first version, the console shows the exact result to
-release, recipient and attachments; an explicit console instruction authorizes
-those bytes. A “tell them the deadline moved” instruction can supply the exact
-relay text in the same console operation; unstructured instruction parsing may
-prepare a draft but cannot issue a grant. A grant covers only the selected text,
-structured fields and immutable file versions, never the surrounding steer or
-its replies. This deliberately adds a release step for private-derived results;
-it does not forbid the agent from acting on private instructions or delivering
-results once authorized. Ordinary peer work that has read no private material
-continues normally. Broader automatic private-derived result release is deferred,
-not silently entrusted to the model (see Questions for Josh).
+Per Q1, v1 uses **auto delivery**: the agent's intended result for the original
+requester goes out through the deliver-to-requester action without a per-result
+console approval step, exact-payload preview or release grant. The agent may act
+on private instructions and deliver results. What the server still guarantees is
+that the steer text and the agent's private replies to the operator are never
+delivered on a peer channel (stream, subscription, poll, push, saved history,
+tool output) and are never stored in peer-readable history. Auto delivery contains
+the private exchange itself, not the model's wording, so it does **not** stop the
+model from repeating what it was told inside a result. A “tell them the deadline
+moved” relay is an ordinary delivered result under this action. Ordinary peer work
+that has read no private material continues normally. A per-steer “hold for my
+review” option is a possible later addition, not part of v1 (see Questions for Josh).
 
 Persist a versioned delivery record in server-only columns on existing task
 records (not wire-visible SDK metadata): delivery
-ID, requester binding, private turn ID, release kind (result or relay), exact
-payload/blob references and digest, console grant ID and credential generation,
-expiry, idempotency key, and prepared/authorized/dispatching/delivered/revoked
-state. Grant and immutable payload commit before any publication. The dispatcher
-checks recipient, payload digest, live grant and audience generation, then uses
-the same sealed payload for every transport and durable peer projection. Changing
-one byte invalidates authorization. Revocation prevents dispatch not yet committed;
-already published bytes cannot be recalled. Retries reuse the delivery/artifact
-ID: history is idempotent; push may be at-least-once and includes the stable ID.
-A crash after external send but before acknowledgment must not invent a second
-release or claim exactly-once network delivery.
+ID, requester binding, private turn ID, release kind (result or relay),
+payload/blob references and digest, credential generation, idempotency key, and
+prepared/dispatching/delivered/canceled state. The delivery record and its sealed
+payload commit before any publication. The dispatcher checks recipient, payload
+digest and audience generation, then uses the same sealed payload for every
+transport and durable peer projection. Changing one byte invalidates the record.
+Cancellation prevents dispatch not yet committed; already published bytes cannot
+be recalled. Retries reuse the delivery/artifact ID: history is idempotent; push
+may be at-least-once and includes the stable ID. A crash after external send but
+before acknowledgment must not invent a second release or claim exactly-once
+network delivery.
 
 **Seams.** [executor.py](../../src/a2a_impl/executor.py) `_flush_text` (1182),
 `steer_consumed` (1479), `_finalize` (1207) and progress hooks must publish through
@@ -243,12 +243,15 @@ the release projection; [stores.py](../../src/a2a_impl/stores.py)
 reads before SDK serialization. Existing tier ownership remains an additional
 check, not release authority.
 
-**Rejected alternatives and risk.** Model A, an unauthenticated B event, a prompt
-asking for discretion, and substring canary filters cannot establish what the
-operator released; paraphrases and file encodings evade text filters. Exact-byte
-release is enforceable but costs an operator interaction and cannot protect
-against an operator approving sensitive content by mistake. The preview must
-include filenames, structured fields and file contents, not just an answer bubble.
+**Rejected alternatives and risk.** Model A (the model labels each output's
+audience), a bare unauthenticated B event, and a prompt asking the model for
+discretion cannot enforce the contract against a wrong model decision; the
+server-side deliver-to-requester action bound to a delivery record is the
+enforcement point. Auto delivery (Q1) removes the per-result console step, so it
+cannot stop the model from repeating private material inside a result it was
+authorized to send: it contains the private exchange itself — the steer text,
+private replies and their surfaces — not the model's wording. A per-steer "hold
+for my review" option could add that check later; it is not part of v1.
 
 ### 2. Private storage for idle and parked steering
 
@@ -377,10 +380,11 @@ no human identity. The device kind proves a credential was **paired for the
 operator's personal device use, not that a human is present, attentive or
 unautomated**, and not *who* holds it. Agents with access to the human's browser,
 bearer, credential files or credential-management powers can impersonate it.
-Private steering must remain disabled where those resources cannot be isolated
-from agents; a classifier cannot solve same-OS-user compromise. The
-kind-records-pairing-not-user limit is raised under Questions for Josh; it is not
-a reason to relabel an agent as human or reopen decision 1.
+Per Q2, private steering stays enabled everywhere, including where those resources
+cannot be isolated from agents; a classifier cannot solve same-OS-user compromise,
+and that risk is accepted. The kind-records-pairing-not-user limit is raised under
+Questions for Josh; it is not a reason to relabel an agent as human or reopen
+decision 1.
 
 ### 4. One audience per turn, durably scheduled
 
@@ -493,28 +497,30 @@ bypass and arbitrary tool side effects are **inspection findings**, not executed
 proof of comprehensive quarantine. #5403's observation paths remain relevant to
 terminal/error hooks as well.
 
-**Proposed design.** Apply the delivery grant to the final serialized envelope,
+**Proposed design.** Apply the delivery record to the final serialized envelope,
 not just text events. Private files are staged outside peer-readable workspace
-paths; bind hashes, names, MIME types, sizes and file versions to a release.
-Downloads and signed URLs must check the intended principal and live release,
-not merely possession of an old task or broad operator credential. A preview or
-thumbnail is also content. Park/resume carries private file ownership and audience;
-no context-only carry may attach them to the next peer answer. Structured output
-is private until its entire DataPart and metadata are sealed into a grant.
-Finalization cannot append unapproved fields/files after that seal.
+paths; bind hashes, names, MIME types, sizes and file versions to a delivery
+record. Downloads and signed URLs must check the intended principal and live
+delivery record, not merely possession of an old task or broad operator credential.
+A preview or thumbnail is also content. Park/resume carries private file ownership
+and audience; no context-only carry may attach them to the next peer answer.
+Structured output is private until its entire DataPart and metadata are sealed into
+a delivery record. Finalization cannot append fields/files after that seal.
 
 Tools inherit the turn's audience and an effect policy before invocation. Local
-private computation can run in isolated scratch storage. Publishing tools
-(A2A/send, email, web requests containing data, shared file writes, commands,
-plugins and delegated agents) require a destination-and-exact-payload/effect
-manifest authorized by the console; they cannot bypass delivery with a tool call.
-Unknown or unsandboxable effectful tools are unavailable in private turns.
-A delegate is a peer under decision 1: delegating the steer itself requires an
-explicit scoped relay grant. Reusable automatic permissions cannot authorize
-arbitrary private arguments. Tool arguments, progress, stdout and results remain
-private even when the intended side effect is approved; a separate release is
-needed to publish them. The practical limit is enforcement at filesystem/network
-and tool boundaries, not a model-generated “safe tool” label.
+private computation can run in isolated scratch storage. Per decision 2 the agent
+may act on what it was told, so publishing tools (A2A/send, email, web requests
+containing data, shared file writes, commands, plugins and delegated agents) no
+longer need a console-authorized destination-and-exact-payload/effect manifest:
+the agent may invoke them to carry out the instruction. **Unknown or unsandboxable
+effectful tools are unavailable in private turns** (unchanged). A delegate is a
+peer under decision 1: delegating the steer content itself is a relay to that peer
+and rides the same server-side delivery record, not a private side channel. Tool
+arguments, output, progress, stdout, errors and files from a private segment stay
+private unless they are part of the delivered result; carrying out a side effect
+does not by itself publish its arguments or output. The practical limit is
+enforcement at filesystem/network and tool boundaries, not a model-generated
+“safe tool” label.
 
 All errors, stalls, implicit end-of-stream, cancellation and cleanup paths use
 the same audience projection. Peers get fixed content-free status codes; raw
@@ -546,33 +552,45 @@ that output filtering contained them.
 ### Questions for Josh
 
 These are trade-offs for the proposed mechanisms, not amendments to the six
-recorded decisions. Josh gave his answers on 2026-11-16; each is recorded
-verbatim under its question below. Q3, Q4 and Q5 are decided; Q1 stays
-undecided; Q2 records his words plus an operator reading that still needs his
-confirmation. None changes the six recorded decisions or the decision-1
-clarification.
+recorded decisions. Josh gave his answers on 2026-11-16 and 2026-11-17; each is
+recorded verbatim under its question below. Q3, Q4 and Q5 are decided
+(2026-11-16); Q1 and Q2 are decided (2026-11-17). None changes the six recorded
+decisions or the decision-1 clarification.
 
 - **Result release interaction:** the unauthenticated B action in #5400 can carry
-  any text. Exact-payload console release makes the contract enforceable but adds
-  a step even for intended private-derived results. Accept that conservative v1
-  interaction, or redirect the design toward a separately proven automatic result
-  contract? Until then, automatic private-derived free-text delivery is not
-  proposed as safe. Decision 2 remains unchanged.
+  any text. The question was whether to require an exact-payload console release
+  for every private-derived result — enforceable, but a step even for intended
+  results — or to adopt auto delivery through the explicit deliver-to-requester
+  action. Decision 2 remains unchanged either way.
 
-  **Josh undecided, 2026-11-16.** "Im honestly not sure here." This question
-  stays open; no option is chosen here. Decision 2 remains unchanged.
+  **Decided by Josh, 2026-11-17.** Before the choice was explained: "i think auto
+  delviery for releasing results to a peer. im not sure the exact problem that is
+  trying to solve tbh, help me understand". After the explanation: "yes auto
+  delivery, and yes keep it on everywhere".
+
+  v1 uses **auto delivery**: the agent's result for the original requester goes out
+  through the explicit deliver-to-requester action (Model B). There is **no console
+  grant, no exact-payload release and no preview.** The server guarantees that
+  steering text and the agent's private replies to the operator are never delivered
+  on peer channels (stream, subscription, poll, push, saved history, tool output)
+  and are never stored in peer-readable history. This does **not** guarantee that
+  the model won't repeat what it was told inside a result: auto delivery contains
+  the private exchange itself, not the model's choice of words. A per-steer "hold
+  for my review" option is a possible later addition and is not part of v1.
+  Decision 2 remains unchanged.
 - **Deployment boundary:** #5402 cannot distinguish a human from an agent that
   steals console authority. Accept disabling private steering where credential
   and tool isolation cannot be established, rather than weakening decision 1?
 
-  **Josh answered 2026-11-16 (not yet a decision).** "accept the risk, im not too
-  stressed about this situation happening."
+  **Decided by Josh, 2026-11-17.** On 2026-11-16: "accept the risk, im not too
+  stressed about this situation happening." Confirmed 2026-11-17: "yes keep it on
+  everywhere".
 
-  Operator's reading, pending Josh's confirmation: do **not** disable private
-  steering where credential and tool isolation cannot be established; the risk
-  that an agent obtains console authority is accepted. This is the opposite of
-  the option the question proposed (which was to disable steering in that case).
-  Recorded as pending Josh's confirmation, not marked decided.
+  Private steering stays **enabled everywhere**; it is not disabled where
+  credential and tool isolation cannot be established. The risk that an agent
+  obtains console authority is accepted. There is **no per-deployment disable
+  switch.** This is the opposite of the option the question proposed (which was to
+  disable steering in that case). Decision 1 is unchanged.
 - **Device kind records pairing, not who uses it:** section 3 treats the shared
   operator bearer and paired `device`-kind devices as the human operator. A
   device's kind is set at pairing time (src/security/devices.py; fixed when the
@@ -606,23 +624,25 @@ clarification.
 
 ## Phase 1 as revised
 
-**Every slice below is proposed, needs Josh's go.** These are small potential
-board slices, not new cards or permission to implement. The old Phase 1 row is
-refined by these gates; Phases 2–6 remain unauthorized. After an explicit go,
-start only with the bounded proof slices needed to execute the next section;
-production integration, migration and UI enablement wait for their evidence and
-Josh's CONTINUE decision. A green run alone does not authorize further phases.
+**P1a–P1g below are authorized proof slices (Josh, 2026-11-17); P1h stays
+proposed, needs Josh's go.** On 2026-11-17 Josh said "then we are ready for
+phase 1", authorizing the bounded proof slices. These are small board slices, not
+permission to go past them. The old Phase 1 row is refined by these gates; Phases
+2–6 remain unauthorized. Start only with the bounded proof slices needed to
+execute the next section; production integration, migration and UI enablement
+(P1h) wait for the proof gate's evidence and Josh's CONTINUE decision. A green run
+alone does not authorize further phases.
 
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
-| P1a identity proof | Propagate a verified principal kind from `_classify_token`/the device record, separate from the operator tier: the shared bearer and `device`-kind devices read as the human operator; the fleet service token, `agent`-kind devices and federation read as peers. Scoped loopback; reuse existing device pairing/rotation/revoke, **no new console credential**, no private UI. Prove fleet-token and `agent`-device rejection and `device`-kind acceptance before private reads. | proposed, needs Josh's go |
-| P1b private persistence proof | Private input/reply partition and public history projection on existing task records; idle and guarded parked resume, with original resolver binding. Depends on P1a. | proposed, needs Josh's go |
-| P1c scheduling proof | Durable sequence/segment claim, safe boundaries, deduplication, park/resume and crash recovery on the existing runner. Depends on P1b. | proposed, needs Josh's go |
-| P1d delivery proof | Immutable payload grant, original-requester binding, recipient projection, retry/revoke and durable delivery state. Depends on P1a–c. | proposed, needs Josh's go |
-| P1e other-exit proof | Seal structured/files at finalization; private tool/effect restrictions, error/cancel cleanup and scoped downloads. Depends on P1d. | proposed, needs Josh's go |
-| P1f derived-memory proof | Public projection for gist/digest, then harvest/archives/facts in a separate small slice; test later ordinary turns and stale records. Depends on P1b–c. | proposed, needs Josh's go |
-| P1g observability proof | Trace/prompt suppression and public-only fleet export, including background/terminal paths and later turns. Depends on P1b–c. | proposed, needs Josh's go |
-| P1h integration, only after proof gate | Reviewed schema migration/reconciliation, compatibility refusal, rollback gating and operator diagnostics. Release UI requires its own approved spec/preview before boarding; no Work composer yet. | proposed, needs Josh's go |
+| P1a identity proof | Propagate a verified principal kind from `_classify_token`/the device record, separate from the operator tier: the shared bearer and `device`-kind devices read as the human operator; the fleet service token, `agent`-kind devices and federation read as peers. Scoped loopback; reuse existing device pairing/rotation/revoke, **no new console credential**, no private UI. Prove fleet-token and `agent`-device rejection and `device`-kind acceptance before private reads. | authorized: proof slice (Josh, 2026-11-17) |
+| P1b private persistence proof | Private input/reply partition and public history projection on existing task records; idle and guarded parked resume, with original resolver binding. Depends on P1a. | authorized: proof slice (Josh, 2026-11-17) |
+| P1c scheduling proof | Durable sequence/segment claim, safe boundaries, deduplication, park/resume and crash recovery on the existing runner. Depends on P1b. | authorized: proof slice (Josh, 2026-11-17) |
+| P1d delivery proof | Auto delivery to the original requester, requester binding, recipient projection and durable delivery state. Depends on P1a–c. | authorized: proof slice (Josh, 2026-11-17) |
+| P1e other-exit proof | Seal structured/files at finalization; private tool/effect restrictions, error/cancel cleanup and scoped downloads. Depends on P1d. | authorized: proof slice (Josh, 2026-11-17) |
+| P1f derived-memory proof | Public projection for gist/digest, then harvest/archives/facts in a separate small slice; test later ordinary turns and stale records. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-17) |
+| P1g observability proof | Trace/prompt suppression and public-only fleet export, including background/terminal paths and later turns. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-17) |
+| P1h integration, only after proof gate | Reviewed schema migration/reconciliation, compatibility refusal, rollback gating and operator diagnostics. Release UI requires its own approved spec/preview before boarding; no Work composer yet. Waits for the proof gate below and Josh's CONTINUE. | proposed, needs Josh's go |
 
 ## Proof that turns REVISE into CONTINUE
 
@@ -639,20 +659,21 @@ paired-agent and enrolled-console callers; no operator-tier shortcut.
 | Required scenario | Surface and pass condition; existing test seam |
 | --- | --- |
 | Running with preexisting handles | Extend `test_phase0_preexisting_handles` in `tests/test_a2a_hitl_parked_routing.py`: private input/reply/tool canaries absent from stream, subscription, poll, push and reopened history; exact authorized result present once in durable projection with unchanged context. Also check console progress hooks, history and private recovery. |
-| Wrong recipient / overbroad release | Forge requester/context/grant IDs, mutate bytes, substitute a file after approval, repeat/revoke/expire a grant and replace a push destination. Neither a wrong label nor a raw B event releases anything; the original recipient gets only the sealed payload. |
+| Wrong recipient / overbroad release | Forge requester, context or task IDs, replace the push destination and add a second peer to the context. Nothing is delivered to anyone but the original requester: neither a wrong label nor a raw B event releases to a forged, substituted or second recipient, and the original requester receives only the sealed payload. In the same run, private input and the agent's private replies never appear on any peer surface — stream, subscription, poll, push, saved history or tool output. |
 | Idle and parked/resume | Replace the leak assertions in `test_phase0_output_gate_cannot_hide_private_input_history[False/True]` with privacy assertions at intake and every peer read, not only output. Prove console recovery of input and reply, task/interrupt binding, private files and a subsequent peer follow-up. Preserve #5380 ownership. |
 | Both queue orders and completion race | Extend `tests/test_steering.py` and `tests/test_steer_idle_starts_turn.py`: peer then private, private then peer, steer exactly as completion commits, duplicate POST, failed loopback/requeue, matching resume behind queued input, and a long-running tool. Inspect actual model inputs: no mixed audience. One durable turn per message ID in acceptance order. |
-| Actual process restart | Kill/restart the runner after accepted input, during claimed execution, while parked, after grant commit and after external send before acknowledgment. Reopen checkpoint and task stores; recover original resolver metadata, audience, queue order and private transcript. No duplicate effect, unauthorized send or fallback public input. Reopened SQLite alone is insufficient. |
+| Actual process restart | Kill/restart the runner after accepted input, during claimed execution, while parked, after delivery-record commit and after external send before acknowledgment. Reopen checkpoint and task stores; recover original resolver metadata, audience, queue order and private transcript. No duplicate effect, unauthorized send or fallback public input. Reopened SQLite alone is insufficient. |
 | Identity lifecycle | Extend `tests/test_a2a_stores.py` and `tests/test_chat_routes.py` with authenticated HTTP/SSE and proxy/loopback integration: `device`-kind pairing issuance, device token rotation (reuse-detection grace), logout/revoke, expiry, missing revocation service, forged delegation, wrong target, replay, and a claimer attempting to relabel an `agent` code as `device`. A shared operator bearer and a `device`-kind device read as the human operator; the fleet service token, `agent`-kind devices and federation cannot mint operator-console authority or read private history. |
 | Every derived reader on a later ordinary turn | Execute separate cases for gist, digest (open/closed/relevant), harvest, facts, tracing, prompt capture and fleet export. Seed private canaries in retained private messages/replies/tool output and legacy mixed archives/cards; run a public turn with `incognito=False`, compaction and restart. Assert canaries absent from derived stores, search/recall, composed peer prompts and actual exported bytes; stale gist timers and unknown provenance cannot restore them. These tests supply the currently missing #5403 execution evidence. |
-| Other exits and termination | Inject private values into structured DataParts, file contents/names/URLs, tool args/output, outbound tool effects, errors, stalls, implicit stream end and cancellation. Capture final serialized artifacts, download responses, side-effect requests and terminal hooks. Deny ungranted exits, preserve authorized results, and ensure Stop never flushes private data or restarts canceled input. |
+| Other exits and termination | Inject private values into structured DataParts, file contents/names/URLs, tool args/output, outbound tool effects, errors, stalls, implicit stream end and cancellation. Capture final serialized artifacts, download responses, side-effect requests and terminal hooks. Deny exits that are not part of a delivered result, preserve delivered results, and ensure Stop never flushes private data or restarts canceled input. |
 | Missing/stale state and deletion | Missing private record/checkpoint, conflicting audience version and unsupported resolver fail closed. × deletes both partitions and leaves Work unavailable; stale derived readers cannot resurrect them. Automatic sweep and recovery do not release active-work retention references. |
 
 CONTINUE requires all applicable privacy assertions to pass and an explicit
 review of unsupported tools/deployments and residual risks; no generic “209
-passed” substitution. A failure keeps REVISE. This revision neither executes
-those tests nor grants their implementation: Josh must first authorize the
-bounded proof work and later decide whether its evidence permits CONTINUE.
+passed” substitution. A failure keeps REVISE. Josh has authorized the bounded
+proof slices (P1a–P1g, 2026-11-17); this revision does not execute these tests,
+and **CONTINUE past the proof slices stays Josh's decision**, taken on the
+evidence this matrix produces.
 
 ## Decision sources and approval boundaries
 
@@ -1150,11 +1171,11 @@ See [Phase 0 outcome](#phase-0-outcome) for the historical result.
 | v1 participant scope; unavailable rows; no copied fallback | **Decided by Josh 2026-11-16 (4)** | — |
 | ADR 0129 D8 structured controls and missing-origin fallback in v1 | **Decided by Josh 2026-11-16 (5)** | — |
 | What merging this proposal means; when work starts | **Decided by Josh 2026-11-16 (6)** | — |
-| Explicit relay permission flow and UI ("tell them the deadline moved") | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Section 1 proposes exact-payload console grants, immutable requester binding and durable delivery records. Unstructured instructions prepare drafts, not grants; the UI still needs design approval. |
-| Human-console identity mechanism (decision 1 unchanged; Clarified by Josh, 2026-11-16) | Mechanism proposed in design revision (pending Josh) — [#5402](https://github.com/protoLabsAI/protoAgent/issues/5402); device-kind question **Decided by Josh, 2026-11-16 (Q3)**; deployment-boundary reading **pending Josh's confirmation (Q2)** | Section 3: the human operator is the shared operator bearer plus paired `device`-kind devices (phones/browsers); the fleet service token, `agent`-kind devices and federation stay peers. The unforgeable device kind and credential type carry the distinction, propagated separately from the operator tier — no new console credential. Scoped proxy/loopback delegation; possession does not prove human presence. Limit in Questions for Josh: kind records how a device was paired, not who uses it. Q3 accepts this limit for v1 — anything paired as kind `device` counts as the human operator; no stronger per-human proof is required. Q2 records Josh's "accept the risk" words; the operator reading that private steering stays enabled where isolation cannot be established is pending Josh's confirmation, not decided. |
+| Explicit relay ("tell them the deadline moved") | Resolved by Q1 — **Decided by Josh, 2026-11-17** — auto delivery; [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Section 1: a relay is an ordinary delivered result through the server-side deliver-to-requester action bound to a delivery record — no console grant, exact-payload release or preview. Immutable requester binding and the recipient projection still hold. |
+| Human-console identity mechanism (decision 1 unchanged; Clarified by Josh, 2026-11-16) | Mechanism proposed in design revision (pending Josh) — [#5402](https://github.com/protoLabsAI/protoAgent/issues/5402); device-kind question **Decided by Josh, 2026-11-16 (Q3)**; deployment boundary **Decided by Josh, 2026-11-17 (Q2)** | Section 3: the human operator is the shared operator bearer plus paired `device`-kind devices (phones/browsers); the fleet service token, `agent`-kind devices and federation stay peers. The unforgeable device kind and credential type carry the distinction, propagated separately from the operator tier — no new console credential. Scoped proxy/loopback delegation; possession does not prove human presence. Limit in Questions for Josh: kind records how a device was paired, not who uses it. Q3 accepts this limit for v1 — anything paired as kind `device` counts as the human operator; no stronger per-human proof is required. Q2: private steering stays enabled everywhere, including where credential and tool isolation cannot be established; the risk that an agent obtains console authority is accepted; there is no per-deployment disable switch. |
 | Private idle/parked transcript storage | Proposed in design revision (pending Josh) — [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Section 2: private partitions on existing records under one original identity; no private SDK history/shared checkpoint messages. |
 | Gist, digest, harvest and facts across later turns | Proposed in design revision (pending Josh) — [#5403](https://github.com/protoLabsAI/protoAgent/issues/5403), inspection-only | Section 5: public projections, source-versioned derived records, stale-record quarantine and no private fact extraction. |
-| Files, structured output, tools and terminal exits | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Section 6: exact-payload grants at finalization and before external effects; private errors/cancellation cannot flush to peers. |
+| Files, structured output, tools and terminal exits | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400); result-release model **Decided by Josh, 2026-11-17 (Q1)** — auto delivery | Section 6: the delivery record seals files and structured output at finalization; per decision 2 effectful tools need no console-authorized manifest, but tool arguments, output, progress, errors and files stay private unless part of the delivered result; unknown/unsandboxable effectful tools stay unavailable; private errors/cancellation cannot flush to peers. |
 | Nonterminal active states for retention | Open — not informed by Phase 0 prototype | Include queued/Coming up, blocked, parked, waiting and unknown recovery; release only on durable closure of all references. |
 | Stalled, never-closed linked work: closure owner; D9 nudges and Needs you parking vs release | Open — not informed by Phase 0 prototype | Give release an owner; a stall nudge is a prompt to close or continue, never an automatic release. |
 | One request producing several jobs | Open — not informed by Phase 0 prototype | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
@@ -1165,7 +1186,7 @@ See [Phase 0 outcome](#phase-0-outcome) for the historical result.
 | Closed-chat clock after last closure vs the 14-day closed-chat digest window (#5387) | Open — not informed by Phase 0 prototype | Define one truthful clock; never promise deletion while retaining data. |
 | Do traces, captured prompts and fleet trace export follow the incognito rule for private steering? | Proposed in design revision (pending Josh) — [#5403](https://github.com/protoLabsAI/protoAgent/issues/5403), inspection-only | Section 5 proposes data-lifetime audience partitions and source-versioned projections, with no content tracing/capture for private reads and public-only fleet export. Each derived surface still needs executed later-turn evidence. |
 | Two audiences in one context (steering scheduling) | Mechanism proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401); steering-latency scheduling **Decided by Josh, 2026-11-16 (Q4)** | Section 4 proposes immutable execution-segment audiences, durable ordered intake, safe-boundary yielding and matching guarded resume. Restart and completion-race proof are required. Q4: private steering waits for a safe boundary and peer work queues behind it; no implicit interrupt bypass or change to decision 5. |
-| Default-private output enforceability; agent-decides-audience vs explicit deliver-to-requester (result release) | Open — **Josh undecided, 2026-11-16 (Q1)**; proposed in design revision — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Sections 1–2 and 6 propose authenticated Model B, private storage outside SDK/shared checkpoint history, and final-envelope/tool-effect enforcement. Private-derived results require exact-payload release in the conservative first version. Q1 (result-release interaction) stays open: Josh answered "Im honestly not sure here"; no option is chosen. |
+| Default-private output enforceability; agent-decides-audience vs explicit deliver-to-requester (result release) | **Decided by Josh, 2026-11-17 (Q1)** — auto delivery; [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Sections 1–2 and 6: authenticated Model B (deliver-to-requester) with **auto delivery** — no console grant, exact-payload release or preview; private storage outside SDK/shared checkpoint history; the delivery record seals the final envelope and files. Auto delivery contains the private exchange itself, not the model's wording, so it does not stop the model repeating what it was told inside a result. A per-steer "hold for my review" option is a possible later addition, not v1. |
 | Read-only Open in chat milestone | Open — not informed by Phase 0 prototype | Accept it: it ships value from phases 2–4 without waiting on isolation. |
 | Record the supersession as an ADR 0131 amendment or a new ADR (ADR home) | **Decided by Josh, 2026-11-16 (Q5)** | Record it as an ADR 0131 amendment so the contract has one home ("as recommended"). The amendment is written with Phase 1, after Josh's go; this card writes no amendment and edits no ADR file. |
 

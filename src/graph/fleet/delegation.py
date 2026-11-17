@@ -21,24 +21,40 @@ so it stays a peer whatever operator tier it earns.
 later private-steering slices (P1b.2 binds the loopback delegation to the persisted
 private-input id) consume it. This slice lands the mint/verify/redeem mechanism and its proof.
 
-**Signing key.** Domain-separated from the loopback-only fleet service token
-(``graph.fleet.service_token``): every agent in one instance resolves the same service token
-(the hub from its file, a member from the injected env var), so both ends of the hop derive the
-same delegation key without a second distributed secret. The capability to MINT is a hub-held
-server secret; possessing the raw fleet bearer as a transport credential does not by itself
-reach this signing path on the authenticated hub, and on the owner side a presented fleet
-bearer only ever earns the ``fleet-service`` peer kind.
+**Signing key — asymmetric, so the capability to MINT is genuinely hub-held.** A symmetric key
+would have to be shared with the owner to verify, and every member already holds the fleet
+service token (injected by env, ``graph.fleet.service_token``); deriving the key from *that*
+would let any member — or anyone who swapped in the fleet bearer — mint a delegation for any
+audience. So the signature is **Ed25519**: a hub-held PRIVATE key signs, and the owner verifies
+with the matching PUBLIC key.
+
+* The private key is a hub server secret — resolved from ``PROTOAGENT_FLEET_DELEGATION_SEED``
+  (an explicit/standalone seam) else read-or-created at ``workspaces_root()/.fleet-delegation-key``
+  (``0600``, hardened), **never** delivered to a member. A member's own ``workspaces_root`` is
+  empty by construction, so it has no hub private key and cannot mint a proxy delegation any
+  owner trusts; possessing the fleet bearer reaches none of this.
+* The owner verifies a **proxy**-issued delegation against the hub's public key
+  (``PROTOAGENT_FLEET_DELEGATION_PUBKEY`` on a member — a public key is safe to deliver; P1b
+  wires that spawn injection when a member first consumes a delegation) and a **loopback**-issued
+  one against its own local key (minted and redeemed inside one process). Until the member
+  spawn injection lands, a member only ever verifies its own loopback mints — which is all the
+  dormant slice exercises.
 """
 
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import json
+import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
+logger = logging.getLogger(__name__)
 
 # --- Untrusted inbound headers the proxy strips before minting its own ----------------------
 #
@@ -62,7 +78,14 @@ _KNOWN_ISSUERS = frozenset({ISSUER_PROXY, ISSUER_LOOPBACK})
 DELEGATED_PRINCIPAL_KIND = "shared-operator-bearer"
 
 _DELEGATION_TTL = 30.0  # seconds — short-lived; a stalled op re-mints rather than replays
-_KEY_INFO = b"protoagent-fleet-delegation-v1"  # HKDF-style domain separator off the service token
+
+# Hub-held private signing key. The env seed is an explicit/standalone seam (and the test seam);
+# otherwise the hub reads-or-creates a 32-byte seed file beside the fleet token registry. The
+# public counterpart a member verifies PROXY delegations against rides its own env var.
+_SEED_ENV = "PROTOAGENT_FLEET_DELEGATION_SEED"
+_PUBKEY_ENV = "PROTOAGENT_FLEET_DELEGATION_PUBKEY"
+_KEY_FILENAME = ".fleet-delegation-key"
+_SEED_BYTES = 32  # Ed25519 private seed
 
 # Bounded redemption ledger (nonce → expiry): replay rejection for the proxy hop, idempotent
 # re-redeem for loopback. In-memory and process-local — a restart drops it, which fails CLOSED
@@ -71,6 +94,9 @@ _KEY_INFO = b"protoagent-fleet-delegation-v1"  # HKDF-style domain separator off
 # proxy's own ``_ticket_bindings`` so a flood can't grow it without bound.
 _LEDGER_LIMIT = 8192
 _redeemed: dict[str, float] = {}
+
+# Process cache for the private key — constant for a process; rotation is restart-gated.
+_private_key_cache: list[Ed25519PrivateKey | None] = [None]
 
 # Revocation generation. A delegation carries the generation current at mint; the owner compares
 # it against the live generation and refuses an older one. The accessor is a seam so a real
@@ -114,14 +140,6 @@ def bump_revocation_generation() -> int:
     return _revocation_generation[0]
 
 
-def _signing_key() -> bytes:
-    """HMAC key, domain-separated from the loopback-only fleet service token so a delegation
-    signature is not interchangeable with anything else signed by that token."""
-    from graph.fleet.service_token import resolve_service_token
-
-    return hmac.new(resolve_service_token().encode("utf-8"), _KEY_INFO, hashlib.sha256).digest()
-
-
 def _b64(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
@@ -129,6 +147,92 @@ def _b64(raw: bytes) -> str:
 def _unb64(txt: str) -> bytes:
     pad = "=" * (-len(txt) % 4)
     return base64.urlsafe_b64decode(txt + pad)
+
+
+def _key_path():
+    from graph.workspaces import manager
+
+    return manager.workspaces_root() / _KEY_FILENAME
+
+
+def _read_or_create_seed() -> bytes:
+    """The hub's persisted private seed, minting + writing one ``0600`` if absent.
+
+    Mirrors ``service_token._read_or_create`` (pid-unique temp + atomic replace + re-read), so a
+    concurrent creator can't truncate it and every hub caller converges on one key. Delivered to
+    members? Never — only the PUBLIC key is (and only when P1b wires it); a member's empty
+    ``workspaces_root`` means it reads-or-creates its OWN unrelated key, useful only for its own
+    loopback, never trusted as a proxy mint by any sister."""
+    from infra.paths import harden_private_file
+
+    path = _key_path()
+    try:
+        existing = path.read_bytes().strip()
+        if len(existing) == _SEED_BYTES:
+            return existing
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logger.warning("[fleet] delegation key unreadable at %s — regenerating", path)
+
+    seed = secrets.token_bytes(_SEED_BYTES)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{_KEY_FILENAME}.{os.getpid()}.tmp")
+        tmp.write_bytes(seed)
+        os.chmod(tmp, 0o600)  # 0600 before the rename — a server secret, even on loopback.
+        os.replace(tmp, path)  # atomic
+        harden_private_file(path)
+        winner = path.read_bytes().strip()
+        return winner if len(winner) == _SEED_BYTES else seed
+    except OSError:
+        logger.warning("[fleet] could not persist delegation key at %s — using an ephemeral one", path)
+        return seed
+
+
+def _load_private_key() -> Ed25519PrivateKey:
+    seed = os.environ.get(_SEED_ENV, "").strip()
+    raw = _unb64(seed) if seed else _read_or_create_seed()
+    return Ed25519PrivateKey.from_private_bytes(raw[:_SEED_BYTES])
+
+
+def _private_key() -> Ed25519PrivateKey:
+    """The hub's Ed25519 private key for THIS process (never log it, never deliver it). Cached."""
+    if _private_key_cache[0] is None:
+        _private_key_cache[0] = _load_private_key()
+    return _private_key_cache[0]
+
+
+def _public_key(issuer: str | None) -> Ed25519PublicKey:
+    """The public key that verifies a delegation from ``issuer``.
+
+    A **proxy** delegation is minted by the hub, so on a member the owner verifies it against the
+    hub's injected public key (``PROTOAGENT_FLEET_DELEGATION_PUBKEY``); on the hub / standalone it
+    is the local private key's public half. A **loopback** delegation is minted and redeemed in
+    one process, so it is always the local key. (No pubkey env, or any other issuer, falls back to
+    the local key — on the hub that is correct; on a member that only verifies its own loopback,
+    which is all the dormant slice reaches.)"""
+    if issuer == ISSUER_PROXY:
+        pub = os.environ.get(_PUBKEY_ENV, "").strip()
+        if pub:
+            return Ed25519PublicKey.from_public_bytes(_unb64(pub)[:32])
+    return _private_key().public_key()
+
+
+def reset_signing_keys() -> None:
+    """Drop the cached private key (test / restart-rotation seam)."""
+    _private_key_cache[0] = None
+
+
+def public_key_b64() -> str:
+    """The hub's delegation public key, url-safe base64 — what a member is given to verify a
+    PROXY delegation (``PROTOAGENT_FLEET_DELEGATION_PUBKEY``). Dormant delivery seam for P1b."""
+    from cryptography.hazmat.primitives import serialization
+
+    raw = _private_key().public_key().public_bytes(
+        encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
+    )
+    return _b64(raw)
 
 
 def mint_delegation(
@@ -142,13 +246,15 @@ def mint_delegation(
     ttl: float = _DELEGATION_TTL,
     now: float | None = None,
     revocation_gen: int | None = None,
-    key: bytes | None = None,
+    signing_key: Ed25519PrivateKey | None = None,
 ) -> str:
     """Mint a signed delegation bound to one ``audience`` (member slug / loopback target),
     ``method``, ``context`` and ``operation`` (plus the ``task_id`` for the loopback binding).
 
     The caller must already be an authenticated human operator — the fleet proxy checks
-    ``is_human_operator`` before calling this, and a peer caller is never handed a token.
+    ``is_human_operator`` before calling this, and a peer caller is never handed a token. Minting
+    needs the hub's PRIVATE key (``signing_key`` overrides it for tests); holding the fleet
+    service token reaches nothing here.
     """
     now = time.time() if now is None else now
     rev = current_revocation_generation() if revocation_gen is None else revocation_gen
@@ -165,7 +271,8 @@ def mint_delegation(
         "pk": DELEGATED_PRINCIPAL_KIND,
     }
     payload = _b64(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    sig = _b64(hmac.new(key or _signing_key(), payload.encode("ascii"), hashlib.sha256).digest())
+    sk = signing_key or _private_key()
+    sig = _b64(sk.sign(payload.encode("ascii")))
     return f"{payload}.{sig}"
 
 
@@ -180,24 +287,25 @@ def verify_delegation(
     allowed_issuers: frozenset[str] = _KNOWN_ISSUERS,
     now: float | None = None,
     revocation_check=current_revocation_generation,
-    key: bytes | None = None,
+    verifying_key: Ed25519PublicKey | None = None,
 ) -> Delegation:
     """Verify a delegation (no ledger side effect) and return it, or raise ``DelegationError``.
 
-    The owner checks, in order: the HMAC signature (forged → refuse), the issuer (foreign →
-    refuse), the target ``audience`` (wrong member → refuse), any bound ``method``/``context``/
-    ``operation``/``task_id`` the caller pins, the expiry, and the revocation generation. If the
-    revocation check cannot be read (raises or returns None) the result is ``RevocationUnavailable``
-    — private access fails CLOSED rather than assuming the grant is still live.
+    The owner checks, in order: the issuer (foreign → refuse), the Ed25519 signature against the
+    public key for that issuer (forged / signed with the wrong key → refuse), the target
+    ``audience`` (wrong member → refuse), any bound ``method``/``context``/``operation``/``task_id``
+    the caller pins, the expiry, and the revocation generation. If the revocation check cannot be
+    read (raises or returns None) the result is ``RevocationUnavailable`` — private access fails
+    CLOSED rather than assuming the grant is still live.
     """
     now = time.time() if now is None else now
     try:
         payload, sig = token.split(".", 1)
     except (ValueError, AttributeError) as exc:
         raise DelegationError("malformed delegation") from exc
-    expected = _b64(hmac.new(key or _signing_key(), payload.encode("ascii"), hashlib.sha256).digest())
-    if not hmac.compare_digest(sig, expected):
-        raise DelegationError("bad signature")  # forged or signed with the wrong key
+    # Decode the claims UNTRUSTED, only to read ``iss`` so we pick the right public key (JWT
+    # ``kid`` style). A lie about the issuer merely selects a key the signature won't verify
+    # under — the signature check below is what makes it binding.
     try:
         claims = json.loads(_unb64(payload))
     except (ValueError, TypeError) as exc:
@@ -208,6 +316,12 @@ def verify_delegation(
     issuer = claims.get("iss")
     if issuer not in allowed_issuers:
         raise DelegationError(f"untrusted issuer {issuer!r}")
+    vk = verifying_key or _public_key(issuer)
+    try:
+        vk.verify(_unb64(sig), payload.encode("ascii"))
+    except (InvalidSignature, ValueError) as exc:  # bad sig, wrong key, or undecodable signature
+        raise DelegationError("bad signature") from exc
+
     if claims.get("aud") != audience:
         raise DelegationError("wrong target audience")
     for pinned, field, label in (
@@ -251,8 +365,11 @@ def _evict_expired(now: float) -> None:
     for nonce, exp in list(_redeemed.items()):
         if exp <= now:
             del _redeemed[nonce]
+    # Capacity backstop. Only the hub mints (the private key is hub-held), so a flood of LIVE
+    # nonces isn't attacker-reachable; if the cap is still hit we drop the soonest-to-expire
+    # entry — the one whose remaining replay window is smallest — never a longer-lived live one.
     while len(_redeemed) >= _LEDGER_LIMIT:
-        del _redeemed[next(iter(_redeemed))]
+        del _redeemed[min(_redeemed, key=_redeemed.get)]
 
 
 def redeem_delegation(

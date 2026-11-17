@@ -1205,11 +1205,14 @@ def self_invocation_headers(fallback_bearer: str = "", fallback_api_key: str = "
     which is precisely the duplicated-security-derivation failure this PR exists to remove.
 
     These headers carry the agent's OWN inbound credential (the shared operator bearer): that is
-    an ``operator``-tier credential and KEEPS its existing powers, but it never confers
-    human-operator status for private content (ADR 0131 P1a.2, decision 1 — "the operator" for
-    private steering is the human's console session, not an automated self-invocation). The
-    output is deliberately just the credential headers; a human-operator grant rides a separate
-    verified delegation (see ``resolve_human_operator`` / ``graph.fleet.delegation``), never this.
+    an ``operator``-tier credential and KEEPS its existing powers. The shared bearer is a
+    human-CAPABLE credential *kind* (``is_human_operator`` classifies the kind, not presence), but
+    a self-invocation is not a human present for a private op, so these headers NEVER confer
+    human-operator *status* for private content (ADR 0131 P1a.2, decision 1 — "the operator" for
+    private steering is the human's console session, not an automated self-invocation). The output
+    is deliberately just the credential headers; the human-operator grant for a private op is
+    conferred only by ``resolve_human_operator`` reading a separate verified delegation (see
+    ``graph.fleet.delegation``), which a self-invocation never carries.
     """
     bearer, api_key = fallback_bearer or "", fallback_api_key or ""
     try:
@@ -1234,6 +1237,7 @@ def resolve_human_operator(
     context: str | None = None,
     task_id: str | None = None,
     idempotent: bool = False,
+    allowed_issuers=None,
     now: float | None = None,
     revocation_check=None,
 ):
@@ -1248,6 +1252,11 @@ def resolve_human_operator(
     a missing header, a forged/wrong-target/expired/revoked/replayed token, or an unreadable
     revocation service — returns None (fails CLOSED).
 
+    This is the single fail-closed verify-and-redeem wrapper — the loopback intake
+    (``server.chat._redeem_loopback_delegation``) calls THROUGH it rather than copying it, pinning
+    ``allowed_issuers`` to the loopback issuer so a loopback owner never honors a proxy token.
+    ``allowed_issuers`` defaults to both this-instance issuers (the proxy owner's case).
+
     Dormant: no live route grants private access off this yet; P1b wires it into the private
     intake. Returns the ``graph.fleet.delegation.Delegation`` so a caller can read its binding.
     """
@@ -1257,6 +1266,7 @@ def resolve_human_operator(
     if not token:
         return None
     check = revocation_check or _delegation.current_revocation_generation
+    issuers = allowed_issuers if allowed_issuers is not None else _delegation._KNOWN_ISSUERS
     try:
         return _delegation.redeem_delegation(
             token,
@@ -1266,6 +1276,7 @@ def resolve_human_operator(
             operation=operation,
             task_id=task_id,
             idempotent=idempotent,
+            allowed_issuers=issuers,
             now=now,
             revocation_check=check,
         )

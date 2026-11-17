@@ -68,6 +68,7 @@ async def read_origin(engine, context_id: str) -> dict[str, str]:
     if engine is None or not context_id:
         return {}
     from a2a.server.tasks.database_task_store import TaskModel
+    from a2a_impl.stores import task_public_filter
     from sqlalchemy import literal_column, select
 
     async with engine.begin() as conn:
@@ -81,7 +82,7 @@ async def read_origin(engine, context_id: str) -> dict[str, str]:
         rows = await conn.execute(
             # ``task_metadata`` is the attribute mapped to the ``metadata`` column —
             # ``TaskModel.metadata`` is SQLAlchemy's own ``MetaData`` object, not the column.
-            select(TaskModel.task_metadata).where(TaskModel.context_id == context_id).order_by(*order)
+            select(TaskModel.task_metadata).where(TaskModel.context_id == context_id).where(await task_public_filter(conn)).order_by(*order)
         )
         for (meta,) in rows:
             origin = meta.get(METADATA_KEY) if isinstance(meta, dict) else None

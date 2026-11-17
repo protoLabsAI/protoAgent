@@ -905,27 +905,27 @@ def _redeem_loopback_delegation(headers, *, context: str, operation: str, task_i
     redeemed idempotently so a retried self-POST does not trip replay rejection. A missing header
     or any verification failure — forged, wrong target, expired, revoked, or an unreadable
     revocation service — returns None (fails CLOSED). Localhost and ``self_invocation_headers``
-    confer nothing here; the delegation is the only thing that does."""
-    from graph.fleet.delegation import DELEGATION_HEADER, ISSUER_LOOPBACK, DelegationError
-    from graph.fleet.delegation import current_revocation_generation, redeem_delegation
+    confer nothing here; the delegation is the only thing that does.
 
-    token = (headers or {}).get(DELEGATION_HEADER, "") or ""
-    if not token:
-        return None
-    try:
-        return redeem_delegation(
-            token,
-            audience=_LOOPBACK_AUDIENCE,
-            method="SendMessage",
-            context=context,
-            operation=operation,
-            task_id=task_id,
-            idempotent=True,
-            allowed_issuers=frozenset({ISSUER_LOOPBACK}),
-            revocation_check=revocation_check or current_revocation_generation,
-        )
-    except DelegationError:
-        return None
+    Goes through ``auth.resolve_human_operator`` (the one fail-closed verify-and-redeem wrapper)
+    rather than copying it, pinning ``allowed_issuers`` to the loopback issuer so a proxy-issued
+    token is never honored by a loopback owner."""
+    from types import SimpleNamespace
+
+    from a2a_impl.auth import resolve_human_operator
+    from graph.fleet.delegation import ISSUER_LOOPBACK
+
+    return resolve_human_operator(
+        SimpleNamespace(headers=headers or {}),
+        audience=_LOOPBACK_AUDIENCE,
+        method="SendMessage",
+        context=context,
+        operation=operation,
+        task_id=task_id,
+        idempotent=True,
+        allowed_issuers=frozenset({ISSUER_LOOPBACK}),
+        revocation_check=revocation_check,
+    )
 
 
 # ── steering a session with NO live turn (bd-0ad5v) ─────────────────────────────

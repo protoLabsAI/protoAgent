@@ -867,20 +867,11 @@ async def test_real_proxy_releases_member_stream_when_the_client_leaves(monkeypa
 
 from types import SimpleNamespace
 
+from a2a_impl import auth
 from a2a_impl.auth import is_human_operator
 
-
-@pytest.fixture
-def delegation_env(monkeypatch):
-    """Deterministic signing key + a clean redemption ledger and revocation generation."""
-    import graph.fleet.service_token as st
-    from graph.fleet import delegation
-
-    monkeypatch.setattr(st, "resolve_service_token", lambda: "TEST-FLEET-KEY")
-    delegation._revocation_generation[0] = 0
-    delegation.reset_ledger()
-    yield delegation
-    delegation.reset_ledger()
+# ``delegation_env`` (deterministic Ed25519 hub keypair + clean ledger/revocation generation) is
+# the shared fixture in tests/conftest.py — the same one test_a2a_auth uses.
 
 
 def _human_request(principal="shared-operator-bearer", headers=None):
@@ -893,6 +884,17 @@ def _mint(delegation_env, slug="alice"):
     return proxy.mint_member_delegation(
         slug, _human_request(), method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1"
     )
+
+
+def _owner_resolve(delegation_env, token, *, audience="alice", **overrides):
+    """Resolve ``token`` the way a MEMBER (owner) does on receipt — the real owner-side auth
+    entry (``resolve_human_operator``), reading it from the ``DELEGATION_HEADER`` exactly as the
+    forwarded request carries it. This is the middleware path, not a direct verify/redeem call."""
+    headers = {delegation_env.DELEGATION_HEADER: token} if token else {}
+    req = SimpleNamespace(headers=headers)
+    kw = dict(method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1")
+    kw.update(overrides)
+    return auth.resolve_human_operator(req, audience=audience, **kw)
 
 
 def test_proxy_strips_untrusted_principal_headers(delegation_env):
@@ -957,13 +959,16 @@ def test_owner_refuses_wrong_target_member(delegation_env):
 
 
 def test_owner_refuses_forged_delegation(delegation_env):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
     token = _mint(delegation_env)
     payload, _sig = token.split(".", 1)
     with pytest.raises(delegation_env.DelegationError):
         delegation_env.verify_delegation(payload + ".AAAA", audience="alice")  # tampered signature
-    # A token signed with a key the attacker chose (they lack the real signing key) is forged too.
+    # A token signed with a key the attacker chose (they lack the hub private key) is forged too.
     forged = delegation_env.mint_delegation(
-        audience="alice", method="SendMessage", context="c", operation="o", key=b"attacker-key"
+        audience="alice", method="SendMessage", context="c", operation="o",
+        signing_key=Ed25519PrivateKey.generate(),
     )
     with pytest.raises(delegation_env.DelegationError):
         delegation_env.verify_delegation(forged, audience="alice")
@@ -1000,3 +1005,148 @@ def test_owner_fails_closed_when_revocation_unavailable(delegation_env):
         delegation_env.verify_delegation(token, audience="alice", revocation_check=boom)
     with pytest.raises(delegation_env.RevocationUnavailable):
         delegation_env.verify_delegation(token, audience="alice", revocation_check=lambda: None)
+
+
+# --- The owner rejects through the REAL proxy+middleware paths (ADR 0131 P1a.2) --------------
+#
+# The tests above exercise the verify/redeem primitives directly. These drive every rejection
+# the same way production does: the hub mints via ``mint_member_delegation`` and forwards the
+# token through ``_proxy_headers`` (the proxy hop); the member (owner) resolves it through
+# ``auth.resolve_human_operator`` reading the DELEGATION_HEADER (the middleware entry P1b wires).
+
+
+def test_owner_resolves_proxy_minted_delegation_end_to_end(delegation_env):
+    """Hub mints for a human caller, forwards through _proxy_headers, owner resolves it."""
+    hub_req = _human_request()
+    token = proxy.mint_member_delegation(
+        "alice", hub_req, method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1"
+    )
+    forwarded = proxy._proxy_headers(hub_req, {delegation_env.DELEGATION_HEADER: token})
+    assert forwarded[delegation_env.DELEGATION_HEADER] == token
+    grant = auth.resolve_human_operator(
+        SimpleNamespace(headers=forwarded),
+        audience="alice", method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1",
+    )
+    assert grant is not None and grant.audience == "alice" and grant.operation == "op-1"
+    assert is_human_operator(grant.principal_kind)
+
+
+def test_owner_middleware_rejects_forged_delegation(delegation_env):
+    """A token signed with a key the attacker chose (members never hold the hub private key),
+    and a tampered signature, both resolve to None at the owner."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    forged = delegation_env.mint_delegation(
+        audience="alice", method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1",
+        issuer=delegation_env.ISSUER_PROXY, signing_key=Ed25519PrivateKey.generate(),
+    )
+    assert _owner_resolve(delegation_env, forged) is None
+    genuine = _mint(delegation_env)
+    payload, _sig = genuine.split(".", 1)
+    assert _owner_resolve(delegation_env, payload + ".AAAA") is None
+
+
+def test_owner_middleware_rejects_wrong_target(delegation_env):
+    token = _mint(delegation_env, slug="alice")
+    assert _owner_resolve(delegation_env, token, audience="bob") is None  # minted for alice
+    assert _owner_resolve(delegation_env, token, audience="alice") is not None
+
+
+def test_owner_middleware_rejects_replay(delegation_env):
+    """The proxy hop is non-idempotent: a second resolution of the same token is a replay."""
+    token = _mint(delegation_env)
+    assert _owner_resolve(delegation_env, token) is not None  # first redemption spends the nonce
+    assert _owner_resolve(delegation_env, token) is None  # replay denied through the middleware
+
+
+def test_owner_middleware_rejects_expired(delegation_env):
+    token = _mint(delegation_env)
+    future = time.time() + delegation_env._DELEGATION_TTL + 1
+    assert _owner_resolve(delegation_env, token, now=future) is None
+
+
+def test_owner_middleware_rejects_revoked_generation(delegation_env):
+    token = _mint(delegation_env)
+    delegation_env.bump_revocation_generation()
+    assert _owner_resolve(delegation_env, token) is None
+
+
+def test_owner_middleware_fails_closed_when_revocation_unavailable(delegation_env):
+    """An unreadable revocation service denies (fails CLOSED) through the owner middleware."""
+    token = _mint(delegation_env)
+
+    def boom():
+        raise RuntimeError("revocation service down")
+
+    assert _owner_resolve(delegation_env, token, revocation_check=boom) is None
+    assert _owner_resolve(delegation_env, token, revocation_check=lambda: None) is None
+
+
+def test_fleet_bearer_swap_confers_nothing_through_the_middleware(delegation_env):
+    """The proxy mints no token for a fleet (peer) bearer, so the forwarded request carries no
+    delegation and the owner resolves to None — a swapped fleet bearer stays a peer end to end."""
+    peer_req = _human_request(principal="fleet-service")
+    token = proxy.mint_member_delegation("alice", peer_req, method="SendMessage", context="ctx-1", operation="op-1")
+    assert token is None
+    forwarded = proxy._proxy_headers(peer_req, None)  # nothing minted to apply
+    assert delegation_env.DELEGATION_HEADER not in {k.lower() for k in forwarded}
+    assert auth.resolve_human_operator(
+        SimpleNamespace(headers=forwarded), audience="alice", method="SendMessage", context="ctx-1", operation="op-1"
+    ) is None
+
+
+def test_smuggled_delegation_is_stripped_so_owner_sees_nothing(delegation_env):
+    """A caller that smuggles its own (even validly-signed) delegation header has it stripped by
+    the proxy, so the owner resolving the forwarded headers gets None — the hub is the sole author."""
+    smuggled = delegation_env.mint_delegation(
+        audience="alice", method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1",
+        issuer=delegation_env.ISSUER_PROXY,
+    )
+    caller = FakeRequest(headers={"X-Fleet-Delegation": smuggled, "Authorization": "Bearer caller"})
+    forwarded = {k.lower(): v for k, v in proxy._proxy_headers(caller, None).items()}
+    assert delegation_env.DELEGATION_HEADER not in forwarded
+    assert _owner_resolve(delegation_env, forwarded.get(delegation_env.DELEGATION_HEADER)) is None
+
+
+def test_fleet_service_token_is_not_the_mint_key(delegation_env):
+    """Finding-1 regression. The mint key is the hub's Ed25519 PRIVATE key, never derived from
+    the fleet service token every member holds. A delegation signed with any key a member could
+    hold (here, one derived from the service token) is refused by the owner — so a member, or a
+    swapped fleet bearer, cannot mint a proxy delegation any owner trusts."""
+    import hashlib
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    # All a member holds is the fleet service token; whatever keypair it could derive from that
+    # is NOT the hub's private key, so the owner (verifying with the hub public key) rejects it.
+    member_key = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"fleet-service-token").digest())
+    minted_by_member = delegation_env.mint_delegation(
+        audience="alice", method="SendMessage", context="ctx-1", operation="op-1", task_id="task-1",
+        issuer=delegation_env.ISSUER_PROXY, signing_key=member_key,
+    )
+    assert _owner_resolve(delegation_env, minted_by_member) is None
+
+
+def test_member_verifies_hub_delegation_only_with_injected_pubkey(delegation_env, monkeypatch):
+    """The asymmetric design across processes: the hub mints a proxy delegation with its private
+    key; a member (a DIFFERENT local key) verifies it ONLY because it was handed the hub's PUBLIC
+    key (PROTOAGENT_FLEET_DELEGATION_PUBKEY). Its own key alone cannot — the mirror image of the
+    hub-only-mint property."""
+    import base64
+
+    hub_pub = delegation_env.public_key_b64()
+    token = _mint(delegation_env)  # minted under the fixture's hub private key
+
+    # Re-key the process to a member's OWN (distinct) key, with no hub pubkey yet.
+    monkeypatch.setenv(
+        "PROTOAGENT_FLEET_DELEGATION_SEED",
+        base64.urlsafe_b64encode(b"a-member-local-key-distinct-32by").decode().rstrip("="),
+    )
+    delegation_env.reset_signing_keys()
+    assert _owner_resolve(delegation_env, token) is None  # member's local key can't verify it
+
+    # Hand the member the hub's public key — now it verifies the hub's proxy delegation.
+    monkeypatch.setenv("PROTOAGENT_FLEET_DELEGATION_PUBKEY", hub_pub)
+    delegation_env.reset_signing_keys()
+    grant = _owner_resolve(delegation_env, token)
+    assert grant is not None and grant.audience == "alice"

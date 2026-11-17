@@ -53,6 +53,7 @@ async def _prompt(session_id: str, task_id: str) -> str:
     # The durable task transcript preserves the user's bubble, unlike the
     # model checkpoint which can contain attachment instructions or compaction.
     from a2a.server.tasks.database_task_store import TaskModel
+    from a2a_impl.stores import task_public_filter
     from sqlalchemy import select
 
     if STATE.a2a_task_engine is None:
@@ -60,7 +61,7 @@ async def _prompt(session_id: str, task_id: str) -> str:
     async with STATE.a2a_task_engine.connect() as conn:
         history = (
             await conn.execute(
-                select(TaskModel.history).where(TaskModel.id == task_id, TaskModel.context_id == session_id)
+                select(TaskModel.history).where(TaskModel.id == task_id, TaskModel.context_id == session_id).where(await task_public_filter(conn))
             )
         ).scalar_one_or_none()
     for message in history or []:
