@@ -83,26 +83,50 @@ def _effective_tools(explicit, extra, all_tools):
     from graph.tool_renames import migrate_tool_names, warn_once
 
     registered = {t.name for t in all_tools}
+    unmatched = set()
+
+    def expand(names, source):
+        expanded = []
+        for name in names:
+            if isinstance(name, str) and name.startswith("mcp:") and name.endswith("/*"):
+                server = name[4:-2]
+                if server and not any(c in server for c in "/*?[]"):
+                    matches = sorted(n for n in registered if n.startswith(f"{server}__"))
+                    if not matches:
+                        unmatched.add(name)
+                        warn_once(
+                            source, name,
+                            "[execute_code] %s: '%s' matches no registered tools on this agent.",
+                            source, name,
+                        )
+                    # An unmatched explicit selector stays ineligible, preventing an
+                    # empty expansion from falling back to the curated defaults.
+                    expanded.extend(matches or [name])
+                    continue
+            expanded.append(name)
+        return expanded
+
     if explicit:
         # ADR 0125: an allowlist written before the memory tool rename still names the
         # old tools; translate it (warned once) rather than silently bridging nothing.
-        explicit = migrate_tool_names(explicit, source="execute_code.tools")
+        explicit = expand(migrate_tool_names(explicit, source="execute_code.tools"), "execute_code.tools")
         for name in explicit:
-            if name not in registered and name != "execute_code":
+            if name not in registered and name != "execute_code" and name not in unmatched:
                 warn_once(
                     "execute_code.tools",
                     name,
                     "[execute_code] tools: '%s' is not a registered tool on this agent; scripts can't call it.",
                     name,
                 )
-    extra = migrate_tool_names(extra, source="execute_code.extra_tools")
+    extra = expand(migrate_tool_names(extra, source="execute_code.extra_tools"), "execute_code.extra_tools")
     if not extra:
         return explicit
 
     additions, dropped = set(), []
     for name in extra:
         if name == "execute_code" or name not in registered:
-            dropped.append(name)
+            if name not in unmatched:
+                dropped.append(name)
         else:
             additions.add(name)
     if dropped:
