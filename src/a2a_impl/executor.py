@@ -851,12 +851,15 @@ class ProtoAgentExecutor(AgentExecutor):
         context_meta_provider: Callable[[], dict[str, Any]] | None = None,
         stall_timeout_provider: Callable[[], float] | None = None,
         server_fired_origin: Callable[[str], bool] | None = None,
+        requester_projection_factory=None,
     ) -> None:
         # ``stream_fn_factory(text, context_id, *, resume, caller_trace,
         # request_metadata)`` → async generator of (event_type, payload). This is
         # protoAgent's ``_chat_langgraph_stream``; ``request_metadata`` is the
         # merged A2A request metadata, passed through so the backend's thread_id
         # resolver (#571) can scope memory off it.
+        # Dormant proof seam: no server route installs this factory.
+        self._requester_projection_factory = requester_projection_factory
         self._stream_factory = stream_fn_factory
         # ``structured_finalizer(skill_id, final_text)`` → an emit DataPart dict
         # or None (#476). Injected by server.py so the executor stays decoupled
@@ -920,7 +923,21 @@ class ProtoAgentExecutor(AgentExecutor):
         return [*parts, _ext_data_part(emit)] if emit else parts
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        projection = None
+        if self._requester_projection_factory is not None:
+            projection = await self._requester_projection_factory(context, event_queue)
+            event_queue = projection
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+
+        def progress(*args):
+            if projection is None or not projection.private_ref:
+                _notify_progress(*args)
+            elif args[2].get("phase") in {"turn_started", "input_required", "turn_ended"}:
+                # Preserve host lifecycle bookkeeping (including HITL pause/resume),
+                # but never forward private prompts, stimuli, or other content.
+                frame = {key: value for key, value in args[2].items()
+                         if key in {"phase", "origin", "resumed", "state"}}
+                _notify_progress(args[0], args[1], frame)
 
         # A resumed task (HITL) already exists in input-required; a fresh task
         # must be enqueued as a Task object first (the framework requires the
@@ -1040,7 +1057,7 @@ class ProtoAgentExecutor(AgentExecutor):
         # this first frame too (#3092) so a server host can publish an addressable,
         # session-scoped control capability without inferring task identity later from
         # display frames.
-        _notify_progress(
+        progress(
             context.context_id,
             context.task_id,
             {
@@ -1198,7 +1215,7 @@ class ProtoAgentExecutor(AgentExecutor):
             # an open console sees nothing for the whole turn. Mirror each flushed chunk
             # onto the progress hook so a host can republish it. Already batched to
             # _FLUSH_CHARS, so this is ~one frame per paragraph, not per token.
-            _notify_progress(
+            progress(
                 context.context_id,
                 context.task_id,
                 {"phase": "text", "text": chunk, "origin": _origin},
@@ -1293,6 +1310,8 @@ class ProtoAgentExecutor(AgentExecutor):
                 pass
 
         def _outcome(state: str, final_text: str, error: str = "") -> TurnOutcome:
+            if projection is not None and projection.private_ref:
+                final_text, error = "", ""
             ended_state[0] = state
             durations = {k: list(v) for k, v in tool_durations.items()}
             # Knowledge ops attribute to the SAME per-turn durations blob as tool
@@ -1352,6 +1371,8 @@ class ProtoAgentExecutor(AgentExecutor):
             )
             async for event_type, payload in guarded:
                 _capture_trace_id()
+                if projection is not None and await projection.consume(event_type, payload):
+                    continue
                 # A contiguous reasoning run ends at the first non-reasoning event:
                 # flush the buffered tail first so frames reach the consumer in
                 # stream order (thinking before the text/tool frame it preceded).
@@ -1419,7 +1440,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         )
                     # Realtime tap (ADR 0051) — surface the tool frame to any host hook.
                     if isinstance(payload, dict):
-                        _notify_progress(
+                        progress(
                             context.context_id,
                             context.task_id,
                             # origin AFTER the payload spread: it is the frame's own
@@ -1442,7 +1463,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         # server itself, not the browser. Mirror authored replies onto
                         # the progress hook so the open room sees each participant
                         # before the lead's eventual synthesis (#3051).
-                        _notify_progress(
+                        progress(
                             context.context_id,
                             context.task_id,
                             {"phase": "room_reply", **payload, "origin": _origin},
@@ -1494,7 +1515,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         # console the same acknowledgement a browser-owned stream carries
                         # inline. Without it the operator's message sat "queued" under an
                         # answer that had already used it.
-                        _notify_progress(
+                        progress(
                             context.context_id,
                             context.task_id,
                             {"phase": "steer_consumed", "items": payload.get("items") or [], "origin": _origin},
@@ -1570,7 +1591,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     # "needs approval" bus event — a fleet console can then show a pending
                     # HITL without polling. Best-effort by contract (_notify_progress
                     # swallows everything), so it can never break the pause itself.
-                    _notify_progress(
+                    progress(
                         context.context_id,
                         context.task_id,
                         {"phase": "input_required", "prompt": _hitl_prompt(payload)},
@@ -1673,7 +1694,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 # crash paths where a terminal update itself raised before the terminal
                 # hook ran, so a host that registered this turn on `turn_started` always
                 # gets to forget it. Idempotent for the host by contract.
-                _notify_progress(
+                progress(
                     context.context_id,
                     context.task_id,
                     {"phase": "turn_ended", "origin": _origin, "state": ended_state[0]},

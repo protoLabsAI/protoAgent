@@ -1254,6 +1254,46 @@ async def test_a_verified_public_partition_can_be_traced_again(session_langfuse,
     span.update.assert_any_call(output="verified public")
 
 
+async def test_a_failing_run_on_a_private_partition_records_no_error_text(session_langfuse, monkeypatch):
+    """Terminal/error span: a run that raises on a partitioned conversation is still marked
+    ERROR (content-free structure), but the exception text — which can carry the private
+    steering — is suppressed. The ``sdk.trace_run`` terminal span is the path the card's
+    proof names, and ``_failed_on_raise`` gates its ``status_message`` on ``io_allowed``."""
+    from graph import sdk
+
+    tracing, span = session_langfuse
+    _bind_private_source(monkeypatch)
+
+    async with tracing.trace_session("chat-private", name="chat"):
+        assert tracing.io_allowed() is False
+        with pytest.raises(KeyError, match="PRIVATE_ERROR_CANARY"):
+            async with sdk.trace_run("workflow:x", run_id="r1"):
+                raise KeyError("PRIVATE_ERROR_CANARY")
+
+    marked = [c.kwargs for c in span.update.call_args_list if c.kwargs.get("level") == "ERROR"]
+    assert marked, "the failing run must still be marked ERROR (content-free structure stays)"
+    assert all("status_message" not in m for m in marked), "no exception text on a private partition"
+    assert "CANARY" not in repr(span.update.call_args_list)
+
+
+async def test_a_failing_run_on_a_public_conversation_still_records_its_error(session_langfuse, monkeypatch):
+    """The gate is bidirectional: without a private partition the error text is recorded
+    exactly as before, so debugging a real failure still works (AC#3)."""
+    from graph import sdk
+
+    tracing, span = session_langfuse
+    monkeypatch.setattr("graph.public_memory._source_reader", lambda sid: None)
+
+    async with tracing.trace_session("chat-public", name="chat"):
+        assert tracing.io_allowed() is True
+        with pytest.raises(KeyError, match="engine bug"):
+            async with sdk.trace_run("workflow:x", run_id="r1"):
+                raise KeyError("engine bug")
+
+    marked = [c.kwargs for c in span.update.call_args_list if c.kwargs.get("level") == "ERROR"]
+    assert marked and "KeyError" in marked[0]["status_message"]
+
+
 async def test_session_input_is_capped(session_langfuse):
     tracing, span = session_langfuse
     big = "x" * (tracing.MAX_IO_CHARS + 5)
