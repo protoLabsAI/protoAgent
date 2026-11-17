@@ -153,7 +153,7 @@ async def test_wrong_recipient_and_overbroad_release(tmp_path, kind):
     set_progress_hook(lambda *a: progress.append(a))
     set_terminal_hook(outcomes.append)
     client = httpx.AsyncClient(transport=httpx.MockTransport(
-        lambda request: (pushes.append(request.content.decode()), httpx.Response(200))[1]))
+        lambda request: (pushes.append((str(request.url), request.content.decode())), httpx.Response(200))[1]))
     sender = stores.ValidatingPushNotificationSender(client, push_store, delivery_store=store)
     handler, router = _handler(stream, task_store=store, push_config_store=push_store, push_sender=sender,
                                requester_projection_factory=factory)
@@ -181,7 +181,7 @@ async def test_wrong_recipient_and_overbroad_release(tmp_path, kind):
     assert got.status.state == TaskState.TASK_STATE_COMPLETED and got.context_id == CTX
     assert [p.text for a in got.artifacts for p in a.parts] == [RESULT]
     assert [sum(RESULT in str(f) for f in frames), sum(RESULT in str(f) for f in subscriptions),
-            sum(RESULT in body for body in pushes)] == [1, 1, 1]
+            sum(RESULT in body for _, body in pushes)] == [1, 1, 1]
     # r3 (item 6): no private byte on ANY peer-readable surface in this same run.
     surfaces = {"stream": [MessageToDict(f) for f in frames], "subscription": [MessageToDict(f) for f in subscriptions],
                 "poll": MessageToDict(got), "push": pushes, "progress": progress,
@@ -197,17 +197,17 @@ async def test_wrong_recipient_and_overbroad_release(tmp_path, kind):
     assert task_id not in second_listed and await store.get(task_id, second) is None
     requester_listed = {t.id for t in (await handler.on_list_tasks(ListTasksRequest(context_id=CTX), requester)).tasks}
     assert task_id in requester_listed
-    assert all(SECOND_HOOK not in body and "8.8.4.4" not in body for body in pushes)
+    assert {url for url, _ in pushes} == {ORIGINAL_HOOK}
+    assert [url for url, body in pushes if RESULT in body] == [ORIGINAL_HOOK]
     # r1: substituted push destination gets nothing — bound destination dispatches once; replacing the URL
     # under the same config id is refused (its digest is not in the allow-list).
     artifact = next(f for f in frames if RESULT in str(f))
-    pushes.clear()
-    assert await sender._dispatch_notification(artifact, config, task_id)
-    assert len(pushes) == 1 and RESULT in pushes[0]
+    original_pushes = list(pushes)
     await push_store.set_info(task_id, TaskPushNotificationConfig(id="original", task_id=task_id, url=STOLEN_HOOK),
                               requester)
     await sender.send_notification(task_id, artifact)
-    assert len(pushes) == 1 and all(STOLEN_HOOK not in body and "8.8.4.4" not in body for body in pushes)
+    assert pushes == original_pushes
+    assert not {SECOND_HOOK, STOLEN_HOOK}.intersection(url for url, _ in pushes)
     # r1 / r4: binding forgeries and unbound ids cannot create or redirect a release.
     projection = projections[0]
     for forged in _forged_bindings(projection.binding):

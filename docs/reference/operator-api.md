@@ -214,13 +214,28 @@ delivery. Use `session` with `deliver: "thread"` to address a thread.
 |---|---|
 | `activity` | Advisory `driven`, `idle`, or `stalled`, added only to `in_progress` tasks. `driven` means unresolved linked work or a session driver is present (or a driver source failed to read); `stalled` means no driver and more than 30 minutes since `updated_at`; otherwise `idle`, including an unreadable timestamp. Omitted if activity annotation fails. |
 | `ask` | String containing the operator-facing question or action needed; empty string when unset. Set with `PATCH /api/tasks/issues/{issue_id}`; `ask: ""` clears it. |
-| `links` | A **JSON-encoded string**, or `""` when no links are stored. Decode it to `[{ref, kind, state, reason}, …]`: `kind` is `card`, `directive`, `pr`, or `job`; `state` is `open` or `done`; `reason` is a string. |
+| `links` | A **JSON-encoded string**, or `""` when no links are stored. Decode it to `[{ref, kind, state, reason}, …]`: `kind` is `card`, `directive`, `pr`, `job`, `url`, or `conversation`; `state` is `open` or `done`; `reason` is a string. A `conversation` entry also carries `owner`, `context_id`, and `roles` (a deduped list of `requester`/`coder`/`reviewer`/`related`); its `ref` is `conv:<owner>/<context_id>`. |
+| `rel_version` | Integer schema version of the row's relationship metadata — `1` on rows created with correlation/provenance recorded, `0` on legacy rows. |
+| `request` | The decoded request-correlation object the work came from, or `{}` when unknown. When set it carries a subset of `kind` (`inbox` or `a2a`), `owner`, `context_id`, `message_id`, `task_id`, `item_id`. **Display-only provenance** — never an authorization input. Server-derived; a client cannot set it. |
+| `requester` | The decoded requester-provenance object, or `{}` when unknown. When set it carries a subset of `caller`, `caller_kind`, `on_behalf_of`. Display-only, server-derived, not client-settable. |
 
-`POST /api/tasks/issues` and `PATCH /api/tasks/issues/{issue_id}` instead accept
-`links` as a list of reference strings (card ids, directive ids, PR URLs, or
-scheduler job ids). On PATCH, the list replaces the references while preserving
-the resolution of retained references; `[]` clears it, and omitted or `null`
-leaves it unchanged. Create and update return `{issue: {...}}`.
+`POST /api/tasks/issues` and `PATCH /api/tasks/issues/{issue_id}` accept `links` as
+a list whose entries are either **reference strings** (card ids, directive ids, PR
+URLs, or scheduler job ids) **or related-conversation objects**
+`{"kind": "conversation", "role": "requester"|"coder"|"reviewer"|"related", "owner":
+"<agent name>", "context_id": "<chat context>"}`. On PATCH, the list replaces the
+references while preserving the resolution of retained references (and the roles of a
+retained conversation); `[]` clears it, and omitted or `null` leaves it unchanged.
+`request`, `requester`, and `promotion_key` are **server-derived only** — sending them
+in the body is ignored. Create and update return `{issue: {...}}`.
+
+A conversation link is accepted **only** when its `owner` is this agent's own name
+**and** its `context_id` is one of this agent's own conversations (a context present in
+its A2A task store) that is **not** a server/execution context (`job:`, `background:`,
+`system:`, `palette-`). A link with a forged `owner`, an unknown `context_id`, a server
+context, or another agent's equal context string is rejected with **403** and **nothing
+is written** (no partial link list is stored). The `owner`/`context_id` is provenance for
+Work to display later; it never grants read access to that conversation.
 
 ## Config, setup & settings
 
