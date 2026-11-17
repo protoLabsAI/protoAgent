@@ -244,13 +244,14 @@ async def _newest_turn(session_id: str) -> tuple[str | None, str | None, Any]:
     from sqlalchemy import select
 
     from a2a.server.tasks.database_task_store import TaskModel
+    from a2a_impl.stores import task_public_filter
     from a2a_impl.stores import task_newest_first
 
     async with engine.begin() as conn:
         row = (
             await conn.execute(
                 select(TaskModel.id, TaskModel.status, TaskModel.last_updated)
-                .where(TaskModel.context_id == session_id)
+                .where(TaskModel.context_id == session_id).where(await task_public_filter(conn))
                 .order_by(*task_newest_first(TaskModel, conn.dialect.name))
                 .limit(1)
             )

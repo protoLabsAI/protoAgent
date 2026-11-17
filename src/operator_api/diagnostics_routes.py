@@ -359,6 +359,7 @@ def register_diagnostics_routes(app) -> None:
 
         try:
             from a2a.server.tasks.database_task_store import TaskModel
+            from a2a_impl.stores import task_public_filter
             from sqlalchemy import select
 
             stmt = (
@@ -367,7 +368,7 @@ def register_diagnostics_routes(app) -> None:
                 .limit(_MAX_SESSION_SCAN_ROWS + 1)
             )
             async with engine.connect() as conn:
-                rows = (await conn.execute(stmt)).mappings().all()
+                rows = (await conn.execute(stmt.where(await task_public_filter(conn)))).mappings().all()
         except Exception:  # noqa: BLE001 — a store read failure is a diagnostics answer, not a 500
             log.exception("[diagnostics] session inventory read failed")
             body = dict(empty)
@@ -433,10 +434,11 @@ def register_diagnostics_routes(app) -> None:
 
         try:
             from a2a.server.tasks.database_task_store import TaskModel
+            from a2a_impl.stores import task_public_filter
             from sqlalchemy import select
 
             async with engine.connect() as conn:
-                row = (await conn.execute(select(TaskModel).where(TaskModel.id == task_id))).mappings().first()
+                row = (await conn.execute(select(TaskModel).where(TaskModel.id == task_id).where(await task_public_filter(conn)))).mappings().first()
         except Exception:  # noqa: BLE001 — a store read failure is a diagnostics answer, not a 500
             log.exception("[diagnostics] task read failed for %s", task_id)
             return JSONResponse(

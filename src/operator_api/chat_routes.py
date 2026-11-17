@@ -14,6 +14,7 @@ HTTP layer over it. ``ui`` (the deployment tier) is passed in because
 
 from __future__ import annotations
 
+
 import asyncio
 import contextlib
 import json
@@ -34,7 +35,7 @@ from a2a_impl.conversation_policy import (
     CONVERSATION_WINDOW_DAYS as _CONVERSATION_WINDOW_DAYS,
     listed_outside_thread,
 )
-from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first
+from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first, task_public_filter
 from infra.paths import package_version
 from runtime.session_ids import SessionId, require_session_id, session_id_problem
 from runtime.state import STATE
@@ -322,7 +323,7 @@ async def _parked_sessions(engine, limit: int) -> list[dict]:
         tombstones = await _ensure_chat_tombstones(conn)
         candidates = (
             select(TaskModel.context_id, func.max(TaskModel.last_updated).label("parked_at"))
-            .where(TaskModel.context_id.like("chat-%"))
+            .where(TaskModel.context_id.like("chat-%")).where(await task_public_filter(conn))
             .where(state.in_(_PARKED_STORED_STATES))
             .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
             .group_by(TaskModel.context_id)
@@ -333,7 +334,7 @@ async def _parked_sessions(engine, limit: int) -> list[dict]:
         # Each candidate is confirmed off its newest-created turn in the SAME statement
         # (#3972): one windowed pass over the candidates' rows, not 2 scans per candidate.
         newest = _newest_turn_ranked(
-            TaskModel, conn.dialect.name, TaskModel.context_id.in_(select(candidates.c.context_id))
+            TaskModel, conn.dialect.name, TaskModel.context_id.in_(select(candidates.c.context_id)) & await task_public_filter(conn)
         )
         rows = (
             await conn.execute(
@@ -396,7 +397,7 @@ async def session_summary(session_id: str) -> dict | None:
             return None
         from a2a.server.tasks.database_task_store import TaskModel
 
-        newest = _newest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id == session_id)
+        newest = _newest_turn_ranked(TaskModel, conn.dialect.name, (TaskModel.context_id == session_id) & await task_public_filter(conn))
         row = (
             await conn.execute(
                 select(newest.c.turn_count, newest.c.last_updated, newest.c.status, newest.c.task_id).where(
@@ -600,7 +601,7 @@ async def _conversation_index(engine, *, before, cutoff, pool_cap: int):
     async with engine.begin() as conn:
         tombstones = await _ensure_chat_tombstones(conn)
         where = ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id))
-        where = where & listed_outside_thread(TaskModel.context_id)
+        where = where & listed_outside_thread(TaskModel.context_id) & await task_public_filter(conn)
         newest = _newest_turn_ranked(TaskModel, conn.dialect.name, where)
         summary_q = select(
             newest.c.context_id, newest.c.task_id, newest.c.status, newest.c.turn_count, newest.c.last_updated
@@ -620,7 +621,7 @@ async def _conversation_index(engine, *, before, cutoff, pool_cap: int):
         context_ids = [row.context_id for row in summaries]
         openings: dict = {}
         if context_ids:
-            oldest = _oldest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id.in_(context_ids))
+            oldest = _oldest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id.in_(context_ids) & await task_public_filter(conn))
             for row in (
                 await conn.execute(
                     select(oldest.c.context_id, oldest.c.origin_meta, oldest.c.history).where(oldest.c.rn == 1)
@@ -650,7 +651,7 @@ async def _session_started_incognito(session_id: str) -> bool:
         from a2a.server.tasks.database_task_store import TaskModel
 
         async with engine.begin() as conn:
-            oldest = _oldest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id == session_id)
+            oldest = _oldest_turn_ranked(TaskModel, conn.dialect.name, (TaskModel.context_id == session_id) & await task_public_filter(conn))
             row = (await conn.execute(select(oldest.c.history).where(oldest.c.rn == 1))).first()
     except Exception as exc:  # noqa: BLE001 — detection is opportunistic, like the session index
         log.warning("[chat] incognito detection failed for %s: %s", session_id, exc)
@@ -1475,7 +1476,7 @@ def register_chat_routes(app, ui: str) -> None:
                     # The task store also contains delegation, Activity,
                     # fleet-room, and API contexts. Only console-created
                     # chat tabs use the stable ``chat-`` id prefix.
-                    TaskModel.context_id.like("chat-%")
+                    TaskModel.context_id.like("chat-%") & await task_public_filter(conn)
                     & ~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id))
                 )
                 if closed_ids:
@@ -1567,7 +1568,7 @@ def register_chat_routes(app, ui: str) -> None:
                     live_ids = [sid for sid in candidate_ids if sid not in tombstoned]
                     if live_ids:
                         newest = _newest_turn_ranked(
-                            TaskModel, conn.dialect.name, TaskModel.context_id.in_(live_ids)
+                            TaskModel, conn.dialect.name, TaskModel.context_id.in_(live_ids) & await task_public_filter(conn)
                         )
                         for r in (
                             await conn.execute(
@@ -1891,7 +1892,7 @@ def register_chat_routes(app, ui: str) -> None:
                             TaskModel.history,
                             TaskModel.last_updated,
                         )
-                        .where(TaskModel.context_id == session_id)
+                        .where(TaskModel.context_id == session_id).where(await task_public_filter(conn))
                         .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
                         # Read the NEWEST bounded tail so catch-up always includes
                         # a current HITL/in-flight turn, then restore chronology below.

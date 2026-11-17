@@ -1903,6 +1903,7 @@ async def settle_plugin_form_task(session_id: str) -> bool:
         return False
     try:
         from a2a.server.tasks.database_task_store import TaskModel
+        from a2a_impl.stores import task_public_filter
         from sqlalchemy import select, update
         from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -1913,7 +1914,7 @@ async def settle_plugin_form_task(session_id: str) -> bool:
             row = (
                 await session.execute(
                     select(TaskModel.id, TaskModel.status)
-                    .where(TaskModel.context_id == sid)
+                    .where(TaskModel.context_id == sid).where(await task_public_filter(await session.connection()))
                     # The newest-CREATED turn, like the durable turns reader (#3963).
                     .order_by(*task_newest_first(TaskModel, engine.dialect.name))
                     .limit(1)
@@ -1954,11 +1955,12 @@ async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULE
         return True
     try:
         from a2a.server.tasks.database_task_store import TaskModel
+        from a2a_impl.stores import task_public_filter
         from sqlalchemy import func, select
 
         async with engine.connect() as conn:
             latest = (
-                await conn.execute(select(func.max(TaskModel.last_updated)).where(TaskModel.context_id == session_id))
+                await conn.execute(select(func.max(TaskModel.last_updated)).where(TaskModel.context_id == session_id).where(await task_public_filter(conn)))
             ).scalar()
     except Exception:  # noqa: BLE001 — a read failure must not suppress a delivery
         return True
