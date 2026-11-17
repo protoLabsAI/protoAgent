@@ -826,3 +826,497 @@ async def test_runner_resolves_the_reference_then_folds_the_reply(tmp_path, monk
     assert replied is True
     await engine.dispose()
     steering._reset()
+
+
+# ── durable one-audience-per-segment scheduling (ADR 0131 P1c; dormant) ────────────
+# Accepted inputs persist as ordered pending turns on the existing task records; the active
+# segment is one more durable record carrying a monotonic generation. Every transition is a
+# transactional compare-and-set on that generation (a2a_impl.segment_schedule), not a process
+# lock, so completion-vs-acceptance is one ordering decision and a real restart recovers the
+# queue, audience and order from the reopened store with no tool replay and no public fallback.
+
+
+async def _open_store(path):
+    from a2a_impl import stores
+
+    engine = stores.make_sqlite_engine(str(path))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    await store.initialize()
+    return engine, store
+
+
+@pytest.mark.asyncio
+async def test_pending_turns_persist_in_order_with_every_field(tmp_path):
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    peer = await ss.accept_pending_turn(
+        store, session_id="chat-s", audience=ss.AUDIENCE_PEER, principal="op-bearer", dedupe="m1",
+        checkpoint="proj:atlas:chat-s", interrupt_id="", context=op,
+    )
+    priv = await ss.accept_pending_turn(
+        store, session_id="chat-s", audience=ss.AUDIENCE_PRIVATE, principal="op-bearer", dedupe="m2",
+        checkpoint="proj:atlas:chat-s", interrupt_id="i7", input_ref="private-input:abc", context=op,
+    )
+    assert (peer["seq"], priv["seq"]) == (1, 2)  # monotonic durable acceptance order
+    turns = await ss.pending_turns(store, "chat-s", op)
+    assert [t["seq"] for t in turns] == [1, 2]
+    # Every scheduling field is on the record: sequence, audience, principal, dedupe, checkpoint,
+    # interrupt id, input reference and state.
+    assert turns[0] == {
+        "version": 1, "kind": "pending-turn", "seq": 1, "audience": "peer", "principal": "op-bearer",
+        "dedupe": "m1", "checkpoint": "proj:atlas:chat-s", "interrupt_id": "", "input_ref": "", "state": "queued",
+    }
+    assert turns[1]["audience"] == "private" and turns[1]["input_ref"] == "private-input:abc"
+    assert turns[1]["interrupt_id"] == "i7"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_message_id_gives_exactly_one_pending_turn(tmp_path):
+    from sqlalchemy import text as _sql
+
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    first = await ss.accept_pending_turn(
+        store, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op
+    )
+    again = await ss.accept_pending_turn(
+        store, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op
+    )
+    assert again["seq"] == first["seq"]  # the retry reuses the one turn
+    async with store.engine.connect() as conn:
+        n = (await conn.execute(_sql("SELECT COUNT(*) FROM tasks WHERE public_visible=0"))).scalar()
+    assert n == 1  # one record, not two
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order", ["fold_wins", "complete_wins"])
+async def test_completion_versus_acceptance_is_one_transactional_ordering(tmp_path, order):
+    # A steer arriving exactly as a turn completes: the single generation CAS decides. Either the
+    # fold wins (it bumps the generation, so completion loses and the turn keeps running to drain
+    # it — one turn) or completion wins (the fold's CAS then matches nothing, so the steer stays
+    # queued for the next segment — one turn). Never both, never neither.
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    head = await ss.accept_pending_turn(
+        store, session_id="chat-c", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op
+    )
+    gen = await ss.claim_segment(store, "chat-c", audience=ss.AUDIENCE_PEER, seq=head["seq"], context=op)
+    await ss.set_turn_state(store, "chat-c", head["seq"], ss.STATE_RUNNING, op)
+    await ss.accept_pending_turn(
+        store, session_id="chat-c", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m2", context=op
+    )
+
+    if order == "fold_wins":
+        gen2 = await ss.try_fold(store, "chat-c", generation=gen, audience=ss.AUDIENCE_PEER, seq=2, context=op)
+        assert gen2 == gen + 1  # folded into the running turn
+        recovered = await ss.recover_undrained_segments(store, "chat-c", op)
+        assert [t["dedupe"] for t in recovered["suspended"]] == ["m1", "m2"]
+        assert await ss.complete_segment(store, "chat-c", generation=gen, context=op) is False  # completion lost
+        assert await ss.complete_segment(store, "chat-c", generation=gen2, context=op) is True
+        assert await ss.next_dispatch(store, "chat-c", op) is None
+    else:
+        assert await ss.complete_segment(store, "chat-c", generation=gen, context=op) is True  # completion won
+        # The fold now matches nothing: the steer is NOT read by the turn that just ended.
+        assert await ss.try_fold(store, "chat-c", generation=gen, audience=ss.AUDIENCE_PEER, seq=2, context=op) is None
+        # It stays queued; a fresh segment runs it (the next-start half of the same ordering).
+        nxt = await ss.next_dispatch(store, "chat-c", op)
+        assert nxt["dedupe"] == "m2"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completion_race_resolves_to_exactly_one_outcome_concurrently(tmp_path):
+    # The same ordering under a genuine concurrent race on the one SQLite record: fold and
+    # completion run together; exactly one commits at the shared generation.
+    import asyncio
+
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    head = await ss.accept_pending_turn(
+        store, session_id="chat-r", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op
+    )
+    gen = await ss.claim_segment(store, "chat-r", audience=ss.AUDIENCE_PEER, seq=head["seq"], context=op)
+    await ss.accept_pending_turn(
+        store, session_id="chat-r", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m2", context=op
+    )
+    folded, completed = await asyncio.gather(
+        ss.try_fold(store, "chat-r", generation=gen, audience=ss.AUDIENCE_PEER, seq=2, context=op),
+        ss.complete_segment(store, "chat-r", generation=gen, context=op),
+    )
+    assert bool(folded) != bool(completed)  # exactly one of the two won the generation CAS
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_cross_audience_steer_queues_behind_the_running_segment(tmp_path):
+    # Audience is fixed when the segment is claimed; the other audience queues behind, ordered by
+    # acceptance seq, and next_dispatch never crosses audiences. (The model-input proof of BOTH
+    # directions is test_no_model_call_mixes_audiences_in_a_real_graph in test_steering.py.)
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    # A private turn is accepted first and claims the runner; a peer steer arrives during it.
+    priv = await ss.accept_pending_turn(
+        store, session_id="chat-q", audience=ss.AUDIENCE_PRIVATE, principal="op", dedupe="m1",
+        input_ref="private-input:x", context=op,
+    )
+    gen = await ss.claim_segment(store, "chat-q", audience=ss.AUDIENCE_PRIVATE, seq=priv["seq"], context=op)
+    await ss.set_turn_state(store, "chat-q", priv["seq"], ss.STATE_RUNNING, op)
+    await ss.accept_pending_turn(
+        store, session_id="chat-q", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m2", context=op
+    )
+    # The peer steer must NOT fold into the running private segment, and the runner is reserved.
+    assert await ss.try_fold(store, "chat-q", generation=gen, audience=ss.AUDIENCE_PEER, seq=2, context=op) is None
+    assert await ss.next_dispatch(store, "chat-q", op) is None  # reserved by the private segment
+    # Once the private segment completes, the peer turn is the next dispatch (its own segment).
+    assert await ss.complete_segment(store, "chat-q", generation=gen, context=op) is True
+    nxt = await ss.next_dispatch(store, "chat-q", op)
+    assert nxt["dedupe"] == "m2" and nxt["audience"] == "peer"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_parked_segment_reserves_runner_until_its_matching_resume(tmp_path):
+    # A parked segment holds the runner; only its matching guarded resume continues it, and the
+    # resume may pass queued fresh inputs of its own audience. An ordinary steer does not resume it.
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    head = await ss.accept_pending_turn(
+        store, session_id="chat-p", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op
+    )
+    gen = await ss.claim_segment(store, "chat-p", audience=ss.AUDIENCE_PEER, seq=head["seq"], context=op)
+    await ss.set_turn_state(store, "chat-p", head["seq"], ss.STATE_RUNNING, op)
+    assert await ss.park_segment(store, "chat-p", generation=gen, interrupt_id="i42", context=op) is True
+    await ss.set_turn_state(store, "chat-p", head["seq"], ss.STATE_PARKED, op, interrupt_id="i42")
+    seg = await ss.read_segment(store, "chat-p", op)
+    assert seg["state"] == "parked"  # reserved, not idle
+    # A fresh peer steer queues behind; the runner stays reserved (no dispatch).
+    await ss.accept_pending_turn(
+        store, session_id="chat-p", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m2", context=op
+    )
+    assert await ss.next_dispatch(store, "chat-p", op) is None
+    # A resume for a DIFFERENT interrupt (an ordinary steer) cannot continue it.
+    assert await ss.resume_segment(store, "chat-p", generation=seg["generation"], interrupt_id="other", context=op) is None
+    # The matching guarded resume continues the SAME segment; the queued fresh input is now
+    # available to unblock the interrupt.
+    g2 = await ss.resume_segment(store, "chat-p", generation=seg["generation"], interrupt_id="i42", context=op)
+    assert g2 == seg["generation"] + 1
+    fresh = await ss.pending_turns(store, "chat-p", op, states=(ss.STATE_QUEUED,))
+    assert [t["dedupe"] for t in fresh] == ["m2"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("head_state", ["queued", "running", "parked"])
+async def test_completion_retires_only_attached_turns_durably(tmp_path, head_state):
+    from a2a_impl import segment_schedule as ss
+
+    path = tmp_path / "completed.db"
+    engine, store = await _open_store(path)
+    op = _operator_ctx()
+    for dedupe, audience in [
+        ("head", ss.AUDIENCE_PEER), ("folded", ss.AUDIENCE_PEER),
+        ("later-private", ss.AUDIENCE_PRIVATE), ("later-peer", ss.AUDIENCE_PEER),
+    ]:
+        await ss.accept_pending_turn(
+            store, session_id="chat", audience=audience, principal="op", dedupe=dedupe, context=op,
+        )
+    generation = await ss.claim_segment(store, "chat", audience=ss.AUDIENCE_PEER, seq=1, context=op)
+    await ss.set_turn_state(store, "chat", 1, head_state, op)
+    folded_generation = await ss.try_fold(
+        store, "chat", generation=generation, audience=ss.AUDIENCE_PEER, seq=2, context=op,
+    )
+    before = await store.scheduling_payloads("chat", op)
+    assert not await ss.complete_segment(store, "chat", generation=generation, context=op)
+    assert await store.scheduling_payloads("chat", op) == before
+    assert await ss.complete_segment(store, "chat", generation=folded_generation, context=op)
+    await engine.dispose()
+
+    engine, store = await _open_store(path)
+    try:
+        recovered = await ss.recover_undrained_segments(store, "chat", op)
+        assert not recovered["reserved"]
+        assert recovered["suspended"] == recovered["parked"] == []
+        assert [t["dedupe"] for t in recovered["queued"]] == ["later-private", "later-peer"]
+        terminal = await ss.pending_turns(store, "chat", op, states=(ss.STATE_TERMINAL,))
+        assert [t["dedupe"] for t in terminal] == ["head", "folded"]
+        retry = await ss.accept_pending_turn(
+            store, session_id="chat", audience=ss.AUDIENCE_PEER, principal="op", dedupe="folded", context=op,
+        )
+        assert retry == terminal[1]
+        next_turn = await ss.next_dispatch(store, "chat", op)
+        assert next_turn["dedupe"] == "later-private"
+        assert await ss.claim_segment(
+            store, "chat", audience=next_turn["audience"], seq=next_turn["seq"], context=op,
+        ) is not None
+        before = await store.scheduling_payloads("chat", op)
+        assert not await ss.complete_segment(store, "chat", generation=folded_generation, context=op)
+        assert await store.scheduling_payloads("chat", op) == before
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_restart_after_acceptance_recovers_queue_audience_and_order(tmp_path):
+    # A real process restart (the store is disposed and reopened from the same file) after inputs
+    # were accepted but before any ran: the durable queue, audience and order are recovered.
+    from a2a_impl import segment_schedule as ss
+
+    path = tmp_path / "seg.db"
+    op = _operator_ctx()
+    engine, store = await _open_store(path)
+    await ss.accept_pending_turn(store, session_id="chat-a", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op)
+    await ss.accept_pending_turn(
+        store, session_id="chat-a", audience=ss.AUDIENCE_PRIVATE, principal="op", dedupe="m2",
+        input_ref="private-input:x", context=op,
+    )
+    await engine.dispose()  # == the process restarts
+
+    engine, store = await _open_store(path)
+    rec = await ss.recover_undrained_segments(store, "chat-a", op)
+    assert rec["reserved"] is False  # no runner was claimed before the crash
+    assert [(t["seq"], t["audience"], t["dedupe"]) for t in rec["queued"]] == [
+        (1, "peer", "m1"), (2, "private", "m2"),
+    ]
+    assert rec["audience"] == "peer"  # the head queued turn's audience leads the next dispatch
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_restart_during_execution_suspends_without_replaying_a_tool_effect(tmp_path):
+    # A restart while a turn was RUNNING: its pending turn is reported suspended for
+    # reconciliation, never re-dispatched — so a tool effect it may already have fired is not
+    # replayed. A private running turn keeps its opaque reference; there is no public fallback.
+    from a2a_impl import segment_schedule as ss
+
+    path = tmp_path / "seg.db"
+    op = _operator_ctx()
+    engine, store = await _open_store(path)
+    head = await ss.accept_pending_turn(
+        store, session_id="chat-e", audience=ss.AUDIENCE_PRIVATE, principal="op", dedupe="m1",
+        input_ref="private-input:secret", context=op,
+    )
+    await ss.claim_segment(store, "chat-e", audience=ss.AUDIENCE_PRIVATE, seq=head["seq"], context=op)
+    await ss.set_turn_state(store, "chat-e", head["seq"], ss.STATE_RUNNING, op)
+    await ss.accept_pending_turn(store, session_id="chat-e", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m2", context=op)
+    await engine.dispose()  # == a crash mid-execution
+
+    engine, store = await _open_store(path)
+    rec = await ss.recover_undrained_segments(store, "chat-e", op)
+    assert rec["reserved"] is True and rec["segment"]["state"] == "running"  # the runner stays held
+    assert [t["dedupe"] for t in rec["suspended"]] == ["m1"]  # the interrupted turn is suspended…
+    assert rec["suspended"][0]["input_ref"] == "private-input:secret"  # …with its private reference intact
+    assert rec["suspended"] != rec["queued"]  # NOT re-queued for a fresh dispatch (no replay)
+    assert rec["audience"] == "private"  # the reserved audience, never a public fallback
+    assert [t["dedupe"] for t in rec["queued"]] == ["m2"]  # the peer input still waits behind it
+    # next_dispatch refuses to start anything while the interrupted segment holds the runner.
+    assert await ss.next_dispatch(store, "chat-e", op) is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_restart_while_parked_keeps_the_reservation(tmp_path):
+    # A restart while a segment was PARKED: it stays reserved, with its interrupt id, so only its
+    # matching resume continues it after recovery — exactly as before the crash.
+    from a2a_impl import segment_schedule as ss
+
+    path = tmp_path / "seg.db"
+    op = _operator_ctx()
+    engine, store = await _open_store(path)
+    head = await ss.accept_pending_turn(store, session_id="chat-k", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op)
+    gen = await ss.claim_segment(store, "chat-k", audience=ss.AUDIENCE_PEER, seq=head["seq"], context=op)
+    await ss.park_segment(store, "chat-k", generation=gen, interrupt_id="i99", context=op)
+    await engine.dispose()
+
+    engine, store = await _open_store(path)
+    rec = await ss.recover_undrained_segments(store, "chat-k", op)
+    assert rec["reserved"] is True and rec["segment"]["state"] == "parked"
+    assert rec["segment"]["interrupt_id"] == "i99"
+    assert await ss.next_dispatch(store, "chat-k", op) is None  # reserved until the matching resume
+    seg = rec["segment"]
+    assert await ss.resume_segment(store, "chat-k", generation=seg["generation"], interrupt_id="i99", context=op) == seg["generation"] + 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ambiguous", [False, True])
+async def test_failed_dispatch_requeues_only_a_proven_refusal(tmp_path, ambiguous):
+    # A failed loopback (the dispatch could not start) must not lose or terminalize the accepted
+    # input: it stays queued, so recovery re-offers it. It is never replaced by a public fallback.
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    turn = await ss.accept_pending_turn(
+        store, session_id="chat-f", audience=ss.AUDIENCE_PRIVATE, principal="op", dedupe="m1",
+        input_ref="private-input:keep", context=op,
+    )
+    import httpx
+
+    attempts = []
+
+    async def loopback(request):
+        attempts.append(request)
+        if ambiguous:
+            raise httpx.ReadTimeout("delivery outcome unknown")
+        return httpx.Response(503)
+
+    async def send(pending):
+        assert pending["state"] == "running"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(loopback)) as client:
+            response = await client.post("http://loopback/a2a", json={"input_ref": pending["input_ref"]})
+        # This fake receiver explicitly refuses before starting any execution.
+        assert response.status_code == 503
+        return None
+
+    if ambiguous:
+        with pytest.raises(httpx.ReadTimeout):
+            await ss.dispatch_pending_turn(store, "chat-f", op, send)
+        recovered = await ss.recover_undrained_segments(store, "chat-f", op)
+        assert recovered["reserved"] and recovered["queued"] == []
+        assert recovered["suspended"][0]["input_ref"] == "private-input:keep"
+        assert await ss.next_dispatch(store, "chat-f", op) is None
+        await engine.dispose()
+        return
+    assert await ss.dispatch_pending_turn(store, "chat-f", op, send) is None
+    assert len(attempts) == 1
+    assert await ss.next_dispatch(store, "chat-f", op) == turn
+    still = await ss.pending_turns(store, "chat-f", op, states=(ss.STATE_QUEUED,))
+    assert [t["dedupe"] for t in still] == ["m1"]
+    assert still[0]["input_ref"] == "private-input:keep"  # its private reference is intact
+    assert turn["state"] == "queued"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refusal_after_a_fold_requeues_both_and_never_wedges_the_runner(tmp_path):
+    # The round-2 blocker: a same-audience steer FOLDS into the claimed segment while the head's
+    # dispatch is still in flight (bumping the generation), and then the loopback PROVES refusal
+    # (send returns None). The head never ran, so the folded input never ran either — both must
+    # return to the queue and the runner to idle. The segment must NOT be left running at the
+    # bumped generation with no completer (a wedged runner that never dispatches again).
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    head = await ss.accept_pending_turn(
+        store, session_id="chat-wedge", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op
+    )
+
+    async def send(pending):
+        # In-flight: a second same-audience steer is accepted and folded into the running segment,
+        # bumping the generation the dispatch claimed at.
+        assert pending["seq"] == head["seq"] and pending["state"] == "running"
+        await ss.accept_pending_turn(
+            store, session_id="chat-wedge", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m2", context=op
+        )
+        seg = await ss.read_segment(store, "chat-wedge", op)
+        folded = await ss.try_fold(
+            store, "chat-wedge", generation=seg["generation"], audience=ss.AUDIENCE_PEER, seq=2, context=op
+        )
+        assert folded == seg["generation"] + 1  # the fold committed; the segment moved on
+        return None  # …but the loopback then PROVES refusal (nothing started)
+
+    assert await ss.dispatch_pending_turn(store, "chat-wedge", op, send) is None
+    # Neither input is left running: both are back in the queue in acceptance order, the runner is
+    # idle (not stuck at the folded generation), and next_dispatch can cleanly re-claim the head.
+    seg = await ss.read_segment(store, "chat-wedge", op)
+    assert seg["state"] == "idle" and seg["audience"] == "" and seg["seq"] is None
+    queued = await ss.pending_turns(store, "chat-wedge", op, states=(ss.STATE_QUEUED,))
+    assert [t["dedupe"] for t in queued] == ["m1", "m2"]
+    assert all("segment_seq" not in t for t in queued)  # the fold marker is cleared on requeue
+    assert await ss.pending_turns(store, "chat-wedge", op, states=(ss.STATE_RUNNING,)) == []
+    nxt = await ss.next_dispatch(store, "chat-wedge", op)
+    assert nxt["dedupe"] == "m1"  # the runner re-claims the head cleanly — not wedged
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recover_durable_steers_fails_closed_without_a_partition(idle_server):
+    # The server-layer recovery seam is fail-closed: with no partition store/context there is
+    # nothing durable to recover, so it returns None rather than guessing a public restart.
+    assert await chat_mod.recover_durable_steers("chat-x") is None
+    assert await chat_mod.recover_durable_steers("chat-x", store=None, context=_operator_ctx()) is None
+
+
+@pytest.mark.asyncio
+async def test_recover_durable_steers_reloads_the_durable_queue(tmp_path):
+    # Through the server seam: it reopens the partition and returns the reloaded queue + audience.
+    from a2a_impl import segment_schedule as ss
+
+    path = tmp_path / "seg.db"
+    op = _operator_ctx()
+    engine, store = await _open_store(path)
+    await ss.accept_pending_turn(store, session_id="chat-w", audience=ss.AUDIENCE_PEER, principal="op", dedupe="m1", context=op)
+    await engine.dispose()
+
+    engine, store = await _open_store(path)
+    rec = await chat_mod.recover_durable_steers("chat-w", store=store, context=op)
+    assert rec is not None and [t["dedupe"] for t in rec["queued"]] == ["m1"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_accepts_and_claims_preserve_every_input(tmp_path):
+    import asyncio
+    from a2a_impl import segment_schedule as ss
+
+    path = tmp_path / "concurrent.db"
+    engine, store = await _open_store(path)
+    other_engine, other = await _open_store(path)
+    op = _operator_ctx()
+    try:
+        accepted = await asyncio.gather(*(
+            ss.accept_pending_turn(s, session_id="race", audience="peer", principal="op",
+                                   dedupe=mid, context=op)
+            for s, mid in [(store, "a"), (other, "b"), (other, "a")]
+        ))
+        assert len({t["seq"] for t in accepted}) == 2
+        assert accepted[0] == accepted[2]
+        claims = await asyncio.gather(*(
+            ss.claim_segment(s, "race", audience="peer", seq=seq, context=op)
+            for s, seq in [(store, 1), (other, 2)]
+        ))
+        assert sum(g is not None for g in claims) == 1
+        seg = await ss.read_segment(store, "race", op)
+        assert seg["state"] == "running" and seg["generation"] == 1
+    finally:
+        await engine.dispose()
+        await other_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_queue_and_dedupe_survive_more_than_a_history_window(tmp_path):
+    from a2a.types import a2a_pb2
+    from a2a_impl import segment_schedule as ss
+
+    engine, store = await _partition(tmp_path)
+    op = _operator_ctx()
+    try:
+        first = await ss.accept_pending_turn(store, session_id="long", audience="private",
+                                            principal="op", dedupe="old", context=op)
+        for i in range(205):
+            await store.save(a2a_pb2.Task(id=f"public-{i}", context_id="long"), op)
+        again = await ss.accept_pending_turn(store, session_id="long", audience="private",
+                                            principal="op", dedupe="old", context=op)
+        new = await ss.accept_pending_turn(store, session_id="long", audience="peer",
+                                          principal="op", dedupe="new", context=op)
+        assert again == first and new["seq"] == 2
+        assert await ss.next_dispatch(store, "long", op) == first
+        recovered = await ss.recover_undrained_segments(store, "long", op)
+        assert recovered["queued"] == [first, new]
+    finally:
+        await engine.dispose()

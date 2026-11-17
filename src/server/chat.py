@@ -1453,6 +1453,32 @@ def restart_undrained_steers(session_id: str, state: str) -> "asyncio.Task | Non
     return task
 
 
+async def recover_durable_steers(session_id: str, *, store=None, context=None) -> dict | None:
+    """Reload the durable audience queue BEFORE a runner is claimed (ADR 0131 P1c, dormant).
+
+    The in-memory ``restart_undrained_steers`` above only sees the queue of the process that
+    is still alive; a real process restart loses it. The durable recovery reopens the partition
+    (``a2a_impl.segment_schedule``) and reloads the queue, audience and acceptance order from the
+    task records, classifying a crash-interrupted ``running`` turn as suspended (never
+    re-dispatched — its tool effects cannot be replayed) and a parked segment as still reserved.
+    A private turn keeps its opaque ``input_ref``, so it resumes through the private path and
+    never falls back to a public input.
+
+    Fail-closed: with no partition store/context there is nothing durable to recover, so it
+    returns None rather than guessing — exactly as the private intake refuses without a store.
+    No live route calls this yet; only the P1c proof tests do."""
+    if not session_id or store is None or context is None:
+        return None
+    from a2a_impl import segment_schedule
+
+    try:
+        return await segment_schedule.recover_undrained_segments(store, session_id, context)
+    except Exception:  # noqa: BLE001 — an unreadable partition leaves a recoverable private error
+        log.warning("[steer] durable segment recovery for %s failed — left for reconciliation", session_id,
+                    exc_info=True)
+        return None
+
+
 # The streaming event loop (``_run_turn_stream``) and its lead-speaker filter moved to
 # server/turn_stream.py (#3874) and are re-exported at the top of this module.
 

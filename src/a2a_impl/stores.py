@@ -588,6 +588,122 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             ), {"version": PRIVATE_SCHEMA_VERSION, "audience": PRIVATE_AUDIENCE,
                 "payload": encoded, "visible": int(public_visible), "id": task.id})
 
+    async def scheduling_payloads(self, context_id, context):
+        """Read the complete private scheduling partition, independent of UI history limits."""
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            return await self._scheduling_payloads(session, context_id, context)
+
+    async def _scheduling_payloads(self, session, context_id, context):
+        from a2a_impl.auth import is_human_operator
+        from sqlalchemy import literal_column
+
+        if not is_human_operator((getattr(context, "state", None) or {}).get("principal_kind")):
+            raise PermissionError("Private task access requires a human operator")
+        conn = await session.connection()
+        visible = await task_public_filter(conn, self.task_model, include_private=True)
+        owners = [self.owner_resolver(context)]
+        if owners == [OPERATOR_OWNER]:
+            owners.append(FEDERATION_OWNER)
+        rows = (await session.execute(
+            select(self.task_model.id, literal_column("private_payload"))
+            .where(self.task_model.context_id == context_id, self.task_model.owner.in_(owners),
+                   visible, literal_column("public_visible") == 0,
+                   literal_column("private_version") == PRIVATE_SCHEMA_VERSION)
+        )).all()
+        return {key: json.loads(raw) for key, raw in rows}
+
+    async def update_scheduling_payloads(self, context_id, context, mutate):
+        """Commit a synchronous scheduling decision and all its task changes atomically.
+
+        SQLite's writer reservation is acquired BEFORE reading, including on independent
+        engines/processes. This covers sequence allocation, dedupe, create-if-absent and
+        segment/turn attachment; no process-local lock or merge can lose accepted input.
+        This dormant mechanism uses the runtime's SQLite task store only.
+        """
+        from a2a.types import a2a_pb2
+
+        await self._ensure_initialized()
+        if self.engine.dialect.name != "sqlite":
+            raise NotImplementedError("Durable scheduling requires the SQLite task store")
+        async with self.async_session_maker.begin() as session:
+            await session.execute(text("BEGIN IMMEDIATE"))
+            payloads = await self._scheduling_payloads(session, context_id, context)
+            before = {key: json.dumps(value, allow_nan=False) for key, value in payloads.items()}
+            result = mutate(payloads)
+            conn = await session.connection()
+            table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
+            for key, value in payloads.items():
+                encoded = json.dumps(value, allow_nan=False)
+                if before.get(key) == encoded:
+                    continue
+                task = a2a_pb2.Task(id=key, context_id=context_id)
+                await self._check_write(session, conn, task, context, private=True)
+                if key not in before:
+                    # INSERT, never merge: an unrelated/inaccessible id must fail closed.
+                    session.add(self._to_orm(task, self.owner_resolver(context)))
+                    await session.flush()
+                await session.execute(text(
+                    f"UPDATE {table} SET private_version=:version, private_audience=:audience, "
+                    "private_payload=:payload, public_visible=0 WHERE id=:id"
+                ), {"version": PRIVATE_SCHEMA_VERSION, "audience": PRIVATE_AUDIENCE,
+                    "payload": encoded, "id": key})
+            return result
+
+    async def cas_private_payload(
+        self, task_id: str, *, guard: dict, updates: dict, context: ServerCallContext,
+    ) -> bool:
+        """Transactional compare-and-set on a private-partition record's JSON payload (ADR
+        0131 P1c, dormant). Atomically overwrite the record's payload with
+        ``{**current, **updates}`` IFF every key in ``guard`` still equals the stored value —
+        a single guarded UPDATE, so a concurrent writer that moved the record on loses
+        (``rowcount`` 0, returns False). The guard is the durable ordering token the segment
+        scheduler CASes on (a monotonic ``generation``), not a process lock. Operator-only;
+        never turns a shell public, never crosses owners. Returns True iff this call committed.
+        """
+        from a2a_impl.auth import is_human_operator
+
+        if not is_human_operator((getattr(context, "state", None) or {}).get("principal_kind")):
+            raise PermissionError("Private task access requires a human operator")
+        if not isinstance(updates, dict):
+            raise ValueError("CAS updates must be an object")
+        # Guard/update keys land in a json_extract path and a payload dict — internal segment
+        # fields only; reject anything that isn't a bare identifier so the path stays injection-safe.
+        for key in (*guard, *updates):
+            if not (isinstance(key, str) and key.isidentifier()):
+                raise ValueError(f"Unsupported private payload key: {key!r}")
+        await self._ensure_initialized()
+        owners = [self.owner_resolver(context)]
+        if owners == [OPERATOR_OWNER]:
+            owners.append(FEDERATION_OWNER)
+        async with self.async_session_maker.begin() as session:
+            conn = await session.connection()
+            table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
+            row = (await session.execute(text(
+                f"SELECT private_payload, private_version, owner FROM {table} WHERE id=:id"
+            ), {"id": task_id})).first()
+            if (
+                row is None or row.private_version != PRIVATE_SCHEMA_VERSION
+                or row.private_payload is None or row.owner not in owners
+            ):
+                return False
+            payload = json.loads(row.private_payload)
+            if not isinstance(payload, dict) or any(payload.get(k) != v for k, v in guard.items()):
+                return False
+            encoded = json.dumps({**payload, **updates}, allow_nan=False)
+            # Single guarded UPDATE: the json_extract predicates re-check the guard atomically,
+            # so a writer that changed a guarded field between the read above and here matches
+            # no row (rowcount 0) instead of being clobbered — an optimistic CAS, no lost update.
+            params: dict = {"p": encoded, "id": task_id, "ver": PRIVATE_SCHEMA_VERSION}
+            where = ["id=:id", "private_version=:ver", "private_payload IS NOT NULL"]
+            for i, (k, v) in enumerate(guard.items()):
+                where.append(f"json_extract(private_payload,'$.{k}')=:g_{i}")
+                params[f"g_{i}"] = v
+            result = await session.execute(
+                text(f"UPDATE {table} SET private_payload=:p WHERE {' AND '.join(where)}"), params
+            )
+            return (result.rowcount or 0) == 1
+
     async def _check_write(self, session, conn, task, context, *, private=False):
         # Refuse stale writes to protected/retired rows; never turn a private shell public.
         from sqlalchemy import inspect
