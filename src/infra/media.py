@@ -110,6 +110,72 @@ def media_dir(*, create: bool = False) -> Path:
     return d
 
 
+# Dormant proof seam, installed only by RequesterProjection. Recovery must rebind
+# the durable delivery reader; absent readers fail closed, never fall back to public media.
+_PRIVATE_READERS: dict[str, Callable] = {}
+
+
+def is_private_media(name: str) -> bool:
+    # Reserve the namespace even if ownership metadata has disappeared.
+    return name.startswith("private-")
+
+
+def private_media_dir() -> Path:
+    return instance_paths().store("private-media")
+
+
+def private_owner(name: str) -> str:
+    import json
+
+    if not is_media_name(name) or not is_private_media(name):
+        return ""
+    try:
+        data = json.loads((private_media_dir() / f".{Path(name).stem}.json").read_text())
+        owner = data.get("owner") if isinstance(data, dict) else None
+        return owner if isinstance(owner, str) else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def bind_private_files(owner: str, reader: Callable) -> None:
+    """Bind a trusted private segment to the armed holder and delivery reader."""
+    _PRIVATE_READERS[owner] = reader
+    tf = _TURN_FILES.get()
+    if tf is not None:
+        with tf.lock:
+            tf.private_owner = owner
+
+
+async def private_media_content(name: str, principal: str, kind: str) -> tuple[bytes, str] | None:
+    """Read a snapshot, then authorize those exact bytes against the sealed delivery."""
+    if not is_media_name(name) or not principal or kind != "device":
+        return None
+    reader = _PRIVATE_READERS.get(private_owner(name))
+    if reader is None:
+        return None
+    try:
+        found = resolve_media(name, private_authorized=True)
+        if found is None:
+            return None
+        path, mime = found
+        data = path.read_bytes()
+        if await reader(name, principal, hashlib.sha256(data).hexdigest(), mime):
+            return data, mime
+    except Exception:  # noqa: BLE001 — stale/missing storage never grants access
+        pass
+    return None
+
+
+async def private_media_allowed(name: str, principal: str, kind: str) -> bool:
+    return await private_media_content(name, principal, kind) is not None
+
+
+def private_file_digest(name: str) -> str:
+    if not is_media_name(name) or not is_private_media(name):
+        raise PermissionError("Not a private file")
+    return hashlib.sha256((private_media_dir() / name).read_bytes()).hexdigest()
+
+
 def _live_policy() -> tuple[bool, int]:
     """``(public, retention_days)`` from the LIVE server config, so a Settings
     save applies on reload with no re-wiring. Falls back to the gated defaults
@@ -248,6 +314,8 @@ def check_access(path: str, sig: str, exp: str = "", *, now: float | None = None
     name = path[len(MEDIA_URL_PREFIX) :]
     if not _NAME_RE.match(name):
         return "deny"  # traversal / dotfile / nested path — never exempt
+    if is_private_media(name):
+        return "deny"
     if media_public():
         return "ok"
     if not exp:
@@ -263,7 +331,7 @@ def check_access(path: str, sig: str, exp: str = "", *, now: float | None = None
 OPEN_LINK_TTL_S = 15 * 60
 
 
-def open_link(url: str, *, now: float | None = None) -> str | None:
+def open_link(url: str, *, now: float | None = None, private_authorized: bool = False) -> str | None:
     """A short-lived ``/media/<name>?exp=…&sig=…`` for the store file a console media link
     names — the link the desktop shell opens in the system browser instead of the console's
     permanent one. ``url`` may be relative or absolute; only its ``/media/<name>`` path and
@@ -282,17 +350,17 @@ def open_link(url: str, *, now: float | None = None) -> str | None:
         return None
     rel = path[idx:]
     name = rel[len(MEDIA_URL_PREFIX) :]
-    if not _NAME_RE.match(name) or resolve_media(name) is None:
+    if not _NAME_RE.match(name) or resolve_media(name, private_authorized=private_authorized) is None:
         return None
     q = parse_qs(parts.query)
     sig = (q.get("sig") or [""])[0]
     exp = (q.get("exp") or [""])[0]
-    if check_access(rel, sig, exp, now=now) != "ok":
+    if not (is_private_media(name) and private_authorized) and check_access(rel, sig, exp, now=now) != "ok":
         return None
     return media_url(name, ttl_s=OPEN_LINK_TTL_S, now=now)
 
 
-def remint_link(url: str, *, now: float | None = None) -> str | None:
+def remint_link(url: str, *, now: float | None = None, private_authorized: bool = False) -> str | None:
     """A fresh, unexpired remote link for the store file a (possibly EXPIRED) signed media link
     names — the re-mint that repairs a member's old hub-console history, whose expiring links
     (``media.remote_link_ttl_s``, default 7 days) have lapsed so the inline image 403s (#4274).
@@ -319,7 +387,7 @@ def remint_link(url: str, *, now: float | None = None) -> str | None:
         return None
     rel = path[idx:]
     name = rel[len(MEDIA_URL_PREFIX) :]
-    if not _NAME_RE.match(name) or resolve_media(name) is None:
+    if not _NAME_RE.match(name) or resolve_media(name, private_authorized=private_authorized) is None:
         return None
     q = parse_qs(parts.query)
     sig = (q.get("sig") or [""])[0]
@@ -399,9 +467,12 @@ def save_media(data: bytes | str | Path, mime: str, meta: dict | None = None) ->
         if not source.is_file():
             raise FileNotFoundError(f"save_media: source file not found: {source}")
 
-    media_id = uuid.uuid4().hex
+    tf = _TURN_FILES.get()
+    owner = tf.private_owner if tf is not None else ""
+    media_id = ("private-" if owner else "") + uuid.uuid4().hex
     name = f"{media_id}{_extension_for(mime, source)}"
-    d = media_dir(create=True)
+    d = private_media_dir() if owner else media_dir(create=True)
+    d.mkdir(parents=True, exist_ok=True, mode=0o700 if owner else 0o777)
     dest = d / name
 
     # Crash-safe write: same-dir temp + os.replace (the binary sibling of
@@ -427,6 +498,7 @@ def save_media(data: bytes | str | Path, mime: str, meta: dict | None = None) ->
         raise
 
     sidecar = {
+        "owner": owner,
         "mime": mime or "application/octet-stream",
         "created_at": time.time(),
         # The content key attachments dedupe on (#4258): a re-run tool's fresh copy of the
@@ -437,7 +509,7 @@ def save_media(data: bytes | str | Path, mime: str, meta: dict | None = None) ->
     try:
         from infra.paths import atomic_write
 
-        atomic_write(d / f".{media_id}.json", json.dumps(sidecar))
+        atomic_write(d / f".{media_id}.json", json.dumps(sidecar), mode=0o600 if owner else None)
     except Exception:  # noqa: BLE001 — the artifact is saved; a lost sidecar only degrades the served mime
         log.warning("[media] failed to write meta sidecar for %s", name, exc_info=True)
 
@@ -447,7 +519,7 @@ def save_media(data: bytes | str | Path, mime: str, meta: dict | None = None) ->
     return MediaRef(id=media_id, url=url, path=dest, mime=sidecar["mime"])
 
 
-def resolve_media(name: str) -> tuple[Path, str] | None:
+def resolve_media(name: str, *, private_authorized: bool = False) -> tuple[Path, str] | None:
     """Serving-route lookup: a validated store filename → ``(path, mime)``.
 
     None for anything unsafe (traversal, dotfiles/internals, nested paths) or
@@ -457,7 +529,9 @@ def resolve_media(name: str) -> tuple[Path, str] | None:
 
     if not _NAME_RE.match(name or ""):
         return None
-    f = media_dir() / name
+    if is_private_media(name) and not private_authorized:
+        return None
+    f = (private_media_dir() if is_private_media(name) else media_dir()) / name
     if not f.is_file():
         return None
     mime = ""
@@ -643,12 +717,13 @@ _MAX_TURN_FILES = 16
 
 
 class _TurnFiles:
-    __slots__ = ("lock", "items", "closed")
+    __slots__ = ("lock", "items", "closed", "private_owner")
 
     def __init__(self, items: list[dict] | None = None) -> None:
         self.lock = threading.Lock()
         self.items: list[dict] = list(items or [])
         self.closed = False
+        self.private_owner = ""
 
 
 _TURN_FILES: contextvars.ContextVar[_TurnFiles | None] = contextvars.ContextVar("protoagent_turn_files", default=None)
@@ -679,7 +754,7 @@ def _sweep_parked(now: float) -> None:
 
 
 def begin_turn_files(
-    carry: str = "", principal: str = "", *, claim_mismatch: Callable[[str, int], bool] | None = None
+    carry: str = "", principal: str = "", *, owner: str = "", claim_mismatch: Callable[[str, int], bool] | None = None
 ) -> contextvars.Token:
     """Arm file attachments for the turn running in this context; pass the token to
     :func:`end_turn_files` when the turn ends. ``carry`` names a conversation whose parked
@@ -691,15 +766,23 @@ def begin_turn_files(
         now = time.time()
         with _PARKED_LOCK:
             _sweep_parked(now)
-            got = _PARKED.pop((carry, principal), None)
+            got = _PARKED.get((carry, principal))
+            if got is not None and any(is_private_media(e["file"]) and private_owner(e["file"]) != owner
+                                       for e in got[1]):
+                got = None
+            elif got is not None:
+                _PARKED.pop((carry, principal))
             if got is None and claim_mismatch is not None:
                 for key, parked in list(_PARKED.items()):
-                    if key[0] == carry and claim_mismatch(parked[2], len(parked[1])):
+                    if (key[0] == carry and not any(is_private_media(e["file"]) for e in parked[1])
+                            and claim_mismatch(parked[2], len(parked[1]))):
                         got = _PARKED.pop(key)
                         break
         if got is not None:
-            items = [_remint(e) for e in got[1] if resolve_media(e["file"]) is not None]
-    return _TURN_FILES.set(_TurnFiles(items))
+            items = [_remint(e) for e in got[1] if resolve_media(e["file"], private_authorized=True) is not None]
+    holder = _TurnFiles(items)
+    holder.private_owner = owner
+    return _TURN_FILES.set(holder)
 
 
 def park_turn_files(key: str, principal: str = "", *, principal_kind: str = "unknown") -> None:
@@ -842,17 +925,20 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
         log.warning("[media] attach_file: %r is not a media-store URL — not attached", url[:200])
         return False
     file_name = rel[len(MEDIA_URL_PREFIX) :]
-    if check_access(rel, _query_value(url, "sig"), _query_value(url, "exp")) != "ok":
+    private = is_private_media(file_name)
+    if private and (not tf.private_owner or private_owner(file_name) != tf.private_owner):
+        return False
+    if not private and check_access(rel, _query_value(url, "sig"), _query_value(url, "exp")) != "ok":
         log.warning("[media] attach_file: %r carries no valid, unexpired signature — not attached", rel)
         return False
     if not mime:
-        found = resolve_media(file_name)
+        found = resolve_media(file_name, private_authorized=private)
         mime = found[1] if found else (mimetypes.guess_type(file_name)[0] or "application/octet-stream")
     ttl = remote_link_ttl_s() if ttl_s is None else clamp_remote_link_ttl(ttl_s)
     explicit = (name or "").strip()[:255]
     entry = {
         "file": file_name,
-        "key": _content_key(file_name),
+        "key": ("sha256:" + private_file_digest(file_name)) if private else _content_key(file_name),
         "url": absolute_media_url(media_url(file_name, ttl_s=ttl)),
         "mime": mime,
         "name": explicit or path_name or file_name,

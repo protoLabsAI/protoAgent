@@ -50,6 +50,9 @@ _HANDLERS: list = []
 
 @pytest.fixture(autouse=True)
 def _hooks(monkeypatch):
+    from infra import media
+
+    monkeypatch.setattr(media, "_PRIVATE_READERS", {})
     set_terminal_hook(None)
     set_progress_hook(None)
     yield
@@ -71,7 +74,7 @@ async def _drain():
 
 
 def _handler(stream_fn, *, routing: bool = True, task_store=None, push_config_store=None, push_sender=None,
-             requester_projection_factory=None):
+             requester_projection_factory=None, structured_finalizer=None):
     card = pa.build_agent_card(
         name="t",
         description="d",
@@ -81,7 +84,8 @@ def _handler(stream_fn, *, routing: bool = True, task_store=None, push_config_st
         bearer=False,
     )
     handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(stream_fn, requester_projection_factory=requester_projection_factory),
+        agent_executor=ProtoAgentExecutor(stream_fn, requester_projection_factory=requester_projection_factory,
+                                          structured_finalizer=structured_finalizer),
         task_store=task_store or InMemoryTaskStore(),
         agent_card=card,
         push_config_store=push_config_store or InMemoryPushNotificationConfigStore(),
@@ -1079,3 +1083,88 @@ async def test_delivery_recovery_fails_closed(tmp_path, fault):
         assert not await recovered.deliver_to_requester(identity)
     finally:
         await reopened.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_private_final_envelope_keeps_selected_files_across_resume(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from a2a.types import Artifact, Part
+    from a2a_impl.executor import _data_part_proto
+    from google.protobuf.json_format import MessageToDict
+    from a2a_impl import private_intake, stores
+    from a2a_impl.requester_delivery import RequesterProjection
+    from infra import media
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "instance"))
+    store = stores.ReasoningCoalescingTaskStore(stores.make_sqlite_engine(str(tmp_path / "resume.db")),
+                                              owner_resolver=stores.resolve_task_owner)
+    peer = ServerCallContext(state={"requester_principal": "device:one"})
+    operator = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    private = await private_intake.record_private_steer(
+        store, session_id=CTX, text="STEER-CANARY", msg_id="s1", context=operator)
+    projections, refs = [], []
+
+    async def factory(context, queue):
+        projection = await RequesterProjection.accept(store, context, queue, agent_id="owner", operator=operator)
+        await projection.begin_private(private)
+        projections.append(projection)
+        return projection
+
+    async def structured(skill, text):
+        return {"metadata": {pa.MIME_KEY: "application/json"},
+                "content": {"value": {"private": "STRUCTURED-CANARY", "url": refs[1].url}}}
+
+    async def stream(*args, resume=False, **kwargs):
+        if not resume:
+            refs.extend([media.save_media(b"result bytes", "image/png"),
+                         media.save_media(b"FILE-CONTENT-CANARY", "image/png")])
+            assert media.attach_file(refs[0], name="result.png")
+            assert media.attach_file(refs[1], name="FILE-NAME-CANARY")
+            yield "input_required", {"question": "PRIVATE-PAUSE-CANARY"}
+        else:
+            carried = media.turn_files()
+            assert len(carried) == 2
+            assert [entry["name"] for entry in carried] == ["result.png", "FILE-NAME-CANARY"]
+            selected = Artifact(parts=[Part(text="delivered result"), _data_part_proto({"answer": 42}, "application/json"),
+                                       Part(url=carried[0]["url"], filename="result.png", media_type="image/png")])
+            identity = await projections[-1].prepare_result(selected)
+            selected.parts.append(_data_part_proto({"late": "LATE-CANARY"}, "application/json"))
+            with pytest.raises(PermissionError, match="immutable"):
+                await projections[-1].prepare_result(selected)
+            assert identity
+            # No deliver event: finalization auto-delivers the selected envelope.
+            try:
+                yield "done", "PRIVATE-REPLY-CANARY"
+            finally:
+                assert not media.attach_file(refs[1], name="LATE-FILE-CANARY")
+
+    handler, _ = _handler(stream, task_store=store, requester_projection_factory=factory,
+                          structured_finalizer=structured)
+    request = _msg("request", mid="m1")
+    parked = await handler.on_message_send(request, peer)
+    assert not parked.artifacts
+    # A broad ownership handoff cannot take the private attachments.
+    for principal in ("other", "device:one"):
+        thief = media.begin_turn_files(carry=CTX, principal=principal, claim_mismatch=lambda *_: True)
+        assert media.turn_files() == []
+        media.end_turn_files(thief)
+    request = _msg("continue", mid="m2", task_id=parked.id)
+    request.message.metadata.update({"skillHint": "chat"})
+    completed = await handler.on_message_send(request, peer)
+    wire = json.dumps(MessageToDict(completed))
+    assert "delivered result" in wire and '"answer": 42' in wire
+    assert "CANARY" not in wire and refs[1].path.name not in wire
+    assert len(completed.artifacts) == 1
+    binding, delivery = await store.delivery_data(parked.id)
+    assert delivery["state"] == "delivered"
+    assert hashlib.sha256(delivery["payload"].encode()).hexdigest() == delivery["digest"]
+    envelope = json.loads(delivery["payload"])
+    assert envelope["artifact"] == MessageToDict(completed.artifacts[0])
+    assert envelope["files"] == {refs[0].path.name: {"sha256": hashlib.sha256(b"result bytes").hexdigest(),
+                                                  "mime": "image/png"}}
+    retained = await store.get_record(private_intake.ref_task_id(private), operator)
+    assert "STRUCTURED-CANARY" in str(retained.private_payload)
+    assert binding["principal"] == "device:one"
+    media._PRIVATE_READERS.clear()
+    await store.engine.dispose()

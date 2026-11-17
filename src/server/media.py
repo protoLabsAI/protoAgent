@@ -6,13 +6,16 @@ to mount its own FastAPI route. Auth is enforced UPSTREAM by the default-deny
 middleware (``a2a_impl/auth.py``): a ``/media/`` request reaches this handler
 only with a valid per-file ``?sig=`` signature, a bearer credential, or the
 explicit ``media.public`` opt-in — so the handler itself only validates the
-name and streams the file.
+name and streams the file. Private proof resources additionally require the
+original enrolled requester and a delivered, digest-bound result at the route.
 
 Lives in ``server/`` (not ``graph``/``infra``) per the import-layering contract:
 the store is infra state; the HTTP surface that exposes it is the server's.
 """
 
 from __future__ import annotations
+
+from fastapi import Request
 
 
 # Types a browser runs as a DOCUMENT when one is opened directly (a link, "open in new tab").
@@ -34,16 +37,45 @@ def _serve_headers(mime: str) -> dict[str, str]:
     return headers
 
 
+async def _private_authorized(request: Request, name: str) -> bool:
+    from infra.media import is_private_media, private_media_allowed
+
+    if not is_private_media(name):
+        return False
+    device = getattr(request.state, "device_id", None)
+    principal = f"device:{device}" if device else ""
+    return await private_media_allowed(name, principal, getattr(request.state, "principal_kind", ""))
+
+
+async def _link_authorized(request: Request, url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    try:
+        name = urlsplit(url).path.rsplit("/", 1)[-1]
+    except ValueError:
+        return False
+    return await _private_authorized(request, name)
+
+
 def register_media_routes(app) -> None:
     """Mount ``GET``/``HEAD /media/{name}`` on the FastAPI app."""
     from fastapi import HTTPException
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, Response
 
     # HEAD answers the same headers with no body, behind the same auth (#4258).
     @app.api_route("/media/{name}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def _serve_media(name: str) -> FileResponse:
-        from infra.media import resolve_media
+    async def _serve_media(name: str, request: Request) -> Response:
+        from infra.media import is_private_media, private_media_content, resolve_media
 
+        if is_private_media(name):
+            device = getattr(request.state, "device_id", None)
+            content = await private_media_content(
+                name, f"device:{device}" if device else "", getattr(request.state, "principal_kind", ""))
+            if content is None:
+                raise HTTPException(status_code=404, detail="media not found")
+            data, mime = content
+            headers = {**_serve_headers(mime), "Cache-Control": "no-store", "Content-Length": str(len(data))}
+            return Response(data if request.method == "GET" else b"", media_type=mime, headers=headers)
         got = resolve_media(name)
         if got is None:
             # One answer for unsafe, internal and absent names — discloses nothing.
@@ -56,10 +88,11 @@ def register_media_routes(app) -> None:
     # a short-lived one first. Under ``/api/``, so the default-deny gate requires the operator
     # bearer; the body must already carry a valid signed link (``infra.media.open_link``).
     @app.post("/api/media/open-link", include_in_schema=False)
-    async def _media_open_link(body: dict) -> dict:
+    async def _media_open_link(body: dict, request: Request) -> dict:
         from infra.media import OPEN_LINK_TTL_S, open_link
 
-        link = open_link(str((body or {}).get("url") or ""))
+        url = str((body or {}).get("url") or "")
+        link = open_link(url, private_authorized=await _link_authorized(request, url))
         if link is None:
             raise HTTPException(status_code=404, detail="media not found")
         return {"url": link, "expires_in": OPEN_LINK_TTL_S}
@@ -71,10 +104,11 @@ def register_media_routes(app) -> None:
     # The handler logs nothing: the body carries a ``sig`` (and the full signed URL), and neither
     # must reach the logs.
     @app.post("/api/media/remint", include_in_schema=False)
-    async def _media_remint(body: dict) -> dict:
+    async def _media_remint(body: dict, request: Request) -> dict:
         from infra.media import remint_link
 
-        link = remint_link(str((body or {}).get("url") or ""))
+        url = str((body or {}).get("url") or "")
+        link = remint_link(url, private_authorized=await _link_authorized(request, url))
         if link is None:
             raise HTTPException(status_code=404, detail="media not found")
         return {"url": link}
