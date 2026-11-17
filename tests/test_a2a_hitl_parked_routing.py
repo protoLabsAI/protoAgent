@@ -988,6 +988,57 @@ async def test_phase0_preexisting_handles(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_private_hitl_preserves_content_free_pause_and_resume_progress(tmp_path):
+    from a2a_impl import private_intake, stores
+    from a2a_impl.requester_delivery import RequesterProjection
+
+    store = stores.ReasoningCoalescingTaskStore(
+        stores.make_sqlite_engine(str(tmp_path / "private-hitl.db")), owner_resolver=stores.resolve_task_owner,
+    )
+    await store.initialize()
+    peer = ServerCallContext(state={"requester_principal": "device:one", "principal_kind": "paired-agent"})
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    secret = "PRIVATE-HITL-PROMPT-CANARY"
+    ref = await private_intake.record_private_steer(store, session_id=CTX, text=secret, msg_id="s1", context=op)
+    frames = []
+
+    async def factory(context, queue):
+        projection = await RequesterProjection.accept(store, context, queue, agent_id="owner", operator=op)
+        await projection.begin_private(ref)
+        return projection
+
+    async def stream(*args, resume=False, **kwargs):
+        yield "text", secret
+        if resume:
+            yield "done", secret
+        else:
+            yield "input_required", {"question": secret}
+
+    set_progress_hook(lambda *args: frames.append(args))
+    handler, _ = _handler(stream, task_store=store, requester_projection_factory=factory)
+    request = _msg(secret, mid="m1")
+    request.message.metadata.update({"origin": "a2a", "caller": secret})
+    parked = await handler.on_message_send(request, peer)
+    assert parked.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    assert [frame for _, _, frame in frames] == [
+        {"phase": "turn_started", "origin": "a2a", "resumed": False},
+        {"phase": "input_required"},
+        {"phase": "turn_ended", "origin": "a2a", "state": "input_required"},
+    ]
+
+    request = _msg(secret, mid="m2", task_id=parked.id)
+    request.message.metadata.update({"origin": "a2a", "caller": secret})
+    completed = await handler.on_message_send(request, peer)
+    assert completed.status.state == TaskState.TASK_STATE_COMPLETED
+    assert [frame for _, _, frame in frames[3:]] == [
+        {"phase": "turn_started", "origin": "a2a", "resumed": True},
+        {"phase": "turn_ended", "origin": "a2a", "state": "completed"},
+    ]
+    assert all(context_id == CTX and task_id == parked.id for context_id, task_id, _ in frames)
+    assert secret not in str(frames)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["none", "digest", "claimed", "missing-private", "missing-delivery"])
 async def test_delivery_recovery_fails_closed(tmp_path, fault):
     from types import SimpleNamespace

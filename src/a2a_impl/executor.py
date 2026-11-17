@@ -932,8 +932,12 @@ class ProtoAgentExecutor(AgentExecutor):
         def progress(*args):
             if projection is None or not projection.private_ref:
                 _notify_progress(*args)
-            elif args[2].get("phase") == "turn_ended":
-                _notify_progress(args[0], args[1], {"phase": "turn_ended", "state": args[2]["state"]})
+            elif args[2].get("phase") in {"turn_started", "input_required", "turn_ended"}:
+                # Preserve host lifecycle bookkeeping (including HITL pause/resume),
+                # but never forward private prompts, stimuli, or other content.
+                frame = {key: value for key, value in args[2].items()
+                         if key in {"phase", "origin", "resumed", "state"}}
+                _notify_progress(args[0], args[1], frame)
 
         # A resumed task (HITL) already exists in input-required; a fresh task
         # must be enqueued as a Task object first (the framework requires the
