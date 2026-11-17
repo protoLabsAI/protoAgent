@@ -38,6 +38,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -383,16 +384,36 @@ def _device_for_token(token: str):
         return None
 
 
+PrincipalKind = Literal[
+    "shared-operator-bearer", "device", "fleet-service", "agent-device", "federation", "open/unknown"
+]
+_PRINCIPAL_KINDS = frozenset({
+    "shared-operator-bearer", "device", "fleet-service", "agent-device", "federation", "open/unknown"
+})
+
+
+def is_human_operator(principal: PrincipalKind | None) -> bool:
+    """True only for verified shared-bearer and phone-style device principal kinds.
+
+    Use the kind stamped by authentication, never client-supplied metadata.
+    This identifies a credential, not human presence; tier grants no such identity.
+    """
+    return principal in ("shared-operator-bearer", "device")
+
+
 @dataclass(frozen=True)
 class Credential:
     """What a matched credential earns: its trust TIER (ADR 0066 — who the caller is for goal,
     knowledge and chat trust) and its credential SCOPE (ADR 0121 D4 — whether it may change
     who can get in). Orthogonal: a paired phone is ``operator`` tier with ``device`` scope.
-    ``device_id`` is set for a device token (self rename / unpair, stream re-verification)."""
+    ``device_id`` is set for a device token (self rename / unpair, stream re-verification).
+    ``principal_kind`` identifies the matched credential independently of both permissions;
+    legacy API keys and unauthenticated requests remain unknown."""
 
     tier: str
     scope: str = SCOPE_FULL
     device_id: str | None = None
+    principal_kind: PrincipalKind = "open/unknown"
 
 
 _OPEN_CREDENTIAL = Credential("operator", SCOPE_FULL)
@@ -494,15 +515,15 @@ def _classify_token(token: str) -> Credential | None:
     if not token:
         return None
     if active is not None and _same_secret(token, active):
-        return Credential("operator", SCOPE_FULL)
+        return Credential("operator", SCOPE_FULL, principal_kind="shared-operator-bearer")
     if fed is not None and _same_secret(token, fed):
         # Scope is moot here — the ADR 0066 ceiling already denies federation all of /api.
-        return Credential("federation", SCOPE_FULL)
+        return Credential("federation", SCOPE_FULL, principal_kind="federation")
     if fleet is not None and _same_secret(token, fleet):
         # Fleet service token (ADR 0089): the hub already authenticated the external caller
         # (and applied ITS credential-plane ceiling) and presents members with this internal,
         # loopback-only credential.
-        return Credential("operator", SCOPE_FULL)
+        return Credential("operator", SCOPE_FULL, principal_kind="fleet-service")
     device = _device_for_token(token)
     if device is not None:
         # A paired device (ADR 0087 D1) is the OPERATOR tier — never a new tier string, which
@@ -512,7 +533,8 @@ def _classify_token(token: str) -> Credential | None:
             scope = device.effective_scope()
         except Exception:  # noqa: BLE001 — an odd row must not widen: fail to the narrow scope
             scope = SCOPE_DEVICE
-        return Credential("operator", scope if scope in SCOPES else SCOPE_DEVICE, str(device.id))
+        kind = {"device": "device", "agent": "agent-device"}.get(getattr(device, "kind", None), "open/unknown")
+        return Credential("operator", scope if scope in SCOPES else SCOPE_DEVICE, str(device.id), kind)
     return None
 
 
@@ -629,13 +651,19 @@ def configure(
 # ---------------------------------------------------------------------------
 
 
-def generate_sse_token(session_id: str = "", scope: str = SCOPE_DEVICE, device_id: str | None = None) -> str:
+def generate_sse_token(
+    session_id: str = "", scope: str = SCOPE_DEVICE, device_id: str | None = None,
+    *, principal_kind: PrincipalKind = "open/unknown",
+) -> str:
     """Return a base64url-encoded, HMAC-signed token valid for ``_SSE_TOKEN_LIFETIME`` seconds.
 
     The token is a JSON payload ``{sid, exp, scope}`` concatenated with an
     HMAC-SHA256 signature. The signing key is the active bearer token — when
     no bearer is configured (open mode) the function returns an empty string
     (SSE is already unrestricted).
+
+    ``principal_kind`` is the verified minting request's identity, independent of scope.
+    Callers omitting it retain unknown identity, never human-operator authority.
 
     ``scope`` (ADR 0121 D4) is the MINTING caller's credential scope, signed into the payload
     so an EventSource stream a device opened doesn't come back as ``full``. It defaults to the
@@ -651,6 +679,7 @@ def generate_sse_token(session_id: str = "", scope: str = SCOPE_DEVICE, device_i
         return ""
     scope = scope if scope in SCOPES else SCOPE_DEVICE
     claims: dict = {"sid": session_id, "exp": int(time.time()) + _SSE_TOKEN_LIFETIME, "scope": scope}
+    claims["principal_kind"] = principal_kind if principal_kind in _PRINCIPAL_KINDS else "open/unknown"
     if device_id:
         claims["did"] = str(device_id)
     payload = json.dumps(claims, separators=(",", ":"))
@@ -666,7 +695,10 @@ def sse_token_for(request) -> str:
     state = getattr(request, "state", None)
     scope = getattr(state, "credential_scope", None) or SCOPE_DEVICE
     device_id = getattr(state, "device_id", None)
-    return generate_sse_token(scope=scope, device_id=device_id)
+    return generate_sse_token(
+        scope=scope, device_id=device_id,
+        principal_kind=getattr(state, "principal_kind", "open/unknown"),
+    )
 
 
 def _validate_sse_token(token: str) -> bool:
@@ -681,7 +713,16 @@ def _sse_token_scope(token: str) -> str | None:
 
 
 def _sse_token_claims(token: str) -> tuple[str, str | None] | None:
-    """``(scope, device_id)`` a valid query-string SSE token carries, or None when invalid.
+    """Compatibility view of the verified SSE identity's scope and device."""
+    credential = _sse_token_credential(token)
+    return (credential.scope, credential.device_id) if credential is not None else None
+
+
+def _sse_token_credential(token: str) -> Credential | None:
+    """The identity a valid query-string SSE token carries, or None when invalid.
+
+    Principal kind is signed from the minting request, never inferred from scope or tier.
+    Old tokens without that claim retain their permissions but have unknown identity.
 
     A token minted by a paired device carries its id (``did``, ADR 0121 D5); one whose device
     has since been revoked or idle-expired is INVALID, so the 30 s token lifetime is no window
@@ -697,7 +738,7 @@ def _sse_token_claims(token: str) -> tuple[str, str | None] | None:
     key = _BEARER[0]
     if not key:
         # Open mode — no credential at all ⇒ no token needed.
-        return (SCOPE_FULL, None) if open_mode() else None
+        return _OPEN_CREDENTIAL if open_mode() else None
     if not token:
         return None
     try:
@@ -726,12 +767,14 @@ def _sse_token_claims(token: str) -> tuple[str, str | None] | None:
         return None
     scope = data.get("scope")
     scope = scope if isinstance(scope, str) and scope in SCOPES else SCOPE_DEVICE
+    kind = data.get("principal_kind")
+    kind = kind if isinstance(kind, str) and kind in _PRINCIPAL_KINDS else "open/unknown"
     did = data.get("did")
     if did is None:
-        return scope, None
+        return Credential("operator", scope, principal_kind=kind)
     if not isinstance(did, str) or not did or not device_is_live(did):
         return None
-    return scope, did
+    return Credential("operator", scope, did, kind)
 
 
 def device_is_live(device_id: str | None) -> bool:
@@ -854,6 +897,7 @@ class A2AAuthMiddleware:
     async def dispatch(self, request: Request, call_next):
         """The auth decision. Returns a refusal response, or ``None`` once ``call_next`` has
         run the app for an admitted request (it answered on the real ``send``)."""
+        request.state.principal_kind = "open/unknown"
         path = request.url.path
         # The router dispatches ``scope["path"]``, not ``url.path`` — and the two differ: both
         # Starlettes drop a decoded tab/CR/LF from ``url.path`` (``urlsplit`` strips them), 1.7
@@ -945,11 +989,12 @@ class A2AAuthMiddleware:
         # (the event bus AND the session-attendance stream — see _SSE_QUERY_TOKEN_PATHS).
         if all(_is_sse_query_token_path(s) for s in spellings):
             sse_token = request.query_params.get("token", "")
-            sse_claims = _sse_token_claims(sse_token)
+            sse_claims = _sse_token_credential(sse_token)
             if sse_claims is not None:
-                sse_scope, sse_device = sse_claims
-                # A valid SSE token proves the caller held the operator bearer — it's HMAC-signed
-                # with it and mintable only via the operator-gated /api/sse-token. Mark the tier so
+                sse_scope, sse_device = sse_claims.scope, sse_claims.device_id
+                request.state.principal_kind = sse_claims.principal_kind
+                # A valid SSE token was minted via the operator-tier /api/sse-token route.
+                # Its signing key does not identify the minter; the signed kind does. Mark the tier so
                 # the fleet proxy swaps in the MEMBER's credential (ADR 0089) for a proxied
                 # /agents/<slug>/api/events: this branch returns BEFORE the bearer classifier that
                 # normally sets trust_tier, so without this the swap never fires — and a closed
@@ -990,6 +1035,7 @@ class A2AAuthMiddleware:
         if tier == "federation" and any(_requires_operator(s) for s in spellings):
             return JSONResponse({"detail": "Forbidden: operator credential required"}, status_code=403)
         request.state.trust_tier = tier
+        request.state.principal_kind = cred.principal_kind
         # Credential scope (ADR 0121 D4): orthogonal to the tier. The credential-plane ceiling
         # sits right beside the federation one, and runs before any route — including the
         # fleet proxy's ADR 0089 D3 credential swap, which is just a route handler.

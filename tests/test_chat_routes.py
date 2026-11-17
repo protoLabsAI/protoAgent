@@ -11,6 +11,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None, seen=None):
     import operator_api.chat_routes as cr
@@ -2265,3 +2267,69 @@ def test_forget_private_history_independent_of_knowledge(monkeypatch, tmp_path, 
             assert "old summary" not in _contents(store)
     assert history.get(report) and history.get(other)
     assert history.forget_pending_markers() == {}
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("caller", ["shared", "device", "agent", "fleet", "federation", "legacy"])
+def test_sse_verified_principal_from_pairing_and_minter(caller, tmp_path, monkeypatch):
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, StreamingResponse
+    from a2a_impl import auth
+    from operator_api import pairing_routes
+    from security import devices
+
+    monkeypatch.setattr(devices, "_registry_path", lambda: tmp_path / "devices.json")
+    monkeypatch.setattr(pairing_routes, "_address_set", lambda port: [])
+    # Keep auth's process-global settings isolated from other chat-route tests.
+    saved = [h[0] for h in (auth._BEARER, auth._FEDERATION, auth._FLEET, auth._API_KEY, auth._ALLOWED_ORIGINS)]
+    app = FastAPI()
+    pairing_routes.register_pairing_routes(app)
+
+    @app.get("/api/sse-token")
+    def mint(request: Request):
+        return JSONResponse({"token": auth.sse_token_for(request)})
+
+    @app.get("/api/events")
+    def events(request: Request):
+        kind = request.state.principal_kind
+        data = [kind, auth.is_human_operator(kind), request.state.trust_tier, request.state.credential_scope]
+        return StreamingResponse(iter([f"data: {json.dumps(data)}\n\n"]), media_type="text/event-stream")
+
+    auth.install(app, bearer_token="shared", federation_token="fed", fleet_token="fleet",
+                 api_key="legacy", allowed_origins_raw="")
+    try:
+        with TestClient(app) as client:
+            token = {"federation": "fed"}.get(caller, caller)
+            device = None
+            if caller in ("device", "agent"):
+                code, _ = devices.start_pairing(kind=caller)
+                claim = client.post("/api/pairing/claim", json={"code": code, "name": "phone", "kind": "device"})
+                assert claim.status_code == 200
+                body = claim.json()
+                token, device = body["token"], body["device"]
+                assert device["kind"] == caller  # agent code cannot be relabelled by the claimer
+            headers = {"X-API-Key": "legacy"} if caller == "legacy" else {"Authorization": f"Bearer {token}"}
+            minted = client.get("/api/sse-token", headers=headers)
+            if caller == "federation":
+                assert minted.status_code == 403
+                assert client.get("/api/events", headers=headers).status_code == 403
+                return
+            assert minted.status_code == 200
+            stream_token = minted.json()["token"]
+            response = client.get("/api/events", params={"token": stream_token, "principal_kind": "device"})
+            assert response.status_code == 200
+            kind = {"shared": "shared-operator-bearer", "agent": "agent-device",
+                    "fleet": "fleet-service", "legacy": "open/unknown"}.get(caller, caller)
+            assert _sse_data(response.text) == [[kind, caller in ("shared", "device"),
+                                               "operator", "device" if caller == "device" else "full"]]
+            if caller == "device":
+                with monkeypatch.context() as clock:
+                    clock.setattr(devices, "_now", lambda: time.time() + 31 * 86400)
+                    clock.setattr(devices, "idle_ttl_days", lambda: 30)
+                    assert client.get("/api/events", params={"token": stream_token}).status_code == 401
+            if device:
+                devices.revoke_device(device["id"])
+                assert client.get("/api/events", params={"token": stream_token}).status_code == 401
+    finally:
+        for holder, value in zip((auth._BEARER, auth._FEDERATION, auth._FLEET, auth._API_KEY, auth._ALLOWED_ORIGINS), saved):
+            holder[0] = value

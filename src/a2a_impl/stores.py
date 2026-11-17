@@ -444,13 +444,15 @@ def resolve_task_owner(context: ServerCallContext | None) -> str:
 
 def tier_context_builder():
     """A JSON-RPC ``ServerCallContextBuilder`` that also records the request's classified
-    trust tier in the call context's state, where ``resolve_task_owner`` reads it."""
+    trust tier in the call context's state, where ``resolve_task_owner`` reads it.
+    Principal kind travels alongside it without changing owner or tier permissions."""
     from a2a.server.routes.common import DefaultServerCallContextBuilder
 
     class TierCallContextBuilder(DefaultServerCallContextBuilder):
         def build(self, request):
             context = super().build(request)
             context.state["trust_tier"] = getattr(request.state, "trust_tier", None)
+            context.state["principal_kind"] = getattr(request.state, "principal_kind", "open/unknown")
             return context
 
     return TierCallContextBuilder()
