@@ -163,9 +163,19 @@ def _build_runner_file(code: str) -> str:
         f.write("\n")
         f.write(code)
         # Exceptions and sys.exit() (even sys.exit(0)) skip this epilogue.
-        f.write('\n\nif "result" in globals():\n'
-                '    with open(_os.environ["EC_RESULT_PATH"], "w", encoding="utf-8") as _ec_result_file:\n'
-                '        _ec_result_file.write(_json.dumps(result, default=str, ensure_ascii=False))\n')
+        # default= only reaches unserialisable VALUES, so a non-str dict key (e.g.
+        # a tuple) or a circular reference would still raise and fail the run with
+        # exit 1 where a plain script exited 0; fall back to a best-effort string
+        # so setting `result` never regresses a previously-succeeding script.
+        f.write(
+            '\n\nif "result" in globals():\n'
+            '    try:\n'
+            '        _ec_result_text = _json.dumps(result, default=str, ensure_ascii=False)\n'
+            '    except (TypeError, ValueError):\n'
+            '        _ec_result_text = _json.dumps(str(result), ensure_ascii=False)\n'
+            '    with open(_os.environ["EC_RESULT_PATH"], "w", encoding="utf-8") as _ec_result_file:\n'
+            '        _ec_result_file.write(_ec_result_text)\n'
+        )
     return path
 
 

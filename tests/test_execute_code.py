@@ -53,6 +53,24 @@ async def test_structured_result(expression, expected):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code, needle", [
+    # A non-str dict key (tuple) is unreachable by default= — which only converts
+    # VALUES — so json.dumps raises TypeError. Pre-fix this failed the run.
+    ('result = {(1, 2): "x"}', "(1, 2)"),
+    # A circular reference makes json.dumps raise ValueError.
+    ('result = {}\nresult["self"] = result', "..."),
+])
+async def test_unserialisable_result_falls_back_without_failing(code, needle):
+    out = await run_code(code, {})
+    # The run still succeeds (exit 0); the result is handed back as a best-effort
+    # string rather than crashing the script where a plain run exited 0.
+    assert not out.startswith("Error:")
+    decoded = json.loads(out)
+    assert isinstance(decoded, str)
+    assert needle in decoded
+
+
+@pytest.mark.asyncio
 async def test_stdout_and_structured_result():
     out = await run_code('print("gathered", end="")\nresult = {"a": 1}', {})
     assert out == 'gathered\n--- result ---\n{"a": 1}'

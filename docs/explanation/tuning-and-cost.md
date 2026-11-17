@@ -85,8 +85,8 @@ inheritance rules, and where a fired fallback shows up.
 
 Instead of a long `search → fetch → search → fetch` tool-call chain (one model
 round-trip each), the model writes **one** Python script that calls several
-tools, loops/filters/composes their results, and returns only stdout —
-collapsing the chain into a single turn.
+tools, loops/filters/composes their results, and returns stdout (or a
+structured `result` value) — collapsing the chain into a single turn.
 
 ```yaml
 execute_code:
