@@ -27,6 +27,9 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
+from copy import copy
+from dataclasses import dataclass
 import logging
 import os
 import socket
@@ -458,6 +461,59 @@ def tier_context_builder():
     return TierCallContextBuilder()
 
 
+# These columns are deliberately NOT mapped on the SDK TaskModel. SDK serialization,
+# merge(), artifacts and history therefore cannot carry the console partition.
+_PRIVATE_COLUMNS = {
+    "private_version": "INTEGER",
+    "private_audience": "TEXT",
+    "private_payload": "TEXT",
+    "public_visible": "INTEGER",
+}
+PRIVATE_SCHEMA_VERSION = 1
+PRIVATE_AUDIENCE = "human-operator"
+
+
+@dataclass(frozen=True)
+class TaskRecord:
+    """Server-only console projection; never pass this envelope to an A2A transport."""
+
+    task: Task
+    private_payload: dict | None = None
+
+
+async def task_public_filter(conn, task_model=TaskModel, *, include_private=False):
+    """Filter BEFORE counts, ranking and limits, including direct SQL history readers.
+
+    Old SDK-only databases have no partition columns and keep their behavior. A partial
+    schema or unknown audience/version refuses protected rows, never guessing a format.
+    Tombstones hide both partitions of protected records after incomplete deletion.
+    Ordinary records retain the SDK's read behavior, including after chat deletion.
+    """
+    from sqlalchemy import Column, MetaData, String, Table, and_, exists, false, inspect, literal_column, true
+
+    columns = await conn.run_sync(lambda c: {x["name"] for x in inspect(c).get_columns(task_model.__tablename__)})
+    present = columns & _PRIVATE_COLUMNS.keys()
+    predicate = true()
+    if present:
+        if present != _PRIVATE_COLUMNS.keys():
+            return false()
+        c = {name: literal_column(f"{task_model.__tablename__}.{name}") for name in _PRIVATE_COLUMNS}
+        ordinary = and_(*(value.is_(None) for value in c.values()))
+        supported = and_(
+            c["private_version"] == PRIVATE_SCHEMA_VERSION,
+            c["private_audience"] == PRIVATE_AUDIENCE,
+            c["private_payload"].is_not(None),
+            c["public_visible"].in_((0, 1)),
+        )
+        if not include_private:
+            supported = and_(supported, c["public_visible"] == 1)
+        if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
+            tombstones = Table(CHAT_TOMBSTONE_TABLE, MetaData(), Column("context_id", String(255)))
+            supported = supported & ~exists().where(tombstones.c.context_id == task_model.context_id)
+        predicate = or_(ordinary, supported)
+    return predicate
+
+
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     """Durable task store that coalesces contiguous reasoning-v1 history runs
     into one Message per run on every save (#1710), keeps only the latest
@@ -465,6 +521,154 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     tool-args-v1 previews entirely (ADR 0118 D3). Streaming frames are
     untouched — this is persistence-shape only, so the wire contract and the
     live thinking bubble are unchanged."""
+
+    async def initialize(self) -> None:
+        await super().initialize()
+        # create_all cannot add columns to existing SDK tables. No stored task is rewritten.
+        from sqlalchemy import inspect
+
+        async with self.engine.begin() as conn:
+            columns = await conn.run_sync(
+                lambda c: {x["name"] for x in inspect(c).get_columns(self.task_model.__tablename__)}
+            )
+            table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
+            for name, sql_type in _PRIVATE_COLUMNS.items():
+                if name not in columns:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+
+    async def _reader(self):
+        """An isolated SDK reader preserves SDK pagination and owner semantics."""
+        from sqlalchemy.orm import aliased
+
+        await self._ensure_initialized()
+        async with self.engine.connect() as conn:
+            visible = await task_public_filter(conn, self.task_model)
+        reader = copy(self)
+        reader.task_model = aliased(self.task_model, select(self.task_model).where(visible).subquery())
+        return reader
+
+    async def save_private(
+        self, task: Task, payload: dict, context: ServerCallContext, *, public_visible: bool = True,
+    ) -> None:
+        """Dormant trusted intake: persist an SDK projection and private JSON atomically.
+
+        No route calls this. Private-only turns supply an empty SDK shell; private input
+        and output go only in payload. Existing tasks retain their owner and visibility.
+        """
+        from a2a_impl.auth import is_human_operator
+
+        if not is_human_operator((getattr(context, "state", None) or {}).get("principal_kind")):
+            raise PermissionError("Private task access requires a human operator")
+        if not isinstance(payload, dict):
+            raise ValueError("Private payload must be an object")
+        encoded = json.dumps(payload, allow_nan=False)
+        if not public_visible and (task.history or task.artifacts or task.metadata.fields or task.status.ByteSize()):
+            raise ValueError("Private-only tasks require an empty public shell")
+        await self._ensure_initialized()
+        async with self.async_session_maker.begin() as session:
+            conn = await session.connection()
+            await self._check_write(session, conn, task, context, private=True)
+            table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
+            previous_visibility = (await session.execute(
+                text(f"SELECT public_visible FROM {table} WHERE id=:id"), {"id": task.id}
+            )).first()
+            # NULL partitions are existing public tasks, not new private-only shells.
+            if previous_visibility is not None and (
+                (1 if previous_visibility.public_visible is None else previous_visibility.public_visible)
+                != int(public_visible)
+            ):
+                raise PermissionError("Task visibility cannot change")
+            existing = await session.get(self.task_model, task.id)
+            owner = existing.owner if existing else self.owner_resolver(context)
+            await session.merge(self._to_orm(task, owner))
+            await session.flush()
+            await session.execute(text(
+                f"UPDATE {table} SET private_version=:version, private_audience=:audience, "
+                "private_payload=:payload, public_visible=:visible WHERE id=:id"
+            ), {"version": PRIVATE_SCHEMA_VERSION, "audience": PRIVATE_AUDIENCE,
+                "payload": encoded, "visible": int(public_visible), "id": task.id})
+
+    async def _check_write(self, session, conn, task, context, *, private=False):
+        # Refuse stale writes to protected/retired rows; never turn a private shell public.
+        from sqlalchemy import inspect
+
+        table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
+        row = (await session.execute(text(
+            f"SELECT owner, context_id, private_version, private_audience, private_payload, public_visible "
+            f"FROM {table} WHERE id=:id"
+        ), {"id": task.id})).first()
+        protected = row is not None and any(value is not None for value in row[2:])
+        # Detached ordinary turns must still persist their final state after deletion.
+        # Private intake and existing protected rows must never revive a deleted chat.
+        if not private and not protected:
+            return
+        if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
+            context_ids = {task.context_id}
+            if row is not None:
+                context_ids.add(row.context_id)
+            for context_id in context_ids:
+                if (await session.execute(text(
+                    f"SELECT 1 FROM {CHAT_TOMBSTONE_TABLE} WHERE context_id=:id"
+                ), {"id": context_id})).first():
+                    raise PermissionError("Conversation unavailable")
+        if row is None:
+            return
+        if protected and (
+            row.private_version != PRIVATE_SCHEMA_VERSION or row.private_audience != PRIVATE_AUDIENCE
+            or row.private_payload is None or row.public_visible not in (0, 1)
+            or row.context_id != task.context_id or (not private and row.public_visible == 0)
+        ):
+            raise PermissionError("Task unavailable")
+        if private and row.owner not in (self.owner_resolver(context), FEDERATION_OWNER):
+            raise PermissionError("Task unavailable")
+        return row.owner if protected else None
+
+    async def get_record(self, task_id: str, context: ServerCallContext) -> TaskRecord | None:
+        """Read the console envelope; all SDK methods always return public Tasks."""
+        from a2a_impl.auth import is_human_operator
+
+        from sqlalchemy import literal, literal_column
+
+        human = is_human_operator((getattr(context, "state", None) or {}).get("principal_kind"))
+
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            conn = await session.connection()
+            visible = await task_public_filter(conn, self.task_model, include_private=human)
+            owners = [self.owner_resolver(context)]
+            if owners == [OPERATOR_OWNER]:
+                owners.append(FEDERATION_OWNER)
+            row = (await session.execute(
+                select(self.task_model, literal_column("private_payload") if human else literal(None))
+                .where(self.task_model.id == task_id, self.task_model.owner.in_(owners), visible)
+            )).first()
+            if row is None:
+                return None
+            model, raw = row
+            payload = json.loads(raw) if human and raw is not None else None
+            if payload is not None and not isinstance(payload, dict):
+                raise ValueError("Unsupported private payload")
+            return TaskRecord(self._from_orm(model), payload)
+
+    async def history_records(self, context_id: str, context: ServerCallContext, *, limit: int = 50):
+        """Bounded server-only timeline; private turns never enter SDK Task.history."""
+        from a2a_impl.auth import is_human_operator
+
+        human = is_human_operator((getattr(context, "state", None) or {}).get("principal_kind"))
+        await self._ensure_initialized()
+        owners = [self.owner_resolver(context)]
+        if owners == [OPERATOR_OWNER]:
+            owners.append(FEDERATION_OWNER)
+        async with self.engine.connect() as conn:
+            visible = await task_public_filter(conn, self.task_model, include_private=human)
+            ids = (await conn.execute(
+                select(self.task_model.id)
+                .where(self.task_model.context_id == context_id, self.task_model.owner.in_(owners), visible)
+                .order_by(*task_newest_first(self.task_model, conn.dialect.name))
+                .limit(max(1, min(limit, 200)))
+            )).scalars().all()
+        records = [await self.get_record(task_id, context) for task_id in reversed(ids)]
+        return [record for record in records if record is not None]
 
     async def save(self, task: Task, context: ServerCallContext) -> None:
         try:
@@ -479,25 +683,31 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             drop_tool_args_history(task)
         except Exception:  # noqa: BLE001 — dropping previews must never lose a save
             log.exception("[a2a] tool-args history drop failed; saving with previews")
-        await super().save(task, context)
+        await self._ensure_initialized()
+        async with self.async_session_maker.begin() as session:
+            protected_owner = await self._check_write(session, await session.connection(), task, context)
+            owner = protected_owner if protected_owner is not None else self.owner_resolver(context)
+            await session.merge(self._to_orm(task, owner))
 
     # Owner scoping: the SDK filters every read by the caller's owner. An operator-tier
     # caller also reads federation-owned tasks (the only other owner), as it always could.
     async def get(self, task_id: str, context: ServerCallContext) -> Task | None:
-        task = await super().get(task_id, context)
+        reader = await self._reader()
+        task = await DatabaseTaskStore.get(reader, task_id, context)
         if task is None and self.owner_resolver(context) == OPERATOR_OWNER:
-            task = await super().get(task_id, _FEDERATION_CALL)
+            task = await DatabaseTaskStore.get(reader, task_id, _FEDERATION_CALL)
         return task
 
     async def list(self, params, context: ServerCallContext):
-        page = await super().list(params, context)
+        reader = await self._reader()
+        page = await DatabaseTaskStore.list(reader, params, context)
         if (
             not page.tasks
             and params.context_id
             and not params.page_token
             and self.owner_resolver(context) == OPERATOR_OWNER
         ):
-            page = await super().list(params, _FEDERATION_CALL)
+            page = await DatabaseTaskStore.list(reader, params, _FEDERATION_CALL)
         return page
 
     async def context_foreign(self, context_id: str, context: ServerCallContext) -> bool:
@@ -517,6 +727,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         await self._ensure_initialized()
         in_context = self.task_model.context_id == context_id
         async with self.async_session_maker() as session:
+            in_context = in_context & await task_public_filter(await session.connection(), self.task_model)
             if self.engine.dialect.name == "sqlite":
                 from sqlalchemy import literal_column
 

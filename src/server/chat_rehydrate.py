@@ -54,6 +54,7 @@ async def recovered_messages(config: dict, session_id: str, *, incognito: bool =
         return []
 
     from a2a.server.tasks.database_task_store import TaskModel
+    from a2a_impl.stores import task_public_filter
     from sqlalchemy import func, select
 
     from a2a_impl.stores import task_newest_first
@@ -62,7 +63,7 @@ async def recovered_messages(config: dict, session_id: str, *, incognito: bool =
         rows = (
             await conn.execute(
                 select(TaskModel.history, TaskModel.artifacts)
-                .where(TaskModel.context_id == session_id)
+                .where(TaskModel.context_id == session_id).where(await task_public_filter(conn))
                 .where(TaskModel.status["state"].as_string().in_(_TERMINAL_STATES))
                 # Turns the operator discarded via rewind (graph/rewind_op) are flagged in
                 # place, not deleted — exclude them here so the limit counts live turns only.
@@ -121,6 +122,7 @@ async def mark_turns_rewound(context_id: str, *, content: str | None, occurrence
         return 0
     try:
         from a2a.server.tasks.database_task_store import TaskModel
+        from a2a_impl.stores import task_public_filter
         from sqlalchemy import literal_column, select, update
 
         rowid = literal_column("tasks.rowid")
@@ -128,7 +130,7 @@ async def mark_turns_rewound(context_id: str, *, content: str | None, occurrence
             rows = (
                 await conn.execute(
                     select(rowid, TaskModel.history, TaskModel.artifacts)
-                    .where(TaskModel.context_id == context_id)
+                    .where(TaskModel.context_id == context_id).where(await task_public_filter(conn))
                     .order_by(rowid.asc())
                 )
             ).fetchall()
@@ -148,7 +150,7 @@ async def mark_turns_rewound(context_id: str, *, content: str | None, occurrence
             after = rowid >= cut_rid if before else rowid > cut_rid
             to_flag = (
                 await conn.execute(
-                    select(TaskModel.id, TaskModel.task_metadata).where(TaskModel.context_id == context_id).where(after)
+                    select(TaskModel.id, TaskModel.task_metadata).where(TaskModel.context_id == context_id).where(await task_public_filter(conn)).where(after)
                 )
             ).fetchall()
             flagged = 0
