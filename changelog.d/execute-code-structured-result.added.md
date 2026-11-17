@@ -1,1 +1,0 @@
-- **Execute-code scripts can return structured data.** Assign a top-level `result` to return JSON, optionally alongside stdout, with the existing truncation and spill support.

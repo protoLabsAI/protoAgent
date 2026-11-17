@@ -1,1 +1,0 @@
-- **Model chain summaries read as one line.** In Settings ▸ Model, each role's chain now lays out as one short wrapping line — the model ids in order, joined by a muted arrow, with an Edit button beside it. No list bullets or indent, and the line wraps instead of overflowing or clipping on a phone.

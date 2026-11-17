@@ -1,1 +1,0 @@
-- **Private result envelopes and files.** Extend the dormant Conversations in Work proof seam to seal structured results and file digests, isolate private media storage, enforce requester-bound downloads and link renewal, and retain ownership across park/resume. Refs #5400.

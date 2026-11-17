@@ -15,6 +15,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.247.0] - 2026-11-17
+
+### Added
+- **Session kernels stay bounded and tear down with the chat (#5433).** With `execute_code.session_state` on, session kernels are now kept within two new, configurable limits so an idle or forgotten chat never leaves a long-lived Python process behind: a kernel left unused for `execute_code.kernel_idle_ttl` seconds (default 600) is stopped and its state discarded, and starting a kernel past `execute_code.max_kernels` (default 4) first stops the least-recently-used one. A session's kernel is also stopped the moment its chat is deleted or cleared, or its tab closes; a chat still in active use keeps its kernel and its state. Unloading, reloading or shutting down the plugin stops every kernel. ADR 0134 (D2).
+
+- **Bridge MCP tools and discover signatures in scripts (#5437).** Operators can select registered MCP tools by name or with `mcp:<server>/*` without widening the default bridge or restoring excluded tools. One-shot scripts and session kernels can use `tools.help()` and `tools.help(name)` to retrieve bridged names, signatures and full descriptions without executing or auditing tool calls.
+
+- **execute_code can keep state across a session's runs (experimental) (#5431).** With the new `execute_code.session_state` flag on (default off), the first `execute_code` call in a session starts a long-lived Python kernel keyed by that session, and later calls run in its globals — so variables, imports and functions carry over, and the model can fetch a large tool result once and filter it again without re-fetching or printing it into context. State is lost when a call times out (which reports `kernel restarted: earlier variables are gone`) or the kernel restarts, and never survives a server restart; a call can pass `fresh=true` to start from a clean slate. With the flag off, nothing changes — every call still runs in a fresh subprocess. ADR 0134 (D1 and the D2 timeout rule).
+
+- **Execute-code scripts can return structured data (#5420).** Assign a top-level `result` to return JSON, optionally alongside stdout, with the existing truncation and spill support.
+
+- **Human-operator delegation across the proxy and loopback (#5423).** The fleet proxy strips untrusted principal headers and mints a short-lived signed delegation bound to one member, method, context and operation. The signature is asymmetric — a hub-held private key signs, the owner verifies with the public counterpart — so only the hub can mint one; a member or a swapped fleet bearer cannot. The owner also verifies issuer, audience, expiry, nonce and revocation generation, failing closed when revocation can't be read. The loopback self-POST carries a single-operation delegation redeemed idempotently. A swapped fleet bearer stays a peer, and localhost and self-invocations never confer human-operator status. Refs #5402 — a dormant proof slice that preserves existing permissions and adds no private-steering interface.
+
+- **Verified principal kind (#5415).** Carry credential-derived principal kind alongside trust tier through HTTP, SSE and A2A call contexts, with a human-operator predicate. Refs #5402 — this dormant proof slice preserves existing permissions and adds no private-steering interface.
+
+- **Private intake for idle and parked steering (#5429).** A private steer is now recorded — with its deduplication key — into the private partition before any turn starts; the loopback self-POST carries only an opaque, delegation-bound reference — never the text — and the trusted runner resolves it fail-closed before the turn runs. An idle session starts a fresh turn and a parked one rides the guarded resume path on the original checkpoint binding; a retried steer reuses the one record (never a second shell or a second turn), a peer-owned task stays the peer's with no private prompt in its requires-input message, and a missing record, version or binding stops the turn with no ordinary SendMessage fallback. A metadata-less turn clears earlier resolver inputs so idle checks still detect its parked interrupt under a custom resolver. The mechanism stays dormant and is exercised only by tests. Refs #5401.
+
+- **Private conversation storage proof slice (#5421).** Refs #5401. Add dormant, versioned private partitions to task records with human-operator-only envelope reads, public history projections, and fail-closed deletion and version handling. No private-steering route or data migration is enabled.
+
+- **Durable one-audience-per-segment scheduling (dormant) (#5432).** Phase 1 proof slice P1c for
+  Conversations in Work: a serialized runner per resolved original thread whose accepted inputs
+  persist as ordered pending turns on the existing task records (sequence, audience, principal,
+  message-id dedupe key, checkpoint binding, interrupt id and state). A segment's audience is
+  fixed before its first model/tool call; the steering middleware's drain is scoped to that
+  audience, so no model call ever mixes a peer and a private input. Completion versus acceptance
+  is decided by one transactional compare-and-set on the active segment's generation, not only a
+  process lock, and a real process restart reloads the durable queue, audience and order with no
+  replayed tool effect and no public fallback. The mechanism stays dormant — only the P1c tests
+  exercise it; there is no user-reachable private-steering surface and no disable switch. Refs
+  #5400, Refs #5401.
+  Acceptance and segment creation are serialized by a database transaction; queue recovery and
+  deduplication cover the complete private partition. Folded turns are attached atomically so
+  they cannot dispatch twice, and proven dispatch refusals release and requeue the same input.
+  Completion atomically retires the head and folded inputs with the segment release, so
+  recovery excludes finished work while preserving queued inputs and message deduplication.
+
+- **Requester-bound automatic result delivery proof (#5436).** Add a dormant Model B projection that keeps private steering and replies in server-only storage while automatically delivering sealed results to the original requester, with durable delivery identities and push destination revalidation. Preserve content-free lifecycle notifications for private HITL pauses and continuations. No private-steering route or release UI is enabled. Refs #5400 and Refs #5402.
+
+- **Private conversations: honest exits on error, cancel and timeout (#5440).** A privately
+  steered turn that ends abnormally now leaves the peer a content-free terminal
+  ("working", then "failed" or "cancelled") instead of hanging: its tool arguments, tool
+  output, progress, error strings and partial answer stay in the private partition, the
+  unsent private buffers are discarded, and the delivery record is closed so a
+  sealed-but-undelivered result is never shipped once the turn gives up. The mechanism
+  stays dormant — no console surface and no switch — and only the proof tests exercise it.
+  Refs #5400 (ADR 0131, P1e part 2 of 2).
+
+- **Private result envelopes and files (#5439).** Extend the dormant Conversations in Work proof seam to seal structured results and file digests, isolate private media storage, enforce requester-bound downloads and link renewal, and retain ownership across park/resume. Refs #5400.
+
+- **Public memory projection proof (#5425).** Refs #5403. Adds a dormant, version-checked reader boundary for gist and digest derivation, with coverage for retained private text, stale timers, compaction and restart. Existing unpartitioned conversations retain their behavior.
+
+- **Conversations in Work — public-only harvest, archives and facts (#5427).** Refs #5422. Phase 1 proof slice P1f.2 (ADR 0131 §5, amended by bd-jo3v6). When a conversation that had private operator steering is harvested, the summary, compaction archive, closed-chat digest card and extracted facts are now built only from its **public** part: private-partition messages and non-public archive spans are dropped at a single input boundary (`graph.conversation_audience.public_projection`), so a later ordinary turn that clears `incognito` cannot re-expose retained private material. Summaries, archives, closed cards and facts record an audience and projection source-version; private archive spans are kept out of searchable shared history; and fact extraction stays off for unknown or mixed provenance, with public source lineage carried into storage and dedup so a private fact never merges with or supersedes a shared one. Dormant mechanism exercised only by tests — no user-reachable surface, switch or migration; behaviour is unchanged for conversations without a private partition. Builds on #5403/#5421; the extractor boundary is kept for the ADR 0125 memory epic (#4555) Phase 2–3.
+
+- **Public-only fleet export proof (#5424).** Use the shared public-memory reader boundary for fleet transcripts and auxiliary snapshots, refusing unavailable or mixed lineage. Tests seed the durable private task partition and verify exported bytes after compaction and later public terminal/background turns. The mechanism remains dormant; unpartitioned exports retain their behavior. Refs #5403.
+
+- **Conversations in Work keeps private steering out of traces and prompt captures (#5438).** When a turn reads a conversation's private partition, tracing and prompt capture now record only content-free structure, timing and usage — no prompts, arguments, results or errors — across nested, background and terminal spans, and a later ordinary turn cannot clear the suppression to re-expose retained private material. Routed through the one shared public-source boundary and dormant until that boundary is bound, so tracing and capture are unchanged for conversations with no private partition. Refs #5403 (proof slice P1g.1; ADR 0131 §5 as amended by bd-jo3v6).
+
+- **Stateful kernel benchmark suite (#5434).** Add an opt-in two-turn fresh/kernel comparison over deterministic synthetic issues, with identical prompts, isolated lane routing, and pre-registered input-token and correctness thresholds for the ADR 0134 default-on decision. The original loop/code benchmark remains unchanged.
+
+### Changed
+- **Scheduling now uses croniter 7 (#5398).** croniter 7.0 changes the meaning of a few rare cron forms. A field that starts at its maximum and is followed by a step, such as `59/15`, `23/6` or `6/1`, now matches only that maximum value, where before it matched across the whole field. croniter 7.0 also rejects some malformed expressions it used to accept, such as non-ASCII digits or an out-of-range `#`. Ordinary schedules (`*/15 * * * *`, `0 9 * * 1`, `15 7,12 * * *`) are unchanged. Every cron schedule stored on the fleet was checked, and each gives the same next run times under 6.2.4 and 7.0.0. If you wrote a schedule like `59/15` and meant "every 15 minutes", change it to `*/15`.
+
+- **execute_code session kernels bind policy to the running call (#5435).** A bridged tool call in a long-lived session kernel is now checked against the execute_code call running right now: each call opens a per-kernel active-call slot (its session_id, subagent fence and enforcement gate) on entry and clears it on exit — including on a timeout, a script exception or a cancel. A bridged call that arrives while no call is active (for example from a thread a previous script left behind) is refused with `Blocked by policy: no execute_code call is active` and recorded as a failed `ptc:` audit row under the kernel's session, without running the tool — so the bridge stays no softer than the direct tool path. Implements ADR 0134 D3.
+
+- **Concurrent execute_code tool calls (#5418).** Independent bridged calls can run concurrently through ThreadPoolExecutor, up to eight per run, while preserving per-call policy checks and audit records.
+
+- **Model chain summaries read as one line (#5419).** In Settings ▸ Model, each role's chain now lays out as one short wrapping line — the model ids in order, joined by a muted arrow, with an Edit button beside it. No list bullets or indent, and the line wraps instead of overflowing or clipping on a phone.
+
+- **Model chain summaries (#5417).** Settings shows each saved role’s models in order with an Edit button, so only the chain you choose opens its editor. Done returns to the summary without saving.
+
+### Fixed
+- **The Work handle on the phone is easier to tap (#5404).** The bar above the composer that opens Work was 22px tall, half the 44px touch minimum. Its tap area now reaches 22px further up, over the bottom of the conversation, so the composer stays where it was. The jump-to-latest button still gets its own taps (#5389).
+
+- **Live updates resume as soon as you sign back in (#5407).** If the server restarts with a new token while the console is open, the live event stream and the chat's attendance signal kept failing behind the sign-in prompt and backed off for up to 30 seconds. After you entered the new token they waited out that backoff, and until then a background job that needed your answer could answer itself. Both now reconnect the moment you sign in or pair (#5405).
+
+- **The desktop app signs itself back in without leaving panels broken or reopening the sign-in prompt (#5410).** When the console's stored token went bad, the desktop app quietly signed in again with its own token. But panels that had failed stayed failed until you reopened them, and requests still in flight with the old token reopened the sign-in prompt anyway. Now every panel reloads with the new token, and a rejection for a token that has already been replaced no longer brings the prompt back (#5408).
+
+- **Reject ambiguous cron steps (#5412).** Schedule creation and edits reject maximum-value step expressions with explicit rewrite hints after the croniter 7 upgrade (#5398). Scheduler startup warns about affected stored jobs without modifying or disabling them.
+
+- **Stabilize desktop self-auth unit tests (#5416).** Finish pending lazy imports before replacing auth modules and mocks so an earlier store cannot consume the next test's shell token. Replace timing-based waits with import completion barriers.
+
+- **Memory delivery follows the caller's principal (#5430).** A turn's memory delivery is now decided server-side from the verified principal: a federation-token peer receives no prior-session digest and does not have the `recall_session` or `session_search` tools bound. The shared operator bearer, the fleet service token, paired devices, verified legacy API keys, open-mode callers, and local/self-invocation turns are unchanged.
+
+### Security
+- **Keep fleet delegation signing keys on the hub (#5423).** Member startup strips the hub's private signing seed and inherited workspace-directory override, preventing members from resolving the hub's persisted delegation key through that override. Refs #5402.
+
+### Docs
+- **ADR 0131 amended with audience partitions and scheduling (#5414).** Records the Conversations in Work private-steering design as a dated amendment (2026-11-17) to ADR 0131 rather than a new ADR, per Josh's answer 5: a verified principal kind (shared operator bearer plus paired `device`-kind devices = human operator; fleet service token, `agent`-kind devices and federation = peers) carried separately from trust tier; private steering and replies stored in console-only partitions on existing task records and private checkpoint state, never in SDK `Task.history`, shared checkpoint messages or archives, with the original conversation identity kept; and one audience per execution segment with a durable per-original-thread scheduler where private steering waits for a safe boundary, peer work queues behind it, and a parked segment reserves the runner until its matching guarded resume. Accepted by Josh as direction with Phase 1 proof work authorized; private steering stays enabled everywhere with the risk of an agent obtaining console authority accepted; result release is decided (auto delivery to the original requester through the deliver-to-requester action, no payload grants and no console release step) while CONTINUE past the Phase 1 proof is undecided. Documentation only — references the proposal, changes no runtime behavior and no other ADR.
+
+- **ADR 0134 proposes session-long execute_code state and opt-in MCP bridging (#5428).** A new Proposed decision record describes one long-lived kernel per session behind `execute_code.session_state` (off by default) so variables, imports and functions carry across a session's scripts, a bounded and visible kernel lifecycle, per-call policy binding that stays as strict as the direct path, operators bridging MCP tools by name (plus `mcp:<server>/*`) with `tools.help(name)` for on-demand signatures, and a two-lane benchmark gating the default-on decision. Documentation only — no runtime behaviour changes.
+
+- **Conversations in Work proposal for team review (#5368).** Documents original-chat navigation, private operator steering, active-work history retention, backend gaps, and phased approval boundaries. This proposal does not authorize implementation or change runtime behavior.
+
+- **Conversations in Work proposal: record Josh's Q1/Q2 decisions and align the design with auto delivery (#5422).** `docs/design/conversations-in-work-proposal.md` now records Q1 (result release) and Q2 (deployment boundary) as decided by Josh on 2026-11-17: v1 uses auto delivery through the deliver-to-requester action — no console grant, exact-payload release or preview — and private steering stays enabled everywhere with the console-authority risk accepted. Sections 1, 3 and 6, the decision map, the Phase 1 table (P1a–P1g marked authorized proof slices) and the proof gate are aligned to that; the six 2026-11-16 decisions and the decision-1 clarification are unchanged.
+
+- **Conversations in Work record: one date for Josh's Q1/Q2 answers and his Phase 1 go (#5426).** The Conversations in Work proposal and ADR 0131's audience amendment now date Josh's Q1 (result release) and Q2 (deployment boundary) answers and his Phase 1 go as 2026-11-16, his local date, matching the six 2026-11-16 decisions and the decision-1 clarification, instead of splitting the decision history across 2026-11-16 and the 2026-11-17 UTC date earlier records used. Documentation only — no decision wording changes and no runtime behavior changes.
+
+- **Conversations in Work design revised after Phase 0 (#5409).** Proposes recipient-bound delivery grants, private transcript storage, console identity, durable audience scheduling, derived-reader isolation and other-exit controls for #5400–#5403, with small proposed Phase 1 slices and an explicit execution-proof gate. Records Josh's 2026-11-16 clarification of decision 1 — the human operator is the shared operator bearer plus paired `device`-kind devices (his own phone/browser), while the fleet token, `agent`-kind devices and federation stay peers — so the console identity design uses the existing device kind rather than a new console credential. Preserves Josh's six decisions; authorizes no implementation.
+
+- **Record Josh's answers to the Conversations in Work Questions for Josh (#5413).** Josh answered all five questions on 2026-11-16: Q3 (device kind), Q4 (steering latency) and Q5 (ADR home) are recorded as decided; Q1 (result release) stays undecided; Q2 (deployment boundary) quotes his words with an operator reading that is still pending his confirmation, not decided. Edits only the Questions for Josh section and the matching decision-map rows. The six 2026-11-16 decisions, the decision-1 clarification, the Phase 1 slices ("proposed, needs Josh's go") and the proof gate are unchanged; no ADR or runtime change, and Phase 1 is not authorized.
+
+- **Phase 0 outcome recorded for the Conversations in Work proposal (#5406).** The time-boxed audience-isolation prototype (board card bd-h6gka) returned a **REVISE** verdict: enforcement Model B (explicit deliver-to-requester) is the recommended direction, but the private-steering contract is not yet proven across idle/parked history, artifacts, tool output and checkpoint-derived surfaces. The write-up records the verdict, the Model A vs B comparison, the decision-1 identity mechanism and its limits, and the throwaway prototype's location and test commands, and marks every decision-map row as informed or not informed by the prototype. Documentation only — no runtime behavior changes and no implementation authorized. Builds on the proposal from #5368; findings filed as #5400, #5401, #5402 and #5403.
+
 ## [0.246.1] - 2026-11-16
 
 ### Changed

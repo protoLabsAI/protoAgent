@@ -1,1 +1,0 @@
-- **Stateful kernel benchmark suite.** Add an opt-in two-turn fresh/kernel comparison over deterministic synthetic issues, with identical prompts, isolated lane routing, and pre-registered input-token and correctness thresholds for the ADR 0134 default-on decision. The original loop/code benchmark remains unchanged.
