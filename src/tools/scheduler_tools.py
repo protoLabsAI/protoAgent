@@ -368,10 +368,16 @@ def _build_task_tools(tasks_store) -> list:
         issue_type: str = "task",
         links: list[str] | None = None,
         state: Annotated[Any, InjectedState] = None,
+        job_key: str = "",
     ) -> str:
         """Track a task/issue on your tasks board — your planning surface for
         multi-step work. ``priority`` 0=highest…3=low; ``issue_type`` is one of
-        task|bug|feature|chore|epic. Returns the new issue id.
+        task|bug|feature|chore|epic. Returns the new or reused issue id.
+
+        ``job_key``: a short stable name for this distinct job within the current
+        request (for example "fix-ci" or "write-docs"). Reuse the same job_key when
+        retrying the same job; leave it empty when not handling a request. Keys are
+        stripped, lowercased, whitespace collapsed to "-", and limited to 80 chars.
 
         ``links``: ids/URLs of the work that delivers this task — board card ids
         (``bd-…``), scheduler job ids, a directive id, PR URLs. Link the cards/jobs
@@ -393,6 +399,9 @@ def _build_task_tools(tasks_store) -> list:
                 pass
         if session_id.startswith(("job:", "background:")):
             session_id = _origin_session_from(state)
+        normalized_job_key = "-".join(job_key.strip().lower().split())[:80]
+        message_id = correlation.get("request", {}).get("message_id")
+        promotion_key = f"inbox:{message_id}:{normalized_job_key}" if message_id and normalized_job_key else ""
         try:
             i = tasks_store.create(
                 title,
@@ -403,9 +412,12 @@ def _build_task_tools(tasks_store) -> list:
                 links=links,
                 request=correlation.get("request"),
                 requester=correlation.get("requester"),
+                promotion_key=promotion_key,
             )
         except ValueError as exc:
             return f"Error: {exc}"
+        if i.get("promoted_existing"):
+            return f"Reused existing task {i['id']} for this job: {i['title']} ({i['issue_type']}, p{i['priority']})"
         return f"Created {i['id']}: {i['title']} ({i['issue_type']}, p{i['priority']})"
 
     @tool
