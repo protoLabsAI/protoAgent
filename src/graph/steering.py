@@ -49,8 +49,22 @@ _QUEUES_MAX = 1024
 _QUEUE_TOUCHED: dict[str, float] = {}
 
 
+#: The two audiences a durably-scheduled segment can carry (ADR 0131 P1c). A steer with no
+#: audience tag is a PEER input — every queue item minted before P1c, and the default, so the
+#: in-memory queue's shape and the existing drain are unchanged for an ordinary turn.
+AUDIENCE_PEER = "peer"
+AUDIENCE_PRIVATE = "private"
+
+
 def _now() -> float:
     return time.monotonic()
+
+
+def _item_audience(item: dict) -> str:
+    """A queued item's audience — PEER unless it was tagged private (ADR 0131 P1c). An
+    untagged item (every pre-P1c item) is a peer input, so nothing about the stored shape
+    or the all-audiences drain changes for an ordinary turn."""
+    return item.get("audience") or AUDIENCE_PEER
 
 
 def _evict(session_id: str, why: str) -> None:
@@ -84,6 +98,7 @@ def enqueue(
     vision: bool = False,
     incognito: bool = False,
     settings: dict | None = None,
+    audience: str = AUDIENCE_PEER,
 ) -> str | None:
     """Queue a user message for ``session_id``'s running turn. Returns its id (the
     client's if supplied, else a fresh one), or None on a blank message.
@@ -101,7 +116,12 @@ def enqueue(
     ``reasoning_effort`` / ``bypass_permissions``, the same keys a normal send stamps on
     its A2A message metadata). A fold into a running turn ignores them (that turn already
     has its own), but a message restarted as a FRESH turn at turn-end must carry them or
-    the restart falls back to the configured defaults (bd-0ad5v review)."""
+    the restart falls back to the configured defaults (bd-0ad5v review).
+
+    ``audience`` (ADR 0131 P1c, dormant) tags the item PEER or PRIVATE so a middleware drain
+    scoped to one audience never folds the other into the same model call. The default is
+    PEER, and a peer item carries NO audience key — so every ordinary (non-P1c) steer and the
+    whole existing queue shape is untouched."""
     text = (text or "").strip()
     if not session_id or (not text and not images):
         return None
@@ -115,6 +135,8 @@ def enqueue(
         item["incognito"] = True
     if settings:
         item["settings"] = dict(settings)
+    if audience and audience != AUDIENCE_PEER:
+        item["audience"] = audience
     _evict_stale(session_id)
     _QUEUES.setdefault(session_id, []).append(item)
     _QUEUE_TOUCHED.pop(session_id, None)
@@ -122,9 +144,14 @@ def enqueue(
     return mid
 
 
-def drain(session_id: str) -> list[dict]:
-    """Return and clear all queued items for ``session_id`` (FIFO). Used by the
-    middleware to fold the messages into the running turn.
+def drain(session_id: str, audience: str | None = None) -> list[dict]:
+    """Return and clear queued items for ``session_id`` (FIFO). Used by the middleware to
+    fold the messages into the running turn.
+
+    ``audience`` (ADR 0131 P1c): with no audience this drains the WHOLE queue, exactly as
+    before — every ordinary turn. Scoped to one audience it drains ONLY that audience's items
+    (a peer item carries no tag, so :data:`AUDIENCE_PEER` matches the untagged default) and
+    leaves the other audience's items queued, so a model call can never mix the two.
 
     Each drained id is REMEMBERED (below), so a consumer can still tell "the agent read
     this" from "this never arrived" after the item has left the queue — a distinction the
@@ -133,10 +160,25 @@ def drain(session_id: str) -> list[dict]:
     context, can fail to emit)."""
     if not session_id:
         return []
-    items = _QUEUES.pop(session_id, [])
-    _QUEUE_TOUCHED.pop(session_id, None)
-    if items:
-        _note_drained(session_id, [str(item.get("id") or "") for item in items])
+    if audience is None:
+        items = _QUEUES.pop(session_id, [])
+        _QUEUE_TOUCHED.pop(session_id, None)
+        if items:
+            _note_drained(session_id, [str(item.get("id") or "") for item in items])
+        return items
+    q = _QUEUES.get(session_id)
+    if not q:
+        return []
+    items = [item for item in q if _item_audience(item) == audience]
+    if not items:
+        return []
+    kept = [item for item in q if _item_audience(item) != audience]
+    if kept:
+        _QUEUES[session_id] = kept
+    else:
+        _QUEUES.pop(session_id, None)  # match the all-audiences drain: no empty list lingers
+        _QUEUE_TOUCHED.pop(session_id, None)
+    _note_drained(session_id, [str(item.get("id") or "") for item in items])
     return items
 
 
@@ -214,14 +256,18 @@ def take_unfenced(session_id: str) -> list[dict]:
     to a FRESH turn as its message, which reads them exactly like a fold — so the drain log
     must say "the agent read this", or the console would re-offer words the agent is
     already acting on. Fenced items stay queued untouched: a fenced message answers to its
-    own rules (#2972) and must never ride an unfenced restart into a wider toolset."""
+    own rules (#2972) and must never ride an unfenced restart into a wider toolset.
+
+    A PRIVATE-audience item (ADR 0131 P1c) also stays queued: it must never ride this public
+    restart into a peer-readable turn. Its durable successor is recovered through the private
+    segment path instead, never as a public input."""
     q = _QUEUES.get(session_id)
     if not q:
         return []
-    taken = [item for item in q if not item.get("fence")]
+    taken = [item for item in q if not item.get("fence") and _item_audience(item) == AUDIENCE_PEER]
     if not taken:
         return []
-    kept = [item for item in q if item.get("fence")]
+    kept = [item for item in q if item.get("fence") or _item_audience(item) != AUDIENCE_PEER]
     if kept:
         _QUEUES[session_id] = kept
     else:

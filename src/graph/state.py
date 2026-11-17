@@ -58,6 +58,13 @@ class ProtoAgentState(AgentState):
     # swap the lead model for this turn; unset → the configured default.
     model: NotRequired[str]
 
+    # The segment's fixed audience (ADR 0131 P1c, dormant): "peer" or "private", set
+    # BEFORE the first model/tool call of a durably-scheduled segment and never changed
+    # mid-turn. SteeringMiddleware._drain reads it to scope which queued inputs it folds
+    # in, so a model call never mixes audiences. Absent → the ordinary turn, which drains
+    # every queued steer exactly as before (no live route sets this; only P1c tests do).
+    segment_audience: NotRequired[str]
+
     # Per-turn subagent tool fence (#1639): a detached background job running a
     # registry subagent stamps the subagent's resolved tool allowlist here (fire
     # metadata → request metadata → state); SubagentFenceMiddleware blocks any

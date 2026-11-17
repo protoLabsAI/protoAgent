@@ -86,7 +86,12 @@ class SteeringMiddleware(AgentMiddleware):
         session_id = state.get("session_id") if isinstance(state, dict) else getattr(state, "session_id", None)
         if not session_id:
             return None, []
-        queued = steering.drain(session_id)
+        # A durably-scheduled segment (ADR 0131 P1c) fixes its audience before its first
+        # model call and stamps it here; the drain is then scoped to that audience so a model
+        # call never folds in the other audience's queued inputs — they wait for their own
+        # segment. No audience (every ordinary turn) drains the whole queue, exactly as before.
+        audience = state.get("segment_audience") if isinstance(state, dict) else getattr(state, "segment_audience", None)
+        queued = steering.drain(session_id, audience) if audience else steering.drain(session_id)
         if not queued:
             return None, []
         # One framed HumanMessage carrying all queued text. The add_messages reducer
