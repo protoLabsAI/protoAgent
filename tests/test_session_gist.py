@@ -187,3 +187,68 @@ def test_inflight_result_cannot_overwrite_new_activity_or_deleted_card(harness, 
             h.card()
     else:
         assert "gist" not in h.card()
+
+
+def test_private_source_survives_public_turn_compaction_restart_and_stale_timer(harness, tmp_path, monkeypatch):
+    import asyncio
+    from langchain_core.messages import ToolMessage
+    from graph import public_memory
+    from graph.compaction_op import compact_thread
+    from tests._public_memory_source import PublicMemorySource
+    from tests.test_compaction_op import _FakeGraph, _FakeHistory, _cfg
+
+    h = harness
+    # Seed an already-running legacy timer and contaminated previous gist.
+    h.state["messages"] = [HumanMessage(content="PRIVATE-CANARY")] * 4
+    h.turn(2)
+    stale = h.timers[-1]
+    path = tmp_path / "chat-1.json"
+    path.write_text(json.dumps({**h.card(), "gist": "PRIVATE-OLD-GIST"}))
+    source = PublicMemorySource(tmp_path / "source.record")
+    public = [HumanMessage(content="rocket planning"), AIMessage(content="public answer")] * 3
+    source.save(public)
+    monkeypatch.setattr(public_memory, "_source_reader", source)
+    stale.fire()  # Source changed before another turn had a chance to cancel it.
+    assert not h.calls
+    h.state["messages"].extend([
+        AIMessage(content="PRIVATE-REPLY", tool_calls=[{"name": "lookup", "args": {"x": "PRIVATE-ARGS"}, "id": "p"}]),
+        ToolMessage(content="PRIVATE-TOOL", tool_call_id="p"),
+    ])
+    h.state["incognito"] = False
+    h.turn()
+    stale.fire()
+    h.timers[-1].fire()
+    assert h.calls[-1]["previous_gist"] == ""
+    assert h.card()["message_count"] == len(public)
+    assert h.card()["tool_calls"] == []
+    assert h.card()["final_output"] == "public answer"
+
+    async def summarize(*args):
+        return "PRIVATE-COMPACTED"
+
+    graph = _FakeGraph(h.state["messages"])
+    result = asyncio.run(compact_thread(
+        graph, object(), None, _cfg(2), "chat-1", "chat-1", history_store=_FakeHistory(), summarizer=summarize,
+    ))
+    assert not result["refused"]
+    h.state["messages"] = graph.updates[-1][1]["messages"][1:]
+    # Reopen source and middleware, then run an ordinary turn over the compacted checkpoint.
+    monkeypatch.setattr(public_memory, "_source_reader", PublicMemorySource(source.path))
+    h.mw = memory.SessionSummaryMiddleware(config=h.config)
+    h.mw.after_agent(h.state, None)
+    assert "PRIVATE" not in json.dumps(h.card()) + json.dumps(h.calls)
+    assert "rocket planning" in memory.load_digest(memory_dir=str(tmp_path)).block
+
+    # Source changes while an auxiliary call is running, without a card rewrite.
+    source.save(public * 2)
+    h.mw.after_agent(h.state, None)
+    before = h.card()
+
+    def invoke(_):
+        source.save(public * 3)
+        return AIMessage(content="PRIVATE-STALE")
+
+    monkeypatch.setattr(session_gist, "create_role_llm", lambda *_: SimpleNamespace(invoke=invoke))
+    h.timers[-1].fire()
+    assert h.card() == before
+    assert memory.load_digest(memory_dir=str(tmp_path)).entries == []
