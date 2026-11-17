@@ -213,18 +213,34 @@ async def test_a_bearer_header_device_socket_closes_on_revoke(auth, devices, clo
     await sock.finished()
 
 
-async def test_a_device_socket_closes_within_one_interval_of_expiry(auth, devices, clock, ttl):
+async def test_a_device_socket_closes_within_one_interval_of_expiry(auth, devices, clock, ttl, guard, monkeypatch):
+    # Step the guard's timer by hand, like the revoke test above: "within one interval" means
+    # the FIRST recheck after expiry closes the socket. A wall-clock bound (2.5 ticks = 125 ms)
+    # flaked on a loaded CI runner that delivered the tick ~400 ms late (#5442).
+    ticks = asyncio.Queue()
+
+    async def next_tick(delay):
+        ready = asyncio.get_running_loop().create_future()
+        await ticks.put((delay, ready))
+        await ready
+
+    timer = SimpleNamespace(**vars(asyncio))
+    timer.sleep = next_tick
+    monkeypatch.setattr(guard, "asyncio", timer)
     device, token = _phone(devices)
     sock = Socket(_echo_app(auth), "/ws", f"token={token}")
     await sock.accepted()
-    await asyncio.sleep(TICK * 3)
-    assert sock.outbox.empty()  # still live: nothing closed it
 
-    loop = asyncio.get_running_loop()
+    delay, tick = await asyncio.wait_for(ticks.get(), 5)
+    assert delay == TICK
+    tick.set_result(None)
+    delay, tick = await asyncio.wait_for(ticks.get(), 5)
+    assert delay == TICK
+    assert sock.outbox.empty()  # still live: the first check left it open
+
     clock.advance(31 * DAY)  # past the 30-day idle TTL, with no request in between
-    t0 = loop.time()
-    assert (await sock.until_closed(timeout=TICK * 10))["code"] == 1008
-    assert loop.time() - t0 < TICK * 2.5
+    tick.set_result(None)  # the next recheck, and only that one, must close it
+    assert (await sock.until_closed(timeout=5))["code"] == 1008
     await sock.finished()
 
 
