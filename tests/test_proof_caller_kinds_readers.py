@@ -24,7 +24,7 @@ CALLER_KINDS = [
     pytest.param(("agent", "agent-device", False), id="paired-agent"),
     pytest.param(("device", "device", True), id="enrolled-console"),
 ]
-_Caller = namedtuple("_Caller", "ctx principal is_operator")
+_Caller = namedtuple("_Caller", "ctx principal is_operator token")
 
 @contextmanager
 def _caller_scope(caller):
@@ -64,7 +64,7 @@ def _resolve(case):
     with TestClient(app) as client:
         resp = client.get("/a2a", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200, resp.text
-    return holder["ctx"], device_id
+    return holder["ctx"], device_id, token
 
 @pytest.fixture
 def auth_env(tmp_path, monkeypatch):
@@ -82,16 +82,16 @@ def auth_env(tmp_path, monkeypatch):
 def caller(request, auth_env):
     from a2a_impl.auth import is_human_operator
     case, expected_kind, is_operator = request.param
-    ctx, device_id = _resolve(case)
+    ctx, device_id, token = _resolve(case)
     assert ctx.state["principal_kind"] == expected_kind
     assert is_human_operator(ctx.state["principal_kind"]) is is_operator
     principal = f"{expected_kind}:{device_id}" if device_id else expected_kind
-    return _Caller(ctx, principal, is_operator)
+    return _Caller(ctx, principal, is_operator, token)
 
 @pytest.fixture
 def server_op(auth_env):
     """Resolve private-side operator auth before entering an async test loop."""
-    ctx, _ = _resolve("shared")
+    ctx, _, _ = _resolve("shared")
     assert ctx.state["principal_kind"] == "shared-operator-bearer"
     return ctx
 
@@ -166,8 +166,40 @@ async def test_private_partition_records_no_trace_content_per_caller_kind(caller
         await _src_tracing(session_langfuse, monkeypatch)
 
 def test_private_partition_captures_nothing_per_caller_kind(caller, monkeypatch):
+    from fastapi import FastAPI
+    from starlette.testclient import TestClient
+    from a2a_impl.auth import A2AAuthMiddleware
+    from operator_api.prompt_routes import register_prompt_routes
+    from tests.test_prompt_capture_middleware import _Req, _response, _run_chained
+    from graph.middleware.request_context import request_metadata_scope
+    from langchain_core.messages import SystemMessage
+
+    # Capture itself is principal-independent. Keep its original assertions,
+    # then exercise the identity-sensitive reader with the SAME real credential.
     with _caller_scope(caller):
         _src_prompt(monkeypatch)
+        monkeypatch.setattr("observability.tracing.current_session_id", lambda: "chat-public")
+        with request_metadata_scope({"a2a.task_id": "task-public"}):
+            _run_chained(_Req("gpt-x", SystemMessage(content="PUBLIC_CONTROL")), _response())
+    app = FastAPI()
+    register_prompt_routes(app)
+    app.add_middleware(A2AAuthMiddleware)
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {caller.token}"}
+        private = client.get("/api/prompts/task-private", headers=headers)
+        public = client.get("/api/prompts/task-public", headers=headers)
+        latest = client.get("/api/prompts/last?session_id=chat-public", headers=headers)
+    for response in (private, public, latest):
+        assert "PRIVATE_CONTEXT_CANARY" not in response.text
+        assert "PRIVATE_WIRE_CANARY" not in response.text
+    if caller.ctx.state["principal_kind"] == "federation":
+        assert [r.status_code for r in (private, public, latest)] == [403, 403, 403]
+    else:
+        assert private.status_code == 404
+        assert private.json()["detail"] == "no prompt snapshots for that task"
+        assert public.status_code == latest.status_code == 200
+        assert public.json()["calls"][0]["system"]["stable"] == "PUBLIC_CONTROL"
+        assert latest.json()["call"]["system"]["stable"] == "PUBLIC_CONTROL"
 
 @pytest.mark.parametrize("context_id", ["sess-1", "background:proof-1"])
 async def test_later_public_terminal_export_per_caller_kind(caller, server_op, partition, tmp_path, monkeypatch, context_id):
