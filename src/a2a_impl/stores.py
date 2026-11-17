@@ -214,12 +214,25 @@ class ValidatingPushNotificationSender(BasePushNotificationSender):
     actual outbound POST is gated on the SSRF policy.
     """
 
+    def __init__(self, *args, delivery_store=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._delivery_store = delivery_store
+
     async def _dispatch_notification(
         self,
         event: PushNotificationEvent,
         push_info: TaskPushNotificationConfig,
         task_id: str,
     ) -> bool:
+        if self._delivery_store is not None:
+            from a2a_impl.requester_delivery import push_digest
+
+            binding, _ = await self._delivery_store.delivery_data(task_id)
+            if binding is not None and (
+                binding.get("version") != 1 or binding.get("task_id") != task_id
+                or push_digest(push_info) not in binding.get("push", [])
+            ):
+                return False
         url = push_info.url
         # Re-validate at send-time (DNS may have changed since set-time) — but
         # off the loop: this runs before EVERY push POST, and a synchronous
@@ -481,7 +494,7 @@ class TaskRecord:
     private_payload: dict | None = None
 
 
-async def task_public_filter(conn, task_model=TaskModel, *, include_private=False):
+async def task_public_filter(conn, task_model=TaskModel, *, include_private=False, context=None):
     """Filter BEFORE counts, ranking and limits, including direct SQL history readers.
 
     Old SDK-only databases have no partition columns and keep their behavior. A partial
@@ -511,6 +524,20 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
             tombstones = Table(CHAT_TOMBSTONE_TABLE, MetaData(), Column("context_id", String(255)))
             supported = supported & ~exists().where(tombstones.c.context_id == task_model.context_id)
         predicate = or_(ordinary, supported)
+    if "requester_binding" in columns:
+        from sqlalchemy import func
+
+        binding = literal_column(f"{task_model.__tablename__}.requester_binding")
+        principal = (getattr(context, "state", None) or {}).get("requester_principal", "")
+        predicate = predicate & or_(
+            binding.is_(None),
+            and_(
+                func.json_extract(binding, "$.version") == 1,
+                func.json_extract(binding, "$.principal") == principal,
+                func.json_extract(binding, "$.task_id") == task_model.id,
+                func.json_extract(binding, "$.context_id") == task_model.context_id,
+            ) if principal else false(),
+        )
     return predicate
 
 
@@ -532,17 +559,63 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
                 lambda c: {x["name"] for x in inspect(c).get_columns(self.task_model.__tablename__)}
             )
             table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
-            for name, sql_type in _PRIVATE_COLUMNS.items():
+            for name, sql_type in {**_PRIVATE_COLUMNS, "requester_binding": "TEXT", "delivery_record": "TEXT"}.items():
                 if name not in columns:
                     await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
-    async def _reader(self):
+    async def bind_requester(self, task, binding, context):
+        """Dormant acceptance seam. Bind once, before publishing any task handle."""
+        principal = (getattr(context, "state", None) or {}).get("requester_principal")
+        if binding.get("version") != 1 or not principal or binding.get("principal") != principal:
+            raise PermissionError("An enrolled requester principal is required")
+        if binding.get("task_id") != task.id or binding.get("context_id") != task.context_id:
+            raise PermissionError("Requester binding mismatch")
+        if not binding.get("agent_id") or not binding.get("message_id"):
+            raise PermissionError("Incomplete requester binding")
+        await self._ensure_initialized()
+        encoded = json.dumps(binding, sort_keys=True)
+        async with self.async_session_maker.begin() as session:
+            existing = await session.get(self.task_model, task.id)
+            if existing is None:
+                await session.merge(self._to_orm(task, self.owner_resolver(context)))
+                await session.flush()
+            elif existing.owner != self.owner_resolver(context) or existing.context_id != task.context_id:
+                raise PermissionError("Requester ownership mismatch")
+            row = (await session.execute(text(
+                "SELECT requester_binding FROM tasks WHERE id=:id"
+            ), {"id": task.id})).first()
+            if existing is not None and row.requester_binding != encoded:
+                raise PermissionError("Requester binding is immutable")
+            await session.execute(text("UPDATE tasks SET requester_binding=:b WHERE id=:id"),
+                                  {"b": encoded, "id": task.id})
+
+    async def delivery_data(self, task_id):
+        """Server-only binding and sealed delivery; never part of SDK serialization."""
+        await self._ensure_initialized()
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(text(
+                "SELECT requester_binding, delivery_record FROM tasks WHERE id=:id"
+            ), {"id": task_id})).first()
+        return tuple(json.loads(v) if v else None for v in row) if row else (None, None)
+
+    async def cas_delivery(self, task_id, binding, previous, record):
+        """Seal/claim a delivery before publication; concurrent/restarted retries reuse it."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(text(
+                "UPDATE tasks SET delivery_record=:record WHERE id=:id "
+                "AND requester_binding=:binding AND delivery_record IS :previous"
+            ), {"id": task_id, "binding": json.dumps(binding, sort_keys=True),
+                "previous": json.dumps(previous, sort_keys=True) if previous else None,
+                "record": json.dumps(record, sort_keys=True)})
+            return result.rowcount == 1
+
+    async def _reader(self, context):
         """An isolated SDK reader preserves SDK pagination and owner semantics."""
         from sqlalchemy.orm import aliased
 
         await self._ensure_initialized()
         async with self.engine.connect() as conn:
-            visible = await task_public_filter(conn, self.task_model)
+            visible = await task_public_filter(conn, self.task_model, context=context)
         reader = copy(self)
         reader.task_model = aliased(self.task_model, select(self.task_model).where(visible).subquery())
         return reader
@@ -710,10 +783,16 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
 
         table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
         row = (await session.execute(text(
-            f"SELECT owner, context_id, private_version, private_audience, private_payload, public_visible "
+            f"SELECT owner, context_id, private_version, private_audience, private_payload, public_visible, requester_binding "
             f"FROM {table} WHERE id=:id"
         ), {"id": task.id})).first()
-        protected = row is not None and any(value is not None for value in row[2:])
+        protected = row is not None and any(value is not None for value in row[2:6])
+        if row is not None and row.requester_binding is not None:
+            binding = json.loads(row.requester_binding)
+            principal = (getattr(context, "state", None) or {}).get("requester_principal")
+            if (binding.get("principal") != principal or row.context_id != task.context_id
+                    or row.owner != self.owner_resolver(context)):
+                raise PermissionError("Requester ownership mismatch")
         # Detached ordinary turns must still persist their final state after deletion.
         # Private intake and existing protected rows must never revive a deleted chat.
         if not private and not protected:
@@ -750,7 +829,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         await self._ensure_initialized()
         async with self.async_session_maker() as session:
             conn = await session.connection()
-            visible = await task_public_filter(conn, self.task_model, include_private=human)
+            visible = await task_public_filter(conn, self.task_model, include_private=human, context=context)
             owners = [self.owner_resolver(context)]
             if owners == [OPERATOR_OWNER]:
                 owners.append(FEDERATION_OWNER)
@@ -776,7 +855,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         if owners == [OPERATOR_OWNER]:
             owners.append(FEDERATION_OWNER)
         async with self.engine.connect() as conn:
-            visible = await task_public_filter(conn, self.task_model, include_private=human)
+            visible = await task_public_filter(conn, self.task_model, include_private=human, context=context)
             ids = (await conn.execute(
                 select(self.task_model.id)
                 .where(self.task_model.context_id == context_id, self.task_model.owner.in_(owners), visible)
@@ -808,14 +887,14 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     # Owner scoping: the SDK filters every read by the caller's owner. An operator-tier
     # caller also reads federation-owned tasks (the only other owner), as it always could.
     async def get(self, task_id: str, context: ServerCallContext) -> Task | None:
-        reader = await self._reader()
+        reader = await self._reader(context)
         task = await DatabaseTaskStore.get(reader, task_id, context)
         if task is None and self.owner_resolver(context) == OPERATOR_OWNER:
             task = await DatabaseTaskStore.get(reader, task_id, _FEDERATION_CALL)
         return task
 
     async def list(self, params, context: ServerCallContext):
-        reader = await self._reader()
+        reader = await self._reader(context)
         page = await DatabaseTaskStore.list(reader, params, context)
         if (
             not page.tasks
@@ -831,7 +910,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         only its OWN tier's tasks in the context. A private steer's guarded resume routes
         through this (``a2a_impl.hitl_routing``) so it can never be re-pointed onto — nor can
         an operator turn's settle complete — a PEER-owned parked task (#5380, ADR 0131 P1b.2)."""
-        reader = await self._reader()
+        reader = await self._reader(context)
         return await DatabaseTaskStore.list(reader, params, context)
 
     async def context_foreign(self, context_id: str, context: ServerCallContext) -> bool:

@@ -1,0 +1,1 @@
+- **Requester-bound automatic result delivery proof.** Add a dormant Model B projection that keeps private steering and replies in server-only storage while automatically delivering sealed results to the original requester, with durable delivery identities and push destination revalidation. No private-steering route or release UI is enabled. Refs #5400 and Refs #5402.

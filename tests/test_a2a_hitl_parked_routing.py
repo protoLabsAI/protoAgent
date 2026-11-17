@@ -70,7 +70,8 @@ async def _drain():
     _HANDLERS.clear()
 
 
-def _handler(stream_fn, *, routing: bool = True, task_store=None):
+def _handler(stream_fn, *, routing: bool = True, task_store=None, push_config_store=None, push_sender=None,
+             requester_projection_factory=None):
     card = pa.build_agent_card(
         name="t",
         description="d",
@@ -80,10 +81,11 @@ def _handler(stream_fn, *, routing: bool = True, task_store=None):
         bearer=False,
     )
     handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(stream_fn),
+        agent_executor=ProtoAgentExecutor(stream_fn, requester_projection_factory=requester_projection_factory),
         task_store=task_store or InMemoryTaskStore(),
         agent_card=card,
-        push_config_store=InMemoryPushNotificationConfigStore(),
+        push_config_store=push_config_store or InMemoryPushNotificationConfigStore(),
+        push_sender=push_sender,
     )
     router = hitl_routing.install_parked_task_routing(handler) if routing else None
     if routing:
@@ -833,3 +835,183 @@ async def test_a_private_resume_never_lands_on_a_peer_owned_parked_task(tmp_path
     assert (await store.get_record(private_intake.ref_task_id(ref), op)).private_payload["input"] == _SECRET
     await router.drain()
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase0_preexisting_handles(tmp_path):
+    """Model B isolates retained handles, including peers in the same owner tier."""
+    import httpx
+    from a2a.types import TaskPushNotificationConfig
+    from a2a.utils.errors import TaskNotFoundError
+    from a2a_impl import private_intake, stores
+    from a2a_impl.requester_delivery import RequesterProjection
+
+    store = stores.ReasoningCoalescingTaskStore(
+        stores.make_sqlite_engine(str(tmp_path / "delivery.db")), owner_resolver=stores.resolve_task_owner,
+    )
+    await store.initialize()
+    peer = ServerCallContext(state={"requester_principal": "device:one", "principal_kind": "paired-agent"})
+    other = ServerCallContext(state={"requester_principal": "device:two", "principal_kind": "paired-agent"})
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    secret, reply, result = "STEERING-CANARY", "PRIVATE-REPLY-CANARY", "The requested result."
+    ref = await private_intake.record_private_steer(store, session_id=CTX, text=secret, msg_id="steer", context=op)
+    ready, proceed = asyncio.Event(), asyncio.Event()
+    projections, progress, pushes = [], [], []
+    config = TaskPushNotificationConfig(id="original", url="https://8.8.8.8/hook")
+
+    async def factory(context, queue):
+        config.task_id = context.task_id
+        await handler._push_config_store.set_info(context.task_id, config, peer)
+        projection = await RequesterProjection.accept(
+            store, context, queue, agent_id="agent:owner", operator=op, push_configs=[config],
+        )
+        # Even a config inserted outside the handler cannot widen the accepted recipient.
+        await handler._push_config_store.set_info(context.task_id, TaskPushNotificationConfig(
+            id="second-peer", task_id=context.task_id, url="https://8.8.4.4/other",
+        ), other)
+        projections.append(projection)
+        return projection
+
+    async def stream(*args, **kwargs):
+        ready.set()
+        await proceed.wait()
+        projection = projections[0]
+        await projection.begin_private(ref)
+        yield "steer_consumed", {"items": [{"text": secret}]}
+        yield "text", reply
+        yield "tool_end", {"name": "private", "output": secret}
+        yield "text", {"audience": "requester", "text": reply}  # wrong labels never publish
+        yield "deliver_to_requester", {"text": reply, "audience": "requester"}  # raw B event
+        delivery_id = await projection.prepare_result(result)
+        assert await projection.prepare_result(result) == delivery_id
+        for key in ("principal", "context_id", "task_id", "agent_id", "message_id"):
+            forged = {**projection.binding, key: "forged"}
+            attacker = RequesterProjection(store, projection.context, projection.queue, forged, op)
+            attacker.private_ref = ref
+            assert not await attacker.deliver_to_requester(delivery_id)
+        yield "deliver_to_requester", delivery_id
+        yield "deliver_to_requester", delivery_id  # retry: one artifact frame
+        yield "done", reply
+
+    set_progress_hook(lambda *args: progress.append(args))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: (pushes.append(request.content.decode()), httpx.Response(200))[1],
+    ))
+    push_store = InMemoryPushNotificationConfigStore()
+    sender = stores.ValidatingPushNotificationSender(client, push_store, delivery_store=store)
+    handler, router = _handler(stream, task_store=store, push_config_store=push_store,
+                               push_sender=sender, requester_projection_factory=factory)
+
+    async def collect(iterator, target):
+        async for event in iterator:
+            snapshot = type(event)()
+            snapshot.CopyFrom(event)
+            target.append(snapshot)
+
+    frames, subscriptions = [], []
+    running = asyncio.create_task(collect(handler.on_message_send_stream(_msg("request", mid="request"), peer), frames))
+    await asyncio.wait_for(ready.wait(), 5)
+    task_id = projections[0].binding["task_id"]
+    subscribed = handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), peer)
+    initial = await asyncio.wait_for(anext(subscribed), 5)
+    snapshot = type(initial)()
+    snapshot.CopyFrom(initial)
+    subscriptions.append(snapshot)
+    watching = asyncio.create_task(collect(subscribed, subscriptions))
+    with pytest.raises(TaskNotFoundError):
+        await handler.on_get_task(GetTaskRequest(id=task_id), other)
+    with pytest.raises(TaskNotFoundError):
+        await anext(handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), other))
+    proceed.set()
+    await asyncio.wait_for(asyncio.gather(running, watching), 10)
+    await router.drain()
+    got = await handler.on_get_task(GetTaskRequest(id=task_id), peer)
+    assert got.context_id == CTX
+    assert [p.text for a in got.artifacts for p in a.parts] == [result]
+    assert sum(result in str(f) for f in frames) == 1
+    assert sum(result in str(f) for f in subscriptions) == 1
+    assert all(canary not in str(surface) for canary in (secret, reply)
+               for surface in (frames, subscriptions, got, pushes, progress))
+    assert sum(result in body for body in pushes) == 1
+    # Dispatch through the production sender, including URL validation, then replace it.
+    artifact = next(f for f in frames if result in str(f))
+    pushes.clear()
+    assert await sender._dispatch_notification(artifact, config, task_id)
+    assert len(pushes) == 1 and result in pushes[0]
+    replaced = TaskPushNotificationConfig(id="original", task_id=task_id, url="https://8.8.4.4/stolen")
+    await push_store.set_info(task_id, replaced, peer)
+    await sender.send_notification(task_id, artifact)
+    assert len(pushes) == 1
+    # Binding forgeries and unbound IDs cannot create a new release or redirect this one.
+    projection = projections[0]
+    for key in ("principal", "context_id", "task_id", "agent_id", "message_id"):
+        forged = {**projection.binding, key: "forged"}
+        attacker = RequesterProjection(store, projection.context, projection.queue, forged, op)
+        attacker.private_ref = ref
+        assert not await attacker.deliver_to_requester("unbound")
+        with pytest.raises(PermissionError):
+            await store.bind_requester(got, forged, peer)
+    assert await store.get(task_id, other) is None
+    binding, delivery = await store.delivery_data(task_id)
+    assert delivery["state"] == "delivered" and binding == projection.binding
+    await client.aclose()
+    await store.engine.dispose()
+    reopened = stores.ReasoningCoalescingTaskStore(
+        stores.make_sqlite_engine(str(tmp_path / "delivery.db")), owner_resolver=stores.resolve_task_owner,
+    )
+    try:
+        history = await reopened.history_records(CTX, peer)
+        assert result in str(history) and all(c not in str(history) for c in (secret, reply))
+        assert await reopened.history_records(CTX, other) == []
+        assert (await reopened.delivery_data(task_id))[1] == delivery
+        recovered = RequesterProjection(reopened, projection.context, projection.queue, binding, op)
+        await recovered.begin_private(ref)
+        assert await recovered.prepare_result(result) == delivery["id"]
+        assert not await recovered.deliver_to_requester(delivery["id"])
+        private = await reopened.get_record(private_intake.ref_task_id(ref), op)
+        assert secret in str(private.private_payload) and reply in str(private.private_payload)
+    finally:
+        await reopened.engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["none", "digest", "claimed", "missing-private", "missing-delivery"])
+async def test_delivery_recovery_fails_closed(tmp_path, fault):
+    from types import SimpleNamespace
+    from a2a_impl import private_intake, stores
+    from a2a_impl.requester_delivery import RequesterProjection
+
+    path = str(tmp_path / "recovery.db")
+    store = stores.ReasoningCoalescingTaskStore(stores.make_sqlite_engine(path), owner_resolver=stores.resolve_task_owner)
+    peer = ServerCallContext(state={"requester_principal": "device:one"})
+    op = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    context = SimpleNamespace(call_context=peer, current_task=None, task_id="request", context_id=CTX,
+                              message=_msg("request", mid="m1").message)
+    events = []
+
+    class Queue:
+        async def enqueue_event(self, event):
+            events.append(event)
+
+    projection = await RequesterProjection.accept(store, context, Queue(), agent_id="owner", operator=op)
+    ref = await private_intake.record_private_steer(store, session_id=CTX, text="private", msg_id="s1", context=op)
+    await projection.begin_private(ref)
+    identity = await projection.prepare_result("result")
+    binding, record = await store.delivery_data("request")
+    if fault in ("digest", "claimed"):
+        mutated = {**record, **({"payload": "tampered"} if fault == "digest" else {"state": "dispatching"})}
+        assert await store.cas_delivery("request", binding, record, mutated)
+    elif fault == "missing-private":
+        await store.delete(private_intake.ref_task_id(ref), op)
+    elif fault == "missing-delivery":
+        await store.delete("request", peer)
+    await store.engine.dispose()
+    reopened = stores.ReasoningCoalescingTaskStore(stores.make_sqlite_engine(path), owner_resolver=stores.resolve_task_owner)
+    try:
+        recovered = RequesterProjection(reopened, context, Queue(), binding, op)
+        recovered.private_ref = ref
+        assert await recovered.deliver_to_requester(identity) is (fault == "none")
+        assert len(events) == (1 if fault == "none" else 0)
+        assert not await recovered.deliver_to_requester(identity)
+    finally:
+        await reopened.engine.dispose()
