@@ -1,0 +1,1 @@
+- **Conversations in Work design revised after Phase 0.** Proposes recipient-bound delivery grants, private transcript storage, console identity, durable audience scheduling, derived-reader isolation and other-exit controls for #5400–#5403, with small proposed Phase 1 slices and an explicit execution-proof gate. Preserves Josh’s six decisions; authorizes no implementation.
