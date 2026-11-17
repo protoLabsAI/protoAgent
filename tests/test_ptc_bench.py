@@ -104,9 +104,18 @@ def test_kernel_fixture_and_two_turn_tasks(tmp_path, monkeypatch):
     ptc_bench.main()
     assert (tmp_path / "issues.json").read_bytes() == body
     manifest = yaml.safe_load((Path(__file__).parents[1] / "plugins/execute_code/protoagent.plugin.yaml").read_text())
-    assert len(body) > manifest["config"]["output_truncate"]
+    # Over output_truncate (so printing it into context is penalised), yet UNDER
+    # the read_file one-call cap (so turn 1 loads the whole file in a single
+    # bridged read, not a truncated head that would make the verdict measure
+    # paging instead of session state — ADR 0134 D7 review).
+    assert manifest["config"]["output_truncate"] < len(body) < ptc_bench._READ_FILE_ONE_CALL_CHARS
     records = json.loads(body)
     assert len(records) == 200
+    # The ranking is unambiguous: the 5th-most-commented scheduler record is
+    # strictly ahead of the 6th, so the top-5 set never turns on a tie-break.
+    sched = sorted((r for r in records if r["subsystem"] == "scheduler"),
+                   key=lambda r: (-len(r["comments"]), r["id"]))
+    assert len(sched[4]["comments"]) > len(sched[5]["comments"])
     matches = [r for r in records if r["subsystem"] == "scheduler"]
     top = sorted(matches, key=lambda r: (-len(r["comments"]), r["id"]))[:5]
     answers = [f"MATCH_COUNT={len(matches)};", "\n".join(
@@ -129,6 +138,14 @@ def test_kernel_fixture_and_two_turn_tasks(tmp_path, monkeypatch):
                     assert pattern in answers[turn]
                     assert pattern not in case["prompt"]
     assert len(contexts) == 6
+
+
+def test_fixture_cap_constant_tracks_the_real_read_file_tool():
+    """The fixture is sized to load in ONE bridged read_file call. Pin our cap
+    constant to the tool's actual per-call char cap so a tool-side change can't
+    silently let the fixture grow past a truncating read (ADR 0134 D7 review)."""
+    fs_tools = pytest.importorskip("tools.fs_tools")
+    assert ptc_bench._READ_FILE_ONE_CALL_CHARS == fs_tools._MAX_READ_CHARS
 
 
 @pytest.mark.parametrize("ratio,fresh_pass,kernel_pass,turns,expected", [

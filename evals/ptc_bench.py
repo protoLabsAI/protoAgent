@@ -51,7 +51,10 @@ own evals.runner invocation. Run on otherwise quiet agents with local audit logs
 available to the runner: pass --fresh-audit-path and --kernel-audit-path pointing
 to each instance's audit/audit.jsonl. These set AUDIT_PATH per subprocess.
 Kernel economy uses input tokens, as in the original verdict, counting both
-turns. Missing telemetry fails closed. Do not tune prompts, assertions or
+turns. Missing telemetry fails closed. The fixture is sized to load in ONE
+bridged ``tools.read_file`` call (under that tool's per-call char cap) yet stay
+over ``output_truncate``, so turn 1 holds the whole file in a kernel variable
+rather than paging a truncated head. Do not tune prompts, assertions or
 thresholds to rescue a failing model: a miss keeps session_state off by default.
 
 The comparison MUST run with prompt caching on (the default): the #2777
@@ -169,6 +172,23 @@ def _agg(rows: list[dict]) -> dict:
     }
 
 
+def _auth_headers() -> dict:
+    """Bearer header when A2A auth is set, empty otherwise. ONE copy so the two
+    run paths (``run``/``run_kernel``) can't drift apart."""
+    import os
+
+    token = os.environ.get("A2A_AUTH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _telemetry_turns(body) -> list:
+    """Unwrap ``/api/telemetry/recent``. The route returns a DICT envelope
+    ({enabled, turns, …}); take the list, NEVER fall back to iterating the dict
+    (its KEYS are strings and ``_lane_rows`` explodes — the first live run
+    crashed exactly there). ONE copy, shared by both run paths."""
+    return (body.get("turns") or []) if isinstance(body, dict) else (body or [])
+
+
 def _pass_rate(report: dict, category: str) -> tuple[int, int]:
     results = report.get("results") or report.get("cases") or []
     rows = [r for r in results if r.get("category") == category]
@@ -195,18 +215,34 @@ def verdict(loop: dict, code: dict, loop_pass: tuple[int, int], code_pass: tuple
 
 _KERNEL_FILE = "issues.json"
 _KERNEL_SUBSYSTEM = "scheduler"
+_KERNEL_SUBSYSTEMS = ["scheduler", "graph", "console", "tools", "scheduler"]
+
+# Turn 1 loads the WHOLE fixture in ONE bridged ``tools.read_file`` call, so the
+# file must stay under that tool's per-call char cap (``_MAX_READ_CHARS`` in
+# src/tools/fs_tools.py). Above it, read_file returns a truncated head and the
+# kernel-vs-fresh verdict would measure paging, not session state (ADR 0134 D7
+# review). The fixture is still well over ``output_truncate`` (6000), so a model
+# that prints it into context instead of keeping it in a kernel variable pays for
+# it — which is the behaviour the bench is here to price.
+_READ_FILE_ONE_CALL_CHARS = 50_000
+
+# Five "hot" scheduler issues carry a strictly-descending, DISTINCT comment
+# volume (40, 37, 34, 31, 28); every other record stays in a small 0..10 baseline
+# well clear of the leaders. That makes turn 2's top-5 unambiguous — the bench
+# isolates whether the kernel helped, not whether the model broke a 4-way tie the
+# same way we did. ``4 + 5 * k`` is always ``% 5 == 4`` → the scheduler lane.
+_KERNEL_HOT = {4 + 5 * k: 40 - 3 * k for k in range(5)}
 
 
 def kernel_records() -> list[dict]:
-    """Deterministic issues with unique ids and nontrivial comment rankings."""
+    """Deterministic issues with unique ids and an unambiguous comment ranking."""
     return [
         {
             "id": f"ISSUE-{10001 + i}",
-            "title": f"Synthetic investigation {i}: lifecycle and recovery",
+            "title": f"Synthetic issue {i}: lifecycle and recovery",
             "labels": ["benchmark", "bug" if i % 2 else "enhancement"],
-            "subsystem": ["scheduler", "graph", "console", "tools", "scheduler"][i % 5],
-            "comments": [f"Observation {j} for issue {i}: verify recovery and ownership."
-                         for j in range((i * 37 + 11) % 101)],
+            "subsystem": _KERNEL_SUBSYSTEMS[i % 5],
+            "comments": [f"c{i}.{j}" for j in range(_KERNEL_HOT.get(i, (i * 13 + 7) % 11))],
         }
         for i in range(200)
     ]
@@ -214,7 +250,10 @@ def kernel_records() -> list[dict]:
 
 def write_kernel_fixtures(directory: Path) -> list[str]:
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / _KERNEL_FILE).write_text(json.dumps(kernel_records(), indent=2) + "\n", encoding="utf-8")
+    # Compact (no indent): indent=2 alone pushes 200 records past the read_file
+    # one-call cap on structure before a single comment is counted.
+    body = json.dumps(kernel_records(), separators=(",", ":")) + "\n"
+    (directory / _KERNEL_FILE).write_text(body, encoding="utf-8")
     return [_KERNEL_FILE]
 
 
@@ -290,7 +329,7 @@ def run_kernel(args: argparse.Namespace) -> int:
     results_dir.mkdir(exist_ok=True)
     aggregates, passes = {}, {}
     runner_ok = True
-    headers = {"Authorization": f"Bearer {os.environ['A2A_AUTH_TOKEN']}"} if os.environ.get("A2A_AUTH_TOKEN") else {}
+    headers = _auth_headers()
     for lane, url in (("fresh", args.fresh_base_url), ("kernel", args.kernel_base_url)):
         cases = [c for c in tasks if c["category"] == f"ptc-{lane}"]
         tasks_path = results_dir / f"ptc-{run_id}-{lane}.json"
@@ -306,8 +345,7 @@ def run_kernel(args: argparse.Namespace) -> int:
             response = httpx.get(f"{url.rstrip('/')}/api/telemetry/recent", params={"limit": 200},
                                  timeout=30, headers=headers)
             response.raise_for_status()
-            body = response.json()
-            turns = (body.get("turns") or []) if isinstance(body, dict) else (body or [])
+            turns = _telemetry_turns(response.json())
         except (httpx.HTTPError, ValueError) as exc:
             print(f"{lane}: telemetry unavailable: {exc}", file=sys.stderr)
             turns = []
@@ -376,18 +414,10 @@ def main() -> int:
 
     import httpx
 
-    import os
-
-    headers = {}
-    if os.environ.get("A2A_AUTH_TOKEN"):
-        headers["Authorization"] = f"Bearer {os.environ['A2A_AUTH_TOKEN']}"
     body = httpx.get(
-        f"{args.base_url}/api/telemetry/recent", params={"limit": 200}, timeout=30, headers=headers
+        f"{args.base_url}/api/telemetry/recent", params={"limit": 200}, timeout=30, headers=_auth_headers()
     ).json()
-    # The route returns {"enabled":…, "turns":[…], …} — take the list, never fall
-    # back to iterating the dict (its KEYS are strings; the first live run
-    # crashed exactly there).
-    turns = body.get("turns") or [] if isinstance(body, dict) else (body or [])
+    turns = _telemetry_turns(body)
     loop_rows, code_rows = _lane_rows(turns, "loop", args.reps), _lane_rows(turns, "code", args.reps)
     loop, code = _agg(loop_rows), _agg(code_rows)
     loop_pass, code_pass = _pass_rate(report, "ptc-loop"), _pass_rate(report, "ptc-code")
