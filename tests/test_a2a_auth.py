@@ -1537,7 +1537,7 @@ def test_verified_principal_in_http_call_context(case, tmp_path, monkeypatch):
         "agent": ("agent-device", "operator", "full", False),
         "fleet": ("fleet-service", "operator", "full", False),
         "federation": ("federation", "federation", "full", False),
-        "legacy": ("open/unknown", "operator", "full", False),
+        "legacy": ("legacy-api-key", "operator", "full", False),
         "open": ("open/unknown", "operator", "full", False),
     }[case]
     token = {"federation": "fed"}.get(case, case)

@@ -13,6 +13,27 @@ project-scope banner) without editing the core executor.
 from __future__ import annotations
 
 import contextvars
+from contextlib import contextmanager
+
+_verified_principal_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "protoagent_verified_principal", default=None,
+)
+
+
+def current_verified_principal() -> str | None:
+    """Server-verified HTTP principal; None denotes a local invocation."""
+    return _verified_principal_ctx.get()
+
+
+@contextmanager
+def verified_principal_scope(principal: str):
+    """Bind only the principal stamped by authentication, never request metadata."""
+    token = _verified_principal_ctx.set(principal or "open/unknown")
+    try:
+        yield
+    finally:
+        _verified_principal_ctx.reset(token)
+
 
 _request_metadata_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar(
     "protoagent_request_metadata",
