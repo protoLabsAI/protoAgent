@@ -12,3 +12,5 @@
   Acceptance and segment creation are serialized by a database transaction; queue recovery and
   deduplication cover the complete private partition. Folded turns are attached atomically so
   they cannot dispatch twice, and proven dispatch refusals release and requeue the same input.
+  Completion atomically retires the head and folded inputs with the segment release, so
+  recovery excludes finished work while preserving queued inputs and message deduplication.

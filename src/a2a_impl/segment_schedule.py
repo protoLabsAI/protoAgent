@@ -235,13 +235,25 @@ async def complete_segment(task_store, session_id: str, *, generation: int, cont
 
     CAS on the segment generation: commits only when nothing raced in. If a fold bumped the
     generation first (accept-and-queue won), this matches no row and returns False — the caller
-    must drain the folded input and keep running, then complete at the new generation."""
-    return await task_store.cas_private_payload(
-        segment_task_id(session_id),
-        guard={"generation": generation},
-        updates={"generation": generation + 1, "state": SEGMENT_IDLE, "audience": "", "seq": None, "interrupt_id": ""},
-        context=context,
-    )
+    must drain the folded input and keep running, then complete at the new generation.
+    The head and all folded turns become terminal in the SAME transaction as the release,
+    so recovery cannot mistake completed inputs for interrupted execution."""
+    def complete(records):
+        seg = records.get(segment_task_id(session_id), {})
+        if seg.get("generation") != generation:
+            return False
+        head_seq = seg.get("seq")
+        if head_seq is not None:
+            for turn in records.values():
+                if turn.get("kind") == KIND_PENDING_TURN and (
+                    turn.get("seq") == head_seq or turn.get("segment_seq") == head_seq
+                ):
+                    turn["state"] = STATE_TERMINAL
+        seg.update(generation=generation + 1, state=SEGMENT_IDLE,
+                   audience="", seq=None, interrupt_id="")
+        return True
+
+    return await task_store.update_scheduling_payloads(session_id, context, complete)
 
 
 async def park_segment(task_store, session_id: str, *, generation: int, interrupt_id: str, context) -> bool:

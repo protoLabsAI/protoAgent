@@ -1020,6 +1020,56 @@ async def test_parked_segment_reserves_runner_until_its_matching_resume(tmp_path
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("head_state", ["queued", "running", "parked"])
+async def test_completion_retires_only_attached_turns_durably(tmp_path, head_state):
+    from a2a_impl import segment_schedule as ss
+
+    path = tmp_path / "completed.db"
+    engine, store = await _open_store(path)
+    op = _operator_ctx()
+    for dedupe, audience in [
+        ("head", ss.AUDIENCE_PEER), ("folded", ss.AUDIENCE_PEER),
+        ("later-private", ss.AUDIENCE_PRIVATE), ("later-peer", ss.AUDIENCE_PEER),
+    ]:
+        await ss.accept_pending_turn(
+            store, session_id="chat", audience=audience, principal="op", dedupe=dedupe, context=op,
+        )
+    generation = await ss.claim_segment(store, "chat", audience=ss.AUDIENCE_PEER, seq=1, context=op)
+    await ss.set_turn_state(store, "chat", 1, head_state, op)
+    folded_generation = await ss.try_fold(
+        store, "chat", generation=generation, audience=ss.AUDIENCE_PEER, seq=2, context=op,
+    )
+    before = await store.scheduling_payloads("chat", op)
+    assert not await ss.complete_segment(store, "chat", generation=generation, context=op)
+    assert await store.scheduling_payloads("chat", op) == before
+    assert await ss.complete_segment(store, "chat", generation=folded_generation, context=op)
+    await engine.dispose()
+
+    engine, store = await _open_store(path)
+    try:
+        recovered = await ss.recover_undrained_segments(store, "chat", op)
+        assert not recovered["reserved"]
+        assert recovered["suspended"] == recovered["parked"] == []
+        assert [t["dedupe"] for t in recovered["queued"]] == ["later-private", "later-peer"]
+        terminal = await ss.pending_turns(store, "chat", op, states=(ss.STATE_TERMINAL,))
+        assert [t["dedupe"] for t in terminal] == ["head", "folded"]
+        retry = await ss.accept_pending_turn(
+            store, session_id="chat", audience=ss.AUDIENCE_PEER, principal="op", dedupe="folded", context=op,
+        )
+        assert retry == terminal[1]
+        next_turn = await ss.next_dispatch(store, "chat", op)
+        assert next_turn["dedupe"] == "later-private"
+        assert await ss.claim_segment(
+            store, "chat", audience=next_turn["audience"], seq=next_turn["seq"], context=op,
+        ) is not None
+        before = await store.scheduling_payloads("chat", op)
+        assert not await ss.complete_segment(store, "chat", generation=folded_generation, context=op)
+        assert await store.scheduling_payloads("chat", op) == before
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_restart_after_acceptance_recovers_queue_audience_and_order(tmp_path):
     # A real process restart (the store is disposed and reopened from the same file) after inputs
     # were accepted but before any ran: the durable queue, audience and order are recovered.
