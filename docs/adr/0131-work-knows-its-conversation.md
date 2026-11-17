@@ -106,10 +106,10 @@ Each phase is boarded as small or medium cards (four files or fewer each, per th
 - Quiet tests, an approval wait, a chatty no-change worker and an unreadable store give four distinct progress readings (P3).
 - A pilot alert raised before a restart isn't raised again after it, and its recovery notifies once (P5).
 
-## Amendment 2026-11-17: audience partitions and scheduling
+## Amendment 2026-11-16: audience partitions and scheduling
 
-- Status: Accepted by Josh as direction (2026-11-16, answer 5 "as recommended": record the private-steering design here as an amendment rather than a new ADR). The Phase 1 implementation proof is authorized and in progress (Josh's Phase 1 go, 2026-11-17); **CONTINUE — the decision that would carry this past the bounded Phase 1 proof slices into production — has not been made.**
-- Date: 2026-11-17
+- Status: Accepted by Josh as direction (2026-11-16, answer 5 "as recommended": record the private-steering design here as an amendment rather than a new ADR). The Phase 1 implementation proof is authorized and in progress (Josh's Phase 1 go, 2026-11-16); **CONTINUE — the decision that would carry this past the bounded Phase 1 proof slices into production — has not been made.**
+- Date: 2026-11-16
 - Deciders: Josh Mabry; protoAgent maintainers
 - Source: the Conversations in Work proposal, `docs/design/conversations-in-work-proposal.md` (a design doc excluded from the published docs build, so cited as a path like this ADR's header cites `docs/design/other-conversations.md`), "Design revision after Phase 0" sections 2–4 and "Decisions recorded 2026-11-16" (including the decision-1 clarification). That proposal records the Phase 0 (bd-h6gka) REVISE verdict, the Model B recommendation, and the four Phase 0 issues (#5400–#5403) this design answers.
 
@@ -135,11 +135,11 @@ Private steering **waits for a safe boundary and peer work queues behind it.** A
 
 ### A4 — Private steering stays enabled everywhere; console-authority risk is accepted
 
-Private steering **stays enabled everywhere**, per Josh's 2026-11-17 decision. The principal-kind seam cannot distinguish a human from an agent that obtains console authority or holds a `device`-kind pairing; **that risk is accepted**, rather than making credential and tool isolation a deployment prerequisite. Steering text and private replies must never reach peer channels or peer-readable history. This partitioning does not stop the model repeating what it was told.
+Private steering **stays enabled everywhere**, per Josh's 2026-11-16 decision. The principal-kind seam cannot distinguish a human from an agent that obtains console authority or holds a `device`-kind pairing; **that risk is accepted**, rather than making credential and tool isolation a deployment prerequisite. Steering text and private replies must never reach peer channels or peer-readable history. This partitioning does not stop the model repeating what it was told.
 
 ### A5 — Result release: auto delivery to the original requester
 
-Result release is **decided** (Josh, 2026-11-17: "yes auto delivery, and yes keep it on everywhere"), settling the automatic private-derived result release the proposal's section 1 had deferred. v1 **auto-delivers a private-derived result to the original requester through the deliver-to-requester action**, bound to the requester principal captured at request acceptance and reaching only that one original requester's authorized handles — never a second peer in the same context. There is **no payload grant and no console release step**: delivery is automatic, not operator-gated, and the amendment adds no release UI. Steering text and the private replies themselves still **never reach peer channels or peer-readable history** (A2, A4); only the delivered result does. Auto delivery does not stop the model from repeating in a later peer turn what it was told privately; that is accepted, as under A4. This settles the deferred automatic-release question without changing the proposal's decision 2 privacy contract.
+Result release is **decided** (Josh, 2026-11-16: "yes auto delivery, and yes keep it on everywhere"), settling the automatic private-derived result release the proposal's section 1 had deferred. v1 **auto-delivers a private-derived result to the original requester through the deliver-to-requester action**, bound to the requester principal captured at request acceptance and reaching only that one original requester's authorized handles — never a second peer in the same context. There is **no payload grant and no console release step**: delivery is automatic, not operator-gated, and the amendment adds no release UI. Steering text and the private replies themselves still **never reach peer channels or peer-readable history** (A2, A4); only the delivered result does. Auto delivery does not stop the model from repeating in a later peer turn what it was told privately; that is accepted, as under A4. This settles the deferred automatic-release question without changing the proposal's decision 2 privacy contract.
 
 ### Open questions (not decided here)
 
