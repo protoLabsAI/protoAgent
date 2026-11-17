@@ -35,6 +35,8 @@ from graph.middleware import memory as memmod
 from graph.middleware.knowledge import KnowledgeMiddleware
 from tools.memory_tools import _build_memory_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 _CANARY = "CALLER-SCOPE-CANARY"
 
 
@@ -199,3 +201,24 @@ def test_federation_turn_receives_no_closed_chat_card(memory_env):
 
     assert "CLOSEDCARD-CANARY" in _deliver({"Authorization": "Bearer operator-test"})["context"]
     assert "CLOSEDCARD-CANARY" not in _deliver({"Authorization": "Bearer federation-test"})["context"]
+
+
+def test_unclassified_a2a_turn_gets_no_digest_or_recall_tools(memory_env):
+    _write_session(memory_env, "operator-session", _CANARY)
+    auth.configure(bearer_token="", federation_token="", fleet_token="", api_key="", allowed_origins_raw="")
+
+    result = _deliver({})
+
+    assert result["principal_kind"] == "open/unknown"
+    assert _CANARY not in result["context"]
+    assert not {"recall_session", "session_search"} & set(result["tools"])
+
+    # The HTTP scope resets: a subsequent local invocation retains memory delivery.
+    tools = _build_memory_tools(None)
+    mw = KnowledgeMiddleware(None, bound_tool_names=frozenset(t.name for t in tools))
+    state = {"session_id": "local-turn", "messages": [HumanMessage(content="hello")]}
+    state.update(mw.before_agent(state, None))
+    request = ModelRequest(model=None, messages=state["messages"], tools=tools, state=state, runtime=None)
+    delivered = mw.wrap_model_call(request, lambda req: req)
+    assert _CANARY in "\n".join(str(m.content) for m in delivered.messages)
+    assert {"recall_session", "session_search"} <= {t.name for t in delivered.tools}

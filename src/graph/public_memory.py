@@ -1,4 +1,4 @@
-"""Dormant public-projection boundary for derived conversation memory.
+"""Dormant public-projection boundary for derived conversation readers.
 
 The trusted source reader is deliberately unbound in production in this proof
 slice. It must return None only for a known unpartitioned conversation, and
@@ -14,10 +14,26 @@ from langchain_core.messages import BaseMessage
 
 
 @dataclass(frozen=True)
+class FleetExport:
+    """Public auxiliary snapshot covered by the enclosing source's lineage.
+
+    The trusted reader supplies fields from the same retained public version and
+    raises if any auxiliary input has missing, mixed or stale provenance.
+    """
+
+    task_id: str
+    orient: str
+    tools: list[dict]
+    metadata: dict
+
+
+@dataclass(frozen=True)
 class PublicSource:
     version: str
     messages: tuple[BaseMessage, ...]
     audience: str = "public"
+    # Optional for memory readers; required for a protected fleet export.
+    fleet: FleetExport | None = None
 
 
 # Trusted integration seam, not a config field or a graph-state input.

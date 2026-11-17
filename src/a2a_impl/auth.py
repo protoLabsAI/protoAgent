@@ -883,7 +883,10 @@ class A2AAuthMiddleware:
             await send(message)
 
         async def call_next(_request: Request) -> None:
-            await self.app(scope, receive, tracking_send)
+            from graph.middleware.request_context import verified_principal_scope
+
+            with verified_principal_scope(getattr(_request.state, "principal_kind", "open/unknown")):
+                await self.app(scope, receive, tracking_send)
 
         request = Request(scope, receive)
         refusal = await self.dispatch(request, call_next)

@@ -77,26 +77,19 @@ _FEDERATION_DENIED_TOOLS = frozenset({"recall_session", "session_search"})
 
 
 def _federation_caller() -> bool:
-    """Is THIS turn's verified principal the federation peer (ADR 0066)?
+    """Restrict federation and unclassified remote turns using server-bound identity.
 
-    Read from the server-set trust-tier contextvar (:func:`observability.tracing.
-    current_trust_tier` — stamped by ``A2AAuthMiddleware`` in ``src/a2a_impl/auth.py``
-    from the matched credential). NEVER from request metadata, a header the graph
-    parsed, or graph-state input a caller can set. The contextvar is bound per request,
-    so the decision is per TURN — it rides the run, never this instance, which one
-    compiled graph shares across every concurrent turn.
+    Local invocations have no HTTP principal and retain their existing delivery.
+    The trust-tier fallback also covers drivers that bind only the verified tier.
+    Neither value comes from model state or caller-supplied metadata.
+    """
+    from graph.middleware.request_context import current_verified_principal
+    from observability.tracing import current_trust_tier
 
-    Every other principal reads False and keeps today's delivery: the shared operator
-    bearer (console) and fleet service token (both ``operator`` tier), paired devices
-    (``operator`` tier), and local/self-invocation turns (tier ``""``). The read does
-    not raise in practice; if it ever did, preserving today's delivery is the safe
-    default (gating would narrow every turn, not just the federation peer's)."""
-    try:
-        from observability.tracing import current_trust_tier
-
-        return current_trust_tier() == "federation"
-    except Exception:  # noqa: BLE001 — a telemetry read must never break a model call
-        return False
+    principal = current_verified_principal()
+    if principal is not None:
+        return principal not in {"shared-operator-bearer", "fleet-service", "device", "agent-device"}
+    return current_trust_tier() == "federation"
 
 
 def _bound_tool_name(tool) -> str | None:
