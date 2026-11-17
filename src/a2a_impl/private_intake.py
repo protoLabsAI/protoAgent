@@ -12,7 +12,7 @@ console recovers both the input and the reply from the same partition record
 ``Task``'s history, artifacts or status message, so a peer read (stream, poll, push, reopened
 history) sees nothing.
 
-**Fail closed (r3).** A missing record, an unknown ``version``, or a delegation that is not
+**Fail closed.** A missing record, an unknown ``version``, or a delegation that is not
 bound to THIS reference stops the continuation — :func:`resolve_private_input` returns ``None``
 (never the text) and the caller must refuse the turn rather than fall back to an ordinary
 SendMessage.
@@ -69,7 +69,7 @@ async def find_private_steer(task_store, *, session_id, msg_id, context, kind=PR
     a second private shell (and so a steer whose turn already replied starts no second turn).
 
     Scans this session's operator-visible timeline (``history_records``, newest-first). Raises
-    on an unreadable partition; the caller folds that into its fail-closed refusal (r3)."""
+    on an unreadable partition; the caller folds that into its fail-closed refusal."""
     dedupe = str(msg_id or "")
     if not dedupe:
         return "", False
@@ -129,7 +129,7 @@ async def record_private_reply(task_store, ref, reply, context) -> bool:
 async def resolve_private_input(task_store, ref, *, delegation, context) -> str | None:
     """Resolve an opaque reference to its private text, inside the trusted runner.
 
-    Fail-closed (r3): returns ``None`` — never the text, never a fallback — unless the
+    Fail-closed: returns ``None`` — never the text, never a fallback — unless the
     delegation is bound to THIS reference, the record exists for an operator who may read it,
     its ``version`` matches, and it carries private input. The store itself already refuses a
     non-human-operator ``context`` and an unknown partition format; this adds the delegation

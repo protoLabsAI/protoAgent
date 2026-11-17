@@ -320,7 +320,7 @@ class ParkedTaskRouter:
         message = params.message
         # A private steer / resume (ADR 0131 P1b.2) must carry ONLY its opaque reference —
         # refuse any attempt to smuggle a private prompt alongside the marker before the SDK
-        # records the message, so a peer's requires_input / history can never hold it (r2).
+        # records the message, so a peer's requires_input / history can never hold it.
         enforce_private_input(message)
         if is_settle_message(message) and message.message_id not in _PENDING_SETTLES:
             # Only this module sends settles; a client's copy just loses the marker's meaning.

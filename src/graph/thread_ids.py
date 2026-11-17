@@ -66,5 +66,9 @@ def resolver_metadata(session_id: str) -> dict:
 
 
 def forget_resolver_metadata(session_id: str) -> None:
-    """Drop the persisted resolver inputs for ``session_id`` (session deletion / test reset)."""
+    """Drop the persisted resolver inputs for one ``session_id``.
+
+    The per-test reset (``tests/conftest.py``) clears the whole cache; this drops a single
+    session, which the thread-resolution tests use to isolate one session's inputs.
+    """
     _RESOLVER_METADATA.pop(session_id, None)
