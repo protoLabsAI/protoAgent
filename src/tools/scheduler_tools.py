@@ -400,8 +400,17 @@ def _build_task_tools(tasks_store) -> list:
         if session_id.startswith(("job:", "background:")):
             session_id = _origin_session_from(state)
         normalized_job_key = "-".join(job_key.strip().lower().split())[:80]
-        message_id = correlation.get("request", {}).get("message_id")
-        promotion_key = f"inbox:{message_id}:{normalized_job_key}" if message_id and normalized_job_key else ""
+        # Scope the promotion key to the inbox ITEM (the durable request), never to the
+        # execution's message_id: a2a retires the execution identity on a turn that ends
+        # failed/canceled (server/a2a.py _retire_inbox_execution → InboxStore.retire_execution),
+        # so the item's next delivery mints a FRESH message_id for the same request. Keying on
+        # message_id would therefore miss the row this job already has and create a duplicate on
+        # a failed-then-retried job. item_id is the inbox primary key — stable across both a
+        # restart (the inbox_executions row survives) and that retirement — so the same job
+        # retried under either path reuses its one row. Never derived from title/time/origin.
+        request = correlation.get("request") or {}
+        item_id = request.get("item_id")
+        promotion_key = f"inbox:{item_id}:{normalized_job_key}" if item_id and normalized_job_key else ""
         try:
             i = tasks_store.create(
                 title,

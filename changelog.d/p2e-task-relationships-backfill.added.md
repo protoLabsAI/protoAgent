@@ -1,0 +1,1 @@
+- **Legacy tasks adopt versioned relationships safely.** Opening the task store atomically upgrades unversioned rows without inventing requester or request metadata, changing existing links, origin sessions or timestamps, or publishing events. Reopening is idempotent, and failed upgrades roll back for retry.

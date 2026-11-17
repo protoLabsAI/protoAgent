@@ -48,10 +48,12 @@ def test_distinct_jobs_share_only_request_lineage(open_stores):
         rows = tasks.list()
         assert len(rows) == 2
         assert len({row["id"] for row in rows}) == 2
+        # Two distinct jobs → two keys, each scoped to the request ITEM (not message_id).
         assert {row["promotion_key"] for row in rows} == {
-            f"inbox:{identity['message_id']}:fix-ci",
-            f"inbox:{identity['message_id']}:write-docs",
+            f"inbox:{item['id']}:fix-ci",
+            f"inbox:{item['id']}:write-docs",
         }
+        # Both rows carry the same request lineage; the request is never its own row.
         for row in rows:
             assert json.loads(row["request_ref"]) == {**request, "item_id": str(item["id"])}
 
@@ -78,7 +80,39 @@ def test_redelivered_job_reuses_persisted_task(open_stores, first_key, retry_key
 
     with open_stores() as (_, tasks):
         assert tasks.list() == [original]
-        assert original["promotion_key"] == f"inbox:{identity['message_id']}:{normalized}"
+        assert original["promotion_key"] == f"inbox:{item['id']}:{normalized}"
+
+
+def test_retired_execution_still_reuses_the_one_task(open_stores):
+    """The decisive retry case: a turn that ends failed/canceled retires the execution
+    identity (ADR 0129; server/a2a.py _restore_inbox_item), so the item's next delivery runs
+    under a FRESH message_id and context_id. The job's single row must still be reused —
+    which it is only because the key is scoped to the durable request item, not the retired
+    execution's message_id."""
+    with open_stores() as (inbox, tasks):
+        item = inbox.add("Please investigate", priority="now")
+        first = inbox.execution_identity(item["id"])
+        inbox.mark_delivered([item["id"]])
+        assert create_task(tasks, first["context_id"], job_key="fix-ci").startswith("Created ")
+        original = tasks.list()[0]
+
+    with open_stores() as (inbox, tasks):
+        # The fired turn settled terminally: restore the item and retire its identity, in the
+        # order server/a2a.py _restore_inbox_item does.
+        inbox.mark_pending([item["id"]])
+        inbox.retire_execution(item["id"])
+        retry = inbox.execution_identity(item["id"])
+        # A genuinely new execution identity — both the context and the message id changed,
+        # exactly the situation under which message_id keying would duplicate the row.
+        assert retry["message_id"] != first["message_id"]
+        assert retry["context_id"] != first["context_id"]
+        result = create_task(tasks, retry["context_id"], job_key="fix-ci", title="Retry title")
+        assert result.startswith(f"Reused existing task {original['id']} for this job:")
+        assert "Created" not in result
+
+    with open_stores() as (_, tasks):
+        assert tasks.list() == [original]
+        assert original["promotion_key"] == f"inbox:{item['id']}:fix-ci"
 
 
 @pytest.mark.parametrize(("correlated", "kwargs"), [

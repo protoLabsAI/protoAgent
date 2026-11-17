@@ -44,7 +44,7 @@ def test_old_schema_upgrades_without_backfilling_relationships(db_path):
         row = store.get("task-7")
         assert row["title"] == "legacy"
         assert row["created_at"] == row["updated_at"] == "before"
-        assert row["rel_version"] == 0
+        assert row["rel_version"] == 1
         assert row["request_ref"] == row["requester"] == row["promotion_key"] == ""
         assert store.create("new")["id"] == "task-8"
 
