@@ -99,7 +99,7 @@ def _handler(stream_fn, *, routing: bool = True, task_store=None, push_config_st
     return handler, router
 
 
-CALL = ServerCallContext()
+CALL = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
 
 
 def _msg(text: str, *, mid: str, task_id: str = "", hitl_resume: bool = False, ctx: str = CTX) -> SendMessageRequest:
@@ -700,7 +700,11 @@ async def test_phase0_output_gate_cannot_hide_private_input_history(tmp_path, de
         parkd = await handler.on_message_send(_msg("ask me something", mid="a1", ctx=ctx_id), CALL)
         assert parkd.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
         turn_id = parkd.id
-        frames = await asyncio.wait_for(_stream_send(_ref_msg(ref, mid="o1", hitl_resume=True, ctx=ctx_id)), 5)
+        resume = _ref_msg(ref, mid="o1", hitl_resume=True, ctx=ctx_id)
+        # An explicit guarded handle can continue this ordinary task; the private
+        # fallback now selects only tasks created in the human-private partition.
+        resume.message.task_id = parkd.id
+        frames = await asyncio.wait_for(_stream_send(resume), 5)
     else:
         frames = await asyncio.wait_for(_stream_send(_ref_msg(ref, mid="o1", ctx=ctx_id)), 5)
         turn_id = next(getattr(e, "id", "") or getattr(e, "task_id", "") for e in frames

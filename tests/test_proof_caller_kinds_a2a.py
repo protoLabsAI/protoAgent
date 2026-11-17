@@ -39,20 +39,11 @@ pytestmark = [pytest.mark.platform_sensitive, pytest.mark.asyncio]  # HMAC token
 FEDERATION = "federation"
 ENROLLED_CONSOLE = "enrolled-console"
 ALL_KINDS = (FEDERATION, "fleet-service", "paired-agent", ENROLLED_CONSOLE)
-# All operator TIER share OPERATOR_OWNER ("") — resolve_task_owner keys on trust_tier; only federation isolates.
-_OPERATOR_TIER_PEERS = ("fleet-service", "paired-agent", ENROLLED_CONSOLE)
 
-# Real product defects, named not fixed (LEAK RULE). Full detail in the PR body.
-_STEER_LEAK = (
-    "PROOF FAILURE: an operator-tier peer shares the operator's OPERATOR_OWNER ('') partition "
-    "(resolve_task_owner keys on trust_tier, not identity), so the operator's private steer — a PUBLIC "
-    "operator-owned task — shows up in the peer's own on_list_tasks/on_get_task. Only federation isolates."
-)
-_RESUME_LEAK = (
-    "PROOF FAILURE: an operator-tier peer shares the operator's OPERATOR_OWNER ('') partition "
-    "(resolve_task_owner keys on trust_tier, not identity), so the peer's parked task appears in the "
-    "operator's OWNER-SCOPED parked read and the 'operator owns no parked task' assert fails there."
-)
+# Retained decision conflict: enrolled consoles ARE the human operator, but these
+# original proof assertions treat every caller kind as a peer denied private content.
+_STEER_LEAK = "Decision needed: an enrolled console is the human operator and may read private tasks"
+_RESUME_LEAK = "Decision needed: an enrolled console is the human operator and may read private tasks"
 _PRIVATE_PAYLOAD_LEAK = (
     "PROOF FAILURE: an enrolled-console (paired human 'device') peer is is_human_operator AND shares the "
     "operator's OPERATOR_OWNER ('') partition, so a server/console read returns the operator's "
@@ -200,14 +191,14 @@ async def test_output_gate_cannot_hide_private_input_history(
     await src.test_phase0_output_gate_cannot_hide_private_input_history(tmp_path, delegation_env, parked)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak_kinds=_OPERATOR_TIER_PEERS, reason=_STEER_LEAK))
+@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_STEER_LEAK))
 async def test_private_steer_into_a_peer_thread(tmp_path, delegation_env, monkeypatch, principals, kind):
     _route(monkeypatch, principals, kind)
     await src.test_a_private_steer_into_a_peer_thread_hides_the_input_and_keeps_the_thread_the_peers(
         tmp_path, delegation_env)
 
 
-@pytest.mark.parametrize("kind", _kinds(leak_kinds=_OPERATOR_TIER_PEERS, reason=_RESUME_LEAK))
+@pytest.mark.parametrize("kind", _kinds(leak_kinds=(ENROLLED_CONSOLE,), reason=_RESUME_LEAK))
 async def test_private_resume_never_lands_on_a_peer_owned_parked_task(
     tmp_path, delegation_env, monkeypatch, principals, kind
 ):

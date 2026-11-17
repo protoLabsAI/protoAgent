@@ -1442,3 +1442,59 @@ async def test_ordinary_save_after_chat_deletion_persists_final_state(tmp_path, 
         assert records[0].private_payload is None
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("principal,human", [
+    ("shared-operator-bearer", True), ("device", True),
+    ("fleet-service", False), ("paired-agent", False), ("federation", False),
+])
+async def test_private_task_owner_survives_restart_and_pagination(tmp_path, principal, human):
+    from a2a.types import a2a_pb2
+    from sqlalchemy import text
+
+    operator = ServerCallContext(state={"principal_kind": "shared-operator-bearer"})
+    caller = ServerCallContext(state={
+        "principal_kind": principal,
+        "trust_tier": "federation" if principal == "federation" else "operator",
+    })
+    engine = make_sqlite_engine(str(tmp_path / "owners.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    private = a2a_pb2.Task(id="private", context_id="c", history=[_text_msg("private-input:ref")])
+    await store.save(private, operator)
+    ordinary = a2a_pb2.Task(id="ordinary", context_id="c")
+    await store.save(ordinary, operator)
+    # Later saves without the opening history must retain the private owner.
+    private.ClearField("history")
+    await store.save(private, operator)
+    await engine.dispose()
+    engine = make_sqlite_engine(str(tmp_path / "owners.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    try:
+        assert (await store.get(private.id, caller) is not None) is human
+        page = await store.list(a2a_pb2.ListTasksRequest(context_id="c", page_size=1), caller)
+        assert page.total_size == (2 if human else 0 if principal == "federation" else 1)
+        ids = {task.id for task in page.tasks}
+        while page.next_page_token:
+            page = await store.list(a2a_pb2.ListTasksRequest(
+                context_id="c", page_size=1, page_token=page.next_page_token,
+            ), caller)
+            ids.update(task.id for task in page.tasks)
+        assert (private.id in ids) is human
+        assert (ordinary.id in ids) is (principal != "federation")
+        scoped = await store.list_owner_scoped(a2a_pb2.ListTasksRequest(context_id="c"), caller)
+        assert {task.id for task in scoped.tasks} == ({private.id} if human else set())
+        if not human:
+            with pytest.raises(PermissionError):
+                await store.save(private, caller)
+        async with engine.connect() as conn:
+            owners = dict((await conn.execute(text("SELECT id, owner FROM tasks"))).all())
+            from sqlalchemy import select
+
+            public_ids = (await conn.execute(select(store.task_model.id).where(
+                await stores.task_public_filter(conn),
+            ))).scalars().all()
+            assert public_ids == [ordinary.id]
+        assert owners == {"ordinary": stores.OPERATOR_OWNER, "private": stores.HUMAN_OPERATOR_OWNER}
+    finally:
+        await engine.dispose()

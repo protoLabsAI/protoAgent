@@ -440,10 +440,12 @@ def drop_tool_args_history(task: Task) -> int:
 
 # ── Task owner (who may see a task) ─────────────────────────────────────────────
 
-#: The owner every operator-tier caller saves under (the shared bearer, devices, the fleet
+#: The ordinary-task owner every operator-tier caller saves under (shared bearer, devices, fleet
 #: service token, the scheduler's own self-calls). Empty — the owner every row stored before
 #: owners existed already carries, so those stay the operator's.
 OPERATOR_OWNER = ""
+#: New private segments belong to the verified human, independently of trust tier.
+HUMAN_OPERATOR_OWNER = "human-operator"
 #: The owner a federation-tier caller (ADR 0066) saves under. A federation caller sees and
 #: touches only these; an operator-tier caller sees them too.
 FEDERATION_OWNER = "federation"
@@ -456,6 +458,12 @@ def resolve_task_owner(context: ServerCallContext | None) -> str:
     ``TierCallContextBuilder``). Anything but ``federation`` is the operator."""
     state = getattr(context, "state", None) or {}
     return FEDERATION_OWNER if state.get("trust_tier") == "federation" else OPERATOR_OWNER
+
+
+def _human_operator(context) -> bool:
+    from a2a_impl.auth import is_human_operator
+
+    return is_human_operator((getattr(context, "state", None) or {}).get("principal_kind"))
 
 
 def tier_context_builder():
@@ -538,6 +546,8 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
                 func.json_extract(binding, "$.context_id") == task_model.context_id,
             ) if principal else false(),
         )
+    if "owner" in columns and not _human_operator(context):
+        predicate &= task_model.owner != HUMAN_OPERATOR_OWNER
     return predicate
 
 
@@ -609,15 +619,28 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
                 "record": json.dumps(record, sort_keys=True)})
             return result.rowcount == 1
 
-    async def _reader(self, context):
+    async def _reader(self, context, *, human_only=False):
         """An isolated SDK reader preserves SDK pagination and owner semantics."""
+        from sqlalchemy import case, false
         from sqlalchemy.orm import aliased
 
         await self._ensure_initialized()
         async with self.engine.connect() as conn:
             visible = await task_public_filter(conn, self.task_model, context=context)
+        human = _human_operator(context)
+        if human_only:
+            visible &= self.task_model.owner == HUMAN_OPERATOR_OWNER if human else false()
+        # Project both human-readable operator partitions into the SDK reader's owner
+        # without changing stored owners or its pagination/counting behavior.
+        columns = [
+            case((column == HUMAN_OPERATOR_OWNER, OPERATOR_OWNER), else_=column).label("owner")
+            if column.name == "owner" and human else column
+            for column in self.task_model.__table__.columns
+        ]
         reader = copy(self)
-        reader.task_model = aliased(self.task_model, select(self.task_model).where(visible).subquery())
+        reader.task_model = aliased(
+            self.task_model, select(*columns).where(visible).subquery(), adapt_on_names=True
+        )
         return reader
 
     async def save_private(
@@ -652,7 +675,10 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             ):
                 raise PermissionError("Task visibility cannot change")
             existing = await session.get(self.task_model, task.id)
-            owner = existing.owner if existing else self.owner_resolver(context)
+            # A public task with an attached private payload remains an ordinary task.
+            owner = existing.owner if existing else (
+                self.owner_resolver(context) if public_visible else HUMAN_OPERATOR_OWNER
+            )
             await session.merge(self._to_orm(task, owner))
             await session.flush()
             await session.execute(text(
@@ -674,10 +700,12 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         if not is_human_operator((getattr(context, "state", None) or {}).get("principal_kind")):
             raise PermissionError("Private task access requires a human operator")
         conn = await session.connection()
-        visible = await task_public_filter(conn, self.task_model, include_private=True)
+        visible = await task_public_filter(conn, self.task_model, include_private=True, context=context)
         owners = [self.owner_resolver(context)]
         if owners == [OPERATOR_OWNER]:
             owners.append(FEDERATION_OWNER)
+        if _human_operator(context):
+            owners.append(HUMAN_OPERATOR_OWNER)
         rows = (await session.execute(
             select(self.task_model.id, literal_column("private_payload"))
             .where(self.task_model.context_id == context_id, self.task_model.owner.in_(owners),
@@ -714,7 +742,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
                 await self._check_write(session, conn, task, context, private=True)
                 if key not in before:
                     # INSERT, never merge: an unrelated/inaccessible id must fail closed.
-                    session.add(self._to_orm(task, self.owner_resolver(context)))
+                    session.add(self._to_orm(task, HUMAN_OPERATOR_OWNER))
                     await session.flush()
                 await session.execute(text(
                     f"UPDATE {table} SET private_version=:version, private_audience=:audience, "
@@ -749,6 +777,8 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         owners = [self.owner_resolver(context)]
         if owners == [OPERATOR_OWNER]:
             owners.append(FEDERATION_OWNER)
+        if _human_operator(context):
+            owners.append(HUMAN_OPERATOR_OWNER)
         async with self.async_session_maker.begin() as session:
             conn = await session.connection()
             table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
@@ -786,6 +816,8 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             f"SELECT owner, context_id, private_version, private_audience, private_payload, public_visible, requester_binding "
             f"FROM {table} WHERE id=:id"
         ), {"id": task.id})).first()
+        if row is not None and row.owner == HUMAN_OPERATOR_OWNER and not _human_operator(context):
+            raise PermissionError("Private task access requires a human operator")
         protected = row is not None and any(value is not None for value in row[2:6])
         if row is not None and row.requester_binding is not None:
             binding = json.loads(row.requester_binding)
@@ -796,7 +828,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         # Detached ordinary turns must still persist their final state after deletion.
         # Private intake and existing protected rows must never revive a deleted chat.
         if not private and not protected:
-            return
+            return row.owner if row is not None and row.owner == HUMAN_OPERATOR_OWNER else None
         if await conn.run_sync(lambda c: inspect(c).has_table(CHAT_TOMBSTONE_TABLE)):
             context_ids = {task.context_id}
             if row is not None:
@@ -814,7 +846,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             or row.context_id != task.context_id or (not private and row.public_visible == 0)
         ):
             raise PermissionError("Task unavailable")
-        if private and row.owner not in (self.owner_resolver(context), FEDERATION_OWNER):
+        if private and row.owner not in (self.owner_resolver(context), FEDERATION_OWNER, HUMAN_OPERATOR_OWNER):
             raise PermissionError("Task unavailable")
         return row.owner if protected else None
 
@@ -833,6 +865,8 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             owners = [self.owner_resolver(context)]
             if owners == [OPERATOR_OWNER]:
                 owners.append(FEDERATION_OWNER)
+            if human:
+                owners.append(HUMAN_OPERATOR_OWNER)
             row = (await session.execute(
                 select(self.task_model, literal_column("private_payload") if human else literal(None))
                 .where(self.task_model.id == task_id, self.task_model.owner.in_(owners), visible)
@@ -854,6 +888,8 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         owners = [self.owner_resolver(context)]
         if owners == [OPERATOR_OWNER]:
             owners.append(FEDERATION_OWNER)
+        if _human_operator(context):
+            owners.append(HUMAN_OPERATOR_OWNER)
         async with self.engine.connect() as conn:
             visible = await task_public_filter(conn, self.task_model, include_private=human, context=context)
             ids = (await conn.execute(
@@ -882,10 +918,17 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         async with self.async_session_maker.begin() as session:
             protected_owner = await self._check_write(session, await session.connection(), task, context)
             owner = protected_owner if protected_owner is not None else self.owner_resolver(context)
+            from a2a_impl.hitl_routing import private_input_ref
+
+            if any(private_input_ref(message) for message in task.history):
+                if not _human_operator(context):
+                    raise PermissionError("Private task access requires a human operator")
+                existing = await session.get(self.task_model, task.id)
+                owner = existing.owner if existing is not None else HUMAN_OPERATOR_OWNER
             await session.merge(self._to_orm(task, owner))
 
     # Owner scoping: the SDK filters every read by the caller's owner. An operator-tier
-    # caller also reads federation-owned tasks (the only other owner), as it always could.
+    # caller also reads federation-owned tasks, as it always could.
     async def get(self, task_id: str, context: ServerCallContext) -> Task | None:
         reader = await self._reader(context)
         task = await DatabaseTaskStore.get(reader, task_id, context)
@@ -905,12 +948,17 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             page = await DatabaseTaskStore.list(reader, params, _FEDERATION_CALL)
         return page
 
+    async def delete(self, task_id: str, context: ServerCallContext) -> None:
+        # Keep ordinary deletion semantics; only a human can remove the new partition.
+        await super().delete(task_id, context)
+        if _human_operator(context):
+            private_store = copy(self)
+            private_store.owner_resolver = lambda _: HUMAN_OPERATOR_OWNER
+            await DatabaseTaskStore.delete(private_store, task_id, context)
+
     async def list_owner_scoped(self, params, context: ServerCallContext):
-        """Like :meth:`list` but WITHOUT the operator→federation fallback: the caller sees
-        only its OWN tier's tasks in the context. A private steer's guarded resume routes
-        through this (``a2a_impl.hitl_routing``) so it can never be re-pointed onto — nor can
-        an operator turn's settle complete — a PEER-owned parked task (#5380, ADR 0131 P1b.2)."""
-        reader = await self._reader(context)
+        """List only verified-human private tasks for the guarded resume fallback."""
+        reader = await self._reader(context, human_only=True)
         return await DatabaseTaskStore.list(reader, params, context)
 
     async def context_foreign(self, context_id: str, context: ServerCallContext) -> bool:

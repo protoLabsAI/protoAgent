@@ -304,7 +304,7 @@ class ParkedTaskRouter:
     async def parked_tasks(self, context_id: str, call_context: Any, *, owner_scoped: bool = False) -> list[Task]:
         """The context's input-required tasks, newest first.
 
-        ``owner_scoped`` lists only the caller's OWN tier's tasks — no operator→federation
+        ``owner_scoped`` lists only the verified human's private tasks — no operator→federation
         fallback (``stores.list_owner_scoped``). A private steer's guarded resume uses it so
         the resume can never be re-pointed onto a peer-owned parked task, and an operator
         turn's settle never completes one (#5380, ADR 0131 P1b.2). A task store without that
@@ -344,7 +344,7 @@ class ParkedTaskRouter:
         if not _is_hitl_resume(message) or not message.context_id:
             return
         # A private steer / resume (ADR 0131 P1b.2) may only ever continue a parked task the
-        # OPERATOR owns: scope the lookup to the operator's own tier so the operator→federation
+        # human owns: scope the lookup to the human's private partition so the operator→federation
         # read fallback can never re-point the private turn — and so its private reply — onto a
         # peer-owned parked task (#5380). With no operator pause to resume it runs as a fresh
         # operator-owned task below (never onto a peer's), the way an idle private steer does.

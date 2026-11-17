@@ -1,0 +1,1 @@
+- **Private turns belong to the human operator.** Isolate new private-turn tasks from fleet-service and agent-kind peers, and restrict guarded parked resumes to the human-owned partition while preserving ordinary task access and legacy owners.
