@@ -7,6 +7,13 @@ the pre-registered verdict math.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from evals import ptc_bench
 from evals.ptc_bench import (
     _SIZES,
     RQ_ROUNDS,
@@ -88,3 +95,105 @@ def test_recent_response_unwrap_never_iterates_dict_keys():
     empty = {"enabled": False}
     turns2 = empty.get("turns") or [] if isinstance(empty, dict) else (empty or [])
     assert _lane_rows(turns2, "loop", 1) == []
+
+
+def test_kernel_fixture_and_two_turn_tasks(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["ptc_bench", "fixtures", "--suite", "kernel", "--dir", str(tmp_path)])
+    assert ptc_bench.main() == 0
+    body = (tmp_path / "issues.json").read_bytes()
+    ptc_bench.main()
+    assert (tmp_path / "issues.json").read_bytes() == body
+    manifest = yaml.safe_load((Path(__file__).parents[1] / "plugins/execute_code/protoagent.plugin.yaml").read_text())
+    assert len(body) > manifest["config"]["output_truncate"]
+    records = json.loads(body)
+    assert len(records) == 200
+    matches = [r for r in records if r["subsystem"] == "scheduler"]
+    top = sorted(matches, key=lambda r: (-len(r["comments"]), r["id"]))[:5]
+    answers = [f"MATCH_COUNT={len(matches)};", "\n".join(
+        f"RANK={i};ID={r['id']};COMMENTS={len(r['comments'])};" for i, r in enumerate(top, 1)
+    )]
+    cases = ptc_bench.build_kernel_tasks("proj", 3, run_id="unique")
+    assert len(cases) == 12
+    contexts = set()
+    for rep in range(3):
+        fresh = cases[rep * 2:rep * 2 + 2]
+        kernel = cases[6 + rep * 2:8 + rep * 2]
+        assert [c["prompt"] for c in fresh] == [c["prompt"] for c in kernel]
+        for lane in (fresh, kernel):
+            assert lane[0]["context_id"] == lane[1]["context_id"]
+            contexts.add(lane[0]["context_id"])
+            for turn, case in enumerate(lane):
+                assert case["expected_tools"] == ["execute_code"]
+                assert "forbidden_tools" not in case
+                for pattern in case["expected_patterns"]:
+                    assert pattern in answers[turn]
+                    assert pattern not in case["prompt"]
+    assert len(contexts) == 6
+
+
+@pytest.mark.parametrize("ratio,fresh_pass,kernel_pass,turns,expected", [
+    (0.80, (6, 6), (6, 6), 6, True),
+    (0.85, (6, 6), (6, 6), 6, True),
+    (0.90, (6, 6), (6, 6), 6, False),
+    (0.80, (6, 6), (5, 6), 6, False),
+    (0.80, (4, 6), (5, 6), 6, False),
+    (0.80, (6, 6), (6, 6), 5, False),
+    (0.80, (2, 2), (2, 2), 6, False),
+    (0.0, (6, 6), (6, 6), 6, False),
+])
+def test_kernel_thresholds(ratio, fresh_pass, kernel_pass, turns, expected, capsys):
+    fresh = _agg([{"input_tokens": 1000}] * 6)
+    kernel = _agg([{"input_tokens": int(1000 * ratio)}] * turns)
+    v = ptc_bench.kernel_verdict(fresh, kernel, fresh_pass, kernel_pass, 3)
+    assert v["graduated"] is expected
+    ptc_bench.print_kernel_verdict(v)
+    output = capsys.readouterr().out
+    assert f"VERDICT: {'PASS' if expected else 'FAIL'}" in output
+    for label, op, threshold, value, passed in v["checks"]:
+        assert f"{label}: need {op}{threshold:.2f}, measured {value:.4f} — {'PASS' if passed else 'FAIL'}" in output
+
+
+@pytest.mark.parametrize("telemetry_problem", [None, "missing", "duplicate", "unavailable"])
+def test_kernel_cli_routes_lanes_and_joins_only_current_run(tmp_path, monkeypatch, capsys, telemetry_problem):
+    import httpx
+
+    monkeypatch.setattr(ptc_bench, "__file__", str(tmp_path / "ptc_bench.py"))
+    monkeypatch.setattr("sys.argv", ["ptc_bench", "run", "--suite", "kernel", "--project", "proj",
+                                    "--reps", "3", "--fresh-base-url", "http://fresh",
+                                    "--kernel-base-url", "http://kernel", "--fresh-audit-path", "fresh.jsonl",
+                                    "--kernel-audit-path", "kernel.jsonl"])
+    telemetry = {}
+
+    def runner(command, *, env):
+        url = command[command.index("--base-url") + 1]
+        lane = url.removeprefix("http://")
+        assert env["AUDIT_PATH"] == f"{lane}.jsonl"
+        cases = json.loads(Path(command[command.index("--tasks-file") + 1]).read_text(encoding="utf-8"))
+        assert {c["category"] for c in cases} == {f"ptc-{lane}"}
+        Path(command[command.index("--out") + 1]).write_text(json.dumps({
+            "results": [{"category": c["category"], "passed": True} for c in cases]
+        }), encoding="utf-8")
+        telemetry[url] = [{"session_id": "a2a:" + c["context_id"],
+                           "input_tokens": 1000 if lane == "fresh" else 800} for c in cases]
+        telemetry[url].append({"session_id": f"a2a:ptc-eval-old-{lane}-0", "input_tokens": 999999})
+        return 0
+
+    def recent(url, **kwargs):
+        rows = telemetry[url.removesuffix("/api/telemetry/recent")]
+        if "kernel" in url:
+            if telemetry_problem == "missing":
+                rows.pop(0)
+            elif telemetry_problem == "duplicate":
+                rows[0] = rows[2]
+            elif telemetry_problem == "unavailable":
+                raise httpx.ConnectError("offline")
+        return httpx.Response(200, json={"turns": telemetry[url.removesuffix("/api/telemetry/recent")]},
+                              request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(ptc_bench.subprocess, "call", runner)
+    monkeypatch.setattr(httpx, "get", recent)
+    assert ptc_bench.main() == (1 if telemetry_problem else 0)
+    output = capsys.readouterr().out
+    assert f"VERDICT: {'FAIL' if telemetry_problem else 'PASS'}" in output
+    if not telemetry_problem:
+        assert "measured 0.8000 — PASS" in output
