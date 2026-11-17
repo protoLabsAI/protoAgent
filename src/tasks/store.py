@@ -15,6 +15,15 @@ Issue shape (the fields the console + tools use):
 auto-closes the task once every linked work item has finished, with an attributed
 ``close_reason`` ("bd-c8r5h merged (#5146)"). Other HTTP(S) URLs are informational
 and do not drive or block completion. Unlinked tasks behave exactly as before.
+
+Related-conversation links (P2b, ADR 0131) tie a task to the originals behind it —
+``{ref: "conv:<owner>/<context_id>", kind: "conversation", roles, owner, context_id,
+state, reason}`` — so a later phase can open the right transcript with its role
+(requester/coder/reviewer/related) and owner-agent identity. They are a provenance
+record, never an authorization input, and like ``url`` are informational for
+completion: they never block, drive or get resolved. One original (one ref) carries
+several roles as a deduped ``roles`` list; two owners sharing a context_id are two
+distinct links (owner is part of identity).
 """
 
 from __future__ import annotations
@@ -63,6 +72,17 @@ def _changed(issue_id: str, action: str, *, closed_now: bool = False) -> dict:
 VALID_STATUSES = ("open", "in_progress", "blocked", "waiting", "deferred", "closed")
 _VALID_TYPES = ("task", "bug", "feature", "chore", "epic")
 
+# Roles a related-conversation link may carry (ADR 0131 "Related conversations").
+# A role describes the original's relationship to the work — it is never a
+# credential or proof the thread can be steered. Anything else is rejected.
+_CONVERSATION_ROLES = ("requester", "coder", "reviewer", "related")
+
+# Link kinds that are informational for completion: they never block a task,
+# cause it to auto-close, or get resolved. ``url`` is the original (ADR 0129 Q1);
+# ``conversation`` (P2b) distinguishes a work-result link from the related
+# transcript — the latter never drives completion.
+_INFORMATIONAL_KINDS = ("url", "conversation")
+
 
 def _link_kind(ref: str) -> str:
     """Classify a link ref by shape: board card (``bd-…``), directive (``dir-…``),
@@ -105,8 +125,9 @@ def parse_links(value: Any) -> list[dict]:
 
 
 def _all_links_done(links: list[dict]) -> bool:
-    """Informational URLs neither block completion nor cause it on their own."""
-    work = [e for e in links if e.get("kind") != "url"]
+    """Informational links (URLs, related conversations) neither block completion
+    nor cause it on their own."""
+    work = [e for e in links if e.get("kind") not in _INFORMATIONAL_KINDS]
     return bool(work) and all(e.get("state") == "done" for e in work)
 
 
@@ -114,7 +135,9 @@ def _close_reason(links: list[dict]) -> str:
     """The attributed close reason an all-links-done task carries —
     "bd-c8r5h merged (#5146); job-2 finished" (shared by :meth:`TaskStore.resolve_link`
     and the link-replacement path in :meth:`TaskStore.update`)."""
-    return "; ".join(f"{e['ref']} {e.get('reason') or 'done'}" for e in links if e.get("kind") != "url")
+    return "; ".join(
+        f"{e['ref']} {e.get('reason') or 'done'}" for e in links if e.get("kind") not in _INFORMATIONAL_KINDS
+    )
 
 
 def _now() -> str:
@@ -255,17 +278,59 @@ class TaskStore:
         return t if t in _VALID_TYPES else "task"
 
     @staticmethod
+    def _conversation_entry(item: dict) -> dict:
+        """Normalize a related-conversation link (P2b). Identity is the
+        ``(owner, context_id)`` pair — both required, non-empty — and the stored
+        ``ref`` is derived from it (``conv:<owner>/<context_id>``) so equal context
+        strings on two owners cannot collide. ``role`` (or a ``roles`` list on the
+        round-trip path) must be one of :data:`_CONVERSATION_ROLES`; one original
+        carries several roles as a deduped ``roles`` list. Raises ``ValueError`` on
+        an unknown role or a missing owner/context_id."""
+        owner = str(item.get("owner") or "").strip()
+        context_id = str(item.get("context_id") or "").strip()
+        if not owner:
+            raise ValueError("conversation link requires a non-empty owner")
+        if not context_id:
+            raise ValueError("conversation link requires a non-empty context_id")
+        raw = item.get("roles") if item.get("roles") is not None else item.get("role")
+        candidates = raw if isinstance(raw, (list, tuple)) else [raw]
+        roles: list[str] = []
+        for candidate in candidates:
+            role = str(candidate or "").strip()
+            if role not in _CONVERSATION_ROLES:
+                raise ValueError(
+                    f"invalid conversation role {role!r}; expected one of {_CONVERSATION_ROLES}"
+                )
+            if role not in roles:
+                roles.append(role)
+        if not roles:
+            raise ValueError("conversation link requires at least one role")
+        return {
+            "ref": f"conv:{owner}/{context_id}",
+            "kind": "conversation",
+            "roles": roles,
+            "owner": owner,
+            "context_id": context_id,
+            "state": str(item.get("state") or "").strip(),
+            "reason": str(item.get("reason") or ""),
+        }
+
+    @staticmethod
     def _norm_links(links: Any) -> str:
         """Serialize caller links (a list of refs, or of ``{ref, …}`` dicts) to the
         stored JSON. Deduplicates by ref; empty/None → '' (no links). A dict entry
         keeps a ``done`` state + reason (the restore/round-trip path); anything else
-        starts ``open``."""
+        starts ``open``. A ``{kind: "conversation", …}`` dict is a related-conversation
+        link (P2b): the same original (same ref) submitted with a second role keeps one
+        entry carrying both roles — see :meth:`_conversation_entry`."""
         if not links:
             return ""
         out: list[dict] = []
-        seen: set[str] = set()
+        by_ref: dict[str, dict] = {}
         for item in links:
-            if isinstance(item, dict):
+            if isinstance(item, dict) and item.get("kind") == "conversation":
+                entry = TaskStore._conversation_entry(item)
+            elif isinstance(item, dict):
                 ref = str(item.get("ref") or "").strip()
                 entry = {
                     "ref": ref,
@@ -276,9 +341,18 @@ class TaskStore:
             else:
                 ref = str(item or "").strip()
                 entry = {"ref": ref, "kind": _link_kind(ref), "state": "open", "reason": ""}
-            if not entry["ref"] or entry["ref"] in seen:
+            if not entry["ref"]:
                 continue
-            seen.add(entry["ref"])
+            existing = by_ref.get(entry["ref"])
+            if existing is not None:
+                # A conversation original repeated with another role keeps one entry
+                # carrying both roles; every other dupe keeps first-wins.
+                if entry["kind"] == "conversation" and existing.get("kind") == "conversation":
+                    for role in entry["roles"]:
+                        if role not in existing["roles"]:
+                            existing["roles"].append(role)
+                continue
+            by_ref[entry["ref"]] = entry
             out.append(entry)
         return json.dumps(parse_links(out)) if out else ""
 
@@ -293,7 +367,32 @@ class TaskStore:
         old = {e["ref"]: e for e in parse_links(old_raw)}
         for entry in entries:
             prev = old.get(entry["ref"])
-            if prev is not None and prev.get("state") == "done" and entry["state"] != "done":
+            if prev is None:
+                continue
+            if prev.get("kind") == "conversation":
+                # One original, several roles: a replacement keeps the roles the task
+                # already carries and adds any new ones. A conversation's identity
+                # (owner/context_id, and the fact that it is a conversation) is fixed by
+                # its ref, so a replacement can NEVER change it or downgrade it to a work
+                # link — not even a bare string ref that happens to equal the conv ref
+                # (which _norm_links would otherwise classify as a kind-'job' link). Carry
+                # the stored conversation forward and union in any new roles.
+                roles = list(prev.get("roles") or [])
+                for role in entry.get("roles") or []:
+                    if role not in roles:
+                        roles.append(role)
+                merged = dict(prev)
+                merged["roles"] = roles
+                # A replacement that is itself a conversation dict may refresh its own
+                # state/reason; a bare/non-conversation ref leaves the provenance intact.
+                if entry.get("kind") == "conversation":
+                    if entry.get("state"):
+                        merged["state"] = entry["state"]
+                    if entry.get("reason"):
+                        merged["reason"] = entry["reason"]
+                entry.clear()
+                entry.update(merged)
+            elif prev.get("state") == "done" and entry["state"] != "done":
                 entry["state"] = "done"
                 entry["reason"] = str(prev.get("reason") or "")
         return entries
@@ -486,6 +585,10 @@ class TaskStore:
                 links = parse_links(row["links"])
                 hit = False
                 for entry in links:
+                    # Related-conversation links are informational — a terminal
+                    # work event never resolves them (P2b).
+                    if entry.get("kind") == "conversation":
+                        continue
                     if entry.get("ref") == ref and entry.get("state") != "done":
                         entry["state"] = "done"
                         entry["reason"] = reason

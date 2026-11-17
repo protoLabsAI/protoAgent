@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable
 
-from tasks.store import parse_links
+from tasks.store import _INFORMATIONAL_KINDS, parse_links
 
 # ── D9 constants (written as constants, not settings, for now — ADR 0129 "Defaults") ──
 #: An undriven ``in_progress`` task older than this (seconds) is stalled — 30 minutes.
@@ -110,7 +110,12 @@ def is_driven(task: dict, *, sources: Any) -> bool:
     alone — the session-scoped sources have nothing to match."""
     # An unresolved link is durable evidence and needs no live source — a link is
     # resolved when its state is ``done`` (tasks.store.resolve_link vocabulary).
-    if any(entry.get("kind") != "url" and entry.get("state") != "done" for entry in parse_links(task)):
+    # Informational links (plain URLs, related conversations — P2b) never drive a task:
+    # they carry no work to finish, so they can't make an idle task look driven.
+    if any(
+        entry.get("kind") not in _INFORMATIONAL_KINDS and entry.get("state") != "done"
+        for entry in parse_links(task)
+    ):
         return True
 
     session_id = str(task.get("session_id") or "").strip()

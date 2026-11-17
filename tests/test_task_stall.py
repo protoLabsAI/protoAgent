@@ -59,6 +59,24 @@ def test_links_drive_until_resolved(links, expected):
     assert is_driven(_task(links=links), sources=_sources()) is expected
 
 
+@pytest.mark.parametrize(
+    "links",
+    [
+        pytest.param('[{"ref": "https://example.com/notes", "kind": "url", "state": ""}]', id="url-only"),
+        pytest.param(
+            '[{"ref": "conv:codex/chat-1", "kind": "conversation", "roles": ["coder"],'
+            ' "owner": "codex", "context_id": "chat-1", "state": "", "reason": ""}]',
+            id="conversation-only",
+        ),
+    ],
+)
+def test_informational_links_never_drive_a_task(links):
+    # Plain URLs and related-conversation links (P2b) carry no work to finish; a task
+    # whose only links are informational has nothing driving it, so with no live signal
+    # it reads as undriven (and so can be found stalled).
+    assert is_driven(_task(links=links), sources=_sources()) is False
+
+
 def test_empty_session_is_judged_on_links_only():
     # No session to match → the session-scoped sources can't apply; a live turn in some
     # OTHER session must not count. Resolved link + blank session → undriven.
