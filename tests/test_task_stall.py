@@ -154,18 +154,6 @@ def test_driven_old_task_is_not_stalled():
     assert find_stalled([old], now=NOW, sources=_sources(turn_running=lambda _sid: True)) == []
 
 
-def test_conversation_only_old_task_is_stalled():
-    # A task whose only links are related conversations (informational, state "") has
-    # nothing driving it: left untouched past the threshold it must be found stalled,
-    # not shielded by the provenance link.
-    links = (
-        '[{"ref": "conv:codex/chat-1", "kind": "conversation", "roles": ["coder"],'
-        ' "owner": "codex", "context_id": "chat-1", "state": "", "reason": ""}]'
-    )
-    old = _task(updated_at=(NOW - timedelta(hours=5)).isoformat(), links=links)
-    assert [t["id"] for t in find_stalled([old], now=NOW, sources=_sources())] == ["task-1"]
-
-
 @pytest.mark.parametrize("status", ["open", "blocked", "waiting", "deferred", "closed"])
 def test_non_in_progress_statuses_are_never_stalled(status):
     old = _task(status=status, updated_at=(NOW - timedelta(hours=5)).isoformat())

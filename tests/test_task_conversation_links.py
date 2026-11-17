@@ -89,11 +89,12 @@ def test_same_original_two_roles_is_one_link_within_one_create(store):
         links=[
             {"kind": "conversation", "role": "requester", "owner": "vera", "context_id": "ctx-7"},
             {"kind": "conversation", "role": "reviewer", "owner": "vera", "context_id": "ctx-7"},
+            {"kind": "conversation", "role": "requester", "owner": "vera", "context_id": "ctx-7"},  # a repeat
         ],
     )
     convs = _conv(row)
-    assert list(convs) == ["conv:vera/ctx-7"]  # one entry, not two
-    assert convs["conv:vera/ctx-7"]["roles"] == ["requester", "reviewer"]
+    assert list(convs) == ["conv:vera/ctx-7"]  # one entry, not three
+    assert convs["conv:vera/ctx-7"]["roles"] == ["requester", "reviewer"]  # deduped, order kept
 
 
 def test_same_original_second_role_added_via_update_keeps_both(store, db_path):
@@ -111,40 +112,22 @@ def test_same_original_second_role_added_via_update_keeps_both(store, db_path):
     assert convs["conv:vera/ctx-7"]["roles"] == ["requester", "coder"]  # old role kept, new added
 
 
-def test_duplicate_role_is_not_duplicated(store):
-    row = store.create(
-        "same role twice",
-        links=[
-            {"kind": "conversation", "role": "coder", "owner": "codex", "context_id": "ctx-1"},
-            {"kind": "conversation", "role": "coder", "owner": "codex", "context_id": "ctx-1"},
-        ],
-    )
-    assert _conv(row)["conv:codex/ctx-1"]["roles"] == ["coder"]
-
-
 # ── r3: invalid role / missing owner or context_id raises ────────────────────────
 
 
-def test_unknown_role_raises(store):
-    with pytest.raises(ValueError, match="role"):
-        store.create("bad", links=[{"kind": "conversation", "role": "owner", "owner": "a", "context_id": "c"}])
-
-
-def test_missing_owner_raises(store):
-    with pytest.raises(ValueError, match="owner"):
-        store.create("bad", links=[{"kind": "conversation", "role": "coder", "owner": "", "context_id": "c"}])
-
-
-def test_missing_context_id_raises(store):
-    with pytest.raises(ValueError, match="context_id"):
-        store.create("bad", links=[{"kind": "conversation", "role": "coder", "owner": "a", "context_id": "  "}])
-
-
-def test_empty_roles_list_raises(store):
-    # A conversation link must carry at least one role (the card's rule); an empty
-    # ``roles`` list is zero roles, not a valid provenance record.
-    with pytest.raises(ValueError, match="role"):
-        store.create("bad", links=[{"kind": "conversation", "roles": [], "owner": "a", "context_id": "c"}])
+@pytest.mark.parametrize(
+    ("link", "match"),
+    [
+        # Unknown role, and (the card's rule) an empty ``roles`` list — zero valid roles.
+        pytest.param({"role": "owner", "owner": "a", "context_id": "c"}, "role", id="unknown-role"),
+        pytest.param({"roles": [], "owner": "a", "context_id": "c"}, "role", id="no-roles"),
+        pytest.param({"role": "coder", "owner": "", "context_id": "c"}, "owner", id="missing-owner"),
+        pytest.param({"role": "coder", "owner": "a", "context_id": "  "}, "context_id", id="missing-context"),
+    ],
+)
+def test_invalid_conversation_link_raises(store, link, match):
+    with pytest.raises(ValueError, match=match):
+        store.create("bad", links=[{"kind": "conversation", **link}])
 
 
 def test_unknown_role_on_update_raises_and_leaves_row_unchanged(store):
