@@ -147,6 +147,11 @@ async def test_wrong_recipient_and_overbroad_release(tmp_path, kind):
         yield "deliver_to_requester", {"text": REPLY, "audience": "requester"}
         delivery_id = await projection.prepare_result(RESULT)  # seal the public bytes; selection is now immutable
         assert await projection.prepare_result(RESULT) == delivery_id
+        # Use a valid, still-prepared delivery so neither ID mismatch nor replay rejection masks the binding gate.
+        for forged in _forged_bindings(projection.binding):
+            attacker = RequesterProjection(store, projection.context, projection.queue, forged, op)
+            attacker.private_ref = ref
+            assert not await attacker.deliver_to_requester(delivery_id)
         yield "deliver_to_requester", delivery_id
         yield "deliver_to_requester", delivery_id  # a retry publishes no second artifact
         yield "done", REPLY
@@ -208,12 +213,9 @@ async def test_wrong_recipient_and_overbroad_release(tmp_path, kind):
     await sender.send_notification(task_id, artifact)
     assert pushes == original_pushes
     assert not {SECOND_HOOK, STOLEN_HOOK}.intersection(url for url, _ in pushes)
-    # r1 / r4: binding forgeries and unbound ids cannot create or redirect a release.
+    # Persisted requester bindings cannot be replaced after delivery either.
     projection = projections[0]
     for forged in _forged_bindings(projection.binding):
-        attacker = RequesterProjection(store, projection.context, projection.queue, forged, op)
-        attacker.private_ref = ref
-        assert not await attacker.deliver_to_requester("unbound")
         with pytest.raises(PermissionError):
             await store.bind_requester(got, forged, requester)
     outcome = next(o for o in outcomes if o.state == "completed")
