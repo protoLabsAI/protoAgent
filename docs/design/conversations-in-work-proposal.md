@@ -627,8 +627,9 @@ decisions or the decision-1 clarification.
 **P1a–P1g below are authorized proof slices (Josh, 2026-11-16); P1h stays
 proposed, needs Josh's go.** On 2026-11-16 Josh said "then we are ready for
 phase 1", authorizing the bounded proof slices. These are small board slices, not
-permission to go past them. The old Phase 1 row is refined by these gates; Phases
-2–6 remain unauthorized. Start only with the bounded proof slices needed to
+permission to go past them. The old Phase 1 row is refined by these gates; Phase 2
+was authorized separately (Josh, 2026-11-17; see Proposed small phases); Phases
+3–6 remain unauthorized. Start only with the bounded proof slices needed to
 execute the next section; production integration, migration and UI enablement
 (P1h) wait for the proof gate's evidence and Josh's CONTINUE decision. A green run
 alone does not authorize further phases.
@@ -1086,12 +1087,23 @@ the only navigation that may precede it.
 | --- | --- | --- |
 | 0. Contracts and isolation prototype | Settle every "Open: settled in Phase 0" row in the decision map. Run a **time-boxed isolation prototype** on the real A2A seams comparing two enforcement models: the agent deciding each output's audience, versus an explicit deliver-to-requester action. GetTask returns whole task history and the peer protocol has no private-message notion, so isolation may prove infeasible as designed. Refresh board/PR overlap. | The prototype ends in an explicit **continue-or-revise** decision. Named unsupported states; no implementation inferred from visual sign-off. |
 | 1. Audience isolation | Introduce the human-operator identity (decision 1) and enforce the decision 2 contract in existing transport/store seams, including derived content (gist/digest/harvest/facts) and observability per the Phase 0 ruling. Depends on Phase 0 deciding "continue"; precedes any steering from Work-opened originals. Named scenario: after a private steer, the peer still continues its own thread (ownership already fixed by #5380; privacy of the operator's turns remains to prove). | Adversarial stream/poll/push/history/tool-output tests with preexisting peer handles, including peers holding operator-tier credentials; authorized result delivery still works. |
-| 2. Durable work relationships | Add request correlation, role-labelled original links and idempotent promotion to existing stores. Can be designed with 1; no interactive UI enabled. | Retry/restart/multiple-job fixtures prove identity, provenance and counts; owner authorization rejects forged links. |
+| 2. Durable work relationships | Add request correlation, role-labelled original links and idempotent promotion to existing stores. Can be designed with 1; no interactive UI enabled. **Authorized (Josh, 2026-11-17).** Store/API only; no interactive UI. | Retry/restart/multiple-job fixtures prove identity, provenance and counts; owner authorization rejects forged links. |
 | 3. Retention and continuation | Implement the decision 3 sweep invariant for all linked originals; reconcile references and closure; validate checkpoint metadata binding and #5365 interaction; apply the Phase 0 stall-release rule. Depends on 2. | Full-history and shared-link tests across TTL boundaries and restarts; missing checkpoint fails safely; × delete shows unavailable in Work. |
 | 4. Original-chat navigation | Extend openSourceChat/hydration/registry with owner routing, durable reopen, capability checks and return-to-Work state. Depends on 2–3; the composer additionally depends on 1. | Fresh-client, reconnect, owner switch, missing data and parked-resume scenarios pass without a new chat. |
 | Optional milestone: read-only Open in chat | Open the original in main Chat with the composer disabled. Depends **only on phases 2–4**: isolation matters only once the operator can send. Accept or reject this milestone in Phase 0. Removing From others still waits for a routine-thread home. | Read-only open preserves identity, history and return-to-Work; no send path exists. |
 | 5. Work presentation and migration | Add conversation rows (capability table), request promotion presentation, replace Open conversation / Continue in a new chat entry points per decision 5, and update the stale docs listed under migration. Depends on 4 and approved routine/completed discovery. | Desktop/phone/accessibility review plus focused integration tests; old links still resolve safely. |
 | 6. Remote and non-A2A participants | Upgrade unavailable capability rows (remote A2A, ACP coder, board coder, plugin reviewer, Discord) only as their transcripts become durable and owner guarantees are verified. | Per-type capability evidence; unsupported rows stay truthfully unavailable. |
+
+**Phase 2 authorized (Josh, 2026-11-17).** Josh said
+"go ahead and get pe going on phase 2". This authorizes Phase 2 only: request
+correlation, role-labelled original links and idempotent promotion added to the
+existing stores as additive versioned metadata/columns with an idempotent
+backfill (see Migration, rollout and rollback). No interactive UI is enabled: no
+composer, no Open in chat, no Work presentation changes (phases 4–5). P1h,
+Phases 3–6, the Started by others group and removing the From others tab stay
+unauthorized. The open decision-map rows Phase 2 touches, including "One request
+producing several jobs" and actionable request versus routine conversation, stay
+open; Phase 2 slices do not decide them in code.
 
 **Phase 0 outcome (2026-11-16): REVISE** — see [Phase 0 outcome](#phase-0-outcome).
 Phase 0 ended in revise, not continue, so **Phase 1 does not begin as written**.
