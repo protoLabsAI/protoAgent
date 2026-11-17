@@ -1,1 +1,0 @@
-- **Private conversation storage proof slice.** Refs #5401. Add dormant, versioned private partitions to task records with human-operator-only envelope reads, public history projections, and fail-closed deletion and version handling. No private-steering route or data migration is enabled.
