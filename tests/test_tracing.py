@@ -1179,6 +1179,81 @@ async def test_an_incognito_session_records_no_content(session_langfuse):
     assert (tool["name"], tool["input"], tool["output"]) == ("tool:lookup", None, None)
 
 
+# ── Private-partition content suppression (ADR 0131 §5, P1g.1) ────────────────
+#
+# A conversation with a private partition records only content-free structure/metrics
+# until its composed input is VERIFIED public — and unlike incognito the suppression
+# follows the retained source, so a later ordinary turn (incognito=False) cannot clear
+# it. The dormant boundary is bound here exactly as the fleet-export / gist slices bind it.
+
+
+def _bind_private_source(monkeypatch, *, traceable=False):
+    """Bind the dormant public-source reader so ``chat-private`` reads as a partitioned
+    conversation (content traceable only once verified public) and everything else as an
+    ordinary, unpartitioned conversation."""
+    from langchain_core.messages import HumanMessage
+
+    from graph import public_memory
+
+    source = public_memory.PublicSource(
+        version="retained-2", messages=(HumanMessage(content="Public request"),), traceable=traceable
+    )
+    monkeypatch.setattr(public_memory, "_source_reader", lambda sid: source if sid == "chat-private" else None)
+
+
+async def test_a_private_partition_records_no_content_now_or_on_a_later_public_turn(session_langfuse, monkeypatch):
+    tracing, span = session_langfuse
+    _bind_private_source(monkeypatch)
+
+    # The private turn itself: input, tool args/result and the answer are all suppressed.
+    async with tracing.trace_session("chat-private", name="chat", input="PRIVATE_STEER_CANARY"):
+        assert tracing.io_allowed() is False
+        tracing.trace_tool_call("lookup", {"q": "PRIVATE_ARG_CANARY"}, "PRIVATE_RESULT_CANARY", 5, True)
+        tracing.set_session_output("PRIVATE_REPLY_CANARY")
+    # A later ORDINARY turn (incognito=False) on the same partitioned conversation stays
+    # suppressed — the partition can't be cleared to re-expose retained private state (#5403).
+    async with tracing.trace_session("chat-private", name="chat", input="PRIVATE_LATER_CANARY", incognito=False):
+        assert tracing.io_allowed() is False
+        tracing.trace_tool_call("lookup", {"q": "PRIVATE_LATER_ARG"}, "PRIVATE_LATER_RESULT", 5, True)
+        tracing.set_session_output("PRIVATE_LATER_REPLY")
+
+    tool = tracing._langfuse.start_observation.call_args.kwargs
+    assert (tool["input"], tool["output"]) == (None, None)
+    # No canary reached ANY recorded span field (session input/output or tool args/result).
+    blob = repr(span.update.call_args_list) + repr(tracing._langfuse.start_observation.call_args_list)
+    assert "CANARY" not in blob
+
+
+async def test_an_unpartitioned_conversation_is_traced_unchanged(session_langfuse, monkeypatch):
+    """AC#3: with no private partition the content paths are byte-for-byte the pre-slice ones."""
+    from graph import public_memory
+
+    tracing, span = session_langfuse
+    monkeypatch.setattr(public_memory, "_source_reader", lambda sid: None)
+
+    async with tracing.trace_session("chat-public", name="chat", input="status?"):
+        assert tracing.io_allowed() is True
+        tracing.trace_tool_call("lookup", {"q": "ok"}, "found", 5, True)
+        tracing.set_session_output("Three open.")
+
+    span.update.assert_any_call(input="status?")
+    span.update.assert_any_call(output="Three open.")
+    assert tracing._langfuse.start_observation.call_args.kwargs["input"] == {"q": "ok"}
+
+
+async def test_a_verified_public_partition_can_be_traced_again(session_langfuse, monkeypatch):
+    """The partition is not permanent incognito: once the trusted reader verifies the
+    composed input is public (``traceable``), the public turn records content again."""
+    tracing, span = session_langfuse
+    _bind_private_source(monkeypatch, traceable=True)
+
+    async with tracing.trace_session("chat-private", name="chat", input="now public?"):
+        assert tracing.io_allowed() is True
+        tracing.set_session_output("verified public")
+
+    span.update.assert_any_call(output="verified public")
+
+
 async def test_session_input_is_capped(session_langfuse):
     tracing, span = session_langfuse
     big = "x" * (tracing.MAX_IO_CHARS + 5)

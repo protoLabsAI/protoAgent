@@ -1016,8 +1016,29 @@ def update_span(span: Any, **fields: Any) -> None:
 
 
 def io_allowed() -> bool:
-    """False inside an incognito turn — callers then send no message content."""
-    return not _io_suppressed_ctx.get()
+    """False inside an incognito turn, or for any call that reads a conversation's private
+    partition — callers then record no content, only content-free structure/metrics.
+
+    The private-partition gate (ADR 0131 §5, amended by bd-jo3v6 — P1g.1) routes through the
+    one shared public-source boundary (``graph.public_memory.content_public``): a conversation
+    with no private partition is traced exactly as before, while a partitioned one records no
+    content until its composed input — including memory — is verified public, so a later
+    ordinary turn with ``incognito=False`` cannot re-expose retained private material (#5403).
+    This is the single choke point every content path consults (session input/output, tool
+    args/result, the fleet generation span, and the background/terminal span writers), so
+    suppressing here suppresses all of them, nested and background spans included.
+
+    The boundary is dormant in production — its source reader is unbound, so every
+    conversation reads unpartitioned and this stays ``not incognito``. If the boundary module
+    is unavailable at all (an isolated import of this module), behaviour is likewise unchanged.
+    """
+    if _io_suppressed_ctx.get():
+        return False
+    try:
+        from graph.public_memory import content_public
+    except Exception:  # noqa: BLE001 — boundary unavailable → unchanged (no partitions present)
+        return True
+    return content_public(current_session_id())
 
 
 def set_session_output(output: Any) -> None:
