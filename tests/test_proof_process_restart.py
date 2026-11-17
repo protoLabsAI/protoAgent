@@ -62,6 +62,14 @@ def test_killed_process_preserves_partition_and_reservation(proof):
     assert "public receipt" in report["peer_task"] and "CANARY" not in report["peer_task"]
     assert not report["public"] and report["unresolved"] is None and report["sends"] == []
     assert report["denied"] == (caller != "enrolled-console")
+    # P1a "no operator-tier shortcut": identity is the verified principal kind, SEPARATE from
+    # the operator tier. The fleet service token and an agent-kind device are operator TIER yet
+    # non-operator principals, so their rejection above is a real principal-kind restriction —
+    # not an elevated-tier free pass. Only a device-kind pairing reads as the human operator.
+    assert report["principal_kind"] == {"federation": "federation", "fleet-service": "fleet-service",
+        "paired-agent": "agent-device", "enrolled-console": "device"}[caller]
+    assert report["tier"] == ("federation" if caller == "federation" else "operator")
+    assert report["denied"] == (report["principal_kind"] not in ("shared-operator-bearer", "device"))
     assert rec["audience"] == "private" and rec["reserved"] == (point != "accepted")
     effects = (base / "effects").read_text().splitlines() if (base / "effects").exists() else []
     assert effects == (["effect"] if point == "claimed" else [])

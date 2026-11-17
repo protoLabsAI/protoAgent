@@ -15,23 +15,49 @@ from a2a.types import GetTaskRequest
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import interrupt
 
-from a2a_impl import private_intake as pi, segment_schedule as ss, stores
+from a2a_impl import auth, private_intake as pi, segment_schedule as ss, stores
 from graph import thread_ids
 from graph.checkpointer import build_sqlite_checkpointer
 from runtime.state import STATE
+from security import devices
 from tests.test_a2a_hitl_parked_routing import _handler, _msg
 
 chat = importlib.import_module("server.chat")
 SESSION = "restart-proof"
 THREAD = "proj:atlas:restart-proof"
 SECRET = "PRIVATE-RESTART-CANARY"
-KINDS = {"federation": "federation", "fleet-service": "fleet-service",
-         "paired-agent": "agent-device", "enrolled-console": "device"}
+FLEET_TOKEN = "proof-fleet-service-token"
+FED_TOKEN = "proof-federation-token"
 
 
-def context(caller):
-    return ServerCallContext(state={"principal_kind": KINDS[caller],
-                                   "trust_tier": "federation" if caller == "federation" else "operator",
+def identities():
+    """Classify every caller through the REAL auth ladder (``a2a_impl.auth._classify_token``)
+    and the device registry, exactly as P1a prescribes ("propagate a verified principal kind
+    from ``_classify_token``/the device record, separate from the operator tier").
+
+    This is the whole point of "no operator-tier shortcut": nothing here hand-assigns a tier.
+    The fleet service token and an ``agent``-kind device each authenticate to the OPERATOR
+    trust tier yet a non-operator principal kind, so the private-partition rejection the proof
+    asserts rests on the verified principal kind (``is_human_operator``), not on an elevated
+    tier. A ``device``-kind pairing is the only non-shared-bearer credential that reads as the
+    human operator; federation is its own tier."""
+    auth.set_bearer_token(None)  # no shared bearer: the ladder must fall through to each real credential
+    auth.set_fleet_token(FLEET_TOKEN)
+    auth.set_federation_token(FED_TOKEN)
+    _, device_token = devices._register("enrolled console", devices.KIND_DEVICE)
+    _, agent_token = devices._register("paired agent", devices.KIND_AGENT)
+    return {"federation": FED_TOKEN, "fleet-service": FLEET_TOKEN,
+            "paired-agent": agent_token, "enrolled-console": device_token}
+
+
+def context(caller, tokens):
+    cred = auth._classify_token(tokens[caller])
+    assert cred is not None, f"{caller} credential did not authenticate"
+    # trust_tier + principal_kind are exactly what A2AAuthMiddleware stamps on request.state
+    # and TierCallContextBuilder copies into the call context; requester_principal binds the
+    # dormant acceptance path (stores.bind_requester / requester_binding).
+    return ServerCallContext(state={"principal_kind": cred.principal_kind,
+                                   "trust_tier": cred.tier,
                                    "requester_principal": f"device:{caller}"})
 
 
@@ -46,7 +72,8 @@ async def run(base, point, caller, recover):
     engine = stores.make_sqlite_engine(str(base / "tasks.db"))
     store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
     await store.initialize()
-    human, requester = context("enrolled-console"), context(caller)
+    tokens = identities()
+    human, requester = context("enrolled-console", tokens), context(caller, tokens)
     STATE.thread_id_resolver = lambda md, sid: f"proj:{md.get('project', 'none')}:{sid}"
     cfg = {"configurable": {"thread_id": THREAD}}
 
@@ -148,6 +175,7 @@ async def run(base, point, caller, recover):
                 next=await ss.next_dispatch(store, SESSION, human), transcript=record.private_payload,
                 visible=visible.private_payload if visible else None, public=public is not None,
                 denied=denied, sends=sends, unresolved=unresolved,
+                tier=requester.state["trust_tier"], principal_kind=requester.state["principal_kind"],
                 metadata=thread_ids.resolver_metadata(SESSION),
                 resolved=chat._resolve_turn_thread_id({"private_input": True}, SESSION),
                 checkpoint=snapshot.config["configurable"]["thread_id"],

@@ -8,8 +8,9 @@ exactly what the stall guard (``a2a_impl.executor._stall_guarded``) measures.
 
 These drive the REAL A2A executor over the REAL chat driver
 (``server.chat._chat_langgraph_stream``, which takes the per-thread lock and records the
-holder); only the graph — the model boundary — is a scripted fake, with real sleeps and
-a shrunk stall window. They pin both sides:
+holder); only the graph — the model boundary — is a scripted fake. The scheduler
+integration uses a virtual stall clock; the other cases use real sleeps and a shrunk
+stall window. They pin both sides:
 
 * a turn queued for longer than the window survives and runs once the thread frees;
 * a head-of-line turn that really is wedged is still failed (by its own guard), and the
@@ -33,6 +34,7 @@ from a2a.types import Message, Part, Role, SendMessageRequest
 from a2a_impl.executor import ProtoAgentExecutor, TurnOutcome, set_terminal_hook
 from graph.config import LangGraphConfig
 from tests._turn_driver_fakes import ScriptedGraph, text
+from tests._virtual_clock import VirtualClock
 
 chat_mod = importlib.import_module("server.chat")
 
@@ -43,10 +45,18 @@ _GAP = _STALL / 6
 
 
 class _Sleep:
-    """Script step: the model call takes ``seconds`` (real time) before its next event."""
+    """Script step: the model call takes ``seconds`` on the supplied or real clock."""
 
-    def __init__(self, seconds: float):
+    def __init__(self, seconds: float, *, clock: VirtualClock | None = None):
         self.seconds = seconds
+        self.sleep = clock.sleep if clock is not None else asyncio.sleep
+
+
+class _Wait:
+    """Keep the thread occupied until the test releases it."""
+
+    def __init__(self, event: asyncio.Event):
+        self.event = event
 
 
 class _Signal:
@@ -64,7 +74,9 @@ class _TimedGraph(ScriptedGraph):
         script = self.streams.pop(0)
         for item in script:
             if isinstance(item, _Sleep):
-                await asyncio.sleep(item.seconds)
+                await item.sleep(item.seconds)
+            elif isinstance(item, _Wait):
+                await item.event.wait()
             elif isinstance(item, _Signal):
                 item.event.set()
             else:
@@ -219,9 +231,14 @@ async def test_a_fire_into_a_busy_thread_runs_exactly_once_after_it_frees(env, t
 
     install, outcomes = env
     holding = asyncio.Event()
-    job_turn = [_Signal(holding)]
-    for i in range(30):  # ~5 stall windows of healthy work, far past the fire timeout
-        job_turn += [_Sleep(_GAP), text("r1", f"merge step {i} ")]
+    release = asyncio.Event()
+    clock = VirtualClock().install(monkeypatch)
+    # Hold the thread until the scheduler's HTTP wait expires, then stream through
+    # five virtual stall windows. CI scheduling delays must not stall healthy work
+    # or let the holder finish before the scheduled fire has joined its queue.
+    job_turn = [_Signal(holding), _Wait(release)]
+    for i in range(30):
+        job_turn += [_Sleep(_GAP, clock=clock), text("r1", f"merge step {i} ")]
     graph = install(job_turn, [text("r2", "the scheduled check ran")])
 
     app = build_a2a_app(chat_mod._chat_langgraph_stream, stall_timeout_provider=lambda: _STALL)
@@ -281,6 +298,8 @@ async def test_a_fire_into_a_busy_thread_runs_exactly_once_after_it_frees(env, t
         assert "still running after" in caplog.text
         assert "delivery unknown" not in caplog.text
         assert s._claim_due_jobs(datetime.now(UTC)) == []  # cannot fire a second time meanwhile
+        assert len(graph.stream_calls) == 1  # the fire is still behind the holder
+        release.set()
 
         for _ in range(400):
             await s._tick()
