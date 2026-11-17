@@ -914,3 +914,251 @@ def test_relevant_digest_falls_back_to_newest_when_fts_finds_nothing(tmp_path, h
     ids = [e.session_id for e in res.entries]
     assert "chat-open" in ids  # the newest OPEN chat survived the fallback
     assert "chat-9" in ids  # the closed chat still rides along, marked closed
+
+
+# ── P1f.2 Conversations in Work: public-only harvest, archives and facts (ADR 0131 §5) ──
+#
+# A conversation that had private operator steering is harvested on a LATER ordinary turn
+# (incognito already cleared), with private canaries retained in its checkpoint and a
+# legacy private archive on disk. Every derived reader — summary, closed-chat card,
+# compaction archive, shared-history search, fact recall — must learn only from the public
+# part. These are the executed cases #5403 lacked (proof matrix row "Every derived reader
+# on a later ordinary turn").
+
+_STEER_CANARY = "STEERSECRET acquire TargetCo before Friday"
+_REPLY_CANARY = "PRIVATEREPLY understood, keeping the TargetCo plan quiet"
+_ARCHIVE_CANARY = "LEGACYSECRET the TargetCo valuation is 4.2B"
+
+
+def _private(message):
+    """Stamp a checkpoint message as belonging to the private partition (ADR 0131 §5)."""
+    from graph.conversation_audience import PRIVATE_AUDIENCE
+
+    message.additional_kwargs["audience"] = PRIVATE_AUDIENCE
+    return message
+
+
+def _public(message):
+    from graph.conversation_audience import PUBLIC_AUDIENCE
+
+    message.additional_kwargs["audience"] = PUBLIC_AUDIENCE
+    return message
+
+
+def test_harvest_excludes_private_canaries_from_every_derived_reader(tmp_path, history_store):
+    """Proof slice: a later public turn (incognito=False) with retained private messages,
+    a private reply, and a legacy private archive. The canaries must be absent from the
+    summary, the closed-chat card, the compaction archive, shared-history search, fact
+    recall and facts — while the public part still flows through."""
+    import json as _json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from knowledge.memories import MemoryStore
+
+    from graph.conversation_audience import PRIVATE_AUDIENCE, PUBLIC_AUDIENCE
+    from graph.conversation_harvest import archive_payload
+    from graph.middleware.memory import memory_path, session_filename
+
+    session_id = "chat-9"
+    # A legacy private archive span, retained in the private partition on disk.
+    history_store.add(
+        f"[Conversation archive] {_ARCHIVE_CANARY}",
+        kind="archive",
+        session_id=session_id,
+        namespace=f"chat-archive:{session_id}",
+        audience=PRIVATE_AUDIENCE,
+    )
+    # A public archive span from the same chat — this one DOES belong in a public summary.
+    history_store.add(
+        "[Conversation archive] Earlier we compared teal and slate palettes.",
+        kind="archive",
+        session_id=session_id,
+        namespace=f"chat-archive:{session_id}",
+        audience=PUBLIC_AUDIENCE,
+    )
+
+    messages = [
+        HumanMessage(content="help me pick a theme for the dashboard"),
+        _private(HumanMessage(content=_STEER_CANARY)),
+        _private(AIMessage(content=f"<output>{_REPLY_CANARY}</output>")),
+        AIMessage(content="<output>A teal palette fits the dashboard.</output>"),
+    ]
+    saver = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
+        "channel_values": {
+            "messages": messages,
+            "session_id": session_id,
+            "incognito": False,  # the later ordinary turn cleared it — protection must not rely on it
+            "operator_chat_turn": True,
+        },
+    })))
+
+    seen_transcripts = []
+
+    async def summarize(transcript, config):
+        seen_transcripts.append(transcript)
+        return "The operator wants a teal dashboard theme."
+
+    async def facts(transcript, config):  # must never run — provenance is mixed/unknown
+        raise AssertionError("fact extraction must be disabled for mixed/unknown provenance")
+
+    memory = MemoryStore(tmp_path / "agent.db")
+    cid = asyncio.run(harvest_thread(
+        "a2a:chat-9", checkpointer=saver, knowledge_store=None, history_store=history_store,
+        memory_store=memory, config=SimpleNamespace(knowledge_facts=True),
+        summarizer=summarize, fact_extractor=facts, raise_on_error=True,
+    ))
+
+    # The public archive + public messages reached the summarizer; no canary did.
+    transcript = "".join(seen_transcripts)
+    assert "teal and slate palettes" in transcript and "teal palette fits" in transcript
+    for canary in (_STEER_CANARY, _REPLY_CANARY, _ARCHIVE_CANARY):
+        assert canary not in transcript
+
+    # Summary row — clean, and stamped with the public projection lineage.
+    summary = history_store.get(cid)
+    assert summary.kind == "summary" and summary.audience == PUBLIC_AUDIENCE and summary.source_version == 1
+    for canary in (_STEER_CANARY, _REPLY_CANARY, _ARCHIVE_CANARY):
+        assert canary not in summary.content
+
+    # Shared-history search never surfaces the private archive, nor any new canary. A
+    # restart (reopen the store from disk) keeps the exclusion — the columns persist.
+    for store in (history_store, HistoryStore(history_store.path)):
+        # Single FTS5 tokens — history search takes FTS syntax, not a raw phrase.
+        for token in ("STEERSECRET", "PRIVATEREPLY", "LEGACYSECRET", "TargetCo"):
+            assert store.search(token) == []
+        # The public read hides the private archive; the public archive is still listed.
+        public_arcs = [a.content for a in store.list_for_session(session_id, kinds=["archive"])]
+        assert public_arcs == ["[Conversation archive] Earlier we compared teal and slate palettes."]
+        # The private archive is retained — a console reader (include_private) still sees both.
+        assert len(store.list_for_session(session_id, kinds=["archive"], include_private=True)) == 2
+
+    # Closed-chat digest card — topic + gist come from the public part only.
+    import os as _os
+
+    closed_file = _os.path.join(memory_path(), "closed", session_filename(session_id))
+    card = _json.loads(open(closed_file, encoding="utf-8").read())
+    assert card["audience"] == PUBLIC_AUDIENCE and card["source_version"] == 1
+    for canary in (_STEER_CANARY, _REPLY_CANARY, _ARCHIVE_CANARY):
+        assert canary not in _json.dumps(card)
+
+    # Compaction archive of the same mixed checkpoint drops the private messages.
+    content, kwargs = archive_payload(messages, session_id=session_id, thread_id="a2a:chat-9", cause="auto-compaction")
+    assert kwargs["audience"] == PUBLIC_AUDIENCE and kwargs["source_version"] == 1
+    assert "teal palette fits" in content
+    for canary in (_STEER_CANARY, _REPLY_CANARY):
+        assert canary not in content
+
+    # Facts / recall — extraction was disabled (mixed provenance) so nothing landed.
+    assert memory.list(kind="fact") == []
+    for canary in (_STEER_CANARY, _REPLY_CANARY, _ARCHIVE_CANARY):
+        assert memory.search(canary) == []
+
+
+def test_harvest_learns_from_public_part_of_clean_partition(tmp_path, history_store):
+    """The goal of the slice: a FULLY-labelled partition (every message carries its
+    audience, no unknown spans) has clean provenance, so facts are still extracted — from
+    the public part only. Memory keeps working; the private steer never becomes a fact."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from knowledge.memories import MemoryStore
+
+    from graph.conversation_audience import PUBLIC_AUDIENCE
+
+    messages = [
+        _public(HumanMessage(content="my favorite color is teal")),
+        _private(HumanMessage(content=_STEER_CANARY)),
+        _public(AIMessage(content="<output>Noted — teal it is.</output>")),
+    ]
+    saver = SimpleNamespace(aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={
+        "channel_values": {"messages": messages, "session_id": "chat-7", "operator_chat_turn": True},
+    })))
+
+    async def summarize(transcript, config):
+        assert _STEER_CANARY not in transcript
+        return "The operator prefers teal."
+
+    async def facts(transcript, config):
+        assert _STEER_CANARY not in transcript  # the extractor only ever sees public input
+        return ["The user's favorite color is teal."]
+
+    memory = MemoryStore(tmp_path / "agent.db")
+    cid = asyncio.run(harvest_thread(
+        "a2a:chat-7", checkpointer=saver, knowledge_store=None, history_store=history_store,
+        memory_store=memory, config=SimpleNamespace(knowledge_facts=True),
+        summarizer=summarize, fact_extractor=facts, namespace="proj-x", raise_on_error=True,
+    ))
+    assert cid is not None
+    stored = memory.list(kind="fact", provenance="extracted", scope="proj-x")
+    assert len(stored) == 1 and "teal" in stored[0].content
+    assert stored[0].audience == PUBLIC_AUDIENCE  # public lineage carried into storage
+    assert _STEER_CANARY not in stored[0].content
+
+
+def test_private_fact_never_supersedes_or_merges_with_a_shared_fact(tmp_path):
+    """ADR 0131 §5: a private-lineage fact may neither supersede nor dedup-merge into a
+    shared one. The shared fact stays live; the private revision is kept separate."""
+    from knowledge.memories import MemoryStore
+
+    from graph.conversation_audience import PRIVATE_AUDIENCE, PUBLIC_AUDIENCE
+    from graph.memory_facts import consolidate_and_store
+
+    memory = MemoryStore(tmp_path / "agent.db")
+    shared_id = memory.add(
+        "The user prefers the teal theme", kind="fact", provenance="extracted",
+        subject="theme", audience=PUBLIC_AUDIENCE,
+    )
+
+    # A private fact on the SAME subject must not retire the shared row.
+    private_id, replaced = memory.add_with_supersession(
+        "SECRET the user actually prefers crimson", kind="fact", provenance="extracted",
+        subject="theme", audience=PRIVATE_AUDIENCE,
+    )
+    assert replaced == []
+    live_ids = {m.id for m in memory.list(kind="fact")}
+    assert shared_id in live_ids and private_id in live_ids  # both live — no cross-bucket supersession
+    assert memory.get(shared_id).superseded_by is None
+
+    # A private fact near-identical to the shared one must not dedup-merge into it.
+    counts = consolidate_and_store(
+        memory, ["The user prefers the teal theme"], namespace=None, audience=PRIVATE_AUDIENCE,
+    )
+    assert counts["added"] == 1 and counts["skipped"] == 0  # added as its own private fact, not merged
+    assert memory.get(shared_id).superseded_by is None  # shared fact still untouched
+
+
+def test_harvest_unchanged_without_a_private_partition(tmp_path, history_store):
+    """Regression guard for r4: a conversation with NO private partition harvests exactly
+    as before — the whole transcript is summarized and facts extract — only now the derived
+    records additionally carry the public audience/source version."""
+    from types import SimpleNamespace
+
+    from knowledge.memories import MemoryStore
+
+    from graph.conversation_audience import PUBLIC_AUDIENCE
+
+    db = str(tmp_path / "c.db")
+    _seed(db)  # an ordinary operator chat, no audience markers anywhere
+    memory = MemoryStore(tmp_path / "agent.db")
+    seen = []
+
+    async def summarize(transcript, config):
+        seen.append(transcript)
+        return "User prefers teal."
+
+    async def facts(transcript, config):
+        return ["The user's favorite color is teal."]
+
+    cid = asyncio.run(harvest_thread(
+        "a2a:chat-1", checkpointer=build_sqlite_checkpointer(db), knowledge_store=None,
+        memory_store=memory, config=SimpleNamespace(knowledge_facts=True),
+        summarizer=summarize, fact_extractor=facts, raise_on_error=True,
+    ))
+    # Full transcript reached the summarizer (nothing dropped) and facts were extracted.
+    assert seen == ["User: my favorite color is teal\nAssistant: <output>noted</output>"]
+    summary = history_store.get(cid)
+    assert summary.audience == PUBLIC_AUDIENCE and summary.source_version == 1
+    assert "teal" in summary.content
+    facts_stored = memory.list(kind="fact", provenance="extracted")
+    assert len(facts_stored) == 1 and facts_stored[0].audience == PUBLIC_AUDIENCE

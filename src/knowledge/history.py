@@ -31,6 +31,16 @@ def _held(marker: str) -> tuple:
 
 HistoryKind = Literal["archive", "summary", "report"]
 
+# Conversations in Work (ADR 0131 §5): an archive span retained in the private partition
+# carries this audience and is kept out of searchable shared history. The literal matches
+# ``a2a_impl.stores.PRIVATE_AUDIENCE`` / ``graph.conversation_audience.PRIVATE_AUDIENCE``;
+# repeated here so ``knowledge`` keeps no dependency on those layers. Keep the three in sync.
+_PRIVATE_AUDIENCE = "human-operator"
+
+# Shared-history reads (search/browse) exclude private-audience rows; a legacy NULL audience
+# stays visible, so a conversation without a private partition is unaffected.
+_AUDIENCE_PUBLIC_WHERE = "(audience IS NULL OR audience != ?)"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +55,9 @@ CREATE TABLE IF NOT EXISTS history (
     created_at TEXT NOT NULL,
     namespace TEXT,
     invalidated_at TEXT,
-    invalidation_reason TEXT
+    invalidation_reason TEXT,
+    audience TEXT,
+    source_version INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_history_session ON history(session_id);
 CREATE INDEX IF NOT EXISTS idx_history_thread ON history(thread_id);
@@ -84,6 +96,11 @@ class HistoryEntry:
     namespace: str | None
     invalidated_at: str | None
     invalidation_reason: str | None
+    # Conversations in Work (ADR 0131 §5): the audience this derived record was built for
+    # and the projection version that built it. NULL on legacy rows written before the
+    # feature — treated as shared (public), so existing history is unaffected.
+    audience: str | None = None
+    source_version: int | None = None
 
 
 class HistoryStore:
@@ -97,6 +114,18 @@ class HistoryStore:
         self.path = _resolve_path(db_path)
         with closing(self._connect()) as db:
             db.executescript(_SCHEMA)
+            # Migration: add the audience/source_version columns to databases created
+            # before Conversations in Work (ADR 0131 §5). Additive + nullable, like the
+            # chunks migrations in KnowledgeStore — existing rows stay NULL (shared), so
+            # no data is rewritten and behaviour is unchanged without a private partition.
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(history)")}
+                if "audience" not in cols:
+                    db.execute("ALTER TABLE history ADD COLUMN audience TEXT")
+                if "source_version" not in cols:
+                    db.execute("ALTER TABLE history ADD COLUMN source_version INTEGER")
+            except sqlite3.DatabaseError:  # pragma: no cover — a locked/odd DB keeps the old shape
+                pass
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.path))
@@ -148,13 +177,20 @@ class HistoryStore:
         namespace: str | None = None,
         invalidated_at: str | None = None,
         invalidation_reason: str | None = None,
+        audience: str | None = None,
+        source_version: int | None = None,
     ) -> int:
-        """Persist one complete entry and return its id; raise on failure."""
+        """Persist one complete entry and return its id; raise on failure.
+
+        ``audience``/``source_version`` record the Conversations-in-Work projection that
+        built this record (ADR 0131 §5). Both default to NULL — a record with no private
+        partition is shared, exactly as before."""
         with self._write() as db:
             cur = db.execute(
                 "INSERT INTO history (session_id, thread_id, surface, kind, heading, content, "
-                "span_start, span_end, created_at, namespace, invalidated_at, invalidation_reason) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "span_start, span_end, created_at, namespace, invalidated_at, invalidation_reason, "
+                "audience, source_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     session_id,
                     thread_id,
@@ -168,6 +204,8 @@ class HistoryStore:
                     namespace,
                     invalidated_at,
                     invalidation_reason,
+                    audience,
+                    source_version,
                 ),
             )
             return int(cur.lastrowid)
@@ -178,10 +216,20 @@ class HistoryStore:
             row = db.execute("SELECT * FROM history WHERE id = ? AND invalidated_at IS NULL", (id,)).fetchone()
             return HistoryEntry(**dict(row)) if row else None
 
-    def list_for_session(self, session_id: str, kinds: Sequence[HistoryKind] | None = None) -> list[HistoryEntry]:
-        """List visible entries chronologically, optionally restricted to kinds."""
+    def list_for_session(
+        self, session_id: str, kinds: Sequence[HistoryKind] | None = None, *, include_private: bool = False
+    ) -> list[HistoryEntry]:
+        """List visible entries chronologically, optionally restricted to kinds.
+
+        ``include_private`` keeps archive spans retained in the private partition
+        (``audience='human-operator'``, ADR 0131 §5) in the result — the harvest passes it
+        so it can detect a private partition and exclude those spans from a public summary.
+        The default excludes them: private archives are not searchable shared history."""
         where = "session_id = ? AND invalidated_at IS NULL"
         params: list = [session_id]
+        if not include_private:
+            where += f" AND {_AUDIENCE_PUBLIC_WHERE}"
+            params.append(_PRIVATE_AUDIENCE)
         if kinds is not None:
             if not kinds:
                 return []
@@ -194,7 +242,10 @@ class HistoryStore:
             ]
 
     def search(self, query: str, limit: int = 10) -> list[HistoryEntry]:
-        """Search heading/content using FTS5 syntax, returning visible, kind-labelled hits."""
+        """Search heading/content using FTS5 syntax, returning visible, kind-labelled hits.
+
+        Archive spans retained in the private partition (``audience='human-operator'``, ADR
+        0131 §5) are never returned — private material is not searchable shared history."""
         if not query.strip() or limit <= 0:
             return []
         with closing(self._connect()) as db:
@@ -203,8 +254,9 @@ class HistoryStore:
                 for row in db.execute(
                     "SELECT h.* FROM history_fts JOIN history h ON h.id = history_fts.rowid "
                     "WHERE history_fts MATCH ? AND h.invalidated_at IS NULL "
+                    "AND (h.audience IS NULL OR h.audience != ?) "
                     "ORDER BY history_fts.rank, h.id LIMIT ?",
-                    (query, limit),
+                    (query, _PRIVATE_AUDIENCE, limit),
                 )
             ]
 
@@ -217,7 +269,9 @@ class HistoryStore:
         """Per-session rollup of VISIBLE history, newest activity first: one row per
         ``session_id`` with its surface, date span (``span_*`` plus the ``created_at``
         range) and per-kind counts. Rows hidden by an in-flight forget
-        (``invalidated_at`` set) are excluded, like every other read here."""
+        (``invalidated_at`` set) — and archive spans retained in the private partition
+        (``audience='human-operator'``, ADR 0131 §5) — are excluded, like every other
+        shared-history read here."""
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT session_id, COUNT(*) AS total, "
@@ -227,8 +281,9 @@ class HistoryStore:
                 "MAX(surface) AS surface, "  # a non-null surface if any row carries one
                 "MIN(span_start) AS span_start, MAX(span_end) AS span_end, "
                 "MIN(created_at) AS first_at, MAX(created_at) AS last_at "
-                "FROM history WHERE invalidated_at IS NULL "
-                "GROUP BY session_id ORDER BY last_at DESC, session_id"
+                f"FROM history WHERE invalidated_at IS NULL AND {_AUDIENCE_PUBLIC_WHERE} "
+                "GROUP BY session_id ORDER BY last_at DESC, session_id",
+                (_PRIVATE_AUDIENCE,),
             ).fetchall()
         return [
             {
@@ -256,11 +311,15 @@ class HistoryStore:
             by_kind = {
                 r["kind"]: int(r["n"])
                 for r in db.execute(
-                    "SELECT kind, COUNT(*) AS n FROM history WHERE invalidated_at IS NULL GROUP BY kind"
+                    f"SELECT kind, COUNT(*) AS n FROM history WHERE invalidated_at IS NULL "
+                    f"AND {_AUDIENCE_PUBLIC_WHERE} GROUP BY kind",
+                    (_PRIVATE_AUDIENCE,),
                 )
             }
             sessions = db.execute(
-                "SELECT COUNT(DISTINCT session_id) FROM history WHERE invalidated_at IS NULL"
+                f"SELECT COUNT(DISTINCT session_id) FROM history WHERE invalidated_at IS NULL "
+                f"AND {_AUDIENCE_PUBLIC_WHERE}",
+                (_PRIVATE_AUDIENCE,),
             ).fetchone()[0]
         out = {"archive": 0, "summary": 0, "report": 0, **by_kind}
         out["total"] = sum(by_kind.values())
