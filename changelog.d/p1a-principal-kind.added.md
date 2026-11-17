@@ -1,1 +1,1 @@
-- **Verified principal kind (#5402).** Carry credential-derived principal kind alongside trust tier through HTTP, SSE and A2A call contexts, with a human-operator predicate. This dormant proof slice preserves existing permissions and adds no private-steering interface.
+- **Verified principal kind.** Carry credential-derived principal kind alongside trust tier through HTTP, SSE and A2A call contexts, with a human-operator predicate. Refs #5402 — this dormant proof slice preserves existing permissions and adds no private-steering interface.
