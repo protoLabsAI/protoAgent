@@ -29,6 +29,8 @@ from a2a_impl import auth
 from graph.fleet import member_public, proxy
 from infra import media
 
+pytestmark = pytest.mark.platform_sensitive
+
 # The fleet service token the hub presents a LOCAL member with (ADR 0089): the hub swaps the
 # operator caller's credential for it, and the member accepts it as operator.
 FLEET = "fleet-service-token-for-tests"

@@ -1900,10 +1900,18 @@ def _failed_on_raise(span: Any):
         )
         raise
     except Exception as exc:
-        from graph.middleware.redaction import redact
         from observability import tracing
 
-        tracing.update_span(span, level="ERROR", status_message=redact(f"{type(exc).__name__}: {exc}")[:500])
+        # Record the ERROR LEVEL (content-free structure) always, but the exception TEXT
+        # only when io_allowed() — a failing run on a conversation's private partition, or
+        # an incognito turn, records no error content (ADR 0131 §5, amended by bd-jo3v6 —
+        # P1g.1), exactly as TracedRun.output and trace_tool_call gate their content.
+        fields: dict[str, Any] = {"level": "ERROR"}
+        if tracing.io_allowed():
+            from graph.middleware.redaction import redact
+
+            fields["status_message"] = redact(f"{type(exc).__name__}: {exc}")[:500]
+        tracing.update_span(span, **fields)
         raise
 
 

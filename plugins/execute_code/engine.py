@@ -114,14 +114,14 @@ def _ec_read_replies():
             _CLOSED = True
             _ec_fail_waiters("tool bridge closed before responding")
 
-def _ec_call(_name, **kwargs):
+def _ec_request(_kind, _name, kwargs):
     global _SEQ, _READER_STARTED, _CLOSED
     with _LOCK:
         if _CLOSED:
             raise RuntimeError("tool bridge closed before responding")
         _SEQ += 1
         _rid = _SEQ
-        _frame = _json.dumps({"id": _rid, "tool": _name, "args": kwargs}) + "\n"
+        _frame = _json.dumps({"id": _rid, "type": _kind, "tool": _name, "args": kwargs}) + "\n"
         _waiter = [_threading.Event(), None]
         _PENDING[_rid] = _waiter
         if not _READER_STARTED:
@@ -141,13 +141,15 @@ def _ec_call(_name, **kwargs):
 
 class _ToolProxies:
     """Attribute access returns a callable that RPCs the named tool."""
+    def help(self, name=None):
+        return _ec_request("help", name, {})
     def __getattr__(self, _name):
         def _proxy(**kwargs):
-            return _ec_call(_name, **kwargs)
+            return _ec_request("tool_call", _name, kwargs)
         _proxy.__name__ = _name
         return _proxy
     def __call__(self, _name, **kwargs):  # tools("name", **kw) also works
-        return _ec_call(_name, **kwargs)
+        return _ec_request("tool_call", _name, kwargs)
 
 tools = _ToolProxies()
 
@@ -303,6 +305,9 @@ async def _service_rpc(
                 msg = json.loads(line.decode())
                 if not isinstance(msg, dict):
                     raise ValueError(f"expected a JSON object, got {type(msg).__name__}")
+                if msg.get("type") == "help":
+                    await respond({"id": msg.get("id"), "ok": True, "result": _tool_help(tool_map, msg.get("tool"))})
+                    continue
                 if not isinstance(msg.get("tool"), str):
                     raise ValueError("expected a tool name string")
             except Exception as exc:
@@ -618,6 +623,16 @@ def _tool_signature(t) -> str:
         return f"tools.{t.name}(…)"
 
 
+def _tool_help(tool_map: dict, name=None):
+    """Return bridge metadata without invoking, enforcing or auditing a tool call."""
+    if name is None:
+        return sorted(tool_map)
+    t = tool_map.get(name) if isinstance(name, str) else None
+    if t is None:
+        return f"Tool {name!r} is not bridged."
+    return f"{_tool_signature(t)}\n{t.description or ''}"
+
+
 # Description budget: a wide explicit allowlist must not balloon the (cached,
 # but still token-bearing) tool schema — past this many, the rest list by name.
 _MAX_SIGNATURE_LINES = 25
@@ -692,6 +707,7 @@ def build_execute_code_tool(
     overflow = [t.name for t in ordered[_MAX_SIGNATURE_LINES:]]
     if overflow:
         sig_lines.append(f"(+{len(overflow)} more, same calling shape: {', '.join(overflow)})")
+        sig_lines.append("Use tools.help(name) for signatures and full descriptions.")
     available = "\n".join(f"  {line}" for line in sig_lines) or "  (none)"
 
     if session_state:

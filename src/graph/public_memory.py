@@ -34,6 +34,11 @@ class PublicSource:
     audience: str = "public"
     # Optional for memory readers; required for a protected fleet export.
     fleet: FleetExport | None = None
+    # P1g.1 observability boundary: True only once the trusted reader has verified this
+    # retained version's composed input (messages + memory) is public and so may be traced
+    # or prompt-captured. A partitioned conversation records no trace/capture content while
+    # this is False — a later ordinary turn cannot clear it (see ``content_public``).
+    traceable: bool = False
 
 
 # Trusted integration seam, not a config field or a graph-state input.
@@ -52,6 +57,26 @@ def source_for(session_id: str) -> PublicSource | None:
     ):
         raise ValueError("Unknown public memory source")
     return source
+
+
+def content_public(session_id: str) -> bool:
+    """Whether trace and prompt-capture CONTENT may be recorded for ``session_id`` (ADR
+    0131 §5, amended by bd-jo3v6 — the P1g.1 observability boundary).
+
+    True for a known unpartitioned conversation (``source_for`` returns None) — tracing and
+    prompt capture are byte-for-byte unchanged without a private partition. A partitioned
+    conversation records only content-free metrics until the trusted reader has verified
+    this retained version's composed input is public (``PublicSource.traceable``); unknown,
+    mixed or missing lineage fails closed (no content). This follows the retained source,
+    not the turn's ``incognito`` flag, so a later ordinary turn cannot re-expose private
+    material (#5403). Dormant in production: the source reader is unbound, so every
+    conversation reads unpartitioned and this is True.
+    """
+    try:
+        source = source_for(session_id)
+    except Exception:
+        return False
+    return source.traceable if source is not None else True
 
 
 def stamp(source: PublicSource) -> dict:
