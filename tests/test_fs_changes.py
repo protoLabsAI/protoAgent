@@ -9,7 +9,6 @@ but only for paths inside a registered project and only while the pane is on.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from types import SimpleNamespace
 
@@ -233,16 +232,26 @@ async def test_a_remote_a2a_peer_cannot_forge_fs_changed(bus, project):
 
 
 async def test_a_flood_of_writes_is_coalesced_to_at_most_two_events_a_second(bus, project):
-    """Even from a trusted (local) delegate, 500 settled writes in a burst publish the first
-    at once and coalesce the rest into ONE trailing event — not 500."""
+    """Even from a trusted (local) delegate, a burst of 500 settled writes publishes the first
+    at once and coalesces the rest into ONE trailing event — not 500.
+
+    Driven by an injected clock so the throttle window is exact. The earlier wall-clock version
+    raced a real 0.2 s trailing-flush timer against processing 1000 frames and flaked on a loaded
+    CI host when the burst itself ran past 0.2 s (the trailing event landed mid-burst → 2 events
+    at the first assert). A long real ``write_interval`` keeps that background timer from firing
+    during the sub-second test; the fake clock is what opens and closes the window below — the
+    same large-interval, deterministically-driven shape as the finish-flush test above."""
     from plugins.delegates.a2a_progress import A2AProgressFeed
 
-    t = dp.DelegateProgress("peer", _noop_sink, write_interval=0.2)
+    now = [0.0]
+    t = dp.DelegateProgress("peer", _noop_sink, write_interval=30.0, clock=lambda: now[0])
     feed = A2AProgressFeed(t)
     for frame in _forged_frames(project, 500):
         await feed.frame(frame)
-    assert len(bus.sent) == 1
-    await asyncio.sleep(0.35)  # past the interval: the trailing flush lands on its own
+    assert len(bus.sent) == 1  # first write out at once; the other 499 coalesce into one pending batch
+    now[0] += 30.0  # the throttle window elapses…
+    for frame in _forged_frames(project, 1):  # …so one more settled write flushes the batch as ONE event
+        await feed.frame(frame)
     assert len(bus.sent) == 2
     second = bus.sent[1][1]
     assert second["project"] == "app" and len(second["paths"]) == fs_changes.MAX_PATHS

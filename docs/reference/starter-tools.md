@@ -119,7 +119,7 @@ Defined in `tools/scheduler_tools.py` (`_build_task_tools`).
 
 | Tool | What it does |
 |---|---|
-| [`task_create(title, description="", priority=2, issue_type="task", links=None)`](#task_create) | Open an issue. `priority` 0 (highest)–3; type `task\|bug\|feature\|chore\|epic`. |
+| [`task_create(title, description="", priority=2, issue_type="task", links=None, job_key="")`](#task_create) | Open an issue. `priority` 0 (highest)–3; type `task\|bug\|feature\|chore\|epic`. |
 | [`task_list(include_closed=False)`](#task_list) | List the board. |
 | [`task_update(issue_id, status="", title="", description="", priority=-1, issue_type="", links=None, ask="")`](#task_update) | Change fields; `status` is `open\|in_progress\|blocked\|waiting\|deferred\|closed`. `waiting` requires an `ask` unless already set; `links` replaces linked work. |
 | [`task_close(issue_id, reason="")`](#task_close) | Close as done or won't-do. |
@@ -711,12 +711,20 @@ the task remains instance-wide.
 
 ```python
 def task_create(title: str, description: str = "", priority: int = 2,
-                issue_type: str = "task", links: list[str] | None = None) -> str
+                issue_type: str = "task", links: list[str] | None = None,
+                job_key: str = "") -> str
 ```
 
 Open an issue and return its id. `priority` is 0 (highest) to 3 (low); `issue_type` is one of
 `task` / `bug` / `feature` / `chore` / `epic`. An invalid value returns `"Error: …"` rather
 than raising.
+
+`job_key` is a short stable name for a distinct job within the inbox request you are handling
+(for example `fix-ci` or `write-docs`). Reuse the same `job_key` when retrying the same job so
+it keeps one task across restarts and re-deliveries rather than piling up duplicates; leave it
+empty when you are not handling a request. Keys are stripped, lowercased, whitespace-collapsed
+to `-`, and capped at 80 characters. When a `job_key` reuses an existing task the reply says so
+("Reused existing task …") instead of "Created …".
 
 `links` names the work that delivers the task: board card ids (`bd-…`), scheduler job ids,
 directive ids, or PR URLs. The task automatically closes with an attributed reason once

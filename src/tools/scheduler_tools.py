@@ -368,10 +368,16 @@ def _build_task_tools(tasks_store) -> list:
         issue_type: str = "task",
         links: list[str] | None = None,
         state: Annotated[Any, InjectedState] = None,
+        job_key: str = "",
     ) -> str:
         """Track a task/issue on your tasks board — your planning surface for
         multi-step work. ``priority`` 0=highest…3=low; ``issue_type`` is one of
-        task|bug|feature|chore|epic. Returns the new issue id.
+        task|bug|feature|chore|epic. Returns the new or reused issue id.
+
+        ``job_key``: a short stable name for this distinct job within the current
+        request (for example "fix-ci" or "write-docs"). Reuse the same job_key when
+        retrying the same job; leave it empty when not handling a request. Keys are
+        stripped, lowercased, whitespace collapsed to "-", and limited to 80 chars.
 
         ``links``: ids/URLs of the work that delivers this task — board card ids
         (``bd-…``), scheduler job ids, a directive id, PR URLs. Link the cards/jobs
@@ -393,6 +399,18 @@ def _build_task_tools(tasks_store) -> list:
                 pass
         if session_id.startswith(("job:", "background:")):
             session_id = _origin_session_from(state)
+        normalized_job_key = "-".join(job_key.strip().lower().split())[:80]
+        # Scope the promotion key to the inbox ITEM (the durable request), never to the
+        # execution's message_id: a2a retires the execution identity on a turn that ends
+        # failed/canceled (server/a2a.py _retire_inbox_execution → InboxStore.retire_execution),
+        # so the item's next delivery mints a FRESH message_id for the same request. Keying on
+        # message_id would therefore miss the row this job already has and create a duplicate on
+        # a failed-then-retried job. item_id is the inbox primary key — stable across both a
+        # restart (the inbox_executions row survives) and that retirement — so the same job
+        # retried under either path reuses its one row. Never derived from title/time/origin.
+        request = correlation.get("request") or {}
+        item_id = request.get("item_id")
+        promotion_key = f"inbox:{item_id}:{normalized_job_key}" if item_id and normalized_job_key else ""
         try:
             i = tasks_store.create(
                 title,
@@ -403,9 +421,12 @@ def _build_task_tools(tasks_store) -> list:
                 links=links,
                 request=correlation.get("request"),
                 requester=correlation.get("requester"),
+                promotion_key=promotion_key,
             )
         except ValueError as exc:
             return f"Error: {exc}"
+        if i.get("promoted_existing"):
+            return f"Reused existing task {i['id']} for this job: {i['title']} ({i['issue_type']}, p{i['priority']})"
         return f"Created {i['id']}: {i['title']} ({i['issue_type']}, p{i['priority']})"
 
     @tool
