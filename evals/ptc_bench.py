@@ -35,6 +35,28 @@ Usage (agent ≥ v0.138.0, execute_code plugin enabled, model configured)::
     python -m evals.ptc_bench run --project <registered-name> \
         --base-url http://127.0.0.1:7871 --reps 2
 
+Kernel suite (ADR 0134 D7)::
+
+    python -m evals.ptc_bench fixtures --suite kernel --dir /path/to/issues
+    python -m evals.ptc_bench run --suite kernel --project ptcbench --reps 3 \
+        --fresh-base-url http://127.0.0.1:7871 --kernel-base-url http://127.0.0.1:7872 \
+        --fresh-audit-path /path/to/fresh/audit/audit.jsonl \
+        --kernel-audit-path /path/to/kernel/audit/audit.jsonl
+
+Register the fixture directory under the same project name on two isolated
+agents. Keep model, caching, tools, system prompt and all other settings equal;
+only set ``execute_code.session_state: false`` on --fresh-base-url and ``true``
+on --kernel-base-url. Enable execute_code on both. Each lane runs through its
+own evals.runner invocation. Run on otherwise quiet agents with local audit logs
+available to the runner: pass --fresh-audit-path and --kernel-audit-path pointing
+to each instance's audit/audit.jsonl. These set AUDIT_PATH per subprocess.
+Kernel economy uses input tokens, as in the original verdict, counting both
+turns. Missing telemetry fails closed. The fixture is sized to load in ONE
+bridged ``tools.read_file`` call (under that tool's per-call char cap) yet stay
+over ``output_truncate``, so turn 1 holds the whole file in a kernel variable
+rather than paging a truncated head. Do not tune prompts, assertions or
+thresholds to rescue a failing model: a miss keeps session_state off by default.
+
 The comparison MUST run with prompt caching on (the default): the #2777
 history breakpoints made loop rounds cache-cheap, and benching against an
 uncached world would flatter PTC dishonestly.
@@ -53,6 +75,11 @@ from pathlib import Path
 RQ_ROUNDS = 5.0  # loop rounds / code rounds must be ≥ this
 RQ_TOKENS = 3.0  # loop input tokens / code input tokens ≥ this, OR…
 RQ_WALL = 2.0  # …loop wall-clock / code wall-clock ≥ this
+
+# Pre-registered ADR 0134 D7 thresholds — fixed BEFORE any live kernel run.
+RQ_KERNEL_COST_RATIO = 0.85  # input-token cost, same measure as verdict()
+RQ_KERNEL_PASS_DELTA = 0.0  # kernel pass rate minus fresh pass rate
+RQ_KERNEL_PASS_RATE = 1.0
 
 # Distinctive labeled sizes — 4-digit values that won't collide with incidental
 # numbers in a reply. len == the file count ceiling.
@@ -145,6 +172,23 @@ def _agg(rows: list[dict]) -> dict:
     }
 
 
+def _auth_headers() -> dict:
+    """Bearer header when A2A auth is set, empty otherwise. ONE copy so the two
+    run paths (``run``/``run_kernel``) can't drift apart."""
+    import os
+
+    token = os.environ.get("A2A_AUTH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _telemetry_turns(body) -> list:
+    """Unwrap ``/api/telemetry/recent``. The route returns a DICT envelope
+    ({enabled, turns, …}); take the list, NEVER fall back to iterating the dict
+    (its KEYS are strings and ``_lane_rows`` explodes — the first live run
+    crashed exactly there). ONE copy, shared by both run paths."""
+    return (body.get("turns") or []) if isinstance(body, dict) else (body or [])
+
+
 def _pass_rate(report: dict, category: str) -> tuple[int, int]:
     results = report.get("results") or report.get("cases") or []
     rows = [r for r in results if r.get("category") == category]
@@ -169,6 +213,154 @@ def verdict(loop: dict, code: dict, loop_pass: tuple[int, int], code_pass: tuple
     }
 
 
+_KERNEL_FILE = "issues.json"
+_KERNEL_SUBSYSTEM = "scheduler"
+_KERNEL_SUBSYSTEMS = ["scheduler", "graph", "console", "tools", "scheduler"]
+
+# Turn 1 loads the WHOLE fixture in ONE bridged ``tools.read_file`` call, so the
+# file must stay under that tool's per-call char cap (``_MAX_READ_CHARS`` in
+# src/tools/fs_tools.py). Above it, read_file returns a truncated head and the
+# kernel-vs-fresh verdict would measure paging, not session state (ADR 0134 D7
+# review). The fixture is still well over ``output_truncate`` (6000), so a model
+# that prints it into context instead of keeping it in a kernel variable pays for
+# it — which is the behaviour the bench is here to price.
+_READ_FILE_ONE_CALL_CHARS = 50_000
+
+# Five "hot" scheduler issues carry a strictly-descending, DISTINCT comment
+# volume (40, 37, 34, 31, 28); every other record stays in a small 0..10 baseline
+# well clear of the leaders. That makes turn 2's top-5 unambiguous — the bench
+# isolates whether the kernel helped, not whether the model broke a 4-way tie the
+# same way we did. ``4 + 5 * k`` is always ``% 5 == 4`` → the scheduler lane.
+_KERNEL_HOT = {4 + 5 * k: 40 - 3 * k for k in range(5)}
+
+
+def kernel_records() -> list[dict]:
+    """Deterministic issues with unique ids and an unambiguous comment ranking."""
+    return [
+        {
+            "id": f"ISSUE-{10001 + i}",
+            "title": f"Synthetic issue {i}: lifecycle and recovery",
+            "labels": ["benchmark", "bug" if i % 2 else "enhancement"],
+            "subsystem": _KERNEL_SUBSYSTEMS[i % 5],
+            "comments": [f"c{i}.{j}" for j in range(_KERNEL_HOT.get(i, (i * 13 + 7) % 11))],
+        }
+        for i in range(200)
+    ]
+
+
+def write_kernel_fixtures(directory: Path) -> list[str]:
+    directory.mkdir(parents=True, exist_ok=True)
+    # Compact (no indent): indent=2 alone pushes 200 records past the read_file
+    # one-call cap on structure before a single comment is counted.
+    body = json.dumps(kernel_records(), separators=(",", ":")) + "\n"
+    (directory / _KERNEL_FILE).write_text(body, encoding="utf-8")
+    return [_KERNEL_FILE]
+
+
+def build_kernel_tasks(project: str, reps: int, *, run_id: str) -> list[dict]:
+    records = [r for r in kernel_records() if r["subsystem"] == _KERNEL_SUBSYSTEM]
+    top = sorted(records, key=lambda r: (-len(r["comments"]), r["id"]))[:5]
+    prompts = [
+        f"Use execute_code to load {_KERNEL_FILE} from project '{project}' "
+        f"(tools.read_file is available), parse the JSON and keep the records whose subsystem "
+        f"equals '{_KERNEL_SUBSYSTEM}' in a variable for follow-up analysis. "
+        "Report only their count, formatted as MATCH_COUNT=<integer>;.",
+        "Use execute_code to compute the five records with the most comments among the "
+        "matching records from the previous turn. Sort by comment count descending, breaking "
+        "ties by id ascending. Report one line per record in this exact format: "
+        "RANK=<rank>;ID=<id>;COMMENTS=<count>; (ranks start at 1).",
+    ]
+    patterns = [
+        [f"MATCH_COUNT={len(records)};"],
+        [f"RANK={rank};ID={r['id']};COMMENTS={len(r['comments'])};" for rank, r in enumerate(top, 1)],
+    ]
+    return [
+        {
+            "id": f"ptc_{lane}_{rep}_turn_{turn + 1}",
+            "category": f"ptc-{lane}", "kind": "ask",
+            "name": f"{lane} lane rep {rep} turn {turn + 1}",
+            "context_id": f"ptc-eval-{run_id}-{lane}-{rep}",
+            "prompt": prompt, "timeout_s": 600,
+            "expected_tools": ["execute_code"],
+            "expected_patterns": patterns[turn],
+        }
+        for lane in ("fresh", "kernel")
+        for rep in range(reps)
+        for turn, prompt in enumerate(prompts)
+    ]
+
+
+def kernel_verdict(fresh: dict, kernel: dict, fresh_pass: tuple[int, int],
+                   kernel_pass: tuple[int, int], reps: int) -> dict:
+    """Fail closed on incomplete reps or telemetry; never round before judging."""
+    complete = reps > 0 and all(a["turns"] == 2 * reps for a in (fresh, kernel)) and all(
+        total == 2 * reps for _, total in (fresh_pass, kernel_pass)
+    )
+    measured = fresh["input_tokens"] > 0 and kernel["input_tokens"] > 0
+    ratio = kernel["input_tokens"] / fresh["input_tokens"] if measured else float("inf")
+    fresh_rate = fresh_pass[0] / fresh_pass[1] if fresh_pass[1] else 0.0
+    kernel_rate = kernel_pass[0] / kernel_pass[1] if kernel_pass[1] else 0.0
+    checks = [
+        ("input-token cost ratio", "≤", RQ_KERNEL_COST_RATIO, ratio, measured and ratio <= RQ_KERNEL_COST_RATIO),
+        ("pass-rate delta", "≥", RQ_KERNEL_PASS_DELTA, kernel_rate - fresh_rate,
+         kernel_rate - fresh_rate >= RQ_KERNEL_PASS_DELTA),
+        ("kernel pass rate", "≥", RQ_KERNEL_PASS_RATE, kernel_rate, kernel_rate >= RQ_KERNEL_PASS_RATE),
+    ]
+    return {"checks": checks, "complete": complete, "graduated": complete and all(c[4] for c in checks)}
+
+
+def print_kernel_verdict(v: dict) -> None:
+    for label, operator, threshold, value, passed in v["checks"]:
+        print(f"{label}: need {operator}{threshold:.2f}, measured {value:.4f} — {'PASS' if passed else 'FAIL'}")
+    print(f"complete reps and telemetry: {'PASS' if v['complete'] else 'FAIL'}")
+    print("VERDICT: " + ("PASS — ADR 0134 D7 thresholds met" if v["graduated"] else
+                          "FAIL — keep session_state off by default and reassess ADR 0134"))
+
+
+def run_kernel(args: argparse.Namespace) -> int:
+    import os
+    import uuid
+
+    import httpx
+
+    run_id = uuid.uuid4().hex
+    tasks = build_kernel_tasks(args.project, args.reps, run_id=run_id)
+    results_dir = Path(__file__).parent / "results"
+    results_dir.mkdir(exist_ok=True)
+    aggregates, passes = {}, {}
+    runner_ok = True
+    headers = _auth_headers()
+    for lane, url in (("fresh", args.fresh_base_url), ("kernel", args.kernel_base_url)):
+        cases = [c for c in tasks if c["category"] == f"ptc-{lane}"]
+        tasks_path = results_dir / f"ptc-{run_id}-{lane}.json"
+        report_path = results_dir / f"run-{run_id}-{lane}.json"
+        tasks_path.write_text(json.dumps(cases, indent=1), encoding="utf-8")
+        rc = subprocess.call([sys.executable, "-m", "evals.runner", "--tasks-file", str(tasks_path),
+                              "--base-url", url, "--out", str(report_path)],
+                             env={**os.environ, "AUDIT_PATH": getattr(args, f"{lane}_audit_path")})
+        runner_ok = runner_ok and rc == 0
+        report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+        passes[lane] = _pass_rate(report, f"ptc-{lane}")
+        try:
+            response = httpx.get(f"{url.rstrip('/')}/api/telemetry/recent", params={"limit": 200},
+                                 timeout=30, headers=headers)
+            response.raise_for_status()
+            turns = _telemetry_turns(response.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            print(f"{lane}: telemetry unavailable: {exc}", file=sys.stderr)
+            turns = []
+        rows = _lane_rows(turns, f"{run_id}-{lane}", args.reps)
+        # Duplicates must not replace a missing rep or unmeasured turn.
+        valid = all(sum(str(t.get("session_id", "")).endswith(c["context_id"]) for t in rows) == 2
+                    for c in cases)
+        valid = valid and all((t.get("input_tokens") or 0) > 0 for t in rows)
+        aggregates[lane] = _agg(rows if valid else [])
+        print(f"{lane}: pass {passes[lane][0]}/{passes[lane][1]}, {aggregates[lane]}")
+    v = kernel_verdict(aggregates["fresh"], aggregates["kernel"], passes["fresh"], passes["kernel"], args.reps)
+    print_kernel_verdict(v)
+    return 0 if runner_ok and v["graduated"] else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -182,10 +374,21 @@ def main() -> int:
     r.add_argument("--base-url", default="http://127.0.0.1:7871")
     r.add_argument("--files", type=int, default=10)
     r.add_argument("--reps", type=int, default=2)
+    for parser in (f, r):
+        parser.add_argument("--suite", choices=("ptc", "kernel"), default="ptc")
+    r.add_argument("--fresh-base-url", help="agent with execute_code.session_state: false")
+    r.add_argument("--kernel-base-url", help="otherwise identical agent with execute_code.session_state: true")
+    r.add_argument("--fresh-audit-path", help="fresh agent local audit JSONL")
+    r.add_argument("--kernel-audit-path", help="kernel agent local audit JSONL")
     args = ap.parse_args()
+    if args.cmd == "run" and args.suite == "kernel":
+        if not all((args.fresh_base_url, args.kernel_base_url, args.fresh_audit_path, args.kernel_audit_path)) or args.reps < 1:
+            ap.error("kernel suite requires both lane base URLs, audit paths and positive --reps")
+        return run_kernel(args)
 
     if args.cmd == "fixtures":
-        names = write_fixtures(Path(args.dir), args.files)
+        names = (write_kernel_fixtures(Path(args.dir)) if args.suite == "kernel"
+                 else write_fixtures(Path(args.dir), args.files))
         print(f"wrote {len(names)} fixture file(s) to {args.dir}")
         print("register the dir as a project (Settings ▸ Capabilities, or config):")
         print(f"  projects:\n    - name: ptcbench\n      path: {args.dir}\n      write: false")
@@ -211,18 +414,10 @@ def main() -> int:
 
     import httpx
 
-    import os
-
-    headers = {}
-    if os.environ.get("A2A_AUTH_TOKEN"):
-        headers["Authorization"] = f"Bearer {os.environ['A2A_AUTH_TOKEN']}"
     body = httpx.get(
-        f"{args.base_url}/api/telemetry/recent", params={"limit": 200}, timeout=30, headers=headers
+        f"{args.base_url}/api/telemetry/recent", params={"limit": 200}, timeout=30, headers=_auth_headers()
     ).json()
-    # The route returns {"enabled":…, "turns":[…], …} — take the list, never fall
-    # back to iterating the dict (its KEYS are strings; the first live run
-    # crashed exactly there).
-    turns = body.get("turns") or [] if isinstance(body, dict) else (body or [])
+    turns = _telemetry_turns(body)
     loop_rows, code_rows = _lane_rows(turns, "loop", args.reps), _lane_rows(turns, "code", args.reps)
     loop, code = _agg(loop_rows), _agg(code_rows)
     loop_pass, code_pass = _pass_rate(report, "ptc-loop"), _pass_rate(report, "ptc-code")

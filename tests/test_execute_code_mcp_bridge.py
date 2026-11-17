@@ -10,6 +10,10 @@ from graph.plugins.registry import PluginRegistry
 from plugins.execute_code import kernel, register
 from plugins.execute_code.engine import build_execute_code_tool, run_code
 
+# The engine and kernel modules branch on ``os.name``; the import pulls their
+# Windows-only paths into this file, so the whole module is platform-sensitive.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _tools():
     def echo(value: str = "default") -> str:
@@ -28,7 +32,6 @@ def _factory(config):
     return registry.late_tool_factories[0]
 
 
-@pytest.mark.platform_sensitive
 @pytest.mark.asyncio
 @pytest.mark.parametrize("config, expected", [
     ({"extra_tools": ["mcp:srv/*"]}, ["read_file", "srv__a", "srv__b"]),
@@ -56,7 +59,6 @@ def test_unknown_server_warned_once(caplog, monkeypatch):
     assert sum("matches no registered tools" in r.message for r in caplog.records) == 1
 
 
-@pytest.mark.platform_sensitive
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restriction", ["tools_disabled", "tools_subagent_only"])
 async def test_glob_cannot_reintroduce_tools_excluded_by_lead_seam(restriction):
@@ -86,7 +88,6 @@ else:
         set_disabled_tools([])
 
 
-@pytest.mark.platform_sensitive
 @pytest.mark.asyncio
 @pytest.mark.parametrize("session_state", [False, True])
 async def test_help_is_metadata_only_in_both_runners(session_state, tmp_path, monkeypatch):
