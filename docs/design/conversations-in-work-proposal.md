@@ -552,9 +552,9 @@ that output filtering contained them.
 ### Questions for Josh
 
 These are trade-offs for the proposed mechanisms, not amendments to the six
-recorded decisions. Josh gave his answers on 2026-11-16 and 2026-11-17; each is
+recorded decisions. Josh gave his answers on 2026-11-16; each is
 recorded verbatim under its question below. Q3, Q4 and Q5 are decided
-(2026-11-16); Q1 and Q2 are decided (2026-11-17). None changes the six recorded
+(2026-11-16); Q1 and Q2 are decided (2026-11-16). None changes the six recorded
 decisions or the decision-1 clarification.
 
 - **Result release interaction:** the unauthenticated B action in #5400 can carry
@@ -563,7 +563,7 @@ decisions or the decision-1 clarification.
   results — or to adopt auto delivery through the explicit deliver-to-requester
   action. Decision 2 remains unchanged either way.
 
-  **Decided by Josh, 2026-11-17.** Before the choice was explained: "i think auto
+  **Decided by Josh, 2026-11-16.** Before the choice was explained: "i think auto
   delviery for releasing results to a peer. im not sure the exact problem that is
   trying to solve tbh, help me understand". After the explanation: "yes auto
   delivery, and yes keep it on everywhere".
@@ -582,8 +582,8 @@ decisions or the decision-1 clarification.
   steals console authority. Accept disabling private steering where credential
   and tool isolation cannot be established, rather than weakening decision 1?
 
-  **Decided by Josh, 2026-11-17.** On 2026-11-16: "accept the risk, im not too
-  stressed about this situation happening." Confirmed 2026-11-17: "yes keep it on
+  **Decided by Josh, 2026-11-16.** On 2026-11-16: "accept the risk, im not too
+  stressed about this situation happening." Confirmed 2026-11-16: "yes keep it on
   everywhere".
 
   Private steering stays **enabled everywhere**; it is not disabled where
@@ -624,8 +624,8 @@ decisions or the decision-1 clarification.
 
 ## Phase 1 as revised
 
-**P1a–P1g below are authorized proof slices (Josh, 2026-11-17); P1h stays
-proposed, needs Josh's go.** On 2026-11-17 Josh said "then we are ready for
+**P1a–P1g below are authorized proof slices (Josh, 2026-11-16); P1h stays
+proposed, needs Josh's go.** On 2026-11-16 Josh said "then we are ready for
 phase 1", authorizing the bounded proof slices. These are small board slices, not
 permission to go past them. The old Phase 1 row is refined by these gates; Phases
 2–6 remain unauthorized. Start only with the bounded proof slices needed to
@@ -635,13 +635,13 @@ alone does not authorize further phases.
 
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
-| P1a identity proof | Propagate a verified principal kind from `_classify_token`/the device record, separate from the operator tier: the shared bearer and `device`-kind devices read as the human operator; the fleet service token, `agent`-kind devices and federation read as peers. Scoped loopback; reuse existing device pairing/rotation/revoke, **no new console credential**, no private UI. Prove fleet-token and `agent`-device rejection and `device`-kind acceptance before private reads. | authorized: proof slice (Josh, 2026-11-17) |
-| P1b private persistence proof | Private input/reply partition and public history projection on existing task records; idle and guarded parked resume, with original resolver binding. Depends on P1a. | authorized: proof slice (Josh, 2026-11-17) |
-| P1c scheduling proof | Durable sequence/segment claim, safe boundaries, deduplication, park/resume and crash recovery on the existing runner. Depends on P1b. | authorized: proof slice (Josh, 2026-11-17) |
-| P1d delivery proof | Auto delivery to the original requester, requester binding, recipient projection and durable delivery state. Depends on P1a–c. | authorized: proof slice (Josh, 2026-11-17) |
-| P1e other-exit proof | Seal structured/files at finalization; private tool/effect restrictions, error/cancel cleanup and scoped downloads. Depends on P1d. | authorized: proof slice (Josh, 2026-11-17) |
-| P1f derived-memory proof | Public projection for gist/digest, then harvest/archives/facts in a separate small slice; test later ordinary turns and stale records. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-17) |
-| P1g observability proof | Trace/prompt suppression and public-only fleet export, including background/terminal paths and later turns. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-17) |
+| P1a identity proof | Propagate a verified principal kind from `_classify_token`/the device record, separate from the operator tier: the shared bearer and `device`-kind devices read as the human operator; the fleet service token, `agent`-kind devices and federation read as peers. Scoped loopback; reuse existing device pairing/rotation/revoke, **no new console credential**, no private UI. Prove fleet-token and `agent`-device rejection and `device`-kind acceptance before private reads. | authorized: proof slice (Josh, 2026-11-16) |
+| P1b private persistence proof | Private input/reply partition and public history projection on existing task records; idle and guarded parked resume, with original resolver binding. Depends on P1a. | authorized: proof slice (Josh, 2026-11-16) |
+| P1c scheduling proof | Durable sequence/segment claim, safe boundaries, deduplication, park/resume and crash recovery on the existing runner. Depends on P1b. | authorized: proof slice (Josh, 2026-11-16) |
+| P1d delivery proof | Auto delivery to the original requester, requester binding, recipient projection and durable delivery state. Depends on P1a–c. | authorized: proof slice (Josh, 2026-11-16) |
+| P1e other-exit proof | Seal structured/files at finalization; private tool/effect restrictions, error/cancel cleanup and scoped downloads. Depends on P1d. | authorized: proof slice (Josh, 2026-11-16) |
+| P1f derived-memory proof | Public projection for gist/digest, then harvest/archives/facts in a separate small slice; test later ordinary turns and stale records. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-16) |
+| P1g observability proof | Trace/prompt suppression and public-only fleet export, including background/terminal paths and later turns. Depends on P1b–c. | authorized: proof slice (Josh, 2026-11-16) |
 | P1h integration, only after proof gate | Reviewed schema migration/reconciliation, compatibility refusal, rollback gating and operator diagnostics. Release UI requires its own approved spec/preview before boarding; no Work composer yet. Waits for the proof gate below and Josh's CONTINUE. | proposed, needs Josh's go |
 
 ## Proof that turns REVISE into CONTINUE
@@ -671,7 +671,7 @@ paired-agent and enrolled-console callers; no operator-tier shortcut.
 CONTINUE requires all applicable privacy assertions to pass and an explicit
 review of unsupported tools/deployments and residual risks; no generic “209
 passed” substitution. A failure keeps REVISE. Josh has authorized the bounded
-proof slices (P1a–P1g, 2026-11-17); this revision does not execute these tests,
+proof slices (P1a–P1g, 2026-11-16); this revision does not execute these tests,
 and **CONTINUE past the proof slices stays Josh's decision**, taken on the
 evidence this matrix produces.
 
@@ -1171,11 +1171,11 @@ See [Phase 0 outcome](#phase-0-outcome) for the historical result.
 | v1 participant scope; unavailable rows; no copied fallback | **Decided by Josh 2026-11-16 (4)** | — |
 | ADR 0129 D8 structured controls and missing-origin fallback in v1 | **Decided by Josh 2026-11-16 (5)** | — |
 | What merging this proposal means; when work starts | **Decided by Josh 2026-11-16 (6)** | — |
-| Explicit relay ("tell them the deadline moved") | Resolved by Q1 — **Decided by Josh, 2026-11-17** — auto delivery; [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Section 1: a relay is an ordinary delivered result through the server-side deliver-to-requester action bound to a delivery record — no console grant, exact-payload release or preview. Immutable requester binding and the recipient projection still hold. |
-| Human-console identity mechanism (decision 1 unchanged; Clarified by Josh, 2026-11-16) | Mechanism proposed in design revision (pending Josh) — [#5402](https://github.com/protoLabsAI/protoAgent/issues/5402); device-kind question **Decided by Josh, 2026-11-16 (Q3)**; deployment boundary **Decided by Josh, 2026-11-17 (Q2)** | Section 3: the human operator is the shared operator bearer plus paired `device`-kind devices (phones/browsers); the fleet service token, `agent`-kind devices and federation stay peers. The unforgeable device kind and credential type carry the distinction, propagated separately from the operator tier — no new console credential. Scoped proxy/loopback delegation; possession does not prove human presence. Limit in Questions for Josh: kind records how a device was paired, not who uses it. Q3 accepts this limit for v1 — anything paired as kind `device` counts as the human operator; no stronger per-human proof is required. Q2: private steering stays enabled everywhere, including where credential and tool isolation cannot be established; the risk that an agent obtains console authority is accepted; there is no per-deployment disable switch. |
+| Explicit relay ("tell them the deadline moved") | Resolved by Q1 — **Decided by Josh, 2026-11-16** — auto delivery; [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400) | Section 1: a relay is an ordinary delivered result through the server-side deliver-to-requester action bound to a delivery record — no console grant, exact-payload release or preview. Immutable requester binding and the recipient projection still hold. |
+| Human-console identity mechanism (decision 1 unchanged; Clarified by Josh, 2026-11-16) | Mechanism proposed in design revision (pending Josh) — [#5402](https://github.com/protoLabsAI/protoAgent/issues/5402); device-kind question **Decided by Josh, 2026-11-16 (Q3)**; deployment boundary **Decided by Josh, 2026-11-16 (Q2)** | Section 3: the human operator is the shared operator bearer plus paired `device`-kind devices (phones/browsers); the fleet service token, `agent`-kind devices and federation stay peers. The unforgeable device kind and credential type carry the distinction, propagated separately from the operator tier — no new console credential. Scoped proxy/loopback delegation; possession does not prove human presence. Limit in Questions for Josh: kind records how a device was paired, not who uses it. Q3 accepts this limit for v1 — anything paired as kind `device` counts as the human operator; no stronger per-human proof is required. Q2: private steering stays enabled everywhere, including where credential and tool isolation cannot be established; the risk that an agent obtains console authority is accepted; there is no per-deployment disable switch. |
 | Private idle/parked transcript storage | Proposed in design revision (pending Josh) — [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Section 2: private partitions on existing records under one original identity; no private SDK history/shared checkpoint messages. |
 | Gist, digest, harvest and facts across later turns | Proposed in design revision (pending Josh) — [#5403](https://github.com/protoLabsAI/protoAgent/issues/5403), inspection-only | Section 5: public projections, source-versioned derived records, stale-record quarantine and no private fact extraction. |
-| Files, structured output, tools and terminal exits | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400); result-release model **Decided by Josh, 2026-11-17 (Q1)** — auto delivery | Section 6: the delivery record seals files and structured output at finalization; per decision 2 effectful tools need no console-authorized manifest, but tool arguments, output, progress, errors and files stay private unless part of the delivered result; unknown/unsandboxable effectful tools stay unavailable; private errors/cancellation cannot flush to peers. |
+| Files, structured output, tools and terminal exits | Proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400); result-release model **Decided by Josh, 2026-11-16 (Q1)** — auto delivery | Section 6: the delivery record seals files and structured output at finalization; per decision 2 effectful tools need no console-authorized manifest, but tool arguments, output, progress, errors and files stay private unless part of the delivered result; unknown/unsandboxable effectful tools stay unavailable; private errors/cancellation cannot flush to peers. |
 | Nonterminal active states for retention | Open — not informed by Phase 0 prototype | Include queued/Coming up, blocked, parked, waiting and unknown recovery; release only on durable closure of all references. |
 | Stalled, never-closed linked work: closure owner; D9 nudges and Needs you parking vs release | Open — not informed by Phase 0 prototype | Give release an owner; a stall nudge is a prompt to close or continue, never an automatic release. |
 | One request producing several jobs | Open — not informed by Phase 0 prototype | Preserve a request lineage and distinct child work IDs; decide whether the parent counts before implementing promotion/counts. |
@@ -1186,7 +1186,7 @@ See [Phase 0 outcome](#phase-0-outcome) for the historical result.
 | Closed-chat clock after last closure vs the 14-day closed-chat digest window (#5387) | Open — not informed by Phase 0 prototype | Define one truthful clock; never promise deletion while retaining data. |
 | Do traces, captured prompts and fleet trace export follow the incognito rule for private steering? | Proposed in design revision (pending Josh) — [#5403](https://github.com/protoLabsAI/protoAgent/issues/5403), inspection-only | Section 5 proposes data-lifetime audience partitions and source-versioned projections, with no content tracing/capture for private reads and public-only fleet export. Each derived surface still needs executed later-turn evidence. |
 | Two audiences in one context (steering scheduling) | Mechanism proposed in design revision (pending Josh) — [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401); steering-latency scheduling **Decided by Josh, 2026-11-16 (Q4)** | Section 4 proposes immutable execution-segment audiences, durable ordered intake, safe-boundary yielding and matching guarded resume. Restart and completion-race proof are required. Q4: private steering waits for a safe boundary and peer work queues behind it; no implicit interrupt bypass or change to decision 5. |
-| Default-private output enforceability; agent-decides-audience vs explicit deliver-to-requester (result release) | **Decided by Josh, 2026-11-17 (Q1)** — auto delivery; [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Sections 1–2 and 6: authenticated Model B (deliver-to-requester) with **auto delivery** — no console grant, exact-payload release or preview; private storage outside SDK/shared checkpoint history; the delivery record seals the final envelope and files. Auto delivery contains the private exchange itself, not the model's wording, so it does not stop the model repeating what it was told inside a result. A per-steer "hold for my review" option is a possible later addition, not v1. |
+| Default-private output enforceability; agent-decides-audience vs explicit deliver-to-requester (result release) | **Decided by Josh, 2026-11-16 (Q1)** — auto delivery; [#5400](https://github.com/protoLabsAI/protoAgent/issues/5400), [#5401](https://github.com/protoLabsAI/protoAgent/issues/5401) | Sections 1–2 and 6: authenticated Model B (deliver-to-requester) with **auto delivery** — no console grant, exact-payload release or preview; private storage outside SDK/shared checkpoint history; the delivery record seals the final envelope and files. Auto delivery contains the private exchange itself, not the model's wording, so it does not stop the model repeating what it was told inside a result. A per-steer "hold for my review" option is a possible later addition, not v1. |
 | Read-only Open in chat milestone | Open — not informed by Phase 0 prototype | Accept it: it ships value from phases 2–4 without waiting on isolation. |
 | Record the supersession as an ADR 0131 amendment or a new ADR (ADR home) | **Decided by Josh, 2026-11-16 (Q5)** | Record it as an ADR 0131 amendment so the contract has one home ("as recommended"). The amendment is written with Phase 1, after Josh's go; this card writes no amendment and edits no ADR file. |
 
