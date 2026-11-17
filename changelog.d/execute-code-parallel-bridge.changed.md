@@ -1,0 +1,1 @@
+- **Concurrent execute_code tool calls.** Independent bridged calls can run concurrently through ThreadPoolExecutor, up to eight per run, while preserving per-call policy checks and audit records.

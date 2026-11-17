@@ -26,9 +26,8 @@ desktop app, ADR 0094) with:
   serialises the call over a loopback socket back to the **parent**, which runs
   the real (async) tool and returns the result. Tools therefore execute with the
   parent's credentials and audit/trace context — the child only orchestrates.
-  Bridged calls are **serialized** (one in flight at a time, under a lock in the
-  prelude): safe to make from threads, never parallel — the parent serves them
-  in order anyway.
+  Bridged calls are thread-safe and run concurrently (up to 8 per run). Use
+  ``concurrent.futures.ThreadPoolExecutor`` for independent calls.
 
 Security posture
 ----------------
@@ -79,30 +78,63 @@ _RESP = _sock.makefile("r")  # parent -> child
 _REQ.write(_os.environ["EC_TOKEN"] + "\n")  # authenticate this run's connection
 _REQ.flush()
 _SEQ = 0
-# One request/response exchange at a time. The two makefiles are shared by every
-# thread in the script: unlocked, concurrent writes interleave (the text buffer
-# flushes in ~8K chunks, splitting JSON frames) and concurrent readlines steal each
-# other's replies. The parent serves requests strictly one after another, so
-# holding this across write+flush+readline costs no real parallelism — tools.*
-# calls are thread-SAFE, just serialized.
+# Writes and waiter registration share a lock; only the reader thread reads replies.
 _LOCK = _threading.Lock()
+_PENDING = {}
+_READER_STARTED = False
+_CLOSED = False
+
+def _ec_fail_waiters(_error):
+    # Called under _LOCK.
+    for _waiter in _PENDING.values():
+        _waiter[1] = {"ok": False, "error": _error}
+        _waiter[0].set()
+    _PENDING.clear()
+
+def _ec_read_replies():
+    global _CLOSED
+    try:
+        while True:
+            _line = _RESP.readline()
+            if not _line:
+                break
+            _resp = _json.loads(_line)
+            with _LOCK:
+                if _resp.get("id") is None:
+                    # An unidentifiable error fails ALL current waiters. Subsequent
+                    # calls may proceed; late replies for failed calls are ignored.
+                    _ec_fail_waiters(_resp.get("error") or "tool bridge reply missing id")
+                    continue
+                _waiter = _PENDING.pop(_resp["id"], None)
+                if _waiter is not None:
+                    _waiter[1] = _resp
+                    _waiter[0].set()
+    finally:
+        with _LOCK:
+            _CLOSED = True
+            _ec_fail_waiters("tool bridge closed before responding")
 
 def _ec_call(_name, **kwargs):
-    global _SEQ
+    global _SEQ, _READER_STARTED, _CLOSED
     with _LOCK:
+        if _CLOSED:
+            raise RuntimeError("tool bridge closed before responding")
         _SEQ += 1
         _rid = _SEQ
-        _REQ.write(_json.dumps({"id": _rid, "tool": _name, "args": kwargs}) + "\n")
-        _REQ.flush()
-        _line = _RESP.readline()
-    if not _line:
-        raise RuntimeError("tool bridge closed before responding")
-    _resp = _json.loads(_line)
-    _got = _resp.get("id")
-    # Defense in depth: never hand a caller someone else's reply. A null id is the
-    # parent's answer to a frame it couldn't parse (always the one in flight).
-    if _got != _rid and not (_got is None and not _resp.get("ok")):
-        raise RuntimeError("tool bridge desync: sent request %r, got reply for %r" % (_rid, _got))
+        _frame = _json.dumps({"id": _rid, "tool": _name, "args": kwargs}) + "\n"
+        _waiter = [_threading.Event(), None]
+        _PENDING[_rid] = _waiter
+        if not _READER_STARTED:
+            _threading.Thread(target=_ec_read_replies, daemon=True).start()
+            _READER_STARTED = True
+        try:
+            _REQ.write(_frame)
+            _REQ.flush()
+        except OSError:
+            _CLOSED = True
+            _ec_fail_waiters("tool bridge closed before responding")
+    _waiter[0].wait()
+    _resp = _waiter[1]
     if not _resp.get("ok"):
         raise RuntimeError(_resp.get("error") or ("tool '%s' failed" % _name))
     return _resp.get("result")
@@ -186,62 +218,83 @@ def _deny_reason(name: str, gate, fence) -> str | None:
 _FRAME_ID_RE = re.compile(rb'\s*\{\s*"id"\s*:\s*(\d+)')
 
 
+_MAX_PARALLEL_CALLS = 8
+
+
 async def _service_rpc(
     req_reader: asyncio.StreamReader, resp_writer, tool_map: dict, *, session_id: str = "", gate=None, fence=None
 ):
     """Read RPC requests from the child, invoke real tools, write back results."""
     import time
 
-    while True:
-        line = await req_reader.readline()
-        if not line:  # child closed the pipe (exited)
-            return
-        try:
-            msg = json.loads(line.decode())
-            if not isinstance(msg, dict):
-                raise ValueError(f"expected a JSON object, got {type(msg).__name__}")
-        except Exception as exc:
-            # ANSWER it rather than drop it: the child's bridge has exactly one call
-            # in flight (it serializes under a lock), and that caller is blocked on
-            # readline — a silently dropped frame would park it until the hard
-            # timeout. Recover the id when the frame's prefix still carries it.
-            log.warning("[execute_code] bad RPC frame: %s", exc)
-            m = _FRAME_ID_RE.match(line)
-            resp = {"id": int(m.group(1)) if m else None, "ok": False, "error": f"malformed tool-bridge request: {exc}"}
+    semaphore = asyncio.Semaphore(_MAX_PARALLEL_CALLS)
+    write_lock = asyncio.Lock()
+    pending: set[asyncio.Task] = set()
+    service_task = asyncio.current_task()
+
+    async def respond(resp):
+        async with write_lock:
             try:
                 resp_writer.write((json.dumps(resp) + "\n").encode())
                 await resp_writer.drain()
             except Exception:
-                return  # child gone
-            continue
-        rid, name, args = msg.get("id"), msg.get("tool"), msg.get("args") or {}
-        tool = tool_map.get(name)
-        denied = _deny_reason(name, gate, fence) if tool is not None else None
-        if tool is None:
-            resp = {"id": rid, "ok": False, "error": f"tool '{name}' not available"}
-        elif denied:
-            # Same "Blocked by policy:" prefix the enforcement/fence ToolMessages
-            # carry — and the denial is a RECORDED bridged call (success=False),
-            # so policy blocks are as observable on this path as on the direct one.
-            err = f"Blocked by policy: {denied}"
-            resp = {"id": rid, "ok": False, "error": err}
-            _record_bridged_call(session_id, name, args, err, 0, False)
-        else:
-            started = time.monotonic()
-            try:
-                result = await tool.ainvoke(args)
-                text = result if isinstance(result, str) else str(result)
-                resp = {"id": rid, "ok": True, "result": text}
-                _record_bridged_call(session_id, name, args, text, int((time.monotonic() - started) * 1000), True)
-            except Exception as exc:
-                err = f"{type(exc).__name__}: {exc}"
+                service_task.cancel()  # child gone: stop dispatch and cancel outstanding calls
+
+    async def dispatch(msg):
+        async with semaphore:
+            rid, name, args = msg.get("id"), msg.get("tool"), msg.get("args") or {}
+            tool = tool_map.get(name)
+            denied = _deny_reason(name, gate, fence) if tool is not None else None
+            if tool is None:
+                resp = {"id": rid, "ok": False, "error": f"tool '{name}' not available"}
+            elif denied:
+                # Same "Blocked by policy:" prefix the enforcement/fence ToolMessages
+                # carry — and the denial is a RECORDED bridged call (success=False),
+                # so policy blocks are as observable on this path as on the direct one.
+                err = f"Blocked by policy: {denied}"
                 resp = {"id": rid, "ok": False, "error": err}
-                _record_bridged_call(session_id, name, args, err, int((time.monotonic() - started) * 1000), False)
-        try:
-            resp_writer.write((json.dumps(resp) + "\n").encode())
-            await resp_writer.drain()
-        except Exception:
-            return  # child gone
+                _record_bridged_call(session_id, name, args, err, 0, False)
+            else:
+                started = time.monotonic()
+                try:
+                    result = await tool.ainvoke(args)
+                    text = result if isinstance(result, str) else str(result)
+                    resp = {"id": rid, "ok": True, "result": text}
+                    _record_bridged_call(session_id, name, args, text, int((time.monotonic() - started) * 1000), True)
+                except Exception as exc:
+                    err = f"{type(exc).__name__}: {exc}"
+                    resp = {"id": rid, "ok": False, "error": err}
+                    _record_bridged_call(session_id, name, args, err, int((time.monotonic() - started) * 1000), False)
+            await respond(resp)
+
+    try:
+        while True:
+            line = await req_reader.readline()
+            if not line:
+                return
+            try:
+                msg = json.loads(line.decode())
+                if not isinstance(msg, dict):
+                    raise ValueError(f"expected a JSON object, got {type(msg).__name__}")
+                if not isinstance(msg.get("tool"), str):
+                    raise ValueError("expected a tool name string")
+            except Exception as exc:
+                # Answer every malformed frame, recovering its id when possible.
+                log.warning("[execute_code] bad RPC frame: %s", exc)
+                m = _FRAME_ID_RE.match(line)
+                await respond({
+                    "id": int(m.group(1)) if m else None,
+                    "ok": False,
+                    "error": f"malformed tool-bridge request: {exc}",
+                })
+                continue
+            task = asyncio.create_task(dispatch(msg))
+            pending.add(task)
+            task.add_done_callback(pending.discard)
+    finally:
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def _resolve_child_interpreter() -> str | None:
@@ -595,8 +648,8 @@ def build_execute_code_tool(
         "    results = [tools.web_search(query=q) for q in queries]\n"
         "    print('\\n\\n'.join(results)[:2000])\n\n"
         f"Each tool returns a string. Available tools (call signatures):\n{available}\n\n"
-        "tools.* calls are serialized: safe to make from threads, but they run one "
-        "at a time, so a thread pool adds no tool parallelism — a plain loop is as fast.\n\n"
+        f"tools.* calls are thread-safe and run concurrently (up to {_MAX_PARALLEL_CALLS} per run). "
+        "Use concurrent.futures.ThreadPoolExecutor for independent calls.\n\n"
         f"The script runs in an isolated subprocess with a {timeout:.0f}s timeout "
         "and a scrubbed environment (no credentials), fresh each call (no state "
         "persists between runs). Only stdout is returned; write your result with "
