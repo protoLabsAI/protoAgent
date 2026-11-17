@@ -25,6 +25,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from graph.goals.goal_turn import in_goal_turn
 from graph.model_roles import create_role_llm
+from graph.public_memory import PROVENANCE, public_card, public_state
 
 log = logging.getLogger(__name__)
 card_lock = RLock()
@@ -53,6 +54,8 @@ def preserve_gist(path, summary):
     try:
         with open(path, encoding="utf-8") as stream:
             previous = json.load(stream)
+        if not public_card(previous) or previous.get(PROVENANCE) != summary.get(PROVENANCE):
+            return
         for key in _GIST_FIELDS:
             if key in previous:
                 summary[key] = previous[key]
@@ -83,6 +86,11 @@ def schedule(state, config):
             with open(path, encoding="utf-8") as stream:
                 card = json.load(stream)
             if card["session_id"].startswith(("background:", "job:", "palette-", "system:")):
+                return
+            if not public_card(card):
+                return
+            state, provenance = public_state(state, card["session_id"])
+            if card.get(PROVENANCE) != provenance.get(PROVENANCE):
                 return
             count = card["message_count"]
             since = card.get("gist_message_count", 0)
@@ -116,13 +124,16 @@ def schedule(state, config):
             timer.daemon = True
             _pending[path] = timer
             timer.start()
-        except (OSError, ValueError, KeyError, TypeError):
+        except Exception:
             log.debug("Session gist could not be scheduled", exc_info=True)
 
 
 def _generate(path, card, payload, config, token):
     with card_lock:
         if _pending.get(path) is not token:
+            return
+        if not public_card(card):
+            cancel(path)
             return
     temp_path = None
     try:
@@ -142,7 +153,7 @@ def _generate(path, card, payload, config, token):
         if not gist:
             return
         with card_lock:
-            if _pending.get(path) is not token or not config.memory_session_gist:
+            if _pending.get(path) is not token or not config.memory_session_gist or not public_card(card):
                 return
             with open(path, encoding="utf-8") as stream:
                 if json.load(stream) != card:

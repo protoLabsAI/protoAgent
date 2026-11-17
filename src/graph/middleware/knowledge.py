@@ -449,11 +449,13 @@ class KnowledgeMiddleware(AgentMiddleware):
         policy = opts.prior_sessions_policy
         if policy == "off":  # defensive — the composer gates before calling
             return "", []
-        if policy == "relevant":
+        from graph import public_memory
+
+        if policy == "relevant" or public_memory._source_reader is not None:
             from graph.middleware.memory import load_digest
 
             return load_digest(
-                "relevant",
+                policy,
                 query=query,
                 exclude_session_id=exclude_session_id,
                 max_sessions=opts.prior_sessions_max,

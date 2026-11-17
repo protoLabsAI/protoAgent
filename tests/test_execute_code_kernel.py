@@ -6,12 +6,11 @@ to end. The timeout test blocks the child with ``time.sleep(99)`` — a
 never-returns stub the test kills, NOT a real wait — so nothing here sleeps.
 """
 
-import os
-
 import pytest
 import pytest_asyncio
 from langchain_core.tools import tool
 
+from infra import paths
 from plugins.execute_code import kernel
 from plugins.execute_code.engine import build_execute_code_tool
 
@@ -19,15 +18,10 @@ pytestmark = pytest.mark.platform_sensitive
 
 
 def _pid_alive(pid: int | None) -> bool:
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    """Cross-platform liveness via ``infra.paths.pid_alive`` (#1678). A raw
+    ``os.kill(pid, 0)`` is NOT a probe on Windows — signal 0 is ``CTRL_C_EVENT``,
+    which would *terminate* a live kernel and raise ``OSError`` for a dead pid."""
+    return pid is not None and paths.pid_alive(pid)
 
 
 @pytest_asyncio.fixture(autouse=True)
