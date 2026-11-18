@@ -3,8 +3,20 @@
 Steering scenarios moved to P1h.3 (bd-o4z6e): there is no caller-to-queue path yet.
 Reused reader scenarios preserve their assertions and fixture cleanup; digest delivery differs
 for federation, whose prior-session gate stays enabled per ADR 0066.
+
+Two groups, counted differently by the Phase 1 gate (#5482):
+
+* Per-caller proofs, parametrized over ``CALLER_KINDS``: prompt capture (the real
+  ``/api/prompts/*`` routes with each caller's token) and digest
+  (``knowledge._restrict_prior_session_memory()`` reads the bound principal).
+* Caller-independent reader proofs, run ONCE: session gist, tracing, trace export and
+  harvest. These readers take no caller: product code never reads the verified principal or
+  the approval authority on those paths, so a per-kind run would repeat one caller-blind
+  proof four times and prove nothing extra. They show the reader keeps private content out
+  for everyone; they are not evidence about any particular caller kind.
 """
 
+import inspect
 import json
 import os
 from contextlib import contextmanager
@@ -89,9 +101,10 @@ def caller(request, auth_env):
     principal = f"{expected_kind}:{device_id}" if device_id else expected_kind
     return SimpleNamespace(ctx=ctx, principal=principal, is_operator=is_operator, token=token)
 
-def test_private_source_survives_public_turn_per_caller_kind(caller, harness, tmp_path, monkeypatch):
-    with _caller_scope(caller):
-        _src_gist(harness, tmp_path, monkeypatch)
+# Caller-independent reader proofs: no caller is bound, because these readers take none.
+
+def test_caller_independent_reader_keeps_private_out_gist(harness, tmp_path, monkeypatch):
+    _src_gist(harness, tmp_path, monkeypatch)
 
 @pytest.mark.parametrize("provenance", [None, {"audience": "mixed", "version": "1"}, {"audience": "public", "version": "old"}])
 def test_public_projection_filters_prompts_per_caller_kind(caller, tmp_path, monkeypatch, provenance):
@@ -159,25 +172,29 @@ def test_public_projection_filters_prompts_per_caller_kind(caller, tmp_path, mon
         assert memory.load_digest(memory_dir=str(tmp_path)).entries == []
         assert "rocket launch" not in restarted.compose_context({"session_id": "peer", "messages": []}, record=False)["context"]
 
-def test_harvest_excludes_private_canaries_per_caller_kind(caller, tmp_path, monkeypatch):
-    from graph.middleware.request_context import current_verified_principal
+def test_caller_independent_reader_keeps_private_out_harvest(tmp_path, monkeypatch):
+    """The store honours ``include_private`` as passed; it does not look at the caller.
+
+    No product path derives the flag from the caller: the only product caller of
+    ``HistoryStore.list_for_session`` (``graph/conversation_harvest.py``) passes True and
+    filters by audience itself. So this asserts the flag's two values, not a per-caller rule.
+    """
     from knowledge.history import HistoryStore
     from runtime.state import STATE
     store = HistoryStore(tmp_path / "kb.db")
     monkeypatch.setattr(STATE, "history_store", store)
     monkeypatch.setenv("MEMORY_PATH", str(tmp_path / "memory"))
-    with _caller_scope(caller):
-        _src_harvest(tmp_path, store)
-        arcs = store.list_for_session("chat-9", kinds=["archive"], include_private=auth.is_human_operator(current_verified_principal()))
-    if caller.is_operator:
-        assert len(arcs) == 2  # the console recovers both the public and retained-private spans
-    else:
-        assert [a.content for a in arcs] == ["[Conversation archive] Earlier we compared teal and slate palettes."]
-        assert all(_ARCHIVE_CANARY not in a.content for a in arcs)
+    _src_harvest(tmp_path, store)
+    public_only = store.list_for_session("chat-9", kinds=["archive"])  # the default is include_private=False
+    assert public_only == store.list_for_session("chat-9", kinds=["archive"], include_private=False)
+    assert [a.content for a in public_only] == ["[Conversation archive] Earlier we compared teal and slate palettes."]
+    assert all(_ARCHIVE_CANARY not in a.content for a in public_only)
+    with_private = store.list_for_session("chat-9", kinds=["archive"], include_private=True)
+    assert len(with_private) == 2  # both the public and the retained-private span
+    assert sum(_ARCHIVE_CANARY in a.content for a in with_private) == 1
 
-async def test_private_partition_records_no_trace_content_per_caller_kind(caller, session_langfuse, monkeypatch):
-    with _caller_scope(caller):
-        await _src_tracing(session_langfuse, monkeypatch)
+async def test_caller_independent_reader_keeps_private_out_tracing(session_langfuse, monkeypatch):
+    await _src_tracing(session_langfuse, monkeypatch)
 
 def test_private_partition_captures_nothing_per_caller_kind(caller, monkeypatch):
     from fastapi import FastAPI
@@ -205,9 +222,19 @@ def test_private_partition_captures_nothing_per_caller_kind(caller, monkeypatch)
         assert latest.json()["call"]["system"]["stable"] == "PUBLIC_CONTROL"
 
 @pytest.mark.parametrize("context_id", ["sess-1", "background:proof-1"])
-async def test_later_public_terminal_export_per_caller_kind(caller, tmp_path, monkeypatch, context_id):
-    with _caller_scope(caller):
-        await _src_export(tmp_path, monkeypatch, context_id)
+async def test_caller_independent_reader_keeps_private_out_export(tmp_path, monkeypatch, context_id):
+    await _src_export(tmp_path, monkeypatch, context_id)
+
+def test_only_the_per_caller_proofs_take_a_caller():
+    """Guards the gate's per-caller count: a caller-blind reader must not be run per kind."""
+    takes_caller = {name for name, fn in globals().items()
+                    if name.startswith("test_") and inspect.isfunction(fn) and fn.__module__ == __name__
+                    and "caller" in inspect.signature(fn).parameters}
+    assert takes_caller == {"test_public_projection_filters_prompts_per_caller_kind",
+                            "test_private_partition_captures_nothing_per_caller_kind"}
+    independent = {name for name in globals() if name.startswith("test_caller_independent_reader_keeps_private_out_")}
+    assert {name.rsplit("_", 1)[1] for name in independent} == {"gist", "tracing", "export", "harvest"}
+    assert not independent & takes_caller
 
 
 # Digest helpers copied locally: its caller-specific delivery assertion differs.
