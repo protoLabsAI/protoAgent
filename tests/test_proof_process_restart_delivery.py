@@ -96,9 +96,10 @@ def test_restart_delivers_only_sealed_payload_once_to_original_requester(proof):
     assert report["outcomes"] == ([True, False] if point == "committed" else [False, False])
 
 
-def test_restart_delivery_record_is_terminal(proof, request):
+def test_restart_delivery_record_is_terminal(proof):
     point, _, report, _ = proof
-    if point == "sent":
-        request.node.add_marker(pytest.mark.xfail(strict=True, reason=
-            "PROOF FAILURE: SIGKILL after external send leaves delivery dispatching; recovery refuses replay but never closes it"))
-    assert report["record"]["state"] in {"delivered", "closed"}
+    # No field records a finished send except `delivered` itself, so a claim the dead
+    # process left `dispatching` settles `closed`: once, with no replay, and for good.
+    assert report["recovered"] == [point == "sent", False]
+    assert report["settled"]["state"] == ("closed" if point == "sent" else "prepared")
+    assert report["record"]["state"] == ("closed" if point == "sent" else "delivered")

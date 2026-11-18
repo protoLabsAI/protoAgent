@@ -245,9 +245,7 @@ async def test_preexisting_handles_keep_operator_private_progress(tmp_path, monk
 
 
 @pytest.mark.parametrize("exit_kind", [
-    "stall", "outbound_selected",
-    pytest.param("implicit", marks=pytest.mark.xfail(strict=True, raises=OpenDelivery,
-                 reason="PROOF FAILURE: implicit stream end leaves an unprepared private delivery open")),
+    "stall", "outbound_selected", "implicit",
     "outbound_complete", "outbound_stop", "outbound_selected_stop",
 ])
 async def test_private_exit_closes_without_unselected_effects(tmp_path, monkeypatch, kind, exit_kind):

@@ -21,6 +21,10 @@ def push_digest(config):
     return hashlib.sha256(config.SerializeToString(deterministic=True)).hexdigest()
 
 
+# Claims this process is dispatching right now, so `recover` never settles a live send.
+_IN_FLIGHT: set[tuple[str, str]] = set()
+
+
 class RequesterProjection:
     def __init__(self, store, context, queue, binding, operator):
         self.store, self.context, self.queue = store, context, queue
@@ -119,6 +123,10 @@ class RequesterProjection:
         _, record = await self.store.delivery_data(self.binding["task_id"])
         if record and record.get("state") == "prepared":
             await self.deliver_to_requester(record["id"])
+        elif record and record.get("state") == "private":
+            # Implicit end: the turn completed without selecting a result, so nothing can
+            # ever publish from this segment. Close it like the other no-result exits.
+            await self.close()
 
     async def close(self):
         """Seal the delivery terminally on an abnormal turn exit (error, cancel, timeout).
@@ -132,7 +140,8 @@ class RequesterProjection:
 
         Idempotent and best-effort: a delivery already ``dispatching``/``delivered`` is left
         intact (never resent, never reopened), and a lost CAS just means the record already
-        moved on. Nothing private is published here."""
+        moved on. Nothing private is published here. ``finalize`` also calls this when a
+        clean completion selected no result; ``recover`` settles a stale ``dispatching``."""
         if not self.private_ref:
             return
         binding, previous = await self.store.delivery_data(self.binding["task_id"])
@@ -142,6 +151,29 @@ class RequesterProjection:
             return
         closed = {**previous, "state": "closed", "payload": None, "digest": None}
         await self.store.cas_delivery(binding["task_id"], binding, previous, closed)
+
+    async def recover(self):
+        """Settle a delivery a dead process left ``dispatching``. Never replays the send.
+
+        The only record that a send finished is the ``delivered`` state itself, written
+        after the send returns. A record still ``dispatching`` at recovery therefore has
+        no recorded send: it moves to ``closed``. Its payload, digest and identity stay
+        as the audit of what may already have reached the requester under that
+        idempotency key, and nothing reads a ``closed`` record to publish or serve files.
+
+        Returns True only when it changed the record: ``prepared`` (still deliverable),
+        ``delivered`` and ``closed`` are left alone, so a second pass is a no-op, as is a
+        claim this process is still dispatching."""
+        if not self.private_ref:
+            return False
+        binding, previous = await self.store.delivery_data(self.binding["task_id"])
+        if (binding != self.binding or not previous or previous.get("version") != 1
+                or previous.get("private_turn_id") != ref_task_id(self.private_ref)
+                or previous.get("state") != "dispatching"
+                or (binding["task_id"], previous.get("id")) in _IN_FLIGHT):
+            return False
+        return await self.store.cas_delivery(
+            binding["task_id"], binding, previous, {**previous, "state": "closed"})
 
     async def retain(self, event, payload):
         record = await self.store.get_record(ref_task_id(self.private_ref), self.operator)
@@ -223,16 +255,21 @@ class RequesterProjection:
         claimed = {**record, "state": "dispatching"}
         if not await self.store.cas_delivery(binding["task_id"], binding, record, claimed):
             return False
-        artifact = Artifact(artifact_id=record["id"], parts=[Part(text=record["payload"])])
-        if record.get("format") == "artifact-v1":
-            envelope = json.loads(record["payload"])
-            artifact = ParseDict(envelope["artifact"], Artifact())
-        await self.queue.enqueue_event(TaskArtifactUpdateEvent(
-            task_id=binding["task_id"], context_id=binding["context_id"],
-            artifact=artifact,
-            append=False, last_chunk=True,
-        ))
-        await self.store.cas_delivery(binding["task_id"], binding, claimed, {**claimed, "state": "delivered"})
+        flight = (binding["task_id"], record["id"])
+        _IN_FLIGHT.add(flight)
+        try:
+            artifact = Artifact(artifact_id=record["id"], parts=[Part(text=record["payload"])])
+            if record.get("format") == "artifact-v1":
+                envelope = json.loads(record["payload"])
+                artifact = ParseDict(envelope["artifact"], Artifact())
+            await self.queue.enqueue_event(TaskArtifactUpdateEvent(
+                task_id=binding["task_id"], context_id=binding["context_id"],
+                artifact=artifact,
+                append=False, last_chunk=True,
+            ))
+            await self.store.cas_delivery(binding["task_id"], binding, claimed, {**claimed, "state": "delivered"})
+        finally:
+            _IN_FLIGHT.discard(flight)
         return True
 
     async def enqueue_event(self, event):
