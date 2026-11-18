@@ -1,0 +1,1 @@
+- **Session kernel audit rows link back to their scripts.** Bridged execute_code calls now carry the owning tool-call ID and script SHA-256, with one script row per kernel run retaining the code under the existing redaction and size limits.

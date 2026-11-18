@@ -140,7 +140,10 @@ print(json.dumps([tools.help(), descriptions]))
         assert "not bridged" in out
         assert calls == []
         rows = [json.loads(line) for line in audit.read_text().splitlines()] if audit.exists() else []
-        assert not any(row.get("tool", "").startswith("ptc:") for row in rows)
+        # Kernel runs retain their scripts, but help itself is still unaudited metadata.
+        assert not any(
+            row.get("tool", "").startswith("ptc:") and row["tool"] != "ptc:script" for row in rows
+        )
     finally:
         await kernel.stop_session("mcp-help")
 
