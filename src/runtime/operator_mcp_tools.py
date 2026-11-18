@@ -60,6 +60,7 @@ _READ_ONLY_TOOLS = frozenset(
         "list_schedules",
         "check_inbox",
         "task_list",
+        "task_get",
         "list_watches",
         "read_note",
         # Fleet diagnostics (ADR 0071 / #3170) is a read-only, roster-only, bounded and
