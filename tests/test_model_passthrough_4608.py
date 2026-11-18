@@ -9,6 +9,8 @@ Fakes sit at the model-BUILDER boundary (``graph.llm._build_gateway_llm`` /
 for every connection TYPE — gateway, local openai-compat, native subscription — while no network
 call is made. The fake is a real ``BaseChatModel`` so the usage callback the route attaches is fed
 exactly as a live gateway would feed it.
+The Anthropic parameter regression instead uses the real OAuth builder and SDK with a
+capturing HTTP transport, so both direct invocation and tool binding exercise provider code.
 """
 
 from __future__ import annotations
@@ -322,7 +324,27 @@ def test_temperature_forwarded_to_openai_compat(harness, tool_params):
     assert kw.get("max_tokens") == 64
 
 
-def test_temperature_dropped_for_anthropic_oauth(harness, tool_params):
+def test_temperature_dropped_for_anthropic_oauth(harness, tool_params, monkeypatch, request):
+    from graph.providers import anthropic_oauth
+    from tests.test_oauth_identity_every_call import _Capture, _wire
+
+    # #5501: use the real OAuth builder, ChatAnthropic and SDK, including when no
+    # tools are bound. A generic BaseChatModel fake cannot detect provider drift.
+    capture = _Capture()
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-PASSTHROUGH-TEST")
+    anthropic_oauth._reset_token_cache()
+
+    def native_builder(ptype, config, model_name=None, reasoning_effort=None):
+        assert ptype == "anthropic-oauth"
+        llm = anthropic_oauth.build_anthropic_oauth_llm(
+            config, model_name=model_name, reasoning_effort=reasoning_effort
+        )
+        _wire(llm, capture)
+        return llm
+
+    monkeypatch.setattr("graph.providers.build_native_oauth_llm", native_builder)
+    # The refresh cache is process-global; restore isolation even if the request fails.
+    request.addfinalizer(anthropic_oauth._reset_token_cache)
     # The whole point of the endpoint: an eval setting temperature=0 against a Claude
     # subscription must NOT 502 — Claude rejects temperature, so we omit it.
     r = _post(
@@ -337,9 +359,13 @@ def test_temperature_dropped_for_anthropic_oauth(harness, tool_params):
         },
     )
     assert r.status_code == 200, r.text
-    kw = harness.state["llm"].captured["kwargs"]
+    assert len(capture.bodies) == 1
+    kw = capture.bodies[0]
     assert "temperature" not in kw  # dropped for anthropic-oauth
     assert kw.get("max_tokens") == 64  # but Anthropic takes max_tokens
+    if tool_params:
+        assert kw["tools"][0]["name"] == "f"
+        assert kw["tool_choice"] == {"type": "any"}
 
 
 def test_temperature_and_max_tokens_dropped_for_openai_codex(harness, tool_params):
