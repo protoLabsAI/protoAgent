@@ -488,7 +488,9 @@ function ToolGroup({
 
   // A running subagent delegation can be aborted (Tier 2): Stop cancels just this
   // `task`, the lead keeps working. Lives in the DS ToolCard header `actions` slot
-  // (a sibling of the disclosure toggle, so it doesn't expand the card).
+  // (a sibling of the disclosure toggle, so it doesn't expand the card). Icon only, like
+  // the Manage button beside it: the square already says stop, and the name is in the
+  // tooltip and the aria-label.
   const stopBtn =
     onCancelDelegation && call.name === "task" && call.status === "running" ? (
       <button
@@ -502,7 +504,6 @@ function ToolGroup({
         }}
       >
         <Square size={11} />
-        <span>Stop</span>
       </button>
     ) : null;
 

@@ -1,0 +1,1 @@
+- **The Stop control on a running `task` card is just the square icon.** The word "Stop" beside it repeated what the icon already says. Hover still shows "Stop this delegation", and screen readers read the same label.
