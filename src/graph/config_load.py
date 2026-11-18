@@ -462,6 +462,18 @@ def _valid_a2a_skills(entries) -> list[dict]:
     return kept
 
 
+# Set (to ``1``) by the fleet supervisor on every member it spawns (#5322). A hub member
+# runs ``--ui none`` but is NOT unattended: the operator answers its approvals through
+# the hub console. ``_default_filesystem_allow_run`` reads it.
+FLEET_MEMBER_ENV = "PROTOAGENT_FLEET_MEMBER"
+
+
+def _is_fleet_member() -> bool:
+    """True when the fleet supervisor launched this process as a hub member
+    (``PROTOAGENT_FLEET_MEMBER`` truthy: ``1``/``true``/``yes``/``on``)."""
+    return os.environ.get(FLEET_MEMBER_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _default_filesystem_allow_run() -> bool:
     """Tier-aware app-default for ``filesystem.allow_run`` (#1849). ``run_command``
     is HITL-gated (``run_requires_approval``) — safe when an operator is watching to
@@ -472,8 +484,19 @@ def _default_filesystem_allow_run() -> bool:
     Reads ``PROTOAGENT_UI`` directly rather than via ``_env_default`` because this is
     a derived boolean, not a passthrough value — ``server/__init__`` mirrors the
     FINAL resolved tier there once, whether it came from ``--ui``, ``PROTOAGENT_UI``,
-    or the deprecated ``--headless`` alias. An explicit ``filesystem.allow_run`` in
-    config always wins over this default regardless of tier."""
+    or the deprecated ``--headless`` alias.
+
+    One exception (#5322): a hub-spawned fleet member. The supervisor starts every
+    member with ``--ui none`` (the hub serves the console), so the tier alone reads as
+    headless — but the member IS attended: its approval prompts surface in, and are
+    answered through, the hub console. The supervisor marks the member's environment
+    with ``PROTOAGENT_FLEET_MEMBER=1``; with that marker the default is ON even on the
+    'none' tier. A plain headless instance (no marker) keeps defaulting OFF.
+
+    An explicit ``filesystem.allow_run`` in config always wins over this default
+    regardless of tier or marker."""
+    if _is_fleet_member():
+        return True
     return os.environ.get("PROTOAGENT_UI", "").strip().lower() != "none"
 
 

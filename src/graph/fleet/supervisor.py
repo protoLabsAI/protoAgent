@@ -29,6 +29,7 @@ from filelock import FileLock
 from infra.paths import pid_alive
 from infra.proc import detached_kwargs, signal_tree
 
+from graph.config_load import FLEET_MEMBER_ENV
 from graph.workspaces import manager
 
 log = logging.getLogger(__name__)
@@ -284,6 +285,12 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
     ``stop`` (the hub's shutdown signal) is checked under the state lock, so a start
     racing ``shutdown_all`` either records its member before the sweep reads fleet.json or
     spawns nothing: returns ``cancelled: True``.
+
+    The child's environment carries ``PROTOAGENT_FLEET_MEMBER=1`` (#5322): the marker
+    that says "this ``--ui none`` process is a hub member, attended through the hub
+    console". ``graph.config_load._default_filesystem_allow_run`` reads it so a member
+    gets ``run_command`` by default like any attended agent. A workspace whose own
+    ``run_exec`` env sets the variable keeps its value.
     """
     ws = manager._find(manager._safe(ident))
     if ws is None:
@@ -389,6 +396,14 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
         # its own public URL sets it in its own config or workspace env.
         if "PROTOAGENT_PUBLIC_CONSOLE_URL" not in env:
             full_env.pop("PROTOAGENT_PUBLIC_CONSOLE_URL", None)
+        # Fleet-member marker (#5322). Members run ``--ui none`` because the hub serves the
+        # console, and the headless tier defaults ``filesystem.allow_run`` OFF (#1849: no
+        # operator to answer run_command's approval). A member is attended — the operator
+        # answers its approvals in the hub console — so mark it and let the default stay ON.
+        # An explicit ``filesystem.allow_run`` in the member's config still wins, and so
+        # does an explicit per-workspace env value (mirrors the overrides above).
+        if FLEET_MEMBER_ENV not in env:
+            full_env[FLEET_MEMBER_ENV] = "1"
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         _rotate_log(log_path)
