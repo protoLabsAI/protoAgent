@@ -7,27 +7,33 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from graph import session_gist
+from graph.compaction_engine import summary_message
 from graph.compaction_op import compact_thread
+from graph.conversation_audience import is_private_message
 from graph.conversation_harvest import harvest_thread
 from graph.fence_scope import private_segment_scope
 from graph.middleware.compaction import CountingSummarizationMiddleware
 from graph.middleware.memory import SessionSummaryMiddleware
+from graph.middleware.steering import SteeringMiddleware
+from graph.private_sessions import public_part
 from knowledge.history import HistoryStore
 from operator_api.memory_routes import register_memory_routes
+from graph import steering
 from runtime.state import STATE
 from tests._a2a_app import poll_terminal
 from tests import test_private_steer_route as private_routes
 from tests.test_private_steer_route import HUMANS, KINDS, REPLY, SECRET
 
-rig = private_routes.rig
+rig, chat_mod = private_routes.rig, private_routes.chat_mod
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.platform_sensitive]
 
 SID, OTHER = "chat-memory", "chat-other"
-PRIVATE_TURN = [HumanMessage(content=SECRET), AIMessage(content=REPLY)]
+PRIVATE = {"additional_kwargs": {"audience": "human-operator"}}
+PRIVATE_TURN = [HumanMessage(content=SECRET, **PRIVATE), AIMessage(content=REPLY)]
 LATER_TURN = PRIVATE_TURN + [HumanMessage(content="ordinary"), AIMessage(content="ok")]
 GIST_CONFIG = SimpleNamespace(memory_session_gist=True, memory_gist_idle_seconds=60)
 
@@ -87,8 +93,41 @@ async def test_later_ordinary_turn_writes_no_private_text(box, monkeypatch):
     monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool))
     compacted, harvested = await _run_writers({"session_id": SID, "messages": LATER_TURN})
     assert SECRET not in _retained(box) and REPLY not in _retained(box)
-    assert compacted["refused"] and harvested is None and scheduled == []
-    assert box.history.list_for_session(SID, include_private=True) == []
+    assert harvested is None and scheduled == []
+    # Both compaction archives (automatic, then manual) still record the ordinary turn.
+    archives = [e.content for e in box.history.list_for_session(SID, include_private=True)]
+    assert not compacted["refused"] and len(archives) == 2
+    assert all("ordinary" in a and "ok" in a for a in archives)
+
+
+async def test_private_turn_input_is_stamped(box):
+    """What a private turn puts into the checkpoint — its input and a steer folded into it —
+    carries the private audience; an ordinary turn's input is built exactly as before."""
+    plain = chat_mod._vision_human_message("ordinary", [], session_id=SID, incognito=False)
+    assert set(plain.additional_kwargs) == {"protoagent_sent_at"}
+    with private_segment_scope(lambda: True):
+        assert is_private_message(chat_mod._vision_human_message(SECRET, [], session_id=SID, incognito=False))
+        steering.enqueue(SID, SECRET, audience=steering.AUDIENCE_PRIVATE)
+        folded = SteeringMiddleware._inject({"session_id": SID, "messages": []})
+    assert is_private_message(folded["messages"][0])
+    steering.enqueue(SID, "ordinary")
+    ordinary = SteeringMiddleware._inject({"session_id": SID, "messages": []})["messages"][0]
+    assert set(ordinary.additional_kwargs) == {"protoagent_sent_at"}
+
+
+async def test_archive_drops_whole_private_turns(box):
+    public = [HumanMessage(content="ordinary"), AIMessage(content="ok")]
+    tool = ToolMessage(content=REPLY, tool_call_id="t")
+    fold = HumanMessage(content=SECRET, **PRIVATE)
+    turn = [PRIVATE_TURN[0], tool, fold, PRIVATE_TURN[1]]
+    assert public_part(public + turn + public, SID) == public + public  # the stamps alone decide
+    summarized = [summary_message("s")] + public
+    assert public_part(public, SID) == public and public_part(summarized, SID) == summarized  # no private turn
+    await _steer(box.rig, SECRET, "private", private=True)
+    # Marked: a summary may have folded a private turn, and the kept tail may begin inside it.
+    compacted = [summary_message(SECRET), AIMessage(content=REPLY)]
+    assert public_part(compacted + public, SID) == public
+    assert public_part(public, "another-session") == public
 
 
 async def test_gist_is_withheld_from_an_earlier_public_card(box, monkeypatch):

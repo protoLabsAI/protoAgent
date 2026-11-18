@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from graph.conversation_audience import (
     PUBLIC_AUDIENCE,
     SOURCE_VERSION,
-    public_messages,
     public_projection,
 )
 from graph.message_blocks import text_of
@@ -140,11 +139,15 @@ def archive_payload(
     Conversations in Work (ADR 0131 §5): private-partition messages never enter a shared
     archive. They are dropped before rendering, and the row records the public audience and
     projection version. A conversation without a private partition is unaffected — it has no
-    private messages to drop.
+    private messages to drop. A conversation WITH a private (human-operator) turn keeps its
+    public archive: the whole private turn — input, replies and tool results — is dropped
+    (:func:`graph.private_sessions.public_part`), the ordinary turns are archived as before.
 
     ``trailing_date`` defaults to today (see :func:`message_dates`)."""
+    from graph.private_sessions import public_part
+
     today = _today()
-    messages = public_messages(messages)
+    messages = public_part(messages, session_id, thread_id)
     trailing = trailing_date if _DAY.match(trailing_date or "") else today
     dates = message_dates(messages, session_id, trailing_date=trailing)
     lines: list[str] = []
