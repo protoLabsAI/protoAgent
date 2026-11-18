@@ -609,7 +609,13 @@ _HITL_RESUME = object()
 
 
 async def _hold_if_hitl_pending(
-    message: str, session_id: str, config: dict, *, request_metadata: dict | None, fence=None
+    message: str,
+    session_id: str,
+    config: dict,
+    *,
+    request_metadata: dict | None,
+    fence=None,
+    images: list[tuple[str, str]] | None = None,
 ):
     """The HITL hold (#1560): decide what a FRESH message may do while this thread is
     parked at a ``request_user_input`` / ``ask_human`` / approval ``interrupt()``.
@@ -637,6 +643,12 @@ async def _hold_if_hitl_pending(
     (rather than holding the message back for a narrow-enough pass) keeps it in arrival
     order and never strands it: no such pass may ever come.
 
+    A held message keeps its ``images``, the same way the steer route queues them (#4654):
+    each one is saved as a bridged attachment, unless the message is incognito, and the
+    fold hands it to a vision model. Holding only the text dropped a screenshot the
+    operator sent while a decision was open. The resumed turn then saw the words, not the
+    picture, and had to ask for it again (2026-11-17).
+
     Autonomous turns are exempt EXCEPT when a decision is still awaiting an answer, and
     with no pending interrupt this returns ``None`` and the turn is untouched. Callers must
     hold the per-thread lock (the check must not race a parking turn)."""
@@ -655,8 +667,21 @@ async def _hold_if_hitl_pending(
         return _HITL_RESUME
     from graph import steering
 
-    # HITL-held messages remain text-only.
-    steering.enqueue(session_id, message, fence=fence)
+    if images:
+        from runtime.state import STATE
+
+        incognito = bool((request_metadata or {}).get("incognito"))
+        steering.enqueue(
+            session_id,
+            message,
+            fence=fence,
+            images=images,
+            refs="" if incognito else _chat()._bridge_attachment_ids(images, session_id),
+            vision=bool(getattr(STATE.graph_config, "model_vision", False)),
+            incognito=incognito,
+        )
+    else:
+        steering.enqueue(session_id, message, fence=fence)
     log.info("[hitl] holding operator message for session %s — form pending", session_id)
     return pending_val
 

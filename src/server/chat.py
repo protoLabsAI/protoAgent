@@ -2363,7 +2363,7 @@ async def _chat_langgraph_stream_impl(
                     resume = False
                 if not resume:
                     hold = await _turn_control._hold_if_hitl_pending(
-                        message, session_id, config, request_metadata=request_metadata, fence=_fence
+                        message, session_id, config, request_metadata=request_metadata, fence=_fence, images=images
                     )
                     if hold is _turn_control._HITL_RESUME:
                         resume = True
