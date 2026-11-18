@@ -604,9 +604,13 @@ class AcpAdapter(Adapter):
                 phase = "prompt round-trip"
                 # Open session/new on the handshaken process. No session_id_path
                 # or pooled client means this test session is never persisted.
-                await asyncio.wait_for(
+                reply = await asyncio.wait_for(
                     client.prompt("Reply with OK.", timeout=60, fresh_session=True), timeout=60
                 )
+                # A returned prompt can still be refused, interrupted, or empty.
+                failure = client.unfinished_reason() or client.empty_reply_failure(reply)
+                if failure is not None:
+                    return {"ok": False, "error": f"ACP prompt round-trip failed: {failure}"}
         except asyncio.TimeoutError:
             if phase != "handshake":
                 return {"ok": False, "error": "ACP prompt round-trip timed out after 60 seconds."}

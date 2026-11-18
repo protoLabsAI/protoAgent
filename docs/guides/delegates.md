@@ -21,7 +21,9 @@ Edit or delete entries in the same panel. Secret inputs retain the saved value
 when left blank and never display it again.
 
 The health dot means **reachable**, not that the last job succeeded. For ACP,
-Test checks only the initial handshake. The **last call failed** pill reports a
+periodic health checks only run the initial handshake. **Test** also sends a short
+prompt on the configured model in a fresh, unpersisted session; an unfinished or
+empty reply fails Test. The **last call failed** pill reports a
 failed dispatch separately; hover it for the reason. A successful later dispatch
 clears it.
 

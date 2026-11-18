@@ -358,8 +358,9 @@ export type BrowseListing = {
 // the other folders keep working (#3643). Absent on rows the editor is composing.
 export type FsProject = { name?: string; path: string; write: boolean; exists?: boolean };
 
-// The ADR 0095 managed-projects registry (GET /api/projects, read-only — registration
-// is still a YAML edit). `fenced` says whether THIS entry feeds the live fs fence:
+// The ADR 0095 managed-projects registry (GET /api/projects). Registration is still a
+// YAML edit; only `write` is editable from the console (PATCH /api/projects/{name},
+// projectBoard-plugin#783). `fenced` says whether THIS entry feeds the live fs fence:
 // false when it opts out with `fs: false`, and false for every row when explicit
 // Work folders shadow the registry wholesale (see ManagedProjects.fence_source).
 export type ManagedProject = {

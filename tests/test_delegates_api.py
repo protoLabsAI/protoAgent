@@ -125,7 +125,10 @@ def test_create_invalid_returns_400(client):
     )  # no model
 
 
-@pytest.mark.parametrize("outcome", ["model", "no_model", "rpc_error", "timeout", "handshake_error"])
+@pytest.mark.parametrize("outcome", [
+    "model", "no_model", "rpc_error", "timeout", "handshake_error",
+    "refusal", "cancelled", "max_tokens", "background_pending", "empty", "empty_no_reason",
+])
 def test_test_endpoint_acp_prompt_round_trip(client, monkeypatch, tmp_path, outcome):
     import asyncio
     import sys
@@ -161,6 +164,12 @@ def test_test_endpoint_acp_prompt_round_trip(client, monkeypatch, tmp_path, outc
             }})
             await future
         self._model_id = "claude-opus-5-5" if outcome == "model" else None
+        self.last_stop_reason = (
+            outcome if outcome in {"refusal", "cancelled", "max_tokens", "background_pending"}
+            else None if outcome in {"no_model", "empty_no_reason"} else "end_turn"
+        )
+        if outcome in {"empty", "empty_no_reason"}:
+            return " \n\t"
         return "OK"
 
     close = AsyncMock()
@@ -187,8 +196,13 @@ def test_test_endpoint_acp_prompt_round_trip(client, monkeypatch, tmp_path, outc
             assert "CLAUDE_CODE_EXECUTABLE" in body["error"]
         elif outcome == "timeout":
             assert body["error"] == "ACP prompt round-trip timed out after 60 seconds."
-        else:
+        elif outcome == "handshake_error":
             assert "handshake failed" in body["error"]
+        elif outcome in {"empty", "empty_no_reason"}:
+            assert "prompt round-trip failed" in body["error"]
+            assert "produced no text" in body["error"]
+        else:
+            assert body["error"] == f"ACP prompt round-trip failed: {outcome}"
 
 
 async def test_acp_health_probe_never_prompts(monkeypatch, tmp_path):
