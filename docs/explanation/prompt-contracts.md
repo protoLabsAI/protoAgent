@@ -32,7 +32,7 @@ the equivalence, so the labels annotate the real prompt). Section order:
 | 4 | `Collaboration` | `_build_collaboration_section()` | a delegate registry has names and `delegate_to` is reachable (#3042) |
 | 5 | `Context` | the `context` argument under a `# Context` heading | legacy callers only — no runtime caller passes it since ADR 0108 D2 (context is a projected message) |
 | 6 | `Operating model` | `_build_operating_model(bound_tool_names)` | at least one autonomous primitive is bound (goal / tasks / schedule / watch / wait / memory / directives) |
-| 7 | `Guidelines` | inline, fork-override point | always; the async-work rule only when an async capability is bound |
+| 7 | `Guidelines` | inline, fork-override point | always; the batching rule only when `read_file`, `search_files` or `edit_file` is bound; the async-work rule only when an async capability is bound |
 
 **Deliberately excluded:** retrieved memory, the prior-session digest, the
 `<available_skills>` index, and `<working_state>` — these are the *projected
@@ -45,6 +45,9 @@ bound at the model API, never rendered into prose.
 - `bound_tool_names` — the capability map `graph/prompts.py::CAPABILITY_GROUPS`
   (goal / tasks / schedule / watch / wait → tool names) decides which operating-model
   paragraphs appear; the shared async-work guideline is gated on delegation, schedule, watch or wait capabilities.
+  The batching guideline ("make independent reads, searches and edits in the same step") is gated on
+  `read_file`, `search_files` or `edit_file`, and names `edit_file`'s `edits` list and `search_files`'
+  `queries` list only when that tool is bound, so an agent without file tools gets no such guidance.
   Each tool is checked individually, including partial groups. `None` retains legacy
   potential-capability guidance with an explicit runtime-availability qualification.
 - `include_subagents` — whether the roster section exists at all.
@@ -159,16 +162,17 @@ only on multi-participant threads.
 ## Measured sizes
 
 Static composition under the test fixture — a 57-character SOUL, every autonomous
-capability bound, no managed projects, no delegates. Tokens use the repo's
+capability and the three file tools the batching guideline gates on (`read_file`,
+`search_files`, `edit_file`) bound, no managed projects, no delegates. Tokens use the repo's
 `chars // 4` heuristic (ADR 0101 — precise enough at decision thresholds, not for
 billing).
 
 | Contract / section | Chars | ≈ tokens |
 |--------------------|------:|---------:|
 | Lead · `Subagents` (3 lead-visible entries) | 1,612 | 403 |
-| Lead · `Operating model` (all capabilities) | 1,605 | 401 |
-| Lead · `Guidelines` (all capabilities) | 718 | 179 |
-| **Lead · doctrine total (ex-SOUL)** | **3,935** | **983** |
+| Lead · `Operating model` (all capabilities) | 1,732 | 433 |
+| Lead · `Guidelines` (all capabilities) | 919 | 229 |
+| **Lead · doctrine total (ex-SOUL)** | **4,263** | **1,065** |
 | Lead · minimal (no subagents, no autonomous tools) | 340 | 85 |
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |
@@ -193,6 +197,17 @@ section had already grown to 1,325 characters with the memory line, so the new l
 could not fit under the old ceiling. The line is one sentence and is bound only when the
 directive tools are.
 
+The `Guidelines` ceiling rose from 900 to 1,150, and the doctrine total from 4,200 to
+4,500, for the batching line (#5098): "Make independent reads, searches and edits in the
+same step, not one per turn", plus the `edit_file` `edits` / `search_files` `queries`
+hints. In the measured coding session 31 of 50 model messages carried exactly one tool
+call, so each file read, search or edit cost a full model round trip. The line is 201
+characters and takes `Guidelines` from 718 to 919 (1,011 for a legacy caller that passes
+`bound_tool_names=None` and also gets the runtime qualifier, which the same ceiling
+covers). It is bound only when a file tool is, so the minimal prompt is unchanged at 340.
+The budget test now binds the three file tools so the line is measured. No other
+guideline was trimmed to make room.
+
 ## Budget ceilings
 
 `tests/test_prompt_budgets.py` asserts each figure below. Ceilings are the measured
@@ -202,10 +217,10 @@ duplicate section fails CI with the actual and allowed sizes printed.
 
 | Golden | Ceiling (chars) |
 |--------|----------------:|
-| Lead doctrine total (ex-SOUL, all capabilities) | 4,200 |
+| Lead doctrine total (ex-SOUL, all capabilities) | 4,500 |
 | Lead `Subagents` section | 2,000 |
 | Lead `Operating model` section | 1,900 |
-| Lead `Guidelines` section | 900 |
+| Lead `Guidelines` section | 1,150 |
 | Lead minimal (no subagents, no autonomous tools) | 410 |
 | Any subagent prompt | 8,500 |
 | Any **lead-visible** subagent prompt | 4,000 |
