@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabsai/ui/tool-card";
@@ -346,6 +346,77 @@ export function ToolCalls({
   );
 }
 
+function scriptCallLabel(call: ToolCall): string {
+  let arg: string | undefined;
+  try {
+    const input: unknown = JSON.parse(call.input ?? "{}");
+    const values = typeof input === "string" ? [input]
+      : input && typeof input === "object" ? Object.values(input) : [];
+    arg = values.find((value): value is string => typeof value === "string");
+  } catch { /* Incomplete streamed arguments still show the tool name. */ }
+  return `tools.${call.name.slice(4)}${arg === undefined ? "" : ` ${JSON.stringify(arg)}`}`;
+}
+
+function blockedByPolicy(call: ToolCall): boolean {
+  return call.output?.startsWith("Blocked by policy:") ?? false;
+}
+
+// WorkBlock can show the same call in its open timeline and spotlight. Share
+// announcement ownership for that snapshot without retaining transcript history.
+const announcedScripts = new WeakSet<ToolCall>();
+
+/** Outside the disclosure so collapsed scripts announce too. Freeze at settle:
+ * late child frames must not announce again. */
+function ScriptCompletion({ call, summary }: { call: ToolCall; summary: string }) {
+  const announced = useRef(call.status !== "running");
+  const [announcement, setAnnouncement] = useState("");
+  useEffect(() => {
+    if (call.status !== "running" && !announced.current) {
+      announced.current = true;
+      if (!announcedScripts.has(call)) {
+        announcedScripts.add(call);
+        setAnnouncement(`Script finished: ${summary}`);
+      }
+    }
+  }, [call, summary]);
+  return (
+    <span aria-live="polite" aria-atomic="true"
+      style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>
+      {announcement}
+    </span>
+  );
+}
+
+function ScriptCalls({ calls, parent, childrenByParent }: {
+  calls: ToolCall[];
+  parent: ToolCall;
+  childrenByParent: Map<string, ToolCall[]>;
+}) {
+  const folded = calls.length > 8
+    ? calls.filter((kid) => kid.status === "done" && !kid.stopped && !blockedByPolicy(kid)) : [];
+  const render = (kid: ToolCall) => (
+    <ToolGroup key={kid.id} call={{
+      ...kid,
+      status: blockedByPolicy(kid) ? "error" : kid.status,
+      stopped: kid.stopped || (parent.status !== "running" && kid.status === "running" && !blockedByPolicy(kid)),
+    }} childrenByParent={childrenByParent} scriptChild />
+  );
+  return (
+    <ToolSection label={`calls from script (${calls.length})`}>
+      <div role="group" aria-label={`calls from script (${calls.length})`} className="pl-toolcard__children">
+        {/* Visible calls retain wire start order. The fold has a fixed trailing
+            slot so parallel completions cannot reorder the remaining rows. */}
+        {calls.filter((kid) => !folded.includes(kid)).map(render)}
+        {folded.length > 0 ? (
+          <ToolCardSummary count={folded.length} label="successful calls">
+            {folded.map(render)}
+          </ToolCardSummary>
+        ) : null}
+      </div>
+    </ToolSection>
+  );
+}
+
 /** A tool card. For a subagent `task`, its child tool cards collapse INSIDE the card's
  *  body (revealed on expand) and the header shows a running count
  *  ("task → researcher · 3 tools"). Keeping them in the collapsible body — not the DS
@@ -356,15 +427,25 @@ function ToolGroup({
   childrenByParent,
   onCancelDelegation,
   onDismissToolCall,
+  scriptChild = false,
 }: {
   call: ToolCall;
+  scriptChild?: boolean;
   childrenByParent: Map<string, ToolCall[]>;
   onCancelDelegation?: (id: string) => void;
   onDismissToolCall?: (id: string) => void;
 }) {
   const kids = childrenByParent.get(call.id);
-  const nestedCards = kids?.length
-    ? kids.map((kid) => (
+  const scriptKids = call.name === "execute_code" ? (kids ?? []).filter((kid) => kid.name.startsWith("ptc:")) : [];
+  const otherKids = call.name === "execute_code" ? kids?.filter((kid) => !kid.name.startsWith("ptc:")) : kids;
+  const scriptCount = scriptKids.length;
+  const runningCount = scriptKids.filter((kid) => kid.status === "running" && !kid.stopped).length;
+  const blockedCount = scriptKids.filter(blockedByPolicy).length;
+  const failedCount = scriptKids.filter((kid) => kid.status === "error" && !blockedByPolicy(kid)).length;
+  const scriptSummary = `${scriptCount} calls` + (call.status === "running"
+    ? ` · ${runningCount} running` : ` · ${failedCount} failed · ${blockedCount} blocked`);
+  const nestedCards = otherKids?.length
+    ? otherKids.map((kid) => (
         // Children inherit no cancel callback — they aren't independent delegations.
         <ToolGroup key={kid.id} call={kid} childrenByParent={childrenByParent} />
       ))
@@ -383,13 +464,14 @@ function ToolGroup({
   const settledProgress =
     hasProgress && !liveProgress ? <DelegateProgressList progress={call.delegateProgress} live={false} /> : null;
   const body =
-    call.input || call.output || nestedCards || settledProgress ? (
+    call.input || call.output || nestedCards || settledProgress || scriptChild || scriptCount > 0 ? (
       <>
         {call.input ? (
           <ToolSection label="input" copyText={call.input}>
             <ToolValue raw={call.input} role="input" tool={call.name} />
           </ToolSection>
         ) : null}
+        {scriptCount > 0 ? <ScriptCalls calls={scriptKids} parent={call} childrenByParent={childrenByParent} /> : null}
         {call.output ? (
           <ToolSection label="result" copyText={call.output}>
             {/* `input` rides along for output renderers that need both sides — the `wait`
@@ -477,7 +559,7 @@ function ToolGroup({
 
   // A running count of the subagent's tools, in the header — so a collapsed delegation
   // reads "task → researcher · 3 tools" at a glance without expanding.
-  const kidCount = kids?.length ?? 0;
+  const kidCount = otherKids?.length ?? 0;
 
   // Live elapsed, in the header, while the call is in flight. The DS renders `duration`
   // on the right once a call SETTLES; until then there is nothing to render, so a card
@@ -499,8 +581,10 @@ function ToolGroup({
   const costTokens = toolCostTokens(call);
 
   const name = (
-    <>
-      {cardLabel(call)}
+    <span style={call.name === "execute_code" || scriptChild ? { whiteSpace: "normal", overflowWrap: "anywhere" } : undefined}>
+      {scriptChild ? scriptCallLabel(call) : cardLabel(call)}
+      {scriptChild && blockedByPolicy(call) ? " · blocked by policy" : null}
+      {call.name === "execute_code" ? <span className="tool-nested-count"> · {scriptSummary}</span> : null}
       {kidCount > 0 ? (
         <span className="tool-nested-count">
           {" · "}
@@ -540,7 +624,7 @@ function ToolGroup({
           {tokens(costTokens)} ctx
         </span>
       ) : null}
-    </>
+    </span>
   );
 
   const card = (
@@ -574,7 +658,9 @@ function ToolGroup({
       </>
     );
   }
-  if (!liveProgress) return card;
+  if (!liveProgress) return call.name === "execute_code" ? (
+    <>{card}<ScriptCompletion key={call.id} call={call} summary={scriptSummary} /></>
+  ) : card;
   return (
     <>
       {card}
