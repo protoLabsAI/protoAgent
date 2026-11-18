@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -57,6 +58,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
+from langchain_core.tools import InjectedToolCallId
 from langgraph.prebuilt import InjectedState
 
 from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree, untrack_when_reaped
@@ -181,7 +183,17 @@ def _build_runner_file(code: str) -> str:
     return path
 
 
-def _record_bridged_call(session_id: str, name: str, args: dict, result: str, duration_ms: int, success: bool) -> None:
+def _record_bridged_call(
+    session_id: str,
+    name: str,
+    args: dict,
+    result: str,
+    duration_ms: int,
+    success: bool,
+    *,
+    parent_call_id: str = "",
+    script_sha256: str = "",
+) -> None:
     """Bridged-call observability (ADR 0103 S3, #2807).
 
     Before this, a script's tool calls were INVISIBLE: direct ``ainvoke`` never
@@ -192,12 +204,24 @@ def _record_bridged_call(session_id: str, name: str, args: dict, result: str, du
     convention that also splits bridged from direct calls in the Prometheus
     per-tool series without a schema change anywhere. Best-effort: observability
     must never break the RPC loop.
+
+    ``parent_call_id`` (the model's tool-call id for the owning ``execute_code``
+    call) and ``script_sha256`` land on the row via ``extra`` so an operator can
+    tell which script made each ``ptc:`` call — two runs in one session are no
+    longer indistinguishable. Both are omitted when empty, so the one-shot path
+    without an id and the session kernel (which doesn't pass them yet) keep the
+    row shape they had.
     """
     try:
         from observability import metrics
         from observability.audit import audit_logger
 
         tagged = f"ptc:{name}"
+        extra: dict[str, Any] = {}
+        if parent_call_id:
+            extra["parent_call_id"] = parent_call_id
+        if script_sha256:
+            extra["script_sha256"] = script_sha256
         audit_logger.log(
             session_id=session_id or "ptc",
             tool=tagged,
@@ -205,10 +229,55 @@ def _record_bridged_call(session_id: str, name: str, args: dict, result: str, du
             result_summary=(result or "")[:200],
             duration_ms=duration_ms,
             success=success,
+            extra=extra or None,
         )
         metrics.record_tool_call(tagged, success, duration_ms / 1000.0)
     except Exception:  # noqa: BLE001 — observability never breaks the bridge
         log.debug("[execute_code] bridged-call audit failed", exc_info=True)
+
+
+# A one-shot script's full text is kept in its own ``ptc:script`` audit row (below)
+# rather than in a tool's args — _sanitize_args clips every argument at 500 chars,
+# which would lose a long script. Capped so a runaway script can't bloat the log.
+_SCRIPT_CODE_CAP = 64 * 1024  # 64 KB
+
+
+def _record_script(session_id: str, parent_call_id: str, script_sha256: str, code: str) -> None:
+    """Record the full script behind a one-shot ``execute_code`` run as a single
+    ``ptc:script`` audit row (the companion to :func:`_record_bridged_call`).
+
+    It carries the same ``parent_call_id`` and ``script_sha256`` the run's bridged
+    ``ptc:`` rows carry, so a ``ptc:`` row is never an orphan: an operator reading
+    the audit log can find the exact script that made each bridged call and read it
+    in full. The script rides ``extra['code']`` (merged into the row verbatim, not
+    through the 500-char ``_sanitize_args``); it is capped at ``_SCRIPT_CODE_CAP``
+    with ``code_truncated: true`` when cut. Best-effort like the bridged-call row —
+    observability must never break the run; empty id/digest are omitted.
+    """
+    try:
+        from observability.audit import audit_logger
+
+        extra: dict[str, Any] = {}
+        if parent_call_id:
+            extra["parent_call_id"] = parent_call_id
+        if script_sha256:
+            extra["script_sha256"] = script_sha256
+        code = code or ""
+        if len(code) > _SCRIPT_CODE_CAP:
+            code = code[:_SCRIPT_CODE_CAP]
+            extra["code_truncated"] = True
+        extra["code"] = code
+        audit_logger.log(
+            session_id=session_id or "ptc",
+            tool="ptc:script",
+            args={},
+            result_summary="",
+            duration_ms=0,
+            success=True,
+            extra=extra,
+        )
+    except Exception:  # noqa: BLE001 — observability never breaks the run
+        log.debug("[execute_code] script audit failed", exc_info=True)
 
 
 def _deny_reason(name: str, gate, fence) -> str | None:
@@ -229,7 +298,17 @@ def _deny_reason(name: str, gate, fence) -> str | None:
     return None
 
 
-async def _invoke_bridged(name: str, args: dict, tool_map: dict, *, session_id: str, gate, fence) -> tuple[bool, str]:
+async def _invoke_bridged(
+    name: str,
+    args: dict,
+    tool_map: dict,
+    *,
+    session_id: str,
+    gate,
+    fence,
+    parent_call_id: str = "",
+    script_sha256: str = "",
+) -> tuple[bool, str]:
     """Run one bridged tool call under call-bound policy and record its audit row.
 
     The single home for the binding-path contract (ADR 0103 S4): resolve the tool
@@ -238,7 +317,11 @@ async def _invoke_bridged(name: str, args: dict, tool_map: dict, *, session_id: 
     ``(ok, payload)`` where ``payload`` is the result text on success or the error
     string on failure — the one-shot service (:func:`_service_rpc`) and the session
     kernel (``kernel.py``) both frame it onto their own wire, so a bridged call is
-    the same path with the same policy whichever harness runs it."""
+    the same path with the same policy whichever harness runs it.
+
+    ``parent_call_id``/``script_sha256`` (empty by default) attribute the row to the
+    ``execute_code`` call and script that issued it; they thread straight onto the
+    audit row. The kernel passes neither yet, so its rows are unchanged."""
     import time
 
     tool = tool_map.get(name)
@@ -250,17 +333,37 @@ async def _invoke_bridged(name: str, args: dict, tool_map: dict, *, session_id: 
         # and the denial is a RECORDED bridged call (success=False), so policy blocks
         # are as observable on this path as on the direct one.
         err = f"Blocked by policy: {denied}"
-        _record_bridged_call(session_id, name, args, err, 0, False)
+        _record_bridged_call(
+            session_id, name, args, err, 0, False, parent_call_id=parent_call_id, script_sha256=script_sha256
+        )
         return False, err
     started = time.monotonic()
     try:
         result = await tool.ainvoke(args)
         text = result if isinstance(result, str) else str(result)
-        _record_bridged_call(session_id, name, args, text, int((time.monotonic() - started) * 1000), True)
+        _record_bridged_call(
+            session_id,
+            name,
+            args,
+            text,
+            int((time.monotonic() - started) * 1000),
+            True,
+            parent_call_id=parent_call_id,
+            script_sha256=script_sha256,
+        )
         return True, text
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
-        _record_bridged_call(session_id, name, args, err, int((time.monotonic() - started) * 1000), False)
+        _record_bridged_call(
+            session_id,
+            name,
+            args,
+            err,
+            int((time.monotonic() - started) * 1000),
+            False,
+            parent_call_id=parent_call_id,
+            script_sha256=script_sha256,
+        )
         return False, err
 
 
@@ -273,9 +376,20 @@ _MAX_PARALLEL_CALLS = 8
 
 
 async def _service_rpc(
-    req_reader: asyncio.StreamReader, resp_writer, tool_map: dict, *, session_id: str = "", gate=None, fence=None
+    req_reader: asyncio.StreamReader,
+    resp_writer,
+    tool_map: dict,
+    *,
+    session_id: str = "",
+    gate=None,
+    fence=None,
+    parent_call_id: str = "",
+    script_sha256: str = "",
 ):
-    """Read RPC requests from the child, invoke real tools, write back results."""
+    """Read RPC requests from the child, invoke real tools, write back results.
+
+    ``parent_call_id``/``script_sha256`` (empty by default) are attributed to every
+    bridged call this one-shot run records, so its ``ptc:`` rows name the script."""
     semaphore = asyncio.Semaphore(_MAX_PARALLEL_CALLS)
     write_lock = asyncio.Lock()
     pending: set[asyncio.Task] = set()
@@ -292,7 +406,16 @@ async def _service_rpc(
     async def dispatch(msg):
         async with semaphore:
             rid, name, args = msg.get("id"), msg.get("tool"), msg.get("args") or {}
-            ok, payload = await _invoke_bridged(name, args, tool_map, session_id=session_id, gate=gate, fence=fence)
+            ok, payload = await _invoke_bridged(
+                name,
+                args,
+                tool_map,
+                session_id=session_id,
+                gate=gate,
+                fence=fence,
+                parent_call_id=parent_call_id,
+                script_sha256=script_sha256,
+            )
             resp = {"id": rid, "ok": ok, ("result" if ok else "error"): payload}
             await respond(resp)
 
@@ -448,6 +571,8 @@ async def run_code(
     session_id: str = "",
     gate=None,
     fence=None,
+    parent_call_id: str = "",
+    script_sha256: str = "",
 ) -> str:
     """Run ``code`` with a tool-RPC bridge; return stdout and any JSON result.
 
@@ -456,6 +581,10 @@ async def run_code(
     (``name -> deny-reason | None``, from the enforcement config) and ``fence``
     (the turn's subagent allowlist, or None) apply the model-path policy checks
     to every bridged call (S4 binding parity).
+
+    ``parent_call_id`` (the owning ``execute_code`` call's model tool-call id) and
+    ``script_sha256`` (the script's digest) attribute each bridged ``ptc:`` row to
+    the script that made it; both empty by default so a direct call is unaffected.
     """
     interpreter = _resolve_child_interpreter()
     if interpreter is None:
@@ -521,7 +650,16 @@ async def run_code(
         async def _serve() -> None:
             reader, writer = await authed
             try:
-                await _service_rpc(reader, writer, tool_map, session_id=session_id, gate=gate, fence=fence)
+                await _service_rpc(
+                    reader,
+                    writer,
+                    tool_map,
+                    session_id=session_id,
+                    gate=gate,
+                    fence=fence,
+                    parent_call_id=parent_call_id,
+                    script_sha256=script_sha256,
+                )
             finally:
                 with contextlib.suppress(Exception):
                     writer.close()
@@ -752,7 +890,10 @@ def build_execute_code_tool(
 
     @tool("execute_code", description=description)
     async def execute_code(
-        code: str, fresh: bool = False, state: Annotated[Any, InjectedState] = None
+        code: str,
+        fresh: bool = False,
+        state: Annotated[Any, InjectedState] = None,
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
         if not code or not code.strip():
             return "Error: execute_code called with empty code."
@@ -760,6 +901,12 @@ def build_execute_code_tool(
         # InjectedState lane, not current_session_id() (empty inside tool bodies).
         # Excluded from the model-facing schema; None on a direct ainvoke.
         sid = str(state.get("session_id") or "") if isinstance(state, dict) else ""
+        # The model's tool-call id for THIS execute_code call (InjectedToolCallId —
+        # kept out of the model-facing schema, like `state`); it links each bridged
+        # ptc: row and the ptc:script row back to this one call, so two runs in one
+        # session are distinguishable. Empty when invoked without a tool-call id.
+        # Digest the script once so the same value tags every row this run writes.
+        script_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
         # S4 fence parity: a fenced background run that allowlists execute_code
         # must not bridge past the fence — read the turn's stamped allowlist from
         # the same state channel SubagentFenceMiddleware reads, and apply it to
@@ -784,6 +931,10 @@ def build_execute_code_tool(
                     fence=fence,
                     fresh=fresh,
                 )
+            # One-shot run: keep the full script in its own ptc:script audit row
+            # (once per run) so every bridged ptc: row this run writes can be traced
+            # back to it and read whole, then attribute each bridged row to this call.
+            _record_script(sid, tool_call_id, script_sha256, code)
             return await run_code(
                 code,
                 tool_map,
@@ -792,6 +943,8 @@ def build_execute_code_tool(
                 session_id=sid,
                 gate=enforcement_gate,
                 fence=fence,
+                parent_call_id=tool_call_id,
+                script_sha256=script_sha256,
             )
         except Exception as exc:
             log.exception("[execute_code] harness failure")

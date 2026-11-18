@@ -32,6 +32,13 @@ def _factory(config):
     return registry.late_tool_factories[0]
 
 
+async def _invoke_ec(ec, code, **args):
+    """Invoke the built execute_code tool via a full ToolCall (its InjectedToolCallId
+    requires one) and return the text body."""
+    msg = await ec.ainvoke({"name": "execute_code", "args": {"code": code, **args}, "id": "mcp-call", "type": "tool_call"})
+    return msg.content
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("config, expected", [
     ({"extra_tools": ["mcp:srv/*"]}, ["read_file", "srv__a", "srv__b"]),
@@ -44,9 +51,9 @@ def _factory(config):
 ])
 async def test_operator_selectors(config, expected):
     ec = _factory(config)(_tools(), None)
-    assert json.loads(await ec.ainvoke({"code": "result = tools.help()"})) == expected
+    assert json.loads(await _invoke_ec(ec, "result = tools.help()")) == expected
     if "srv__a" in expected:
-        assert await ec.ainvoke({"code": "print(tools.srv__a(value='filtered'))"}) == "filtered"
+        assert await _invoke_ec(ec, "print(tools.srv__a(value='filtered'))") == "filtered"
 
 
 def test_unknown_server_warned_once(caplog, monkeypatch):
@@ -73,7 +80,7 @@ async def test_glob_cannot_reintroduce_tools_excluded_by_lead_seam(restriction):
             late_tool_factories=[_factory({"tools": ["mcp:srv/*"]})],
         )
         ec = next(t for t in graph.bound_tools if t.name == "execute_code")
-        out = await ec.ainvoke({"code": """
+        out = await _invoke_ec(ec, """
 assert tools.help() == ["srv__a"]
 assert "not bridged" in tools.help("srv__b")
 try:
@@ -82,7 +89,7 @@ except RuntimeError:
     print("blocked")
 else:
     raise AssertionError("excluded tool ran")
-"""})
+""")
         assert out == "blocked"
     finally:
         set_disabled_tools([])

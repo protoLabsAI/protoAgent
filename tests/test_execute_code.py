@@ -33,6 +33,17 @@ async def boom_tool() -> str:
 _TOOL_MAP = {"echo_tool": echo_tool, "boom_tool": boom_tool}
 
 
+async def _invoke_tool(ec, code, *, tool_call_id="ec-call", **args):
+    """Invoke a built ``execute_code`` tool the production way — a full ToolCall, so
+    its ``InjectedToolCallId`` (the owning call's id) is populated — and return the
+    text body. ``execute_code`` now declares an ``InjectedToolCallId``, and langchain
+    requires a ToolCall (not a plain ``{"code": ...}`` dict) whenever a tool does."""
+    msg = await ec.ainvoke(
+        {"name": "execute_code", "args": {"code": code, **args}, "id": tool_call_id, "type": "tool_call"}
+    )
+    return msg.content
+
+
 @pytest.mark.asyncio
 async def test_plain_stdout_no_tools():
     out = await run_code("print('hello world')", {})
@@ -249,14 +260,14 @@ def test_build_excludes_self_and_respects_allowlist():
 @pytest.mark.asyncio
 async def test_built_tool_runs():
     ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
-    out = await ec.ainvoke({"code": "print(tools.echo_tool(text='hi'))"})
+    out = await _invoke_tool(ec, "print(tools.echo_tool(text='hi'))")
     assert out == "HI"
 
 
 @pytest.mark.asyncio
 async def test_built_tool_rejects_empty():
     ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
-    out = await ec.ainvoke({"code": "  "})
+    out = await _invoke_tool(ec, "  ")
     assert "empty code" in out
 
 
@@ -301,7 +312,7 @@ async def test_default_bridge_memory_and_knowledge_search(newline):
     for name in ("memory_search", "knowledge_search"):
         assert f"tools.{name}(query" in ec.description
     assert "memory_recall" not in ec.description
-    out = await ec.ainvoke({"code": (
+    out = await _invoke_tool(ec, (
         "import sys\n"
         f"sys.stdout.reconfigure(newline={newline!r})\n"
         "print(tools.memory_search(query='preferences'))\n"
@@ -310,7 +321,7 @@ async def test_default_bridge_memory_and_knowledge_search(newline):
         "    tools.memory_recall(query='legacy')\n"
         "except RuntimeError as exc:\n"
         "    print(exc)"
-    )})
+    ))
     assert out.splitlines()[:2] == ["memory: preferences", "knowledge: reference"]
     assert "not available" in out
 
@@ -583,6 +594,130 @@ async def test_bridged_calls_land_in_audit_and_metrics(tmp_path, monkeypatch):
     assert by_tool["ptc:echo_tool"]["result_summary"] == "OK"
     assert by_tool["ptc:boom_tool"]["success"] is False
     assert "kaboom" in by_tool["ptc:boom_tool"]["result_summary"]
+
+
+# --- execute_code audit parent-link (one-shot) -------------------------------
+
+
+def _audit_rows(path):
+    import json as _json
+
+    return [_json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+@pytest.mark.asyncio
+async def test_ptc_rows_carry_parent_call_id_and_script_sha256(tmp_path, monkeypatch):
+    """Two bridged calls from one execute_code call: both ptc: rows carry the
+    model's tool-call id as ``parent_call_id`` and the script's sha256 as
+    ``script_sha256`` — so an operator can tell which script made each bridged call."""
+    import hashlib
+
+    from observability.audit import AuditLogger
+
+    monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(tmp_path / "audit.jsonl"))
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
+    code = "print(tools.echo_tool(text='a'))\nprint(tools.echo_tool(text='b'))\n"
+    out = await _invoke_tool(ec, code, tool_call_id="call-abc", state={"session_id": "sess-1"})
+    assert out.replace("\r\n", "\n") == "A\nB"
+
+    sha = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    rows = _audit_rows(tmp_path / "audit.jsonl")
+    echoes = [r for r in rows if r["tool"] == "ptc:echo_tool"]
+    assert len(echoes) == 2
+    for r in echoes:
+        assert r["parent_call_id"] == "call-abc"
+        assert r["script_sha256"] == sha
+    # the ptc:script row links the same call and keeps the exact script
+    script_row = next(r for r in rows if r["tool"] == "ptc:script")
+    assert script_row["parent_call_id"] == "call-abc"
+    assert script_row["script_sha256"] == sha
+    assert script_row["code"] == code
+
+
+@pytest.mark.asyncio
+async def test_two_calls_in_one_session_get_distinct_parent_call_ids(tmp_path, monkeypatch):
+    """The session id alone can't separate two runs in one session; the per-call
+    ``parent_call_id`` now does — the two calls' ptc: rows carry different ids."""
+    from observability.audit import AuditLogger
+
+    monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(tmp_path / "audit.jsonl"))
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
+    await _invoke_tool(ec, "print(tools.echo_tool(text='a'))", tool_call_id="call-one", state={"session_id": "sess-X"})
+    await _invoke_tool(ec, "print(tools.echo_tool(text='b'))", tool_call_id="call-two", state={"session_id": "sess-X"})
+
+    rows = _audit_rows(tmp_path / "audit.jsonl")
+    echoes = [r for r in rows if r["tool"] == "ptc:echo_tool"]
+    assert {r["parent_call_id"] for r in echoes} == {"call-one", "call-two"}
+    assert {r["session_id"] for r in echoes} == {"sess-X"}  # same session, distinguishable runs
+
+
+@pytest.mark.asyncio
+async def test_script_row_keeps_full_script_and_caps_at_64kb(tmp_path, monkeypatch):
+    """The script lives in the ptc:script row's ``code`` in full (not clipped at the
+    500-char _sanitize_args limit), and a script over 64 KB is cut to 64 KB and flagged."""
+    from observability.audit import AuditLogger
+    from plugins.execute_code.engine import _SCRIPT_CODE_CAP
+
+    monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(tmp_path / "long.jsonl"))
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
+    long_code = "x = 0  # " + ("pad " * 200) + "\nprint('done')\n"
+    assert len(long_code) > 500
+    await _invoke_tool(ec, long_code, tool_call_id="call-long", state={"session_id": "sess-L"})
+    script_row = next(r for r in _audit_rows(tmp_path / "long.jsonl") if r["tool"] == "ptc:script")
+    assert script_row["code"] == long_code  # full script, not clipped at 500 chars
+    assert "code_truncated" not in script_row
+
+    monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(tmp_path / "big.jsonl"))
+    huge = "pad = '" + ("z" * 70000) + "'\n"
+    assert len(huge) > _SCRIPT_CODE_CAP
+    await _invoke_tool(ec, huge, tool_call_id="call-huge", state={"session_id": "sess-H"})
+    big_row = next(r for r in _audit_rows(tmp_path / "big.jsonl") if r["tool"] == "ptc:script")
+    assert len(big_row["code"]) == _SCRIPT_CODE_CAP == 64 * 1024
+    assert big_row["code"] == huge[:_SCRIPT_CODE_CAP]
+    assert big_row["code_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_without_tool_call_id_records_rows_without_parent(tmp_path, monkeypatch):
+    """A direct invoke with no tool-call id (empty) still runs and records ptc: rows —
+    they just carry no ``parent_call_id`` link (the id is treated as empty)."""
+    from observability.audit import AuditLogger
+
+    monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(tmp_path / "audit.jsonl"))
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
+    code = "print(tools.echo_tool(text='hi'))"
+    out = await _invoke_tool(ec, code, tool_call_id="", state={"session_id": "sess-noid"})
+    assert out.replace("\r\n", "\n") == "HI"
+
+    rows = _audit_rows(tmp_path / "audit.jsonl")
+    echo = next(r for r in rows if r["tool"] == "ptc:echo_tool")
+    assert "parent_call_id" not in echo  # no id → no link, but the row is still written
+    script_row = next(r for r in rows if r["tool"] == "ptc:script")
+    assert "parent_call_id" not in script_row
+    assert script_row["code"] == code  # the script is still kept, just unlinked
+
+
+def test_audit_log_without_extra_keeps_row_shape(tmp_path):
+    """``AuditLogger.log`` without ``extra`` (or ``extra=None``) writes the same row
+    shape as before; a populated ``extra`` merges its keys in verbatim."""
+    import json as _json
+
+    from observability.audit import AuditLogger
+
+    a = AuditLogger(tmp_path / "a.jsonl")
+    a.log(session_id="s", tool="t", args={"a": 1}, result_summary="ok", duration_ms=5, success=True)
+    a.log(session_id="s", tool="t", args={"a": 1}, result_summary="ok", duration_ms=5, success=True, extra=None)
+    r0, r1 = [_json.loads(line) for line in (tmp_path / "a.jsonl").read_text().splitlines()]
+    assert set(r0) == set(r1)  # extra=None writes the identical row shape
+    assert {"ts", "session_id", "tool", "args", "result_summary", "duration_ms", "success"} <= set(r0)
+
+    a.log(
+        session_id="s", tool="ptc:script", args={}, result_summary="", duration_ms=0, success=True,
+        extra={"parent_call_id": "c9", "code": "z" * 600},
+    )
+    r2 = _json.loads((tmp_path / "a.jsonl").read_text().splitlines()[2])
+    assert r2["parent_call_id"] == "c9"
+    assert len(r2["code"]) == 600  # merged verbatim, not clipped by _sanitize_args
 
 
 # --- binding-path parity (ADR 0103 S4, #2807) --------------------------------
