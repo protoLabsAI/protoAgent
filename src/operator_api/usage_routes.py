@@ -78,8 +78,8 @@ def register_usage_routes(app) -> None:
         without polling. Cold member caches report unknown until locally populated.
         A per-member deadline and concurrency limit bound the fan-out.
         """
-        from graph.fleet import supervisor
-        from operator_api.telemetry_routes import _fetch_member_json, _slug_of
+        from graph.fleet import member_read, supervisor
+        from operator_api.telemetry_routes import _slug_of
         from ops.usage import merge_fleet_usage
 
         roster = await asyncio.to_thread(supervisor.status)
@@ -94,7 +94,7 @@ def register_usage_routes(app) -> None:
             async with limit:
                 try:
                     return await asyncio.wait_for(
-                        _fetch_member_json(slug, path),
+                        member_read._fetch_member_json(slug, path),
                         timeout=12.0,
                     )
                 except Exception:  # noqa: BLE001 — never expose exception text or credentials

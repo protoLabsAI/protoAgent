@@ -773,8 +773,7 @@ async def test_m1_after_a_url_move_nothing_reaches_the_new_host_with_a_credentia
     the new host — not the old device token, not the fleet service token, not the caller's."""
     from types import SimpleNamespace
 
-    from graph.fleet import proxy, service_token
-    from operator_api import telemetry_routes as tr
+    from graph.fleet import member_read, proxy, service_token
 
     rec = supervisor.add_remote("ava", URL, token=TOKEN)
     rid = rec["id"]
@@ -822,7 +821,7 @@ async def test_m1_after_a_url_move_nothing_reaches_the_new_host_with_a_credentia
     monkeypatch.setattr(proxy, "_get_client", lambda: _Client())
     try:
         await proxy.forward_to(rid, _Req(), "api/devices")
-        await tr._fetch_member_json(rid, "api/telemetry/summary")
+        await member_read._fetch_member_json(rid, "api/telemetry/summary")
     finally:
         proxy._slug_cache.clear()
         proxy._remote_slugs.clear()
