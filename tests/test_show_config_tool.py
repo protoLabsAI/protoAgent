@@ -909,3 +909,114 @@ def test_show_config_masks_secret_containers_before_selection_and_pagination():
         result = tool.invoke(args)
         assert "synthetic-secret" not in result
     assert json.loads(tool.invoke({"section": "future_plugin.api_keys"})) == {"future_plugin.api_keys": _REDACTED}
+
+
+# --- #5523: a SET secret reads «redacted», an unset one reads "" ---------------------
+
+
+def _plugin_schemas(monkeypatch, *, section="careercoach", secrets=("api_key",), fail=False):
+    """Stand in for installed-plugin schema discovery — the seam both ``config_to_dict``
+    and ``show_config`` read plugin-declared secrets through."""
+    from graph.plugins import pconfig
+
+    def discover(*, strict=False):
+        if fail:
+            raise RuntimeError("plugin discovery is down")
+        return [pconfig.PluginConfigSchema(plugin_id=section, section=section, secrets=list(secrets))]
+
+    monkeypatch.setattr(pconfig, "installed_plugin_config_schemas", discover)
+
+
+def test_set_plugin_secret_reads_redacted_not_blank(monkeypatch):
+    """The jobCoach incident: a correctly saved plugin secret read "" and looked missing."""
+    _plugin_schemas(monkeypatch)
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"careercoach": {"api_key": "SEEKRIT", "region": "us"}}
+    show = build_config_tools(cfg)[0]
+
+    out = show.invoke({"section": "careercoach.api_key"})
+    assert json.loads(out) == {"careercoach.api_key": _REDACTED}
+    assert "SEEKRIT" not in out
+
+    whole = show.invoke({"section": "careercoach"})
+    assert json.loads(whole)["careercoach"] == {"api_key": _REDACTED, "region": "us"}
+    assert "SEEKRIT" not in show.invoke({})
+    assert cfg.plugin_config["careercoach"]["api_key"] == "SEEKRIT"  # live config untouched
+
+
+def test_set_plugin_secret_with_an_innocuous_name_reads_redacted(monkeypatch):
+    """The schema, not the key name, says what is secret: nothing in "passphrase"
+    matches the name hints, so only the declared-secret pass can mark it."""
+    _plugin_schemas(monkeypatch, secrets=("passphrase",))
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"careercoach": {"passphrase": "SEEKRIT"}}
+
+    out = build_config_tools(cfg)[0].invoke({"section": "careercoach.passphrase"})
+
+    assert json.loads(out) == {"careercoach.passphrase": _REDACTED}
+    assert "SEEKRIT" not in out
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_plugin_secret_still_reads_unset(monkeypatch, blank):
+    _plugin_schemas(monkeypatch)
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"careercoach": {"api_key": blank}}
+
+    out = build_config_tools(cfg)[0].invoke({"section": "careercoach.api_key"})
+
+    assert json.loads(out) == {"careercoach.api_key": ""}
+
+
+def test_set_core_secret_reads_redacted_and_unset_reads_blank():
+    cfg = LangGraphConfig()
+    cfg.api_key = ""
+    show = build_config_tools(cfg)[0]
+    assert json.loads(show.invoke({"section": "model.api_key"})) == {"model.api_key": ""}
+
+    cfg.api_key = "sk-SEEKRIT"
+    out = show.invoke({"section": "model.api_key"})
+    assert json.loads(out) == {"model.api_key": _REDACTED}
+    assert "SEEKRIT" not in out
+    assert "SEEKRIT" not in show.invoke({"section": "model"})
+
+
+def test_every_core_secret_field_is_marked_when_set():
+    """Each set core secret resolves to the marker — at its own slot, or at an ancestor
+    the name-based pass already masked whole (``secrets_manager``)."""
+    from graph.config_io import config_to_dict
+    from graph.settings_schema import FIELDS
+    from tools.config_tools import _mark_set_secrets
+
+    secret_fields = [f for f in FIELDS if f.type == "secret"]
+    assert secret_fields
+    cfg = LangGraphConfig()
+    for i, f in enumerate(secret_fields):
+        setattr(cfg, f.attr, f"SEEKRIT-{i}")
+
+    doc = redact_for_agent(config_to_dict(cfg))
+    _mark_set_secrets(doc, cfg)
+
+    for f in secret_fields:
+        cursor = doc
+        for part in f.key.split("."):
+            if cursor == _REDACTED:
+                break
+            cursor = cursor[part]
+        assert cursor == _REDACTED, f.key
+    assert "SEEKRIT" not in json.dumps(doc)
+
+
+def test_plugin_values_never_leak_when_schema_discovery_fails(monkeypatch):
+    """Fail safe: with no schema a secret can't be told from a setting, so every set
+    value reads as the marker and a blank one still reads as blank."""
+    _plugin_schemas(monkeypatch, fail=True)
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"careercoach": {"api_key": "SEEKRIT", "passphrase": "SEEKRIT-2", "unset": ""}}
+    show = build_config_tools(cfg)[0]
+
+    out = show.invoke({"section": "careercoach"})
+
+    assert json.loads(out)["careercoach"] == {"api_key": _REDACTED, "passphrase": _REDACTED, "unset": ""}
+    assert "SEEKRIT" not in out
+    assert "SEEKRIT" not in show.invoke({})

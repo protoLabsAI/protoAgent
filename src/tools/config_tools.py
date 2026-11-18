@@ -97,6 +97,61 @@ def redact_for_agent(value: Any, *, key: str = "") -> Any:
     return value
 
 
+def _set(value: Any) -> bool:
+    """Whether a secret slot holds a value — a whitespace-only string is still unset."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value not in (None, [], {})
+
+
+def _mark_set_secrets(doc: dict, config) -> None:
+    """Mark every secret slot that holds a value in the LIVE config as «redacted» (#5523).
+
+    ``config_to_dict`` blanks secrets to ``""`` — core secret FIELDS and plugin-declared
+    secrets alike — because the Settings UI round-trips blank as "unchanged". That makes
+    a SET secret indistinguishable from an unset one, and ``redact_for_agent`` only masks
+    non-empty values, so it cannot put the marker back. This reads set-ness from the live
+    config and writes only the marker: the value itself is never copied into ``doc``."""
+    from graph.settings_schema import FIELDS
+
+    for f in FIELDS:
+        if f.type != "secret" or not _set(getattr(config, f.attr, None)):
+            continue
+        cursor: Any = doc
+        parts = f.key.split(".")
+        for part in parts[:-1]:
+            cursor = cursor.setdefault(part, {}) if isinstance(cursor, dict) else None
+        if isinstance(cursor, dict):
+            cursor[parts[-1]] = _REDACTED
+
+    plugin_cfg = getattr(config, "plugin_config", {}) or {}
+    if not plugin_cfg:
+        return
+    discovery_ok = True
+    try:
+        # Every installed plugin, enabled or not — the same set `config_to_dict` blanks.
+        from graph.plugins.pconfig import installed_plugin_config_schemas
+
+        secrets_by_section: dict = {}
+        for schema in installed_plugin_config_schemas(strict=True):
+            secrets_by_section.setdefault(schema.section, set()).update(schema.secrets)
+    except Exception:  # noqa: BLE001 — discovery FAILED: we no longer know which keys are secret
+        discovery_ok = False
+        secrets_by_section = {}
+    for section, vals in plugin_cfg.items():
+        if not isinstance(vals, dict):
+            continue
+        # Fail SAFE: with no schema a secret can't be told from a non-secret value, so
+        # every value that is set reads as the marker — never as itself.
+        keys = secrets_by_section.get(section, set()) if discovery_ok else set(vals)
+        slot = doc.get(section)
+        for key in keys:
+            if key in vals and _set(vals[key]):
+                if not isinstance(slot, dict):
+                    slot = doc[section] = {}
+                slot[key] = _REDACTED
+
+
 def _dump(doc: Any) -> str:
     text = json.dumps(doc, indent=2, default=str, sort_keys=True)
     if len(text) > _MAX_CHARS:
@@ -437,6 +492,8 @@ def build_config_tools(config) -> list:
 
         try:
             doc = redact_for_agent(config_to_dict(config))
+            # A SET secret must read «redacted», not the "" config_to_dict blanks it to.
+            _mark_set_secrets(doc, config)
         except Exception as exc:  # noqa: BLE001 — a tool must not raise into the turn
             log.exception("[config] show_config failed to serialize the live config")
             return f"Error: could not read the effective config: {exc}"
