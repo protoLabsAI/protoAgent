@@ -678,19 +678,21 @@ The conditions on that CONTINUE, as Josh set them:
 - **Still not authorized:** release UI, a Work composer, Phases 3–6, Started by
   others.
 
-**P1h.5 dev-instance results (2026-11-18).** The rerun at commit `10f042a83`
-gave steps 1, 4 and 5 **PASS**, with no canary leak.
+**P1h.5 dev-instance results (2026-11-18).**
 
-- **Step 3 (restart): accepted as v1 behaviour** (ruling relayed by Claude Code
-  for Josh, 2026-11-18). A private turn killed mid-run recovers as **FAILED**:
-  "Task interrupted by an agent restart; its runner did not survive." This
-  matches ordinary interrupted turns ([ADR 0129](../adr/0129-work-consolidation.md), D7),
-  fails closed, and nothing leaks or replays. A queued private steer is not
-  separately recovered by the steer route in v1; no card follows.
-- **Step 2 (parked resume): failed and is fixed by bd-kaztd.** A private steer
+- The rerun at commit `10f042a83` gave steps 1, 4 and 5 **PASS** and no canary leak.
+- Step 2 (parked resume) **FAILED** and is fixed by **bd-kaztd**: a private steer
   into a session parked on a decision it may not answer is refused, not started
   beside it.
-- **The default stays off.** Turning it on remains a separate go from Josh.
+- Step 3 (restart) **FAILED**: a private steer sent while a public turn ran, then
+  a kill and restart, came back FAILED ("Task interrupted by an agent restart;
+  its runner did not survive.") and restart recovery found nothing, because no
+  live route writes a durable pending turn. Nothing leaked. It is being fixed
+  under **protoAgent#5504 (card bd-upbbz)**. This is **not accepted v1 behaviour**.
+- Steps 2 and 3 are rerun on the dev instance after both fixes merge
+  (**bd-v8szk**).
+- Turning the default on remains a separate go from Josh;
+  `private_steering.enabled` stays **default off**.
 
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
