@@ -225,3 +225,74 @@ async def test_retry_after_refused_delivery_reuses_durable_acceptance(rig, monke
     (turn,) = await ss.pending_turns(chat_mod._private_partition_store(), "chat-retry", OP)
     assert turn["dedupe"] == "m1" and turn["seq"] == 1 and turn["state"] == ss.STATE_QUEUED
     assert sum(SECRET in (row.private_payload or "") for row in await rig.rows()) == 1
+
+
+@pytest.mark.parametrize("ending", ["error", "exception", "disconnect", "cancel", "exhausted", "retry"])
+@pytest.mark.parametrize("recovered", [False, True])
+async def test_abnormal_private_turn_releases_runner(rig, monkeypatch, ending, recovered):  # noqa: F811
+    # #5504: a known-ended execution must not wedge every later private steer.
+    from graph.fleet.delegation import DELEGATION_HEADER
+
+    session = "chat-ended"
+    carriage = {}
+    start = chat_mod._start_steer_turn
+    native = chat_mod._run_native_turn
+
+    async def capture(*args, **kwargs):
+        carriage.update(kwargs)
+        return "captured"
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", capture)
+    response = await rig.steer("shared-bearer", session, SECRET, "m1", private=True)
+    assert response.status_code == 200
+    if recovered:
+        steering._reset()
+        out = await chat_mod.recover_private_pending_turns()
+        await out["dispatch"]
+
+    async def failing(*args, **kwargs):
+        if kwargs.get("overflow_retry"):
+            segment = await ss.read_segment(chat_mod._private_partition_store(), session, OP)
+            assert segment["state"] == ss.STATE_RUNNING
+            yield ("done", REPLY)
+            return
+        yield ("text", "partial")
+        if ending == "retry":
+            import httpx
+
+            raise httpx.ReadError("provider stream dropped")
+        if ending == "exception":
+            raise ValueError("native failed")
+        if ending == "cancel":
+            raise asyncio.CancelledError()
+        if ending == "error":
+            yield ("error", "native failed")
+
+    monkeypatch.setattr(chat_mod, "_run_native_turn", failing)
+    stream = chat_mod._chat_langgraph_stream(
+        carriage["private_ref"], session,
+        request_metadata={"private_input": True, DELEGATION_HEADER: carriage["delegation"]},
+    )
+    try:
+        assert await anext(stream) == ("text", "partial")
+        if ending == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await anext(stream)
+        elif ending != "disconnect":
+            frames = []
+            async for frame in stream:
+                frames.append(frame)
+                if frame[0] == "error":
+                    break  # the executor closes the stream at its terminal frame
+            if ending == "retry":
+                assert frames[-1] == ("done", REPLY)
+    finally:
+        await stream.aclose()
+    store = chat_mod._private_partition_store()
+    assert await ss.pending_turns(store, session, OP) == []
+    assert (await ss.read_segment(store, session, OP))["state"] == ss.SEGMENT_IDLE
+    assert not chat_mod._RECOVERED_PRIVATE_TURNS
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", start)
+    monkeypatch.setattr(chat_mod, "_run_native_turn", native)
+    follow = (await rig.steer("shared-bearer", session, SECRET, "m2", private=True)).json()
+    assert (await poll_terminal(rig.op, follow["started_turn"]))["status"]["state"] == "TASK_STATE_COMPLETED"

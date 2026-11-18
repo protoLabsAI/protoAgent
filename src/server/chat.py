@@ -1044,7 +1044,7 @@ async def _finish_private_pending_turn(ref, store, context, *, parked=False):
         interrupt = await _pending_interrupt({"configurable": {"thread_id": turn["checkpoint"]}})
         await ss.park_segment(store, sid, generation=seg["generation"],
                               interrupt_id=str(interrupt[0] or "") if interrupt else "", context=context)
-    elif ref not in _RECOVERED_PRIVATE_TURNS:
+    elif seg["state"] == ss.STATE_RUNNING and ref not in _RECOVERED_PRIVATE_TURNS:
         await ss.complete_segment(store, sid, generation=seg["generation"], context=context)
 
 
@@ -1613,9 +1613,9 @@ _RECOVERED_PRIVATE_TURNS: dict[str, str] = {}
 async def _settle_recovered_private_turn(ref: str, store, context) -> None:
     """Release the durable runner and dispatch its next queued private turn.
 
-    Only a ``done`` reaches this (``_fold_private_reply_frames``). A turn that parks, fails or
-    is cut down keeps its segment reserved, so the next restart reports it suspended instead
-    of running it twice. Best-effort: a failed release is logged and leaves it reserved too."""
+    Called on ``done`` and when a claimed execution exits, including failure or cancellation.
+    Parked turns stay reserved. A hard process crash cannot run cleanup, so restart still
+    reports that execution suspended. Best-effort: a failed release leaves it reserved too."""
     session_id = _RECOVERED_PRIVATE_TURNS.pop(ref, None)
     if session_id is None:
         return
@@ -2545,6 +2545,7 @@ async def _chat_langgraph_stream_impl(
         # retries that thread, and must not fire for a failure
         # from the pre-turn chain or the ACP runtime (which never used it).
         _tid: str | None = None
+        _private_claimed = False
         try:
             # The pre-turn dispatch chain (@-mention, /goal, /lifecycle, plugin command,
             # workflow, subagent, skill, unknown /command, ACP switch) is SHARED with
@@ -2628,6 +2629,7 @@ async def _chat_langgraph_stream_impl(
                     if not await _claim_private_pending_turn(session_id, _private_ref, _private_store, _private_ctx):
                         yield ("error", _PRIVATE_UNAVAILABLE)
                         return
+                    _private_claimed = True
                 # HITL hold (#1560): while this thread is parked at a form/question/
                 # approval interrupt, a fresh operator message is HELD in the steering
                 # queue (it folds in right after the form response) and the turn re-parks
@@ -2784,6 +2786,15 @@ async def _chat_langgraph_stream_impl(
             _fail_tid = _tid or _turn_control._resolve_thread_id(request_metadata, session_id)
             yield ("error", await _fail_turn(e, session_id, tag="a2a-stream", thread_id=_fail_tid))
         finally:
+            if _private_claimed:
+                # Own the whole execution, including provider retries. Closing an inner
+                # native stream on a retry must not release its durable reservation.
+                # A parked segment remains reserved; a process crash never runs this.
+                try:
+                    await _finish_private_pending_turn(_private_ref, _private_store, _private_ctx)
+                    await _settle_recovered_private_turn(_private_ref, _private_store, _private_ctx)
+                except Exception:
+                    log.warning("[private] could not settle durable private turn on exit", exc_info=True)
             tracing.flush()
 
 

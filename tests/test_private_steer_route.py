@@ -109,8 +109,17 @@ async def rig(tmp_path, monkeypatch, delegation_env):
             return (await conn.execute(sql(query))).all()
     async def restart():
         nonlocal handler, router, engine, store
+        from tests.test_steer_idle_starts_turn import _operator_ctx
+
+        # Preserve the durable crash image: SIGKILL cannot run generator cleanup,
+        # whereas closing the test handler below gracefully cancels its executions.
+        context = _operator_ctx()
+        crashed = {sid: await store.scheduling_payloads(sid, context)
+                   for sid in await ss.sessions_with_pending_turns(store, context)}
         await handler._active_task_registry.aclose()
         await router.drain()
+        for sid, payloads in crashed.items():
+            await store.update_scheduling_payloads(sid, context, lambda records: records.update(payloads))
         await engine.dispose()
         engine, store = await _partition(tmp_path)
         monkeypatch.setattr(STATE, "a2a_task_engine", engine)

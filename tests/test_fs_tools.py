@@ -2240,3 +2240,122 @@ def test_list_form_edit_invalidates_the_read_memo(workspace):
 
     assert _memoized_read({"messages": read_turn}, "a", "m.py", 1, _DEFAULT_READ_LINES, False) == "x\n"
     assert _memoized_read({"messages": edited_turn}, "a", "m.py", 1, _DEFAULT_READ_LINES, False) is None
+
+
+# ── search_files: several queries in one call (#5098) ────────────────────────
+
+
+@pytest.fixture
+def multi_search(workspace):
+    _, a, _ = workspace
+    (a / "handlers.py").write_text("def foo_handler():\n    pass\n\ndef bar():\n    return ALPHA\n")
+    (a / "notes.md").write_text("ALPHA one\nBETA two\nALPHA three\n")
+    return _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))["search_files"]
+
+
+def _sections(out: str) -> dict[str, str]:
+    """Split a multi-query result into {query: section body}, preserving order."""
+    sections: dict[str, str] = {}
+    for chunk in ("\n" + out).split("\n## ")[1:]:
+        head, _, body = chunk.partition("\n")
+        sections[head] = body.rstrip("\n")
+    return sections
+
+
+def test_search_files_queries_render_one_section_per_query_in_input_order(multi_search):
+    queries = ["BETA", "zzz-absent", "ALPHA"]
+
+    out = multi_search.invoke({"project": "a", "queries": queries, "context_lines": 1})
+
+    sections = _sections(out)
+    assert list(sections) == queries
+    assert out.startswith("## BETA\n")
+    for q in queries:
+        assert sections[q] == multi_search.invoke({"project": "a", "query": q, "context_lines": 1})
+    assert sections["zzz-absent"].startswith("(no matches")
+    assert "output cap reached" not in out
+
+
+def test_search_files_queries_honour_path_and_regex_per_query(multi_search):
+    queries = [r"def \w+_handler\(", r"^ALPHA \w+$", "(unclosed"]
+
+    out = multi_search.invoke({"project": "a", "queries": queries, "regex": True})
+
+    sections = _sections(out)
+    assert list(sections) == queries
+    assert sections[queries[0]] == "handlers.py:1: def foo_handler():"
+    assert sections[queries[1]] == "notes.md:1: ALPHA one\nnotes.md:3: ALPHA three"
+    # One bad pattern is that section's error, not the whole call's.
+    assert sections[queries[2]].startswith("Error: bad regex")
+    # Literal by default: the same strings are not patterns without regex=true.
+    literal = _sections(multi_search.invoke({"project": "a", "queries": queries[:2]}))
+    assert all(body.startswith("(no matches") for body in literal.values())
+    # `path` scopes every query.
+    scoped = _sections(multi_search.invoke({"project": "a", "queries": ["ALPHA", "BETA"], "path": "notes.md"}))
+    assert "handlers.py" not in scoped["ALPHA"] and scoped["BETA"] == "notes.md:2: BETA two"
+
+
+def test_search_files_queries_share_one_total_output_cap(workspace):
+    from tools.fs_tools import _MAX_SEARCH_OUTPUT_LINES
+
+    _, a, _ = workspace
+    for name in ("AAA", "BBB", "CCC", "DDD"):
+        (a / f"{name}.txt").write_text(f"{name}\n" * 150)
+    search = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))["search_files"]
+
+    out = search.invoke({"project": "a", "queries": ["AAA", "BBB", "CCC", "DDD"]})
+
+    lines = out.split("\n")
+    assert lines[-1] == "… (output cap reached after query 3 of 4; narrow the queries or split the call)"
+    assert len(lines) == _MAX_SEARCH_OUTPUT_LINES + 1  # cut at a line boundary, plus the marker
+    assert list(_sections("\n".join(lines[:-1]))) == ["AAA", "BBB", "CCC"]
+    assert "AAA.txt:150:" in out and "BBB.txt:150:" in out  # earlier sections are whole
+    assert "CCC.txt:1:" in out and "CCC.txt:150:" not in out and "DDD.txt" not in out
+
+
+def test_search_files_queries_cap_never_ends_on_a_bare_heading(workspace, monkeypatch):
+    import tools.fs_tools as fs_tools
+
+    _, a, _ = workspace
+    (a / "AAA.txt").write_text("AAA\n" * 3)
+    (a / "BBB.txt").write_text("BBB\n" * 3)
+    search = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))["search_files"]
+    # "## AAA" + 3 hits + blank + "## BBB" = 6 lines: the cut lands right on BBB's heading.
+    monkeypatch.setattr(fs_tools, "_MAX_SEARCH_OUTPUT_LINES", 6)
+
+    out = search.invoke({"project": "a", "queries": ["AAA", "BBB", "CCC"]})
+
+    assert out.split("\n") == [
+        "## AAA",
+        "AAA.txt:1: AAA",
+        "AAA.txt:2: AAA",
+        "AAA.txt:3: AAA",
+        "… (output cap reached after query 1 of 3; narrow the queries or split the call)",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        ({"query": "ALPHA", "queries": ["BETA"]}, "Error: pass either query or queries, not both."),
+        ({}, "Error: pass query or a non-empty queries list."),
+        ({"query": "", "queries": []}, "Error: pass query or a non-empty queries list."),
+        ({"queries": [f"q{i}" for i in range(9)]}, "Error: at most 8 queries per call."),
+        ({"queries": ["ALPHA", "", "BETA"]}, "Error: query 2 of 3 is empty."),
+        ({"queries": ["ALPHA", "BETA", " \t"]}, "Error: query 3 of 3 is empty."),
+    ],
+)
+def test_search_files_query_form_errors(multi_search, args, error):
+    assert multi_search.invoke({"project": "a", **args}) == error
+
+
+def test_search_files_eight_queries_is_allowed_and_an_empty_list_falls_back_to_query(multi_search):
+    out = multi_search.invoke({"project": "a", "queries": [f"q{i}" for i in range(8)]})
+    assert list(_sections(out)) == [f"q{i}" for i in range(8)]
+
+    single = multi_search.invoke({"project": "a", "query": "BETA", "queries": []})
+    assert single == "notes.md:2: BETA two"
+
+
+def test_search_files_description_mentions_queries(multi_search):
+    assert "queries" in multi_search.description
