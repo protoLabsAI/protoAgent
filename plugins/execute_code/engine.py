@@ -211,8 +211,17 @@ def _record_bridged_call(
     longer indistinguishable. Both are omitted when empty, so the one-shot path
     without an id and the session kernel (which doesn't pass them yet) keep the
     row shape they had.
+
+    ``args`` and ``result`` are run through the graph audit middleware's
+    ``redact()`` before they are logged — the direct ``ainvoke`` bridge never
+    passes ``AuditMiddleware``, which is the one place model-path tool rows get
+    redacted, so a secret a script hands a bridged tool (or that a tool echoes
+    back) would otherwise persist here in plaintext. This is the same redactor,
+    in the same order (clip the result to 200, then redact), so the ``ptc:`` row
+    is at credential parity with the model-path row.
     """
     try:
+        from graph.middleware.redaction import redact
         from observability import metrics
         from observability.audit import audit_logger
 
@@ -225,8 +234,8 @@ def _record_bridged_call(
         audit_logger.log(
             session_id=session_id or "ptc",
             tool=tagged,
-            args=args,
-            result_summary=(result or "")[:200],
+            args=redact(args),
+            result_summary=redact((result or "")[:200]),
             duration_ms=duration_ms,
             success=success,
             extra=extra or None,
@@ -253,8 +262,15 @@ def _record_script(session_id: str, parent_call_id: str, script_sha256: str, cod
     through the 500-char ``_sanitize_args``); it is capped at ``_SCRIPT_CODE_CAP``
     with ``code_truncated: true`` when cut. Best-effort like the bridged-call row —
     observability must never break the run; empty id/digest are omitted.
+
+    The script is run through the graph audit middleware's ``redact()`` first — a
+    one-shot run never passes ``AuditMiddleware`` (the model-path redactor), so a
+    credential hardcoded in the script (a ``Bearer`` token, an ``API_KEY = "…"``
+    assignment) would otherwise be persisted here in plaintext. Redacting before
+    the cap keeps a secret from surviving on a truncation boundary.
     """
     try:
+        from graph.middleware.redaction import redact
         from observability.audit import audit_logger
 
         extra: dict[str, Any] = {}
@@ -262,7 +278,7 @@ def _record_script(session_id: str, parent_call_id: str, script_sha256: str, cod
             extra["parent_call_id"] = parent_call_id
         if script_sha256:
             extra["script_sha256"] = script_sha256
-        code = code or ""
+        code = str(redact(code or ""))
         if len(code) > _SCRIPT_CODE_CAP:
             code = code[:_SCRIPT_CODE_CAP]
             extra["code_truncated"] = True

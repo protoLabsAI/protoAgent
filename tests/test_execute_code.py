@@ -702,6 +702,29 @@ async def test_ainvoke_without_tool_call_id_records_rows_without_parent(tmp_path
     assert script_row["code"] == code  # the script is still kept, just unlinked
 
 
+@pytest.mark.asyncio
+async def test_script_and_bridged_rows_redact_credentials(tmp_path, monkeypatch):
+    """A one-shot run bypasses the graph's AuditMiddleware — the one place model-path
+    tool rows are redacted — so this path applies the same redact() itself: a credential
+    hardcoded in the script (the ptc:script `code`) or handed to a bridged tool (the ptc:
+    row's args) is scrubbed, never persisted in the audit log in plaintext."""
+    from observability.audit import AuditLogger
+
+    monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(tmp_path / "audit.jsonl"))
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
+    secret = "sk-" + "a" * 40  # an OpenAI-shaped token the redactor matches by shape
+    code = f'API_KEY = "{secret}"\nprint(tools.echo_tool(text="{secret}"))\n'
+    await _invoke_tool(ec, code, tool_call_id="call-sec", state={"session_id": "sess-sec"})
+
+    rows = _audit_rows(tmp_path / "audit.jsonl")
+    script_row = next(r for r in rows if r["tool"] == "ptc:script")
+    assert secret not in script_row["code"]  # the script is redacted, not stored raw
+    assert "[REDACTED]" in script_row["code"]
+    echo = next(r for r in rows if r["tool"] == "ptc:echo_tool")
+    assert echo["args"] == {"text": "[REDACTED]"}  # the bridged call's args are redacted too
+    assert secret not in json.dumps(echo["args"])
+
+
 def test_audit_log_without_extra_keeps_row_shape(tmp_path):
     """``AuditLogger.log`` without ``extra`` (or ``extra=None``) writes the same row
     shape as before; a populated ``extra`` merges its keys in verbatim."""
