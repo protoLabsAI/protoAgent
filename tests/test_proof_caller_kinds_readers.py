@@ -1,9 +1,10 @@
 """P1 proof K2: the steering-queue and derived-reader isolation scenarios re-run for every caller kind
 (federation, fleet-service, paired-agent, enrolled-console), each minted by ``a2a_impl.auth`` and
 classified behind ``A2AAuthMiddleware`` — the path a live request takes, entering through the seam the
-PRODUCT reads. No src/ change; the source test files are imported, not edited.
+product reads. Source scenarios are imported or adapted below; source test files stay unchanged.
 """
 
+import json
 from collections import namedtuple
 from contextlib import contextmanager
 
@@ -12,9 +13,10 @@ from langchain_core.messages import HumanMessage, SystemMessage, messages_from_d
 from starlette.testclient import TestClient
 from a2a_impl import auth, segment_schedule as ss
 from security import devices
+from graph.middleware.memory import load_digest
 
 from tests.test_conversation_harvest import _ARCHIVE_CANARY, test_harvest_excludes_private_canaries_from_every_derived_reader as _src_harvest
-from tests.test_digest_gating import test_public_projection_filters_open_closed_relevant_and_cached_prompts as _src_digest
+from tests.test_digest_gating import _quiet_working_state, _write
 from tests.test_prompt_capture_middleware import _Req, _response, _run_chained, test_private_partition_captures_nothing_and_drops_the_private_buffers as _src_prompt
 from tests.test_session_gist import harness, test_private_source_survives_public_turn_compaction_restart_and_stale_timer as _src_gist  # noqa: F401
 from tests.test_steer_idle_starts_turn import _partition
@@ -41,9 +43,29 @@ def _caller_scope(caller):
 
 
 def assert_peer_refused():
-    """A non-operator peer's write to the operator-only durable partition is refused (PermissionError) BY
-    DESIGN — not a leak or product gap; peers must not enqueue into it, so later assertions are operator-only."""
+    """Private-audience admission is operator-only; the no-mix proof runs before this check."""
     return pytest.raises(PermissionError)
+
+
+class _QueueAdmissionFailure(AssertionError):
+    """Only the caller's scheduler admission failed, not private-side setup."""
+
+
+class _DigestDeliveryFailure(AssertionError):
+    """The original public positive control is withheld by federation policy."""
+
+
+async def _accept_peer(caller, request, partition, **kwargs):
+    if not caller.is_operator:
+        request.node.add_marker(pytest.mark.xfail(strict=True, raises=_QueueAdmissionFailure,
+            reason="PROOF FAILURE: non-operator scheduler admission prevents queue isolation/dedupe proof"))
+    try:
+        return await ss.accept_pending_turn(partition, audience=ss.AUDIENCE_PEER,
+                                           principal=caller.principal, context=caller.ctx, **kwargs)
+    except PermissionError as exc:
+        if caller.is_operator or str(exc) != "Private task access requires a human operator":
+            raise
+        raise _QueueAdmissionFailure(str(exc)) from exc
 
 
 def _resolve(case):
@@ -121,17 +143,12 @@ async def test_no_model_call_mixes_audiences_per_caller_kind(caller, segment_aud
     assert turn["audience"] == ss.AUDIENCE_PRIVATE and turn["principal"] == caller.principal and turn["state"] == ss.STATE_QUEUED
 
 
-async def test_cross_audience_steer_queues_behind_running_segment_per_caller_kind(caller, server_op, partition):
+async def test_cross_audience_steer_queues_behind_running_segment_per_caller_kind(caller, request, server_op, partition):
     # A private segment runs (operator-staged); the caller submits the PEER steer under its OWN context — the operator-only intake admits only the operator (no shortcut).
     priv = await ss.accept_pending_turn(partition, session_id="chat-q", audience=ss.AUDIENCE_PRIVATE, principal="shared-operator-bearer", dedupe="m1", input_ref="private-input:x", context=server_op)
     gen = await ss.claim_segment(partition, "chat-q", audience=ss.AUDIENCE_PRIVATE, seq=priv["seq"], context=server_op)
     await ss.set_turn_state(partition, "chat-q", priv["seq"], ss.STATE_RUNNING, server_op)
-    peer = ss.accept_pending_turn(partition, session_id="chat-q", audience=ss.AUDIENCE_PEER, principal=caller.principal, dedupe="m2", context=caller.ctx)
-    if not caller.is_operator:
-        with assert_peer_refused():
-            await peer
-        return
-    await peer  # the assertions below run only for the operator caller, by design
+    await _accept_peer(caller, request, partition, session_id="chat-q", dedupe="m2")
     assert await ss.try_fold(partition, "chat-q", generation=gen, audience=ss.AUDIENCE_PEER, seq=2, context=server_op) is None
     assert await ss.next_dispatch(partition, "chat-q", server_op) is None  # reserved by the private segment
     assert await ss.complete_segment(partition, "chat-q", generation=gen, context=server_op) is True
@@ -139,14 +156,9 @@ async def test_cross_audience_steer_queues_behind_running_segment_per_caller_kin
     assert nxt["dedupe"] == "m2" and nxt["audience"] == "peer"
 
 
-async def test_duplicate_message_id_gives_one_pending_turn_per_caller_kind(caller, partition):
+async def test_duplicate_message_id_gives_one_pending_turn_per_caller_kind(caller, request, partition):
     from sqlalchemy import text as sql
-    first = ss.accept_pending_turn(partition, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal=caller.principal, dedupe="m1", context=caller.ctx)
-    if not caller.is_operator:
-        with assert_peer_refused():
-            await first
-        return
-    first = await first  # the dedupe assertions below run only for the operator caller, by design
+    first = await _accept_peer(caller, request, partition, session_id="chat-d", dedupe="m1")
     again = await ss.accept_pending_turn(partition, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal=caller.principal, dedupe="m1", context=caller.ctx)
     assert again["seq"] == first["seq"]  # the retry reuses the one turn
     async with partition.engine.connect() as conn:
@@ -161,24 +173,89 @@ def test_private_source_survives_public_turn_per_caller_kind(caller, harness, tm
 
 
 @pytest.mark.parametrize("provenance", [None, {"audience": "mixed", "version": "1"}, {"audience": "public", "version": "old"}])
-def test_public_projection_filters_prompts_per_caller_kind(caller, tmp_path, monkeypatch, provenance):
-    from graph.middleware import knowledge, memory
-    # The prior-session digest is principal-gated (ADR 0066), run LIVE for every caller — never forced
-    # off. Non-federation callers resolve to restrict=False, so the SOURCE proof runs verbatim.
+def test_public_projection_filters_prompts_per_caller_kind(caller, request, tmp_path, monkeypatch, provenance):
+    from graph.middleware import knowledge
     with _caller_scope(caller):
         is_federation = caller.ctx.state["principal_kind"] == "federation"
         assert knowledge._restrict_prior_session_memory() is is_federation
+        if is_federation:
+            request.node.add_marker(pytest.mark.xfail(strict=True, raises=_DigestDeliveryFailure,
+                reason="PROOF FAILURE: federation policy withholds the source scenario's public digest positive control"))
+        _public_projection_scenario(tmp_path, monkeypatch, provenance, is_federation)
+
+
+def _public_projection_scenario(tmp_path, monkeypatch, provenance, is_federation):
+    # Adapted from test_public_projection_filters_open_closed_relevant_and_cached_prompts;
+    # every original assertion is retained, including the final positive control.
+    from datetime import datetime, timezone
+    from langchain_core.messages import AIMessage, HumanMessage
+    from graph import public_memory
+    from graph.middleware import memory
+    from graph.middleware.knowledge import KnowledgeMiddleware
+    from graph.session_search import search_session_summaries
+    from tests._public_memory_source import PublicMemorySource
+
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+    monkeypatch.setattr(memory, "_PERSISTENCE_DISABLED", False)
+    _quiet_working_state(monkeypatch)
+    _write(tmp_path, "chat-1", "PRIVATE-CANARY", gist="PRIVATE-GIST")
+    path = tmp_path / "chat-1.json"
+    old = json.loads(path.read_text())
+    if provenance is not None:
+        old[public_memory.PROVENANCE] = provenance
+    path.write_text(json.dumps(old))
+    mw = KnowledgeMiddleware(None)
+    mw.compose_context({"session_id": "peer", "messages": [HumanMessage(content="hello")]}, record=False)
+    search_session_summaries("PRIVATE", memory_dir=str(tmp_path))  # prime the FTS cache
+    source = PublicMemorySource(tmp_path / "source.record")
+    source.save([HumanMessage(content="rocket launch"), AIMessage(content="ready")])
+    monkeypatch.setattr(public_memory, "_source_reader", source)
+    closed = tmp_path / "closed"
+    closed.mkdir()
+    now = datetime.now(timezone.utc).isoformat()
+    (closed / path.name).write_text(json.dumps({**old, "closed_at": now}))
+    assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now)
+    assert search_session_summaries("PRIVATE", memory_dir=str(tmp_path)) == []
+    assert memory.digest_entry(old)["topic"] == ""
+    assert memory.format_session_summary(old) == ""
+    assert not memory.record_closed_session("chat-1", topic="PRIVATE", gist="PRIVATE", closed_at=now, source_card=old,
+                                            audience="public", source_version=1)
+    for policy in ("newest", "relevant"):
+        assert load_digest(policy, query="PRIVATE", memory_dir=str(tmp_path)).entries == []
+    assert "PRIVATE" not in (mw.compose_context({"session_id": "peer", "messages": []}, record=False) or {}).get("context", "")
+    memory._persist_session({"session_id": "chat-1", "incognito": False,
+                             "messages": [HumanMessage(content="PRIVATE-COMPACTED"), AIMessage(content="PRIVATE-REPLY")]}, "trace")
+    card = json.loads(path.read_text())
+    assert "PRIVATE" not in json.dumps(card)
+    for policy in ("newest", "relevant"):
+        assert "rocket launch" in load_digest(policy, query="rocket", memory_dir=str(tmp_path)).block
+    card.update(audience="public", source_version=1)
+    assert memory.record_closed_session("chat-1", topic="ignored", gist="ignored", closed_at=now, source_card=card,
+                                        audience="mixed", source_version=0)
+    closed_card = json.loads((closed / path.name).read_text())
+    assert closed_card["audience"] == "public" and closed_card["source_version"] == 1
+    path.unlink()  # closed record outlives the open card
+    monkeypatch.setattr(public_memory, "_source_reader", PublicMemorySource(source.path))
+    restarted = KnowledgeMiddleware(None)
+    context = restarted.compose_context({"session_id": "peer", "messages": []}, record=False)
+    # Keep the source positive control intact. Defer ONLY its known federation failure
+    # so the private-canary check and failed-source/cache-invalidation assertions still run.
+    delivery_failure = None
+    assert "PRIVATE" not in context["context"]
+    try:
+        assert "rocket launch" in context["context"] and "PRIVATE" not in context["context"]
+    except AssertionError as exc:
         if not is_federation:
-            _src_digest(tmp_path, monkeypatch, provenance)
-            return
-        # Federation composes NO prior-session digest: a public summary the loader still serves (store non-empty) is withheld — ADR 0066, live.
-        from tests.test_digest_gating import _write
-        monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
-        monkeypatch.setattr(memory, "_PERSISTENCE_DISABLED", False)
-        _write(tmp_path, "prior-public", "PRIOR_PUBLIC_TOPIC")
-        ctx = (knowledge.KnowledgeMiddleware(None).compose_context({"session_id": "peer", "messages": [HumanMessage(content="hi")]}, record=False) or {}).get("context", "")
-        assert any(e.session_id == "prior-public" for e in memory.load_digest(memory_dir=str(tmp_path)).entries)  # store non-empty
-        assert "PRIOR_PUBLIC_TOPIC" not in ctx  # yet withheld from the federation turn
+            raise
+        delivery_failure = exc
+    source.path.unlink()  # failed source read must also invalidate cached delivery
+    memory._persist_session({"session_id": "chat-1", "incognito": False,
+                             "messages": [HumanMessage(content="PRIVATE-UNKNOWN")]}, "trace")
+    assert not path.exists()
+    assert load_digest(memory_dir=str(tmp_path)).entries == []
+    assert "rocket launch" not in restarted.compose_context({"session_id": "peer", "messages": []}, record=False)["context"]
+    if delivery_failure is not None:
+        raise _DigestDeliveryFailure("federation policy withholds the public digest positive control") from delivery_failure
 
 
 def test_harvest_excludes_private_canaries_per_caller_kind(caller, tmp_path, monkeypatch):
