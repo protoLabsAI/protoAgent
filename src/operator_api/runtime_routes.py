@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 import uuid
 
 from fastapi import Body, HTTPException, Request
@@ -33,6 +34,25 @@ _BOOT_ID = uuid.uuid4().hex
 _RESTART_IDLE_GRACE_S = 120
 
 
+def _coding_agent_dispatches() -> int | None:
+    """Live ACP coder dispatches — clients waiting on a ``session/prompt`` answer (#5267).
+    A board coder is neither a chat turn nor a background job, so nothing else here sees
+    it. ``None`` means the registry could not be read, which the caller reports as busy.
+
+    Read from ``sys.modules`` rather than imported: the client module is plugin code
+    (loaded as ``plugins.coding_agent`` by its callers and under the plugin loader's own
+    name when enabled), and one that was never loaded has no clients to count."""
+    try:
+        return sum(
+            int(module.live_dispatch_count())
+            for name, module in list(sys.modules.items())
+            if name.endswith("coding_agent.acp_client") and module is not None
+        )
+    except Exception:  # noqa: BLE001 — an unreadable registry is "busy", never "idle"
+        log.warning("[restart] coding-agent dispatch registry unreadable", exc_info=True)
+        return None
+
+
 def restart_readiness() -> dict:
     """Read existing work registries; never infer idle from an unavailable store."""
     from runtime.state import STATE
@@ -46,6 +66,11 @@ def restart_readiness() -> dict:
         if jobs:
             count = f"{len(jobs)}" if len(jobs) < 500 else "500 or more"
             busy.append(f"{count} background job{'s' if len(jobs) != 1 else ''}")
+    dispatches = _coding_agent_dispatches()
+    if dispatches is None:
+        busy.append("coding-agent dispatches could not be read")
+    elif dispatches:
+        busy.append(f"{dispatches} coding-agent dispatch{'es' if dispatches != 1 else ''} running")
     supervised = STATE.uvicorn_server is not None or bool(os.environ.get("PROTOAGENT_FLEET_TOKEN"))
     return {
         "idle": not busy,
