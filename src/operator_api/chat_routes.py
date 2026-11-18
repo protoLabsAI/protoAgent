@@ -35,7 +35,7 @@ from a2a_impl.conversation_policy import (
     CONVERSATION_WINDOW_DAYS as _CONVERSATION_WINDOW_DAYS,
     listed_outside_thread,
 )
-from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first, task_public_filter
+from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first, task_public_filter, task_read_columns
 from infra.paths import package_version
 from runtime.session_ids import SessionId, require_session_id, session_id_problem
 from runtime.state import STATE
@@ -364,7 +364,41 @@ async def _parked_sessions(engine, limit: int) -> list[dict]:
     return out
 
 
-async def session_summary(session_id: str) -> dict | None:
+def _read_context(request: Request):
+    from a2a.server.context import ServerCallContext
+
+    return ServerCallContext(state={"principal_kind": getattr(request.state, "principal_kind", "open/unknown")})
+
+
+async def _hidden_session(session_id: str, context) -> bool:
+    """Unpartitioned session state cannot be disclosed when it contains private turns."""
+    from a2a_impl.auth import is_human_operator
+    from a2a_impl.stores import HUMAN_OPERATOR_OWNER
+    from a2a.server.tasks.database_task_store import TaskModel
+    from sqlalchemy import select
+
+    if is_human_operator(context.state.get("principal_kind")):
+        return False
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        if private_steering_enabled():
+            raise HTTPException(status_code=503, detail="Session read unavailable.")
+        return False
+    try:
+        async with engine.connect() as conn:
+            return (await conn.execute(select(TaskModel.id).where(
+                TaskModel.context_id == session_id, TaskModel.owner == HUMAN_OPERATOR_OWNER
+            ).limit(1))).first() is not None
+    except Exception:
+        raise HTTPException(status_code=503, detail="Session read unavailable.") from None
+
+
+async def _guard_session_read(session_id: str, request: Request):
+    if await _hidden_session(session_id, _read_context(request)):
+        raise HTTPException(status_code=403, detail="Session read unavailable.")
+
+
+async def session_summary(session_id: str, *, context=None) -> dict | None:
     """``{session_id, active, turn_count, last_updated, last_state, status, live_task_id,
     last_change_seq, updated_at}`` for one chat session, or ``None`` when the server has
     never seen it (no stored turn, none running) or it was deleted (tombstoned).
@@ -399,7 +433,7 @@ async def session_summary(session_id: str) -> dict | None:
             return None
         from a2a.server.tasks.database_task_store import TaskModel
 
-        newest = _newest_turn_ranked(TaskModel, conn.dialect.name, (TaskModel.context_id == session_id) & await task_public_filter(conn))
+        newest = _newest_turn_ranked(TaskModel, conn.dialect.name, (TaskModel.context_id == session_id) & await task_public_filter(conn, context=context))
         row = (
             await conn.execute(
                 select(newest.c.turn_count, newest.c.last_updated, newest.c.status, newest.c.task_id).where(
@@ -1442,7 +1476,7 @@ def register_chat_routes(app, ui: str) -> None:
         return await compact_session(session_id)
 
     @app.get("/api/chat/sessions/{session_id}/export")
-    async def _api_export_session(session_id: SessionId, title: str | None = None):
+    async def _api_export_session(session_id: SessionId, request: Request, title: str | None = None):
         """Export a chat session's conversation as Markdown (#2158 P1) — the
         "share this thread" gesture.
 
@@ -1455,7 +1489,10 @@ def register_chat_routes(app, ui: str) -> None:
         AND disclosed in the document itself — an export is meant to leave the
         machine, so the operator reviews rather than trusting a silent filter.
         Redaction is a safety net, not a guarantee."""
-        return await export_session(session_id, title=title)
+        await _guard_session_read(session_id, request)
+        result = await export_session(session_id, title=title)
+        await _guard_session_read(session_id, request)
+        return result
 
     @app.get("/api/chat/sessions")
     async def _api_chat_sessions(limit: int = 50, parked: bool = False):
@@ -1844,7 +1881,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"ok": True, "session_id": session_id}
 
     @app.get("/api/chat/sessions/{session_id}")
-    async def _api_chat_session(session_id: SessionId):
+    async def _api_chat_session(session_id: SessionId, request: Request):
         """One session's summary + BUSY SIGNAL: ``{session_id, active, turn_count,
         last_updated, last_state}``. ``active`` is true while a turn is running on the
         session (any surface). Unknown or deleted → 404 ``{detail: {code: "not_found"}}``.
@@ -1852,13 +1889,14 @@ def register_chat_routes(app, ui: str) -> None:
         console turn to finish)."""
         from fastapi import HTTPException
 
+        context = _read_context(request)
         try:
-            summary = await session_summary(session_id)
+            summary = await session_summary(session_id, context=context)
         except Exception as exc:  # noqa: BLE001 — a read API must degrade, not 500 the caller
             log.warning("[chat] session summary read failed for %s: %s", session_id, exc)
             from runtime import turn_activity
 
-            return {
+            summary = {
                 "session_id": session_id,
                 "active": turn_activity.is_active(session_id),
                 "turn_count": None,
@@ -1871,12 +1909,15 @@ def register_chat_routes(app, ui: str) -> None:
             raise HTTPException(
                 status_code=404, detail={"code": "not_found", "reason": f"unknown session: {session_id}"}
             )
+        if await _hidden_session(session_id, context):
+            summary["live_task_id"] = None
         return summary
 
     @app.get("/api/chat/sessions/{session_id}/local-turns")
-    async def _api_local_turns(session_id: SessionId):
+    async def _api_local_turns(session_id: SessionId, request: Request):
         from runtime import local_turns
 
+        await _guard_session_read(session_id, request)
         return {"turns": local_turns.snapshot(session_id)}
 
     @app.post("/api/chat/sessions/{session_id}/local-turns/{turn_id}/cancel")
@@ -1890,7 +1931,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"stopped": stopped}
 
     @app.get("/api/chat/sessions/{session_id}/turns")
-    async def _api_session_turns(session_id: SessionId, limit: int = 50):
+    async def _api_session_turns(session_id: SessionId, request: Request, limit: int = 50):
         """The session's durable turns from the A2A task store (ADR 0104, Swap &
         Resume S5) — status/artifacts/history untransformed (the same wire shapes
         the console's frame dispatcher replays) plus a joined ``text`` convenience.
@@ -1909,7 +1950,9 @@ def register_chat_routes(app, ui: str) -> None:
 
         from runtime import local_turns
 
-        local = local_turns.snapshot(session_id)
+        context = _read_context(request)
+        hidden = await _hidden_session(session_id, context)
+        local = [] if hidden else local_turns.snapshot(session_id)
         engine = getattr(STATE, "a2a_task_engine", None)
         if engine is None:
             return {
@@ -1928,14 +1971,8 @@ def register_chat_routes(app, ui: str) -> None:
                 tombstones = await _ensure_chat_tombstones(conn)
                 rows = (
                     await conn.execute(
-                        select(
-                            TaskModel.id,
-                            TaskModel.status,
-                            TaskModel.artifacts,
-                            TaskModel.history,
-                            TaskModel.last_updated,
-                        )
-                        .where(TaskModel.context_id == session_id).where(await task_public_filter(conn))
+                        select(*(await task_read_columns(conn, context=context)))
+                        .where(TaskModel.context_id == session_id).where(await task_public_filter(conn, context=context))
                         .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
                         # Read the NEWEST bounded tail so catch-up always includes
                         # a current HITL/in-flight turn, then restore chronology below.
@@ -1994,12 +2031,12 @@ def register_chat_routes(app, ui: str) -> None:
             turn["live"] = turn is live
         # No A2A task live → the oldest (first-registered) running local turn (detached
         # #4277 / other #4205 non-A2A driver) is the live one; A2A liveness always wins.
-        local_rows = local_turns.snapshot(session_id)
+        local_rows = [] if hidden else local_turns.snapshot(session_id)
         local_live_id = _mark_local_live(local_rows, live)
         return {"turns": turns, "local_turns": local_rows, "live_task_id": live["task_id"] if live else local_live_id}
 
     @app.get("/api/chat/sessions/{session_id}/turns/{turn_id}")
-    async def _api_session_turn(session_id: SessionId, turn_id: str):
+    async def _api_session_turn(session_id: SessionId, turn_id: str, request: Request):
         """Poll one detached ``/api/chat`` turn by id (#4277).
 
         ``state`` is ``working`` while it runs, then its retained outcome: ``completed`` with
@@ -2009,6 +2046,7 @@ def register_chat_routes(app, ui: str) -> None:
         stored, so it is never returned."""
         from runtime import local_turns
 
+        await _guard_session_read(session_id, request)
         result = local_turns.get_turn(session_id, turn_id)
         if result is None:
             raise HTTPException(status_code=404, detail={"code": "not_found", "reason": f"unknown turn: {turn_id}"})
@@ -2136,7 +2174,7 @@ def register_chat_routes(app, ui: str) -> None:
         )
 
     @app.get("/api/chat/sessions/{session_id}/steer")
-    async def _api_steer_pending(session_id: SessionId):
+    async def _api_steer_pending(session_id: SessionId, request: Request):
         """Items still queued for ``session_id`` — i.e. steering messages that
         arrived after the turn's last model call and weren't folded in. The
         console reads this at turn-end: it settles the consumed ones into the
@@ -2155,10 +2193,21 @@ def register_chat_routes(app, ui: str) -> None:
         console attaches to it rather than settling or re-sending."""
         from graph import steering
 
+        context = _read_context(request)
+        started = steering.started_map(session_id)
+        if await _hidden_session(session_id, context):
+            from sqlalchemy import select
+            from a2a.server.tasks.database_task_store import TaskModel
+
+            async with STATE.a2a_task_engine.connect() as conn:
+                visible = set((await conn.execute(select(TaskModel.id).where(
+                    TaskModel.context_id == session_id, await task_public_filter(conn, context=context)
+                ))).scalars())
+            started = {mid: tid for mid, tid in started.items() if tid in visible}
         return {
             "pending": steering.pending_items(session_id),
             "drained": steering.drained(session_id),
-            "started": steering.started_map(session_id),
+            "started": started,
         }
 
     @app.post("/api/chat/sessions/{session_id}/server-turns/{task_id}/interject")
@@ -2196,13 +2245,14 @@ def register_chat_routes(app, ui: str) -> None:
         return {"removed": removed, "pending": steering.pending(session_id)}
 
     @app.get("/api/chat/sessions/{session_id}/delegations")
-    async def _api_delegations(session_id: SessionId):
+    async def _api_delegations(session_id: SessionId, request: Request):
         """In-flight foreground subagent delegations for ``session_id`` —
         ``[{"id", "label"}]``. ``id`` is the running ``task`` tool-call id; the
         console surfaces a Cancel affordance on each running ``task`` card and this
         is the authoritative list that affordance acts on."""
         from graph import delegations
 
+        await _guard_session_read(session_id, request)
         return {"running": delegations.running_items(session_id)}
 
     @app.post("/api/chat/sessions/{session_id}/delegations/{delegation_id}/cancel")
@@ -2251,15 +2301,17 @@ def register_chat_routes(app, ui: str) -> None:
         return await _api_revoke_directive(session_id, directive_id, reason)
 
     @app.get("/api/chat/sessions/{session_id}/directives")
-    async def _api_directives(session_id: SessionId, status: str | None = None):
+    async def _api_directives(session_id: SessionId, request: Request, status: str | None = None):
         """This chat's directives, oldest first — ``{"directives": [...], "in_force": N}``.
         ``?status=in_force|fulfilled|revoked`` narrows the list. A chat with none answers
         an empty list, not 404: the ledger is per chat and starts empty."""
         from graph.directives import STATUSES, directive_store
 
+        await _guard_session_read(session_id, request)
         if status is not None and status not in STATUSES:
             raise HTTPException(status_code=400, detail=f"status must be one of {', '.join(STATUSES)}")
         items = await asyncio.to_thread(directive_store().list, session_id)
+        await _guard_session_read(session_id, request)
         in_force = sum(1 for d in items if d.in_force)
         if status is not None:
             items = [d for d in items if d.status == status]
