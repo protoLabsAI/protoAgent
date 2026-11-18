@@ -6,4 +6,8 @@
   materializes the registry into explicit fence entries. A fence-only entry is found by name too. The caller is
   the operator, so there is no approval card; setting the mode a project already has writes nothing. Unknown name
   is a 404, a missing or non-boolean `write` a 400. The console client gains `api.setProjectWrite(name, write)`
-  for the upcoming Settings ▸ Projects toggle. Refs protoLabsAI/projectBoard-plugin#783.
+  for the upcoming Settings ▸ Projects toggle. The change is merged under the config write lock, so two
+  overlapping switches — or a switch overlapping an agent registering a project, whose own write now merges the
+  same way — cannot undo each other. A registry entry's current mode is read the way the fence enforces it (a
+  hand-edited `write: "false"` is read-only, a missing `write` is read-write), so a switch is never skipped as
+  "already set" when the enforced mode differs. Refs protoLabsAI/projectBoard-plugin#783.

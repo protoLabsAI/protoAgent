@@ -56,7 +56,10 @@ class PluginHost:
     # (secrets routed automatically) and reload the graph once. Heavy (a full
     # reload) — a route should call it via ``asyncio.to_thread``. Lets a plugin
     # route apply config + reload (e.g. an OAuth Connect flow flipping enabled).
-    apply_settings: Optional[Callable[[dict], Any]] = None
+    # ``patch`` may instead be a callable ``(current_config) -> patch | None``: the
+    # host runs it under its config write lock, so a read-modify-write of a whole
+    # list (the projects registry) cannot lose a concurrent writer's change (#2743).
+    apply_settings: Optional[Callable[[Any], Any]] = None
 
 
 # Process-lifetime singleton. The server fills it in; plugins read it.

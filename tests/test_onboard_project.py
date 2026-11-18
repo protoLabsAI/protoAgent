@@ -117,8 +117,16 @@ class _Mocks:
         return SimpleNamespace(returncode=self._returncode, stdout="", stderr=self._stderr)
 
     def fake_apply(self, patch):
+        patch = _resolved(patch)
         self.apply_calls.append(patch)
         return True, ["config saved"]
+
+
+def _resolved(patch):
+    """The patch a host would write: ``_register`` hands ``HOST.apply_settings`` a
+    callable to run under the config write lock; with no live config it re-merges
+    against what the tool read."""
+    return patch(None) if callable(patch) else patch
 
 
 @pytest.fixture
@@ -531,7 +539,7 @@ async def test_reuse_git_unavailable_reports_not_comparable(tmp_path, monkeypatc
 
     apply_calls: list[dict] = []
     monkeypatch.setattr(onboard_tools.subprocess, "run", _raise)
-    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (apply_calls.append(patch), (True, ["ok"]))[1])
+    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (apply_calls.append(_resolved(patch)), (True, ["ok"]))[1])
 
     target = tmp_path / "widget"
     target.mkdir()
@@ -814,7 +822,7 @@ def _repo(path: Path, *, origin: str | None = None, branch: str = "trunk") -> Pa
 @pytest.fixture
 def applied(monkeypatch):
     calls: list[dict] = []
-    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (calls.append(patch), (True, ["ok"]))[1])
+    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (calls.append(_resolved(patch)), (True, ["ok"]))[1])
     monkeypatch.setattr(HOST, "config", None)
     return calls
 

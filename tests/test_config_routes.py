@@ -813,7 +813,7 @@ def test_projects_get_matches_a_tilde_row_against_its_expanded_fence_entry(monke
 # ── PATCH /api/projects/{name} — switch a project's access mode (projectBoard-plugin#783) ──
 
 
-def _wire_project_apply(monkeypatch, *, ok=True, messages=()):
+def _wire_project_apply(monkeypatch, *, ok=True, messages=(), before_locked_read=lambda: None):
     """Stand in for the server's ``HOST.apply_settings`` wiring: record each settings
     patch and (on success) fold it into ``STATE.graph_config`` the way the real
     apply + reload does, so a following GET reads the new state."""
@@ -825,6 +825,11 @@ def _wire_project_apply(monkeypatch, *, ok=True, messages=()):
     applied: list[dict] = []
 
     def _apply(updates):
+        if callable(updates):  # run under the config write lock, against the committed config
+            before_locked_read()
+            updates = updates(rs.STATE.graph_config)
+        if updates is None:  # another writer already made the change — nothing to write
+            return ok, list(messages)
         applied.append(updates)
         if ok:
             changes = {}
@@ -888,10 +893,51 @@ def test_project_patch_lowers_back_and_a_same_mode_patch_writes_nothing(monkeypa
     assert len(applied) == 1
 
 
-def test_project_patch_same_mode_treats_a_missing_write_key_as_read_only(monkeypatch, tmp_path):
-    _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path)}])
+def test_project_patch_reads_a_registry_entrys_mode_the_way_the_fence_projects_it(monkeypatch, tmp_path):
+    """`fenced_projects()` reads a registry `write` with `_falsey`: a hand-edited string
+    "false" is read-only and a MISSING key is read-write. The same-mode check must agree,
+    or a PATCH answers 200 "already" while the enforced mode stays the opposite."""
+    import runtime.state as rs
+
+    other = tmp_path / "other"
+    other.mkdir()
+    rows = [{"name": "app", "path": str(tmp_path), "write": "false"}, {"name": "other", "path": str(other)}]
+    _projects_state(monkeypatch, projects=rows)
     applied = _wire_project_apply(monkeypatch)
-    assert _client().patch("/api/projects/app", json={"write": False}).status_code == 200
+    client = _client()
+    for name, same in (("app", False), ("other", True)):  # already that mode, as enforced
+        assert client.patch(f"/api/projects/{name}", json={"write": same}).status_code == 200
+    assert applied == []
+    for name, same in (("app", False), ("other", True)):
+        assert client.patch(f"/api/projects/{name}", json={"write": not same}).status_code == 200
+    assert applied[-1]["projects"] == [{**rows[0], "write": True}, {**rows[1], "write": False}]
+    assert [p["write"] for p in rs.STATE.graph_config.fenced_projects()] == [True, False]
+
+
+def test_project_patch_keeps_a_change_another_writer_committed_first(monkeypatch, tmp_path):
+    """The lists are re-read inside the apply (under the host's config write lock), not
+    written back from the read the request started with — so an overlapping PATCH or
+    an agent registration that committed in between is not reverted."""
+    from dataclasses import replace
+
+    import runtime.state as rs
+
+    app = {"name": "app", "path": str(tmp_path), "write": False}
+    other = {"name": "other", "path": str(tmp_path / "other"), "write": False}
+    new = {"name": "new", "path": str(tmp_path / "new"), "write": False}
+    _projects_state(monkeypatch, projects=[app, other])
+
+    def _other_writer():  # commits `other` → read-write and registers `new`
+        rs.STATE.graph_config = replace(rs.STATE.graph_config, projects=[app, {**other, "write": True}, new])
+
+    applied = _wire_project_apply(monkeypatch, before_locked_read=_other_writer)
+    assert _client().patch("/api/projects/app", json={"write": True}).status_code == 200
+    assert applied == [{"projects": [{**app, "write": True}, {**other, "write": True}, new]}]
+
+    # The identical change landing first leaves nothing of ours to write: still a 200.
+    _projects_state(monkeypatch, projects=[app, other])
+    applied.clear()
+    assert _client().patch("/api/projects/other", json={"write": True}).status_code == 200
     assert applied == []
 
 
@@ -901,7 +947,7 @@ def test_project_patch_flips_the_mirrored_explicit_fence_entry_and_nothing_else(
     _projects_state(
         monkeypatch,
         projects=[
-            {"name": "app", "path": str(tmp_path), "default_branch": "main"},
+            {"name": "app", "path": str(tmp_path), "default_branch": "main", "write": False},
             {"name": "legacy", "path": str(legacy), "write": True},
         ],
         filesystem_projects=[
@@ -937,7 +983,7 @@ def test_project_patch_does_not_materialize_the_registry_into_the_fence(monkeypa
     legacy.mkdir()
     _projects_state(
         monkeypatch,
-        projects=[{"name": "app", "path": str(tmp_path)}],
+        projects=[{"name": "app", "path": str(tmp_path), "write": False}],
         filesystem_projects=[{"name": "legacy", "path": str(legacy)}],
     )
     applied = _wire_project_apply(monkeypatch)
@@ -972,7 +1018,7 @@ def test_project_patch_rejects_a_missing_or_non_bool_write(monkeypatch, tmp_path
 
 
 def test_project_patch_surfaces_a_failed_apply_as_a_500(monkeypatch, tmp_path):
-    _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path)}])
+    _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path), "write": False}])
     _wire_project_apply(monkeypatch, ok=False, messages=["config.yaml is not writable"])
     r = _client().patch("/api/projects/app", json={"write": True})
     assert r.status_code == 500

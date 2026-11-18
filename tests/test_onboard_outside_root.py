@@ -74,7 +74,8 @@ def _tool(config: LangGraphConfig):
 @pytest.fixture
 def applied(monkeypatch):
     calls: list[dict] = []
-    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (calls.append(patch), (True, ["ok"]))[1])
+    resolve = lambda patch: patch(None) if callable(patch) else patch  # noqa: E731 — as the host would, under its lock
+    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (calls.append(resolve(patch)), (True, ["ok"]))[1])
     monkeypatch.setattr(HOST, "config", None)
     return calls
 

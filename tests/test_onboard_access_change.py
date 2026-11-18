@@ -52,11 +52,17 @@ class _Host:
         self.cards: list[dict] = []
         self.answer = None
         self.live: LangGraphConfig | None = None
+        self.before_locked_read = lambda: None  # a test's "another writer committed first"
         monkeypatch.setattr(HOST, "apply_settings", self._apply)
         monkeypatch.setattr(HOST, "config", lambda: self.live)
         monkeypatch.setattr(langgraph.types, "interrupt", self._interrupt)
 
     def _apply(self, patch):
+        if callable(patch):  # the host runs it under its config write lock, on the live config
+            self.before_locked_read()
+            patch = patch(self.live)
+        if patch is None:  # nothing to write (the host would only reload)
+            return True, ["ok"]
         self.patches.append(copy.deepcopy(patch))
         if self.live is not None:
             if "projects" in patch:
@@ -313,3 +319,21 @@ def test_delegate_read_only_refusal_names_the_approval_card(root, monkeypatch):
     assert "is read-only (write: false)" in msg
     assert "onboard_project / register_local_project with write=true" in msg and "approval card" in msg
     assert "Settings ▸ Projects" in msg
+
+
+async def test_registration_merges_against_what_another_writer_committed_first(root, host):
+    """``_register`` re-reads the lists INSIDE the apply (the host runs the callable under
+    its config write lock), so an access change that committed after the tool's own read
+    is kept instead of being written back to what was read."""
+    path, fresh = _repo(root / "munda"), _repo(root / "fresh")
+    cfg = _cfg(root, projects=[_entry(path)], filesystem_projects=[{"name": "munda", "path": str(path)}])
+
+    def other_writer():  # raises munda in both lists, between our read and our write
+        cfg.projects = [_entry(path, write=True)]
+        cfg.filesystem_projects = [{"name": "munda", "path": str(path), "write": True}]
+
+    host.before_locked_read = other_writer
+    await host.call(cfg, "register_local_project", path=str(fresh))
+    [patch] = host.patches
+    for entries in (patch["projects"], patch["filesystem"]["projects"]):
+        assert [(e["path"], e["write"]) for e in entries] == [(str(path), True), (str(fresh), False)]
