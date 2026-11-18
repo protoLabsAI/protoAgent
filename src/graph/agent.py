@@ -480,6 +480,15 @@ def _build_middleware(
 
     middleware.append(RoomCastMiddleware(lead_name=getattr(config, "identity_name", "") or ""))
 
+    # Private steering (best effort): the private exchange stays in the model's context,
+    # labelled as a confidential operator note. View-only — the checkpoint never carries
+    # the label — so, like the two above, it sits INSIDE Trajectory/PromptCache (Trajectory
+    # hashes the STORED message bytes) and OUTSIDE PromptCapture (which records what the
+    # model saw). No-op with private steering off or on a conversation with no private turn.
+    from graph.middleware.private_label import PrivateNoteLabelMiddleware
+
+    middleware.append(PrivateNoteLabelMiddleware())
+
     # Prompt snapshot capture (#2243) — records the EXACT system prompt each
     # model call received. After PromptCache and every prompt mutator above (the
     # ordering IS the correctness: it must see the final assembled system message,
