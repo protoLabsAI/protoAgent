@@ -10,6 +10,9 @@ from operator_api.runtime_routes import restart_readiness
 from plugins.coding_agent import acp_client
 from plugins.coding_agent.acp_client import AcpClient, AcpError
 
+# Drives infra.proc's tree teardown, which branches on the OS: run it on the Windows lane.
+pytestmark = pytest.mark.platform_sensitive
+
 
 class _Proc:
     """An agent process whose stdout the test ends by hand; it has already exited 0."""
