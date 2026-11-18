@@ -1,0 +1,1 @@
+- **Script tool calls appear inside execute_code cards.** The console shows nested calls in script syntax, running and failure counts in the collapsed header, policy denials, and stopped calls. Large runs fold successful calls into a summary while keeping failures and active calls visible.

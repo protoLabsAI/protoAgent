@@ -229,8 +229,8 @@ class ParkedTaskRouter:
         # Settles under way per context, and the event their waiters block on.
         self._settling: dict[str, int] = {}
         self._settled_event: dict[str, asyncio.Event] = {}
-        # A settle deferred behind an answer: context → (keep_task_id, call_context, cutoff).
-        self._deferred: dict[str, tuple[str, Any, datetime]] = {}
+        # A settle deferred behind an answer: context → (keep_task_id, call_context, cutoff, private).
+        self._deferred: dict[str, tuple[str, Any, datetime, bool]] = {}
 
     # ── answer bookkeeping (called by the send wrappers) ──────────────────────
 
@@ -283,12 +283,12 @@ class ParkedTaskRouter:
             if event is not None:
                 event.set()
 
-    def _defer(self, ctx: str, keep_task_id: str, call_context: Any, cutoff: datetime) -> None:
+    def _defer(self, ctx: str, keep_task_id: str, call_context: Any, cutoff: datetime, private: bool = False) -> None:
         # The most recent request wins: requests come from turn ENDS, in order, so the
         # latest names the task that owns the pause now (and has the latest cutoff).
         prior = self._deferred.get(ctx)
         if prior is None or prior[2] <= cutoff:
-            self._deferred[ctx] = (keep_task_id, call_context, cutoff)
+            self._deferred[ctx] = (keep_task_id, call_context, cutoff, private)
         if not self._answers.get(ctx):
             # Busy with something that is not a wrapped answer: retry shortly instead.
             loop = asyncio.get_running_loop()
@@ -301,13 +301,16 @@ class ParkedTaskRouter:
         if deferred is not None:
             self.schedule_settle(ctx, *deferred)
 
-    async def parked_tasks(self, context_id: str, call_context: Any, *, owner_scoped: bool = False) -> list[Task]:
+    async def parked_tasks(
+        self, context_id: str, call_context: Any, *, owner_scoped: bool = False, sibling_of: str | None = None, private: bool = False,
+    ) -> list[Task]:
         """The context's input-required tasks, newest first.
 
-        ``owner_scoped`` lists only the caller's OWN tier's tasks — no operator→federation
+        ``owner_scoped`` lists only the verified human's private tasks — no operator→federation
         fallback (``stores.list_owner_scoped``). A private steer's guarded resume uses it so
-        the resume can never be re-pointed onto a peer-owned parked task, and an operator
-        turn's settle never completes one (#5380, ADR 0131 P1b.2). A task store without that
+        the resume can never be re-pointed onto a peer-owned parked task. ``sibling_of``
+        selects the saved turn's partition for settlement (#5380, ADR 0131 P1b.2).
+        A task store without that
         method (the SDK in-memory store used in tests) has no cross-owner fallback anyway, so
         it keeps the plain list."""
         if not context_id:
@@ -316,6 +319,9 @@ class ParkedTaskRouter:
         params = ListTasksRequest(
             context_id=context_id, status=TaskState.TASK_STATE_INPUT_REQUIRED, page_size=50
         )
+        siblings = getattr(store, "list_sibling_tasks", None)
+        if sibling_of is not None and siblings is not None:
+            return list((await siblings(params, call_context, sibling_of, private=private)).tasks)
         lister = getattr(store, "list_owner_scoped", None) if owner_scoped else None
         page = await (lister(params, call_context) if lister is not None else store.list(params, call_context))
         return list(page.tasks)
@@ -344,7 +350,7 @@ class ParkedTaskRouter:
         if not _is_hitl_resume(message) or not message.context_id:
             return
         # A private steer / resume (ADR 0131 P1b.2) may only ever continue a parked task the
-        # OPERATOR owns: scope the lookup to the operator's own tier so the operator→federation
+        # human owns: scope the lookup to the human's private partition so the operator→federation
         # read fallback can never re-point the private turn — and so its private reply — onto a
         # peer-owned parked task (#5380). With no operator pause to resume it runs as a fresh
         # operator-owned task below (never onto a peer's), the way an idle private steer does.
@@ -413,18 +419,18 @@ class ParkedTaskRouter:
         return True
 
     async def settle_siblings(
-        self, context_id: str, keep_task_id: str, call_context: Any, cutoff: datetime | None = None
+        self, context_id: str, keep_task_id: str, call_context: Any, cutoff: datetime | None = None, private: bool = False
     ) -> list[str]:
         """Complete every input-required task in ``context_id`` that parked no later than
         ``cutoff`` (default: now), except ``keep_task_id``, each pointing at it. A task that
         parked after the cutoff is a newer pause, not a stale one. Returns the ids settled."""
         cutoff = cutoff or datetime.now(UTC)
         settled: list[str] = []
-        # Owner-scoped: a turn settles only parked tasks of its OWN tier. Without this an
+        # A turn settles only parked tasks in its saved owner partition. Without this an
         # operator turn ending in a peer's context would, through the operator→federation read
         # fallback, complete (and re-own) the PEER's parked task — a private steer that ran as
         # a fresh operator turn there would force-settle the peer's pause (#5380, ADR 0131 P1b.2).
-        for task in await self.parked_tasks(context_id, call_context, owner_scoped=True):
+        for task in await self.parked_tasks(context_id, call_context, owner_scoped=True, sibling_of=keep_task_id, private=private):
             if task.id == keep_task_id or _parked_at(task) > cutoff:
                 continue
             busy = await self._busy(task.id)
@@ -434,7 +440,7 @@ class ParkedTaskRouter:
                 # An answer is in flight in this context (maybe headed to this very task):
                 # it owns the outcome. Re-run once it is done — never race it.
                 log.info("[a2a] deferring the settle of parked task %s — an answer is in flight", task.id)
-                self._defer(context_id, keep_task_id, call_context, cutoff)
+                self._defer(context_id, keep_task_id, call_context, cutoff, private)
                 return settled
             self._settle_started(context_id)
             message_id = f"settle-{uuid.uuid4()}"
@@ -481,7 +487,7 @@ class ParkedTaskRouter:
             return False
 
     def schedule_settle(
-        self, context_id: str, keep_task_id: str, call_context: Any, cutoff: datetime | None = None
+        self, context_id: str, keep_task_id: str, call_context: Any, cutoff: datetime | None = None, private: bool = False
     ) -> asyncio.Task | None:
         """Run :meth:`settle_siblings` in the background (the caller is a turn's producer:
         it must not wait on other tasks' producers). The cutoff is fixed NOW, when asked."""
@@ -489,16 +495,16 @@ class ParkedTaskRouter:
             return None
         cutoff = cutoff or datetime.now(UTC)
         task = asyncio.create_task(
-            self._settle_quietly(context_id, keep_task_id, call_context, cutoff),
+            self._settle_quietly(context_id, keep_task_id, call_context, cutoff, private),
             name=f"a2a-settle-siblings:{keep_task_id}",
         )
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
         return task
 
-    async def _settle_quietly(self, context_id: str, keep_task_id: str, call_context: Any, cutoff: datetime) -> None:
+    async def _settle_quietly(self, context_id: str, keep_task_id: str, call_context: Any, cutoff: datetime, private: bool = False) -> None:
         try:
-            await self.settle_siblings(context_id, keep_task_id, call_context, cutoff)
+            await self.settle_siblings(context_id, keep_task_id, call_context, cutoff, private)
         except Exception:  # noqa: BLE001 — best-effort housekeeping
             log.warning("[a2a] settling parked siblings of %s failed", keep_task_id, exc_info=True)
 
@@ -508,13 +514,13 @@ class ParkedTaskRouter:
             await asyncio.wait(set(self._inflight))
 
 
-def schedule_settle_siblings(context_id: str, keep_task_id: str, call_context: Any) -> asyncio.Task | None:
+def schedule_settle_siblings(context_id: str, keep_task_id: str, call_context: Any, *, private: bool = False) -> asyncio.Task | None:
     """Settle the context's other parked tasks via the installed router; no-op without one."""
     router = _ROUTER[0]
     if router is None:
         return None
     try:
-        return router.schedule_settle(context_id, keep_task_id, call_context)
+        return router.schedule_settle(context_id, keep_task_id, call_context, private=private)
     except Exception:  # noqa: BLE001 — never break the turn that asked
         log.warning("[a2a] could not schedule settling parked siblings of %s", keep_task_id, exc_info=True)
         return None

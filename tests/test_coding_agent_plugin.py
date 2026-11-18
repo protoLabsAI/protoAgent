@@ -1863,3 +1863,25 @@ async def test_a_single_chunk_repeated_is_not_a_replay():
     await c._handle_update(_chunk("Short line."))
     await c._handle_update(_chunk(" Short line."))  # not equal to the segment
     assert c._answer == "Short line. Short line."
+
+
+def test_a_bundled_claude_code_too_old_for_the_model_names_the_fix():
+    """claude-agent-acp bundles its own Claude Code. When a new model needs a newer one,
+    the upstream error says "Run 'claude update'", which updates the wrong binary. The
+    rendered error keeps the upstream words and adds what actually fixes it (2026-11-17)."""
+    from plugins.coding_agent.acp_client import _format_rpc_error, bundled_cli_too_old_hint
+
+    upstream = (
+        "Internal error: API Error: 400 Claude Code 2.1.179 does not support this model; "
+        "version 2.1.280 or newer is required. Run 'claude update', or update the Claude "
+        "desktop app, then try again."
+    )
+    msg = _format_rpc_error({"code": -32603, "message": upstream, "data": {"errorKind": "unknown"}})
+    assert msg.startswith(upstream)  # the agent's own words are kept
+    assert "bundles its own Claude Code (2.1.179)" in msg
+    assert "needs 2.1.280 or newer" in msg
+    assert "npm i -g @agentclientprotocol/claude-agent-acp@latest" in msg
+    assert "CLAUDE_CODE_EXECUTABLE" in msg
+    # Any other failure renders exactly as before.
+    assert bundled_cli_too_old_hint("model provider returned 429") == ""
+    assert _format_rpc_error({"code": -32603, "message": "Internal error"}) == "Internal error (JSON-RPC -32603)"

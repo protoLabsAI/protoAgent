@@ -408,12 +408,18 @@ class _Registration:
     """Outcome of :func:`_register`. ``status`` is ``already`` (nothing written),
     ``registered`` (a new registry entry), ``promoted`` (a fence-only entry gained its
     registry entry) or ``error`` (``error`` holds a clause naming what failed).
-    ``mirrored`` = the explicit ``filesystem.projects`` override was appended to."""
+    ``mirrored`` = the explicit ``filesystem.projects`` override was appended to.
+
+    :func:`set_project_write` returns the same type: ``changed`` (the ``write`` key was
+    rewritten; ``mirrored`` = the explicit fence entry was rewritten too), ``already``
+    (every matching entry already had that mode — nothing written) or ``error``;
+    ``fence_only`` = the project has no registry entry, only the explicit fence one."""
 
     status: str
     mirrored: bool = False
     implicit_workspace: bool = False
     error: str = ""
+    fence_only: bool = False
 
 
 async def _register(
@@ -528,6 +534,87 @@ def _where(reg: _Registration) -> str:
         + (" + the explicit filesystem.projects override" if reg.mirrored else "")
         + (" (implicit workspace remains available read-write)" if reg.implicit_workspace else "")
     )
+
+
+async def set_project_write(config, *, name: str, path: Path, write: bool) -> _Registration:
+    """Set ``write`` on the ALREADY-registered project at ``path`` — the ONE write path
+    for changing a managed project's access mode (projectBoard-plugin#783).
+
+    Reads the LIVE config (the same seam as :func:`_register`), rewrites ``write`` on the
+    ``projects:`` entry naming ``path`` AND on the explicit ``filesystem.projects`` entry
+    for it when one exists (an explicit fence wins over the registry, so changing only
+    the registry would change nothing the fs tools enforce), and applies through
+    ``HOST.apply_settings``. A fence-only entry is changed in the fence alone. Entries
+    are matched by path (``_same_path``); ``name`` only narrows the match when several
+    entries share that path. Every other entry, every other key and the order of both
+    lists are written back exactly as read.
+
+    Carries NO approval logic: whoever calls it has already decided the change is
+    allowed (the onboarding tools' operator card; an operator-authenticated endpoint).
+    Never raises — an unknown path or a failed apply comes back as ``status="error"``.
+    """
+    from graph.plugins.host import HOST
+
+    try:
+        source = _live_source(config)
+        registry = list(getattr(source, "projects", []) or [])
+        fence = list(getattr(source, "filesystem_projects", []) or [])
+
+        def _rewrite(entries: list) -> tuple[list, bool, bool]:
+            """``(new_list, matched, changed)`` — same length, same order."""
+            hits = [i for i, e in enumerate(entries) if isinstance(e, dict) and _same_path(e.get("path"), path)]
+            named = [i for i in hits if name and str(entries[i].get("name") or "") == name]
+            hits = named or hits
+            out = list(entries)
+            changed = False
+            for i in hits:
+                if bool(entries[i].get("write", False)) != write:
+                    out[i] = {**entries[i], "write": write}
+                    changed = True
+            return out, bool(hits), changed
+
+        new_registry, in_registry, registry_changed = _rewrite(registry)
+        new_fence, in_fence, fence_changed = _rewrite(fence)
+    except Exception as exc:  # noqa: BLE001 — a helper shared with an endpoint must not raise
+        log.warning("[onboard] could not read the project registry for an access change", exc_info=True)
+        return _Registration("error", error=f"the project registry could not be read: {_redact(str(exc))}")
+    if not in_registry and not in_fence:
+        return _Registration("error", error=f"no registered project matches {path}")
+    if not registry_changed and not fence_changed:
+        return _Registration("already")
+
+    updates: dict = {}
+    if registry_changed:
+        updates["projects"] = new_registry
+    if fence_changed:
+        updates["filesystem"] = {"projects": new_fence}
+
+    # Same superset invariant as ``_register``, tightened: an access change may alter
+    # ONE key, so each list must come back the same length with every entry equal to
+    # what was read once ``write`` is set aside.
+    def _sans_write(e):
+        return {k: v for k, v in e.items() if k != "write"} if isinstance(e, dict) else e
+
+    for label, before_list, after_list in (("projects", registry, new_registry), ("filesystem.projects", fence, new_fence)):
+        if [_sans_write(e) for e in before_list] != [_sans_write(e) for e in after_list]:
+            log.error("[onboard] refusing to apply: the access change would alter more than `write` in %s", label)
+            return _Registration(
+                "error",
+                error="the access change was aborted by an internal safety check — it would have altered another entry",
+            )
+
+    if HOST.apply_settings is None:
+        return _Registration(
+            "error", error="the change is unavailable — the host is not wired for config apply (no running server)"
+        )
+    try:
+        ok, messages = await asyncio.to_thread(HOST.apply_settings, updates)
+    except Exception as exc:  # noqa: BLE001 — never raise into the turn / the endpoint
+        log.error("[onboard] access change failed to apply: %s", _redact(str(exc)))
+        return _Registration("error", error=f"the change failed to apply: {_redact(str(exc))}")
+    if not ok:
+        return _Registration("error", error=f"the change failed: {'; '.join(messages) or 'unknown error'}")
+    return _Registration("changed", mirrored=in_registry and fence_changed, fence_only=not in_registry)
 
 
 _ROOT_UNSET = (
@@ -771,6 +858,16 @@ def _outside_root_decision(decision, token: str) -> str:
     return "deny"
 
 
+def _git_line(target: Path) -> str:
+    """The card's one-line description of ``target`` as a repository (no git is run)."""
+    is_git, origin = _read_origin(target)
+    if is_git and origin:
+        return f"git checkout, origin {_clean_display(_redact(origin))}"
+    if is_git:
+        return "git checkout, no origin remote"
+    return "not a git checkout"
+
+
 def _outside(root_raw: str) -> str:
     """How a result names where the folder sits relative to the root — which may be unset."""
     if root_raw.strip():
@@ -785,13 +882,7 @@ def _approval_card(
     the REALPATH; the agent's words reach it only as the (sanitized, quoted) name and the
     as-typed path when that differs, both labelled as what they are. ``detail`` renders
     as a literal block (never markdown) in the console, the deck and Zed."""
-    is_git, origin = _read_origin(target)
-    if is_git and origin:
-        git_line = f"git checkout, origin {_clean_display(_redact(origin))}"
-    elif is_git:
-        git_line = "git checkout, no origin remote"
-    else:
-        git_line = "not a git checkout"
+    git_line = _git_line(target)
     lines = [f"Folder:     {target}"]
     if str(Path(raw).expanduser()) != str(target):
         lines.append(f"Requested:  {_clean_display(raw)!r} (resolves to the folder above)")
@@ -824,6 +915,148 @@ def _approval_card(
             {"value": _DENY, "label": "Deny", "kind": "reject_once"},
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Raising an existing project to read-write: an operator approval card
+# ---------------------------------------------------------------------------
+#
+# ``write=true`` on a project that is ALREADY registered read-only used to be silently
+# ignored (projectBoard-plugin#783): the agent had no way to ask, and the operator had
+# to hand-edit config before a coder could build there. It now parks on a card of its
+# own. The rules are the outside-root card's, for the same reason — this widens the
+# fence with a config write that outlives the turn: composed from the realpath, the
+# answer bound to that realpath, and no bypass / session-allow / plain-approve skip.
+# LOWERING access (``write=false``) narrows the fence, so it needs no card.
+
+
+def _access_card(*, target: Path, project_name: str, tool_name: str, token: str) -> dict:
+    """The hitl-v1 ``approval`` payload asking to make a read-only project read-write.
+    Like :func:`_approval_card`, every ``detail`` line is composed here from the
+    REALPATH and the registry entry; nothing the agent wrote is rendered."""
+    lines = [
+        f"Folder:     {target}",
+        f"Name:       {_clean_display(project_name, 80)!r}",
+        f"Repository: {_git_line(target)}",
+        "Access now: read-only",
+        "Agent asks: read-write",
+        "",
+        "Allowing lets the agent's filesystem tools, coding delegates and the project board",
+        "WRITE in this folder. Nothing else is widened, and you can change it back in",
+        "Settings ▸ Projects.",
+    ]
+    return {
+        "kind": "approval",
+        "title": "Make this project read-write?",
+        "detail": "\n".join(lines),
+        "tool": tool_name,
+        "path": str(target),
+        # This gate widens the fence, so no client may offer a standing "yes" for it.
+        "session_allow": False,
+        "options": [
+            {"value": f"{_ALLOW_RW}@{token}", "label": "Allow read-write", "kind": "allow_once"},
+            {"value": _DENY, "label": "Keep read-only", "kind": "reject_once", "primary": True},
+        ],
+    }
+
+
+@dataclass(frozen=True)
+class _AccessChange:
+    """Outcome of :func:`_change_access`. ``ok`` = the entry is now at the requested
+    mode; ``reply`` is the tool result sentence either way."""
+
+    ok: bool
+    reply: str
+
+
+_SETTINGS_HINT = "The operator can also change it in Settings ▸ Projects."
+
+
+async def _change_access(config, *, tool_name: str, entry: dict, target: Path, write: bool) -> _AccessChange:
+    """Move the registered project ``entry`` (at ``target``) to ``write`` — the caller
+    has already established that this DIFFERS from the entry's current mode.
+
+    Lowering applies at once. Raising parks on :func:`_access_card` and writes only on
+    the allow answer bound to the folder's realpath as it resolves NOW (the tool re-runs
+    from the top on resume). The write itself is :func:`set_project_write`."""
+    project_name = str(entry.get("name") or target.name)
+    try:
+        real = target.resolve()
+    except (OSError, RuntimeError):
+        real = target
+    if write:
+        token = _path_token(real)
+        card = _access_card(target=real, project_name=project_name, tool_name=tool_name, token=token)
+        # ALWAYS asks: no bypass_permissions / "allow for session" check here, on purpose
+        # (see the section comment above _ALLOW_RO).
+        from langgraph.types import interrupt
+
+        unchanged = f"{project_name} at {real} is still read-only — nothing changed"
+        try:
+            answer = interrupt(card)
+        except (KeyError, RuntimeError):
+            # No graph run to park (a tool surface with no turn runner, e.g. an MCP
+            # client). In a turn ``interrupt`` raises GraphInterrupt, which is neither
+            # of these and propagates. ``onboard_project`` never raised on this path
+            # before the card existed, so it answers instead.
+            log.info("[onboard] read-write request made where no approval card can be shown: %s", real)
+            return _AccessChange(
+                False,
+                f"{unchanged}: making a project read-write needs the operator's approval card, which "
+                f"can't be shown from here (not approvable outside a chat turn). {_SETTINGS_HINT}",
+            )
+        choice = _outside_root_decision(answer, token)
+        if choice == "stale":
+            log.warning("[onboard] read-write approval did not match the resolved path — not changed: %s", real)
+            return _AccessChange(
+                False,
+                f"{unchanged}: the approval answered a different folder than {real} resolves to now "
+                f"(it changed while the card was open). Ask again if you still need it. {_SETTINGS_HINT}",
+            )
+        if choice == "plain":
+            log.warning("[onboard] read-write approval answered with a plain approve — not changed: %s", real)
+            return _AccessChange(
+                False,
+                f"{unchanged}: the operator has to pick \"Allow read-write\" on the card, but the answer was a "
+                "plain approve — from a client that doesn't show that choice, or an automatic approval. Ask "
+                f"the operator to answer from the console or Zed. {_SETTINGS_HINT}",
+            )
+        if choice != "rw":
+            from graph.middleware.request_context import caller_may_approve
+
+            if not caller_may_approve():
+                log.info("[onboard] read-write request not approvable by this caller: %s", real)
+                return _AccessChange(
+                    False,
+                    f"{unchanged}: making a project read-write needs the operator's approval, and this "
+                    f"conversation's caller can't give it. {_SETTINGS_HINT}",
+                )
+            log.info("[onboard] read-write request DENIED by the operator: %s", real)
+            return _AccessChange(
+                False,
+                f"{unchanged}: denied by the operator (or the card was dismissed / nobody was there to "
+                f"answer it). Do not ask again for this project in this turn. {_SETTINGS_HINT}",
+            )
+        log.warning("[onboard] read-write access APPROVED by the operator: %s (%s)", real, project_name)
+
+    reg = await set_project_write(config, name=project_name, path=real, write=write)
+    rw = "read-write" if write else "read-only"
+    how = "approved by the operator" if write else "lowered at your request; no approval is needed to narrow access"
+    if reg.status == "error":
+        lead = "approved by the operator, but " if write else ""
+        return _AccessChange(
+            False, f"Error: {lead}{project_name} at {real} was not made {rw} — {reg.error}. Nothing changed."
+        )
+    where = "the explicit filesystem.projects override" if reg.fence_only else _where(reg)
+    caveat = (
+        " It is still no_delete (read-write-no-delete), which a coding delegate refuses — only the operator "
+        "changes that."
+        if write and entry.get("no_delete")
+        else ""
+    )
+    if not write:
+        log.info("[onboard] project lowered to read-only: %s (%s)", real, project_name)
+    return _AccessChange(True, f"{project_name} at {real} is now {rw} ({how}) — updated in {where}.{caveat}")
 
 
 def _live_source(config):
@@ -935,7 +1168,12 @@ def build_onboard_tools(config) -> list:
                 credential helpers apply.
             name: Project name for the registry. Defaults to the repo name.
             write: Register read-write (``true``) or read-only (``false``).
-                Omit to use the operator's configured default.
+                Omit to use the operator's configured default. On a project
+                that is ALREADY registered: ``true`` on a read-only one pauses
+                and asks the operator with an approval card (Allow read-write /
+                Keep read-only) — nothing changes unless they allow it, and a
+                denial says so: don't retry. ``false`` on a read-write one
+                lowers it to read-only at once. Omit it to leave access alone.
             github_repo: Older name for ``repo`` — still accepted; prefer ``repo``.
             refresh: For a checkout that is ALREADY on disk: ``git fetch`` its
                 upstream and fast-forward it. Only ever a fast-forward — refused
@@ -960,7 +1198,8 @@ def build_onboard_tools(config) -> list:
           read from local Git metadata only, or notes that it couldn't be told.
           That count is only as fresh as the last fetch — pass ``refresh=true``
           to fetch and fast-forward instead.
-        - Already registered → success with a note; onboarding is idempotent.
+        - Already registered → success with a note; onboarding is idempotent
+          (its access changes only through ``write``, as described above).
 
         Onboarding being disabled means this tool isn't available at all; if you
         can't find it, the operator has not enabled the ``onboarding`` config
@@ -1078,6 +1317,25 @@ def build_onboard_tools(config) -> list:
         write_effective = write if write is not None else bool(getattr(config, "onboarding_write_default", False))
         if resolved_entry is not None:
             write_effective = bool(resolved_entry.get("write", False))
+        # An EXPLICIT ``write`` that differs from an already-registered entry's mode is
+        # a request to change its access, not something to ignore (#783): raising it
+        # asks the operator, lowering it applies. ``write`` omitted or equal → the
+        # reuse path below, untouched. A request that is NOT granted still takes that
+        # reuse path at the entry's own mode (refresh included), with the reason appended.
+        access_note = access_refusal = ""
+        access_entry = resolved_entry if resolved_entry is not None else _existing_entry(config, target)
+        if access_entry is not None and write is not None and write != bool(access_entry.get("write", False)):
+            change = await _change_access(
+                config, tool_name="onboard_project", entry=access_entry, target=target, write=write
+            )
+            if change.ok:
+                access_note = change.reply + " "
+                write_effective = write
+            elif change.reply.startswith("Error:"):
+                return change.reply
+            else:
+                access_refusal = " " + change.reply
+                write_effective = bool(access_entry.get("write", False))
         rw = "read-write" if write_effective else "read-only"
         project_name = (
             str(resolved_entry.get("name") or target.name) if resolved_entry is not None else name or target.name
@@ -1103,7 +1361,8 @@ def build_onboard_tools(config) -> list:
         # Resolving a binding reuses its registration as-is. In particular, do
         # not promote a fence-only entry or add it to an explicit fence that
         # excludes it: either would change operator-approved access (#4425).
-        if resolved_entry is not None:
+        # A read-write request that was NOT granted writes nothing either.
+        if resolved_entry is not None or access_refusal:
             reg = _Registration("already")
         else:
             reg = await _register(
@@ -1120,16 +1379,22 @@ def build_onboard_tools(config) -> list:
                 # "reused … nothing changed" here hid that the checkout had been missing, and a
                 # missing registered root is exactly what unbinds the filesystem tools.
                 return (
+                    f"{access_note}"
                     f"{project_name} is already registered at {target} ({rw}), but the checkout was "
                     f"missing — cloned {ref.display_url} back into it (default branch {default_branch}). "
                     "If read_file / search_files dropped out of this session while the folder was gone, "
                     "they come back in a new chat; say so rather than reading files another way."
+                    f"{access_refusal}"
                 )
+            if access_note:
+                return f"{access_note}Reused the existing checkout.{drift}"
             return (
                 f"{project_name} is already registered at {target} ({rw}). "
-                f"Reused the existing checkout — nothing changed.{drift}"
+                f"Reused the existing checkout — nothing changed.{drift}{access_refusal}"
             )
         if reg.status == "error":
+            if access_note:
+                return f"{access_note}But it could not be added to the managed-projects registry — {reg.error}."
             return f"Error: {'found' if reused_checkout else 'cloned to'} {target} but {reg.error}."
 
         if reg.status == "promoted":
@@ -1145,8 +1410,10 @@ def build_onboard_tools(config) -> list:
             source = f"source {normalized} (not GitHub, so the GitHub plugin's picker won't list it)"
             readers = "Your filesystem tools and the project board read"
         return (
+            f"{access_note}"
             f"{verb} {project_name} ({rw}) at {target} in {_where(reg)} — {source}, "
             f"default branch {default_branch}.{drift} {readers} that registry; no further registration is needed."
+            f"{access_refusal}"
         )
 
     async def _register_outside_root(
@@ -1171,11 +1438,21 @@ def build_onboard_tools(config) -> list:
         project_name = (name or target.name).strip()
 
         # Already registered (by the operator, or an earlier approval) → nothing moves the
-        # fence, so no card. A fence-only entry is PROMOTED at its OWN write mode — never
-        # the agent's — so this can't be used to upgrade a read-only folder.
+        # fence, so no outside-root card. A fence-only entry is PROMOTED at its OWN write
+        # mode — never the agent's — so this can't be used to upgrade a read-only folder.
+        # The one way up is an explicit ``write=true``, which asks the operator on the
+        # read-write card (#783); ``write=false`` lowers it without one.
         existing = _existing_entry(config, target)
         if existing is not None:
             mode = bool(existing.get("write", False))
+            access_note = ""
+            if write is not None and write != mode:
+                change = await _change_access(
+                    config, tool_name="register_local_project", entry=existing, target=target, write=write
+                )
+                if not change.ok:
+                    return change.reply
+                access_note, mode = change.reply, write
             rw = "read-write" if mode else "read-only"
             reg = await _register(
                 config,
@@ -1186,10 +1463,14 @@ def build_onboard_tools(config) -> list:
                 default_branch=str(existing.get("default_branch") or "main"),
             )
             if reg.status == "error":
+                if access_note:
+                    return f"{access_note} But it could not be added to the managed-projects registry — {reg.error}."
                 return f"Error: {target} was not registered — {reg.error}."
             if reg.status == "already":
+                if access_note:
+                    return access_note
                 return f"{existing.get('name') or project_name} is already registered at {target} ({rw}) — nothing changed."
-            return f"Promoted the existing filesystem.projects entry for {existing.get('name') or project_name} ({rw}) at {target} in {_where(reg)}."
+            return f"{access_note + ' ' if access_note else ''}Promoted the existing filesystem.projects entry for {existing.get('name') or project_name} ({rw}) at {target} in {_where(reg)}."
 
         # A name another checkout already holds at a different path would shadow it once
         # registered (#4425) — refuse before even showing the approval card.
@@ -1294,7 +1575,12 @@ def build_onboard_tools(config) -> list:
             path: Absolute path to the directory (``~`` is expanded).
             name: Project name for the registry. Defaults to the directory name.
             write: Register read-write (``true``) or read-only (``false``).
-                Omit to use the operator's configured default.
+                Omit to use the operator's configured default. On a project
+                that is ALREADY registered: ``true`` on a read-only one pauses
+                and asks the operator with an approval card (Allow read-write /
+                Keep read-only) — nothing changes unless they allow it, and a
+                denial says so: don't retry. ``false`` on a read-write one
+                lowers it to read-only at once. Omit it to leave access alone.
 
         BOUNDED by ``onboarding.root``: a path that RESOLVES (symlinks followed) to
         an existing directory strictly inside that root registers directly. A
@@ -1369,6 +1655,17 @@ def build_onboard_tools(config) -> list:
                 f"Refused: name '{project_name}' is already registered at {collision.get('path')}; "
                 "pass name= to register a second checkout."
             )
+        # An explicit ``write`` that differs from an already-registered entry's mode asks
+        # to change its access (#783): up → the operator's read-write card, down → applied.
+        access_note = ""
+        existing = _existing_entry(config, target)
+        if existing is not None and write is not None and write != bool(existing.get("write", False)):
+            change = await _change_access(
+                config, tool_name="register_local_project", entry=existing, target=target, write=write
+            )
+            if not change.ok:
+                return change.reply
+            access_note = change.reply
         github = await asyncio.to_thread(github_slug_for_checkout, target)
         default_branch = await asyncio.to_thread(_default_branch, target)
 
@@ -1381,14 +1678,19 @@ def build_onboard_tools(config) -> list:
             default_branch=default_branch,
         )
         if reg.status == "already":
+            if access_note:
+                return access_note
             return f"{project_name} is already registered at {target} ({rw}) — nothing changed."
         if reg.status == "error":
+            if access_note:
+                return f"{access_note} But it could not be added to the managed-projects registry — {reg.error}."
             return f"Error: {target} was not registered — {reg.error}."
         verb = "Promoted the existing filesystem.projects entry for" if reg.status == "promoted" else "Registered"
         source = (
             f"GitHub {github}" if github else "no GitHub origin remote, so the GitHub plugin's picker won't list it"
         )
         return (
+            f"{access_note + ' ' if access_note else ''}"
             f"{verb} {project_name} ({rw}) at {target} in {_where(reg)} — {source}, default branch "
             f"{default_branch}. Your filesystem tools and the project board read that registry; no further "
             "registration is needed."
