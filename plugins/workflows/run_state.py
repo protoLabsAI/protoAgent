@@ -55,6 +55,14 @@ STATUS_CANCELLED = "cancelled"
 
 TERMINAL = (STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED)
 
+# A ``running`` record nothing has written to for this long belongs to a process that is
+# gone: every step dispatch and completion rewrites the record, and nothing resumes a
+# ``running`` run after a restart. ``prune()`` reclassifies it as failed (#5411).
+STALE_RUNNING_S = 7 * 24 * 3600
+INTERRUPTED_ERROR = (
+    "interrupted: the process ended while this run was running and it was never resumed"
+)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -72,6 +80,20 @@ def _next_seq() -> int:
     global _seq_counter
     _seq_counter += 1
     return _seq_counter
+
+
+def _age_seconds(state: dict, now: datetime) -> float | None:
+    """Seconds since the record was last written (``None`` when it carries no readable
+    timestamp — an unknown age is never treated as stale)."""
+    for key in ("updated_at", "created_at"):
+        try:
+            stamp = datetime.fromisoformat(state.get(key))
+        except (TypeError, ValueError):
+            continue
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return (now - stamp).total_seconds()
+    return None
 
 
 def _step_snapshot(steps: list[dict] | None) -> list[dict]:
@@ -422,17 +444,32 @@ class WorkflowRunStore:
             )
         return out
 
-    def prune(self, keep: int = 200) -> int:
+    def prune(self, keep: int = 200, *, stale_running_s: float = STALE_RUNNING_S) -> int:
         """Delete the oldest TERMINAL runs beyond ``keep`` (paused/running records are
         never pruned — they're resumable state, not history). Returns the count removed.
-        Called on each run start so ``.runs/`` stops growing unboundedly."""
+        Called on each run start so ``.runs/`` stops growing unboundedly.
+
+        A ``running`` record not written for ``stale_running_s`` was cut off by a dead
+        process and will never be resumed, so it is first rewritten as ``failed`` with an
+        interrupted marker and then counts as terminal (#5411). ``paused`` records wait on
+        an operator and are left alone at any age, as is a ``running`` record written
+        within the threshold. Never raises: an unreadable or unwritable record is skipped."""
         if keep <= 0:
             return 0
-        terminal = [
-            (state.get("updated_at") or "", rid)
-            for rid in self.list_runs()
-            if (state := self.load(rid)) and state.get("status") in TERMINAL
-        ]
+        now = datetime.now(timezone.utc)
+        terminal = []
+        for rid in self.list_runs():
+            state = self.load(rid)
+            if state is None:
+                log.warning("[workflows] prune skipped unreadable run record %s", rid)
+                continue
+            try:
+                if self._is_stale_running(rid, state, now, stale_running_s) and not self._mark_interrupted(rid, state):
+                    continue
+                if state.get("status") in TERMINAL:
+                    terminal.append((state.get("updated_at") or "", rid))
+            except Exception as exc:  # noqa: BLE001 — a malformed record must not fail a run start
+                log.warning("[workflows] prune skipped run record %s: %s", rid, exc)
         if len(terminal) <= keep:
             return 0
         terminal.sort()  # oldest first
@@ -445,9 +482,36 @@ class WorkflowRunStore:
                 pass
         return removed
 
+    def _is_stale_running(self, rid: str, state: dict, now: datetime, stale_running_s: float) -> bool:
+        if state.get("status") != STATUS_RUNNING or rid == self.run_id:
+            return False
+        age = _age_seconds(state, now)
+        return age is not None and age > stale_running_s
+
+    def _mark_interrupted(self, rid: str, state: dict) -> bool:
+        """Rewrite a stale ``running`` record as failed-because-interrupted; steps still
+        marked in flight end with it, as in ``finish()``. False if the write failed (the
+        record on disk is then still ``running`` and is retried on the next prune)."""
+        stamp = _now()
+        state["status"] = STATUS_FAILED
+        state["interrupted"] = True
+        state["error"] = INTERRUPTED_ERROR
+        state["pending_step"] = None
+        for meta in (state.get("step_meta") or {}).values():
+            if isinstance(meta, dict) and meta.get("status") == STATUS_RUNNING:
+                meta["status"] = STATUS_FAILED
+                meta["finished_at"] = stamp
+        state["updated_at"] = stamp
+        return self._persist(rid, state)
+
     def _write(self) -> None:
-        self._state["seq"] = _next_seq()
+        self._persist(self._state["run_id"], self._state)
+
+    def _persist(self, run_id: str, state: dict[str, Any]) -> bool:
+        state["seq"] = _next_seq()
         try:
-            atomic_write(self.path(self._state["run_id"]), json.dumps(self._state, ensure_ascii=False, indent=2))
+            atomic_write(self.path(run_id), json.dumps(state, ensure_ascii=False, indent=2))
         except OSError as exc:
-            log.warning("[workflows] run-state write failed for %s: %s", self._state["run_id"], exc)
+            log.warning("[workflows] run-state write failed for %s: %s", run_id, exc)
+            return False
+        return True
