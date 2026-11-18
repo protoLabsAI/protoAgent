@@ -255,6 +255,11 @@ async def _stall_guarded(
     the thread part-way through a window still gets a full window for its first frame.
     """
     closed = False
+    step_ctx = None
+
+    async def close_stream():
+        await stream.aclose()
+
     try:
         if seconds <= 0:
             async for item in stream:
@@ -328,7 +333,9 @@ async def _stall_guarded(
                 # another.
                 closed = True
                 try:
-                    await asyncio.wait_for(stream.aclose(), 5.0)
+                    await asyncio.wait_for(
+                        asyncio.create_task(close_stream(), context=step_ctx), 5.0
+                    )
                 except (Exception, asyncio.CancelledError):  # noqa: BLE001
                     logger.debug("[a2a] stalled stream did not close cleanly", exc_info=True)
                 raise TurnStalled(stalled) from None
@@ -338,7 +345,13 @@ async def _stall_guarded(
             # A no-op when ``stream`` already finished (exhausted or raised); otherwise
             # this is the guard being closed/cancelled at a ``yield`` — close ``stream``
             # now rather than leave its cleanup to GC.
-            await stream.aclose()
+            if step_ctx is None:
+                await close_stream()
+            else:
+                # Scope tokens belong to the context that advanced the stream. Closing
+                # in the caller's context breaks their reset and loses the turn's fence
+                # during cleanup. Reuse the exact context, not another copy of it.
+                await asyncio.create_task(close_stream(), context=step_ctx)
 
 
 def _holder_or_none(queued_behind: Callable[[], str | None]) -> str | None:
@@ -1727,7 +1740,7 @@ class ProtoAgentExecutor(AgentExecutor):
             #      enqueued above, so a slow cleanup never delays it reaching the client;
             #   2. `_notify_terminal` already ran, while the stream was still suspended
             #      inside its trace scope (the trace id was captured in the loop anyway);
-            #   3. the stream's cleanup then runs HERE, in this task and context, before
+            #   3. the stream's cleanup is awaited HERE in its original context, before
             #      execute() returns — so a blocking message/send (whose response waits
             #      for this producer to finish) never answers while the thread lock is
             #      still held, and a streaming client's next message queues on the lock
