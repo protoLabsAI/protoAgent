@@ -994,6 +994,54 @@ def _on_custom_goal_probe(st: _TurnStreamState, event: dict, name: str, parent_t
         yield ("goal_status", {"text": f"🎯 {text}"})
 
 
+def _on_custom_ptc_call(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
+    # The execute_code plugin bridges a script's host-tool call out as a `ptc_call` custom
+    # event (card bd-dr0i7): the Python runtime invoked a bound tool from INSIDE a running
+    # script. Re-emit it as an ORDINARY tool frame whose `parentId` is the execute_code
+    # call's id, so the console's by-`parentId` grouping (apps/web/src/chat/ToolCalls.tsx)
+    # nests it under that execute_code card instead of floating it at the turn's top level.
+    # The `ptc:` name prefix is the contract the console reads to tell a script's call from
+    # a model's or a subagent's — don't drop it. A malformed payload (not a dict, missing
+    # id/name/parent, or an unknown phase) yields nothing and never raises.
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return
+    call_id = data.get("id")
+    tool_name = data.get("name")
+    parent = data.get("parent_call_id")
+    if not call_id or not tool_name or not parent:
+        return
+    phase = data.get("phase")
+    if phase == "start":
+        yield (
+            "tool_start",
+            {
+                "id": call_id,
+                "name": f"ptc:{tool_name}",
+                # Shape the args exactly like a model's tool-call input (dict/list → compact
+                # JSON, truncated) so the card renders them the same way.
+                "input": _chat()._coerce_tool_value(data.get("args", "")),
+                "parentId": parent,
+            },
+        )
+    elif phase == "end":
+        yield (
+            "tool_end",
+            {
+                "id": call_id,
+                "name": f"ptc:{tool_name}",
+                # The plugin already shaped `output` to a preview string and reported the
+                # true pre-truncation size in `output_chars`; carry both through (coercing
+                # the preview the same way other cards do).
+                "output": _chat()._coerce_tool_value(data.get("output", "")),
+                "output_chars": int(data.get("output_chars", 0) or 0),
+                "error": bool(data.get("error")),
+                "duration_ms": int(data.get("duration_ms", 0) or 0),
+                "parentId": parent,
+            },
+        )
+
+
 # `astream_events` kind → handler. Kinds not listed produce nothing (skills are no
 # longer auto-retrieved per turn — ADR 0060 progressive disclosure; the model loads one
 # on demand via the `load_skill` tool, an ordinary tool card — so there is no
@@ -1011,6 +1059,7 @@ _CUSTOM_EVENT_HANDLERS: dict[str, Callable[..., _Frames]] = {
     "steer_consumed": _on_custom_steer_consumed,
     "delegate_progress": _on_custom_delegate_progress,
     "goal_probe": _on_custom_goal_probe,
+    "ptc_call": _on_custom_ptc_call,
 }
 
 
