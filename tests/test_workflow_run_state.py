@@ -387,3 +387,136 @@ def test_a_run_that_raises_is_still_recorded_failed(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
     assert store.load(store.run_id)["status"] == STATUS_FAILED
+
+
+# ── #5411: a `running` record left behind by a dead process ──────────────────────────
+
+
+def _backdate(store: WorkflowRunStore, run_id: str, days: float) -> None:
+    """Rewrite a record's ``updated_at`` as if its last write were ``days`` ago."""
+    from datetime import datetime, timedelta, timezone
+
+    path = store.path(run_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["updated_at"] = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _orphan(tmp_path, days: float, *, paused: bool = False) -> str:
+    """A record written by a store that is gone (the process died), ``days`` old."""
+    dead = WorkflowRunStore(tmp_path)
+    run_id = dead.start("demo", {}, steps=[{"id": "gather", "subagent": "researcher"}])
+    dead.step_started("gather")
+    if paused:
+        dead.pause("gather")
+    _backdate(dead, run_id, days)
+    return run_id
+
+
+def test_prune_marks_a_stale_running_run_interrupted(tmp_path):
+    from plugins.workflows.run_state import INTERRUPTED_ERROR
+
+    stale = _orphan(tmp_path, days=30)
+    before = json.loads((tmp_path / f"{stale}.json").read_text(encoding="utf-8"))
+    store = WorkflowRunStore(tmp_path)
+
+    assert store.prune(keep=10) == 0  # reclassified, not deleted: well under `keep`
+
+    state = store.load(stale)
+    assert state["status"] == STATUS_FAILED
+    assert state["interrupted"] is True
+    assert state["error"] == INTERRUPTED_ERROR
+    assert state["step_meta"]["gather"]["status"] == STATUS_FAILED
+    assert state["step_meta"]["gather"].get("finished_at")
+    # Bumped like any other write, and the rest of the record is intact.
+    assert state["updated_at"] > before["updated_at"]
+    assert state["seq"] > before["seq"]
+    assert state["recipe_name"] == "demo" and state["created_at"] == before["created_at"]
+    # Idempotent: an already-interrupted record is plain history on the next prune.
+    again = state["updated_at"]
+    assert store.prune(keep=10) == 0
+    assert store.load(stale)["updated_at"] == again
+
+
+def test_prune_leaves_fresh_running_and_all_paused_runs_alone(tmp_path):
+    fresh = _orphan(tmp_path, days=1)
+    old_paused = _orphan(tmp_path, days=400, paused=True)
+    new_paused = _orphan(tmp_path, days=0, paused=True)
+    store = WorkflowRunStore(tmp_path)
+    for _ in range(3):
+        store.start("demo", {})
+        store.finish(STATUS_DONE)
+    live = store.start("demo", {})  # the run being started when prune is called
+    files = {rid: (tmp_path / f"{rid}.json").read_text(encoding="utf-8") for rid in (fresh, old_paused, new_paused)}
+
+    assert store.prune(keep=1) == 2  # only the terminal runs beyond `keep`
+
+    assert store.load(fresh)["status"] == STATUS_RUNNING
+    assert store.load(live)["status"] == STATUS_RUNNING
+    assert store.load(old_paused)["status"] == "paused"
+    assert store.load(old_paused)["pending_step"] == "gather"
+    assert store.load(new_paused)["status"] == "paused"
+    for rid, text in files.items():
+        assert (tmp_path / f"{rid}.json").read_text(encoding="utf-8") == text  # not rewritten
+
+
+def test_prune_stale_threshold_is_a_keyword_argument(tmp_path):
+    run_id = _orphan(tmp_path, days=1)
+    store = WorkflowRunStore(tmp_path)
+    store.prune(keep=10)
+    assert store.load(run_id)["status"] == STATUS_RUNNING  # inside the 7-day default
+    store.prune(keep=10, stale_running_s=3600)
+    assert store.load(run_id)["status"] == STATUS_FAILED
+
+
+def test_prune_never_reclassifies_the_stores_own_run(tmp_path):
+    store = WorkflowRunStore(tmp_path)
+    run_id = store.start("demo", {})
+    _backdate(store, run_id, days=30)  # a live run whose last write is old
+    store.prune(keep=10)
+    assert store.load(run_id)["status"] == STATUS_RUNNING
+
+
+def test_reclassified_runs_are_pruned_under_the_keep_rule(tmp_path):
+    stale = [_orphan(tmp_path, days=30 + i) for i in range(3)]
+    store = WorkflowRunStore(tmp_path)
+    store.start("demo", {})
+    store.finish(STATUS_DONE)
+    done = store.run_id
+    _backdate(store, done, days=60)  # the oldest terminal record on disk
+
+    # 3 interrupted + 1 done = 4 terminal; keep 2 → the 2 oldest go, `done` first.
+    assert store.prune(keep=2) == 2
+
+    left = store.list_runs()
+    assert done not in left
+    assert len(left) == 2 and set(left) <= set(stale)
+    assert all(store.load(rid)["status"] == STATUS_FAILED for rid in left)
+
+
+def test_prune_skips_records_it_cannot_read_or_rewrite(tmp_path, monkeypatch, caplog):
+    import plugins.workflows.run_state as rs
+
+    stale = _orphan(tmp_path, days=30)
+    (tmp_path / "corrupt.json").write_text("{not json", encoding="utf-8")
+    no_stamp = _orphan(tmp_path, days=30)
+    path = tmp_path / f"{no_stamp}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["updated_at"] = data["created_at"] = "not-a-date"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    store = WorkflowRunStore(tmp_path)
+    for _ in range(2):
+        store.start("demo", {})
+        store.finish(STATUS_DONE)
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(rs, "atomic_write", boom)
+    with caplog.at_level("WARNING", logger=rs.__name__):
+        assert store.prune(keep=1) == 1  # did not raise; the unwritable record is not terminal
+
+    assert json.loads((tmp_path / f"{stale}.json").read_text(encoding="utf-8"))["status"] == STATUS_RUNNING
+    assert store.load(no_stamp)["status"] == STATUS_RUNNING  # unknown age is not stale
+    assert (tmp_path / "corrupt.json").exists()
+    assert "corrupt" in caplog.text and stale in caplog.text
