@@ -574,14 +574,16 @@ function startedConvRow(over: Partial<ConversationRow> = {}): ConversationRow {
     ...over,
   };
 }
-// The conversations list (and, for a waiting job, its source check) resolve asynchronously; flush
-// microtasks until the caller's condition holds — by default until the "Checking source chat…"
-// placeholder clears — or give up after a bounded wait.
+// The conversations list (and, for a waiting job, its source check) resolve asynchronously, and
+// react-query delivers each result on a timer tick. Wait for the caller's condition itself — by
+// default until the "Checking source chat…" placeholder clears — and fail here if it never holds.
+// (Counting a fixed number of flushes gave up silently on a slow CI worker, so the assertion that
+// followed read the placeholder.)
 async function settleUntil(ready: () => boolean = () => !allText().includes("Checking source chat")) {
-  for (let i = 0; i < 50; i++) {
+  await vi.waitFor(async () => {
     await act(async () => { await Promise.resolve(); });
-    if (ready()) return;
-  }
+    if (!ready()) throw new Error("the detail did not settle");
+  }, { timeout: 5000, interval: 5 });
 }
 /** The "Started in" (or waiting "Source") field by its dt label, or null when it isn't drawn. */
 function labeledField(label: string): HTMLElement | null {

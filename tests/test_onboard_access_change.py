@@ -84,6 +84,17 @@ def host(monkeypatch):
     return _Host(monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    # Windows temp repos live under the runner's ~/AppData, which the outside-root
+    # guard correctly refuses. Keep the test projects outside the simulated home,
+    # just as test_onboard_outside_root does, without bypassing the real guard.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
 @pytest.fixture
 def root(tmp_path):
     (tmp_path / "code").mkdir()
