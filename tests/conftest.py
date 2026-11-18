@@ -91,6 +91,14 @@ def _reset_instance_paths(_isolate_instance_roots):
 
 
 @pytest.fixture(autouse=True)
+def _reset_host_teardown_flag(monkeypatch):
+    """``infra.proc`` latches "this process is tearing its trees down" for good (#5267).
+    A test that drives the teardown must not leave every later ACP exit in the run
+    labelled a host shutdown."""
+    monkeypatch.setattr("infra.proc._host_teardown", False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_model_list_cache():
     """Provider model lists are cached process-wide (graph.providers.model_cache), so
     one test's stubbed `/models` answer would otherwise be served to the next test."""

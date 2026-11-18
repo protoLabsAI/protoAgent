@@ -43,7 +43,15 @@ from typing import Any, Awaitable, Callable
 from infra import clock
 from infra.node_runtime import _version_sort_key  # noqa: F401 — re-export (tests, callers)
 from infra.node_runtime import discovered_node_dirs as _discovered_node_dirs
-from infra.proc import child_env, group_kwargs, scrub_agent_env, signal_tree, track_tree, untrack_tree
+from infra.proc import (
+    child_env,
+    group_kwargs,
+    host_teardown_started,
+    scrub_agent_env,
+    signal_tree,
+    track_tree,
+    untrack_tree,
+)
 
 # A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
 # chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
@@ -563,6 +571,12 @@ class AcpError(Exception):
     class means the run was abandoned rather than finished (#3040). It is a separate
     flag rather than ``code is not None`` because an agent may answer with an error
     member carrying no code at all, and that is still an answer.
+
+    ``host_shutdown`` says the agent stopped because THIS process stopped it — a server
+    shutdown signalling its tracked trees, or ``AcpClient.close()`` — with a request
+    still in flight (#5267). The agent did not fail and did not answer, so
+    ``reported_by_agent`` stays False; a caller can tell our own restart from a coder
+    that died on its own.
     """
 
     def __init__(
@@ -572,11 +586,24 @@ class AcpError(Exception):
         code: int | None = None,
         data: object = None,
         reported_by_agent: bool = False,
+        host_shutdown: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.data = data
         self.reported_by_agent = reported_by_agent
+        self.host_shutdown = host_shutdown
+
+
+#: Clients with a ``session/prompt`` request in flight right now — the coder dispatches
+#: a restart would throw away. Read by the restart-readiness check (#5267), which has no
+#: other way to see a board coder working: it is neither a chat turn nor a background job.
+_PROMPTS_IN_FLIGHT: set[AcpClient] = set()
+
+
+def live_dispatch_count() -> int:
+    """How many ACP clients are waiting on a ``session/prompt`` answer."""
+    return len(_PROMPTS_IN_FLIGHT)
 
 
 class AcpClient:
@@ -685,6 +712,9 @@ class AcpClient:
         self._loading = False
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
+        # True from close() until the next spawn: the exit the read loop then sees is
+        # one this process asked for (#5267).
+        self._host_closing = False
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
         self._start_lock = asyncio.Lock()
@@ -841,6 +871,7 @@ class AcpClient:
         # is what keeps whatever that stream is still shouting out of THIS run (#3040).
         self._stream_gen += 1
         self._stream_fenced = False
+        self._host_closing = False
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 self.command,
@@ -1009,6 +1040,9 @@ class AcpClient:
         direct child, so the backend it spawned dies with it instead of reparenting to
         init. The kill is a synchronous syscall, so even if this runs on a cancelled
         task the tree still dies."""
+        # Before anything is signalled or cancelled: the reader this stops must label
+        # any request it fails as our doing, not the agent's (#5267).
+        self._host_closing = True
         self._drop_relay()
         with contextlib.suppress(Exception):
             await self._close_session()
@@ -1301,9 +1335,21 @@ class AcpClient:
                 # died and what it said on the way out. A bare "agent exited" is the least
                 # actionable message in this file: it is emitted for a crash, an OOM kill, a
                 # bad launch, and an upstream auth failure alike.
-                detail = self._exit_detail()
+                #
+                # Unless WE stopped it (#5267): a server shutdown signals every tracked
+                # tree before the drain, and an adapter that honours the SIGTERM exits 0
+                # — which would read here as "agent exited (exit code 0)", a crash, with
+                # whatever unrelated line it last wrote to stderr as the apparent cause.
+                host_shutdown = host_teardown_started() or getattr(self, "_host_closing", False)
+                detail = "" if host_shutdown else self._exit_detail()
                 for fut in self._pending.values():
-                    if not fut.done():
+                    if fut.done():
+                        continue
+                    if host_shutdown:
+                        fut.set_exception(
+                            AcpError(f"{self.name} agent stopped: host shutting down", host_shutdown=True)
+                        )
+                    else:
                         fut.set_exception(AcpError(f"{self.name} agent exited{detail}"))
                 self._pending.clear()
 
@@ -2454,6 +2500,7 @@ class AcpClient:
         """One ``session/prompt`` round on the open session, with the abandoned-turn
         handling every round needs — the first prompt and the background follow-ups
         (bd-572g1) go through the same path."""
+        _PROMPTS_IN_FLIGHT.add(self)
         try:
             return await self._request(
                 "session/prompt",
@@ -2478,12 +2525,18 @@ class AcpClient:
             # the respawn opens a fresh `session/new`, silently dropping the
             # conversation thread the pooling exists to keep.
             if not (isinstance(exc, AcpError) and exc.reported_by_agent):
-                if isinstance(exc, AcpError) and not getattr(exc, "_has_turn_evidence", False):
+                if (
+                    isinstance(exc, AcpError)
+                    and not exc.host_shutdown  # our own shutdown: the turn's evidence is not a cause
+                    and not getattr(exc, "_has_turn_evidence", False)
+                ):
                     # Preserve the original exception and its code/data contract.
                     exc.args = (self._evidence_text(str(exc), 2000) + self._timeout_evidence(),)
                 self._fence_stream()
             await self._cancel_session()
             raise
+        finally:
+            _PROMPTS_IN_FLIGHT.discard(self)
 
     @staticmethod
     def _ended_normally(result: Any) -> bool:
