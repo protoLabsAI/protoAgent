@@ -815,6 +815,13 @@ async def harvest_thread(
         import asyncio
 
         session_id = str(channel_values.get("session_id") or thread_id)
+        from graph.private_sessions import is_marked
+
+        if is_marked(session_id) or is_marked(thread_id):
+            # Checkpoint messages carry no per-turn audience, so the projection below
+            # cannot drop a private turn's messages: skip the whole conversation.
+            log.info("[harvest] thread %s has private turns — skipping harvest", thread_id)
+            return None
         # Conversations in Work (ADR 0131 §5): a later ordinary turn can clear `incognito`
         # while older private messages remain in the checkpoint (#5403), so protection can't
         # ride the thread flag above — it follows the retained data. Read archives INCLUDING

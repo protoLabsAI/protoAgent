@@ -318,6 +318,14 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
         # worker's identity. The jobs DB is the system of record.
         log.debug("[memory] background worker session %s — skipping session persistence", session_id)
         return
+    # A conversation with a private (human-operator) turn: its checkpoint still carries
+    # that turn's messages on every later turn, so the card is withheld for the whole
+    # conversation, not just while the private turn runs. Unmarked sessions are unchanged.
+    from graph.private_sessions import withheld
+
+    if withheld(session_id):
+        log.info("[memory] session has private turns — skipping session persistence")
+        return
     try:
         state, provenance = public_state(state, session_id)
     except Exception:
@@ -1097,9 +1105,17 @@ class SessionSummaryMiddleware(AgentMiddleware):
         self._config = config
 
     def before_agent(self, state, runtime):
+        from graph.fence_scope import in_private_segment
         from graph.session_gist import cancel, card_path
 
         cancel(card_path(state))
+        if in_private_segment():
+            # Mark at the START of a private turn: a turn that never reaches after_agent
+            # still leaves its input in the checkpoint for a later ordinary turn to read.
+            from graph.private_sessions import mark
+            from observability import tracing
+
+            mark(state.get("session_id") or tracing.current_session_id() or "")
         return None
 
     async def abefore_agent(self, state, runtime):

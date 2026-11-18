@@ -616,6 +616,12 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
         if (state or {}).get("incognito"):
             log.info("[compaction] session %s is incognito — compacting WITHOUT an archive (ADR 0069 D3b)", session_id)
             return
+        from graph.private_sessions import withheld
+
+        if withheld(session_id):
+            # Same no-trail rule as incognito: the transcript holds a private turn.
+            log.info("[compaction] session %s has private turns — compacting WITHOUT an archive", session_id)
+            return
         try:
             if store is None:
                 log.warning(

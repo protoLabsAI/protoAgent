@@ -87,7 +87,9 @@ def schedule(state, config):
                 card = json.load(stream)
             if card["session_id"].startswith(("background:", "job:", "palette-", "system:")):
                 return
-            if not public_card(card):
+            from graph.private_sessions import withheld
+
+            if not public_card(card) or withheld(card["session_id"]):
                 return
             state, provenance = public_state(state, card["session_id"])
             if card.get(PROVENANCE) != provenance.get(PROVENANCE):
@@ -154,6 +156,10 @@ def _generate(path, card, payload, config, token):
             return
         with card_lock:
             if _pending.get(path) is not token or not config.memory_session_gist or not public_card(card):
+                return
+            from graph.private_sessions import is_marked
+
+            if is_marked(card["session_id"]):
                 return
             with open(path, encoding="utf-8") as stream:
                 if json.load(stream) != card:

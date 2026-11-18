@@ -136,7 +136,7 @@ async def rig(tmp_path, monkeypatch, delegation_env):
         chat_mod._PRIVATE_RUNS.clear()
 
     r.restart = restart
-    r.steer, r.rpc, r.rows, r.clients, r.op = steer, rpc, rows, clients, clients["shared-bearer"]
+    r.steer, r.rpc, r.rows, r.clients, r.op, r.app = steer, rpc, rows, clients, clients["shared-bearer"], app
     yield r
     r.release.set()  # let a held turn finish before the store closes under it
     if detached := asyncio.all_tasks() - {asyncio.current_task()}:

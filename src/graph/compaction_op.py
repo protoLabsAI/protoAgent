@@ -190,7 +190,11 @@ async def compact_thread(
     snapshot = await graph.aget_state(lg_config)
     values = getattr(snapshot, "values", None) or {}
     messages = list(values.get("messages") or [])
-    incognito = bool(values.get("incognito"))
+    # A conversation with a private (human-operator) turn is archived like an incognito
+    # one — never: the manual path refuses, the safety valve shrinks it unarchived.
+    from graph.private_sessions import withheld
+
+    incognito = bool(values.get("incognito")) or withheld(session_id) or withheld(thread_id)
 
     keep = (
         keep_recent if keep_recent is not None else getattr(config, "compaction_keep_messages", _DEFAULT_KEEP_MESSAGES)

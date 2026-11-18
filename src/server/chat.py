@@ -2644,6 +2644,11 @@ async def _chat_langgraph_stream_impl(
             return
         _private_ref = message
         message = _resolved
+        # From here this conversation's checkpoint holds private text: the shared derived
+        # memory writers (session card, gist, archive, harvest) skip it from now on.
+        from graph.private_sessions import mark as _mark_private_session
+
+        await asyncio.to_thread(_mark_private_session, session_id)
 
     # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
     # test-built, falling back to the default with a notice when it can't be. Everything
