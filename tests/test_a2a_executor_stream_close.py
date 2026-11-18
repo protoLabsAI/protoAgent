@@ -133,6 +133,36 @@ async def test_a_stream_that_raises_is_failed_and_closed_once(_outcomes):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stall", [0.0, 30.0], ids=["guard-off", "guard-on"])
+async def test_completed_private_stream_closes_cleanly(stall, _outcomes, caplog):
+    from graph.fence_scope import in_private_segment
+
+    closed = []
+
+    async def stream(text, context_id, **kwargs):
+        try:
+            async with chat_mod._private_segment_tool_scope(True):
+                try:
+                    assert in_private_segment()
+                    yield ("text", "private answer")
+                    assert in_private_segment()
+                    yield ("done", "private answer")
+                finally:
+                    assert in_private_segment()
+        finally:
+            closed.append(not in_private_segment())
+
+    await ProtoAgentExecutor(stream, stall_timeout_provider=lambda: stall).execute(
+        _request_context(), EventQueue()
+    )
+
+    assert "stream cleanup raised" not in caplog.text
+    assert closed == [True]
+    assert not in_private_segment()
+    assert [o.state for o in _outcomes] == ["completed"]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_that_raises_does_not_break_a_completed_turn(_outcomes, caplog):
     async def stream(text, context_id, **kwargs):
         try:
