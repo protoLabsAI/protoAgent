@@ -44,7 +44,7 @@ import logging
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from graph.fence_scope import fence_scope
+from graph.fence_scope import current_fence, fence_scope, in_private_segment
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,20 @@ def _state_fence(request) -> list:
         return []
 
 
+def _effective_fence(request) -> list:
+    fence = _state_fence(request)
+    if in_private_segment():
+        from graph.tool_access import private_segment_fence
+
+        tools = getattr(request, "tools", None)
+        if tools is None:
+            tool = getattr(request, "tool", None)
+            tools = [tool] if tool is not None else []
+        fence = intersect_fences(fence, current_fence())
+        fence = intersect_fences(fence, private_segment_fence(tools))
+    return fence
+
+
 def _bound_tool_name(tool) -> str | None:
     """Name of a ``ModelRequest.tools`` entry — a BaseTool or a provider tool-spec dict."""
     name = getattr(tool, "name", None)
@@ -117,7 +131,7 @@ def fence_tools(request):
 
     Unfenced, deny-all, or no bound tool inside the fence → the request as-is. An entry
     whose name can't be read is kept (never drop what we can't identify)."""
-    fence = _state_fence(request)
+    fence = _effective_fence(request)
     allowed = {t for t in fence if t != FENCE_DENY_ALL}
     tools = getattr(request, "tools", None)
     if not allowed or not tools:
@@ -144,14 +158,13 @@ class SubagentFenceMiddleware(AgentMiddleware):
     """Block tool calls outside the turn's stamped subagent allowlist."""
 
     def _deny_reason(self, request) -> str | None:
-        state = getattr(request, "state", None) or {}
-        fence = state.get("subagent_fence")
+        fence = _effective_fence(request)
         if not fence:
             return None
         name = request.tool_call.get("name", "")
         if name in fence:
             return None
-        if is_resumed_parked_call(request) and name in _answer_tools():
+        if not in_private_segment() and is_resumed_parked_call(request) and name in _answer_tools():
             # A parked ANSWER completes on its own resume (see module doc).
             logger.info("[subagent-fence] allowed the resumed parked answer %s outside the fence", name)
             return None
@@ -167,8 +180,9 @@ class SubagentFenceMiddleware(AgentMiddleware):
 
     def _declined(self, request) -> ToolMessage | None:
         """A resumed parked APPROVAL outside the fence → the declined outcome, else None."""
-        state = getattr(request, "state", None) or {}
-        fence = state.get("subagent_fence")
+        fence = _effective_fence(request)
+        if in_private_segment():
+            return None
         name = request.tool_call.get("name", "")
         if not fence or name in fence or name in _answer_tools() or not is_resumed_parked_call(request):
             return None
@@ -203,7 +217,7 @@ class SubagentFenceMiddleware(AgentMiddleware):
         reason = self._deny_reason(request)
         if reason:
             return self._blocked(request, reason)
-        with fence_scope(_state_fence(request)):
+        with fence_scope(_effective_fence(request)):
             return handler(request)
 
     async def awrap_tool_call(self, request, handler):
@@ -216,5 +230,5 @@ class SubagentFenceMiddleware(AgentMiddleware):
         # The tool body runs as code of THIS turn's fence: anything it leaves behind to
         # run later as its own turn (a background job's nudge, a scheduled resume, a
         # watch reaction, a goal's hooks) records it and stays fenced (graph/fence_scope).
-        with fence_scope(_state_fence(request)):
+        with fence_scope(_effective_fence(request)):
             return await handler(request)

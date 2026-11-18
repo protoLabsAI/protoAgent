@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ from a2a_impl import auth, hitl_routing, private_intake, stores
 from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
 from a2a_impl.requester_delivery import RequesterProjection
 from tests._virtual_clock import VirtualClock
+from graph.middleware.subagent_fence import SubagentFenceMiddleware
 
 CTX = "proof-g1"
 SECRET, REPLY, OUTPUT = "PRIVATE-INPUT-G1", "PRIVATE-REPLY-G1", "PRIVATE-TOOL-OUTPUT-G1"
@@ -107,7 +109,18 @@ async def _scenario(tmp_path, monkeypatch, kind, exit_kind):
             yield "text", REPLY
             value = RESULT if exit_kind in {"outbound_selected", "outbound_selected_stop"} else SECRET
             yield "tool_start", {"id": "call", "name": "outbound", "input": value}
-            output = await outbound.ainvoke({"value": value}) if exit_kind.startswith("outbound") else OUTPUT
+            # Keep a private output canary independent of whether the effect is refused.
+            yield "reasoning", OUTPUT
+            output = OUTPUT
+            if exit_kind.startswith("outbound"):
+                call = {"name": outbound.name, "args": {"value": value}, "id": "call", "type": "tool_call"}
+                request = SimpleNamespace(tool_call=call, tool=outbound, state={})
+                async def invoke(request):
+                    return await outbound.ainvoke(request.tool_call)
+                result = await SubagentFenceMiddleware().awrap_tool_call(request, invoke)
+                output = result.content
+                assert result.status == "error"
+                assert output.startswith("Blocked by policy:")
             yield "tool_end", {"id": "call", "name": "outbound", "output": output, "duration_ms": 1}
             # An exhausted stream with no selected result must not leave a live delivery.
             if exit_kind != "implicit":
@@ -198,7 +211,8 @@ async def _scenario(tmp_path, monkeypatch, kind, exit_kind):
         # A future effect guard may suppress a forbidden request. Do not require the leak.
         assert len(requests) <= int(exit_kind.startswith("outbound"))
         if exit_kind == "outbound_selected":
-            assert [json.loads(body) for body in requests] == [{"value": RESULT}]
+            assert all(json.loads(body) == {"value": RESULT} for body in requests)
+        assert requests == []
         return delivery, private_progress, requests
     finally:
         for task in tasks:
@@ -217,7 +231,7 @@ async def _scenario(tmp_path, monkeypatch, kind, exit_kind):
 
 
 @pytest.mark.xfail(strict=True, raises=MissingPrivateProgress,
-                   reason="PROOF FAILURE: lifecycle-only operator hook cannot show private tool progress required by G1")
+                   reason="v1 limitation: operator hook is lifecycle-only, not a peer leak")
 async def test_preexisting_handles_keep_operator_private_progress(tmp_path, monkeypatch, kind):
     delivery, progress, _ = await _scenario(tmp_path, monkeypatch, kind, "progress")
     assert delivery["state"] == "delivered"
@@ -231,9 +245,7 @@ async def test_preexisting_handles_keep_operator_private_progress(tmp_path, monk
     "stall", "outbound_selected",
     pytest.param("implicit", marks=pytest.mark.xfail(strict=True, raises=OpenDelivery,
                  reason="PROOF FAILURE: implicit stream end leaves an unprepared private delivery open")),
-    *[pytest.param(case, marks=pytest.mark.xfail(strict=True, raises=UnselectedEffect,
-                   reason="PROOF FAILURE: outbound tool sends private values absent from the delivered result"))
-      for case in ("outbound_complete", "outbound_stop", "outbound_selected_stop")],
+    "outbound_complete", "outbound_stop", "outbound_selected_stop",
 ])
 async def test_private_exit_closes_without_unselected_effects(tmp_path, monkeypatch, kind, exit_kind):
     delivery, _, requests = await _scenario(tmp_path, monkeypatch, kind, exit_kind)

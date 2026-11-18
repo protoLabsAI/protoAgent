@@ -1375,6 +1375,9 @@ class ProtoAgentExecutor(AgentExecutor):
         # — the chat driver's per-thread lock release, trace flush, turn bookkeeping —
         # waited for the event loop's async-generator finalizer (GC).
         guarded: AsyncGenerator[tuple[str, Any], None] | None = None
+        tool_scope = projection.tool_scope() if projection is not None else None
+        if tool_scope is not None:
+            tool_scope.__enter__()
         try:
             guarded = _stall_guarded(
                 self._stream_factory(
@@ -1737,6 +1740,8 @@ class ProtoAgentExecutor(AgentExecutor):
                     except Exception:  # noqa: BLE001 — the turn's outcome is already recorded
                         logger.exception("[a2a] stream cleanup raised for task %s", context.task_id)
             finally:
+                if tool_scope is not None:
+                    tool_scope.__exit__(None, None, None)
                 # The pair of `turn_started` (#3933): fired on EVERY exit, including the
                 # crash paths where a terminal update itself raised before the terminal
                 # hook ran, so a host that registered this turn on `turn_started` always

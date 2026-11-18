@@ -1,4 +1,4 @@
-"""Default-deny classification for future subagent read-tool inheritance.
+"""Default-deny classification for subagent inheritance and private segments.
 
 This module selects candidates only; dispatch applies each subagent's policy.
 """
@@ -48,3 +48,13 @@ def inherited_read_tools(lead_tools, config) -> list:
             inherited.append(tool)
             seen.add(tool.name)
     return inherited
+
+
+def private_segment_fence(tools) -> list[str]:
+    """Local reads only; MCP names use the loader's ``server__tool`` form."""
+    from graph.middleware.subagent_fence import FENCE_DENY_ALL
+
+    allowed = [tool.name for tool in tools
+               if getattr(tool, "name", None) and is_read_tool(tool) and tool.name not in {"fetch_url", "web_search"}
+               and "__" not in tool.name]
+    return list(dict.fromkeys(allowed)) or [FENCE_DENY_ALL]
