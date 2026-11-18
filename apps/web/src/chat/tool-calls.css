@@ -217,18 +217,14 @@
 }
 
 /* Tier 2: Stop a running subagent delegation. Rides the DS header `actions` slot
-   (.pl-toolcard__actions) as a compact, error-toned text button — quiet until
+   (.pl-toolcard__actions) as an icon-only, error-toned button — quiet until
    hover so a long delegation reads as "running" first, "abortable" on intent. */
 .tool-cancel-btn {
   display: inline-flex;
   align-items: center;
-  gap: var(--pl-space-1);
-  padding: 1px var(--pl-space-2);
+  padding: var(--pl-space-0_5);
   width: auto;
   border-radius: var(--pl-radius-md);
-  font-size: var(--pl-font-size-xs);
-  font-weight: 500;
-  line-height: 1.6;
   color: var(--pl-color-fg-subtle);
   border: 1px solid transparent;
 }
