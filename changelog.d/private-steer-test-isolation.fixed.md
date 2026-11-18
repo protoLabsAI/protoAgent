@@ -1,0 +1,1 @@
+- **Isolate setup-wizard test configuration.** Restore the reload stub's runtime config so private-steering scheduling does not leak into later idempotency tests.
