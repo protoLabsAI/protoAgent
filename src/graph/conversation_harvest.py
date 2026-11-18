@@ -818,9 +818,9 @@ async def harvest_thread(
         import asyncio
 
         session_id = str(channel_values.get("session_id") or thread_id)
-        from graph.private_sessions import is_marked
+        from graph.private_sessions import withheld
 
-        if is_marked(session_id) or is_marked(thread_id):
+        if await asyncio.to_thread(withheld, session_id) or await asyncio.to_thread(withheld, thread_id):
             # Checkpoint messages carry no per-turn audience, so the projection below
             # cannot drop a private turn's messages: skip the whole conversation.
             log.info("[harvest] thread %s has private turns — skipping harvest", thread_id)

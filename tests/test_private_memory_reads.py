@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from graph import session_gist
@@ -66,7 +67,9 @@ async def _run_writers(state):
     """Every derived writer a finished turn or an idle conversation can reach."""
     SessionSummaryMiddleware(config=GIST_CONFIG).after_agent(state, None)
     session_gist.cancel(session_gist.card_path(state))
-    CountingSummarizationMiddleware.__new__(CountingSummarizationMiddleware)._archive(state, SID)
+    await CountingSummarizationMiddleware(
+        model=FakeListChatModel(responses=["summary"]), trigger=("messages", 1), keep=("messages", 1)
+    ).abefore_model(state, None)
     graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(values=state)), aupdate_state=AsyncMock())
     summarizer = AsyncMock(return_value="summary")
     compacted = await compact_thread(graph, object(), None, object(), SID, SID, keep_recent=0, summarizer=summarizer)
@@ -90,7 +93,7 @@ async def test_later_ordinary_turn_writes_no_private_text(box, monkeypatch):
     await _steer(box.rig, SECRET, "private", private=True)
     await _steer(box.rig, "ordinary", "public")
     scheduled = []
-    monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool))
+    monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool, cancel=bool))
     compacted, harvested = await _run_writers({"session_id": SID, "messages": LATER_TURN})
     assert SECRET not in _retained(box) and REPLY not in _retained(box)
     assert harvested is None and scheduled == []
@@ -98,6 +101,36 @@ async def test_later_ordinary_turn_writes_no_private_text(box, monkeypatch):
     archives = [e.content for e in box.history.list_for_session(SID, include_private=True)]
     assert not compacted["refused"] and len(archives) == 2
     assert all("ordinary" in a and "ok" in a for a in archives)
+
+
+@pytest.mark.parametrize("next_private", [False, True])
+async def test_pre_marker_private_turn_withholds_shared_writers(box, monkeypatch, next_private):
+    # Real authentication and two or three durable turn completions make this slower than a unit test.
+    await _steer(box.rig, SECRET, "legacy-private", private=True)
+    # Pre-deploy tasks have private ownership, but no marker or message stamps.
+    for path in (box.memory / ".private-sessions").iterdir():
+        path.unlink()
+    if next_private:
+        await _steer(box.rig, "new private input", "new-private", private=True)
+    await _steer(box.rig, "ordinary", "public")
+    scheduled = []
+    monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool, cancel=bool))
+    state = {"session_id": SID, "messages": [HumanMessage(content=SECRET), AIMessage(content=REPLY)] + LATER_TURN[2:]}
+    _, harvested = await _run_writers(state)
+    assert SECRET not in _retained(box) and REPLY not in _retained(box)
+    assert harvested is None and scheduled == []
+
+
+@pytest.mark.parametrize("missing_engine", [True, False])
+async def test_unknown_task_ownership_withholds_shared_writers(box, monkeypatch, missing_engine):
+    from sqlalchemy.engine import URL
+
+    engine = None if missing_engine else SimpleNamespace(url=URL.create("sqlite+aiosqlite", database=str(box.memory / "missing.db")))
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine)
+    state = {"session_id": SID, "messages": [HumanMessage(content=SECRET), AIMessage(content=REPLY)]}
+    _, harvested = await _run_writers(state)
+    assert SECRET not in _retained(box) and REPLY not in _retained(box)
+    assert harvested is None
 
 
 async def test_private_turn_input_is_stamped(box):
@@ -139,7 +172,7 @@ async def test_gist_is_withheld_from_an_earlier_public_card(box, monkeypatch):
     card = (box.memory / f"{SID}.json").read_text(encoding="utf-8")
     await _steer(box.rig, SECRET, "private", private=True)
     scheduled = []
-    monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool))
+    monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool, cancel=bool))
     session_gist.schedule({"session_id": SID, "messages": first["messages"] + LATER_TURN}, GIST_CONFIG)
     assert scheduled == [] and (box.memory / f"{SID}.json").read_text(encoding="utf-8") == card
 

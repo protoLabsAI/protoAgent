@@ -1480,6 +1480,11 @@ async def _private_steer_or_start(
                     detail="This conversation is waiting on a decision a private steer can't answer. Answer the decision first.",
                 )
         if not ref:
+            # Establish whether older unlabelled private turns exist BEFORE this
+            # intake creates its own private task and scheduling records.
+            from graph.private_sessions import mark as _mark_private_session
+
+            await asyncio.to_thread(_mark_private_session, session_id)
             ref = await private_intake.record_private_steer(
                 store, session_id=session_id, text=text, msg_id=mid, context=context
             )

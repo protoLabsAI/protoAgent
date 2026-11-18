@@ -157,9 +157,9 @@ def _generate(path, card, payload, config, token):
         with card_lock:
             if _pending.get(path) is not token or not config.memory_session_gist or not public_card(card):
                 return
-            from graph.private_sessions import is_marked
+            from graph.private_sessions import withheld
 
-            if is_marked(card["session_id"]):
+            if withheld(card["session_id"]):
                 return
             with open(path, encoding="utf-8") as stream:
                 if json.load(stream) != card:
