@@ -148,6 +148,77 @@ async def test_message_held_while_form_pending(monkeypatch):
     assert await chat_mod._pending_interrupt_value(_cfg(sid)) is not None
 
 
+@pytest.mark.asyncio
+async def test_held_message_keeps_its_image(monkeypatch):
+    """A screenshot sent while a decision/form is open must survive the hold (2026-11-17).
+    The hold queued only the text, so the resumed turn saw the words but not the picture
+    and asked the operator to send it again. The held item now carries the images, their
+    bridged refs and the vision flag, exactly as a steer of the same message would."""
+    sid = "hold-img"
+    _install_graph(monkeypatch, [_form_call(), AIMessage(content="unused")])
+    monkeypatch.setattr(chat_mod, "_bridge_attachment_ids", lambda images, session_id=None: "[attachment att-1]")
+    monkeypatch.setattr(STATE.graph_config, "model_vision", True, raising=False)
+
+    frames = await _frames("deploy the service", sid)
+    form = frames[-1][1]
+    shot = [("image/png", "data:image/png;base64,iVBORw0KGgo=")]
+    held = [
+        f
+        async for f in chat_mod._chat_langgraph_stream("swap these old cards", sid, images=shot)
+    ]
+    assert held == [("input_required", form)]
+
+    (item,) = steering.drain(sid)
+    assert item["text"] == "swap these old cards"
+    assert item["images"] == shot
+    assert item["refs"] == "[attachment att-1]"
+    assert item["vision"] is True
+
+
+@pytest.mark.asyncio
+async def test_held_incognito_message_keeps_its_image_without_saving_it(monkeypatch):
+    """Incognito keeps its no-trail promise through the hold: the image rides to the model,
+    but it is not saved as a bridged attachment."""
+    sid = "hold-img-incog"
+    _install_graph(monkeypatch, [_form_call(), AIMessage(content="unused")])
+    saved = []
+    monkeypatch.setattr(chat_mod, "_bridge_attachment_ids", lambda images, session_id=None: saved.append(1) or "x")
+
+    await _frames("deploy the service", sid, request_metadata={"incognito": True})
+    shot = [("image/png", "data:image/png;base64,iVBORw0KGgo=")]
+    [
+        f
+        async for f in chat_mod._chat_langgraph_stream(
+            "private note", sid, images=shot, request_metadata={"incognito": True}
+        )
+    ]
+    (item,) = steering.drain(sid)
+    assert item["images"] == shot and item["refs"] == "" and item.get("incognito") is True
+    assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_sync_driver_honours_incognito_for_a_held_image(monkeypatch):
+    """The non-streaming driver carries incognito as a parameter, not in its turn metadata,
+    so the hold must take it explicitly (QA panel on #5484): a held incognito image rides
+    to the model but is never saved as a bridged attachment."""
+    from server import turn_control
+
+    sid = "hold-img-sync-incog"
+    _install_graph(monkeypatch, [_form_call(), AIMessage(content="unused")])
+    await _frames("deploy the service", sid)
+    saved = []
+    monkeypatch.setattr(chat_mod, "_bridge_attachment_ids", lambda images, session_id=None: saved.append(1) or "x")
+    shot = [("image/png", "data:image/png;base64,iVBORw0KGgo=")]
+    held = await turn_control._hold_if_hitl_pending(
+        "private note", sid, _cfg(sid), request_metadata={"origin": "local"}, images=shot, incognito=True
+    )
+    assert held is not None and held is not turn_control._HITL_RESUME
+    (item,) = steering.drain(sid)
+    assert item["images"] == shot and item["refs"] == "" and item.get("incognito") is True
+    assert saved == []
+
+
 # ── released in order, AFTER the form response, on submit ─────────────────────
 
 
