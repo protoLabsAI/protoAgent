@@ -1,0 +1,1 @@
+- **Refused private turns close before reporting failure.** Live turns whose thread resolver raises or no longer matches their bound checkpoint settle durable scheduling before publishing the error, preserving the private input and preventing queued turns from lingering on Windows.

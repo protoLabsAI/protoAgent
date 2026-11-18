@@ -3,6 +3,7 @@ restart recovery still runs a brand-new conversation's first private turn, and t
 refuses one whose thread no longer resolves to its binding. On the S9 proof rig (real route,
 loopback, executor, stream runner, SQLite partition and checkpointer; the model is scripted)."""
 import importlib
+from contextlib import aclosing
 
 import pytest
 
@@ -55,8 +56,24 @@ async def test_live_stream_refuses_a_private_turn_off_its_bound_checkpoint(world
     ref, turn = await _accepted_but_never_started(world, monkeypatch, session)
     assert turn["checkpoint"] == f"proj:atlas:{session}"
     monkeypatch.setattr(STATE, "thread_id_resolver", resolver, raising=False)  # would fall back to a2a:<session>
+    # Observe the durable state BEFORE the executor receives the error: polling a failed
+    # task can otherwise race generator cleanup, depending on the platform's scheduling.
+    stream_impl = chat_mod._chat_langgraph_stream_impl
+    at_error = []
+
+    async def observe_error(*args, **kwargs):
+        async with aclosing(stream_impl(*args, **kwargs)) as frames:
+            async for frame in frames:
+                if frame[0] == "error":
+                    store = chat_mod._private_partition_store()
+                    at_error.append((await ss.pending_turns(store, session, OP),
+                                     (await ss.read_segment(store, session, OP))["state"]))
+                yield frame
+
+    monkeypatch.setattr(chat_mod, "_chat_langgraph_stream_impl", observe_error)
     retry = (await world.steer("shared-bearer", session, SECRET, "m1", private=True)).json()
     task = await poll_terminal(world.op, retry["started_turn"])
+    assert at_error == [([], ss.SEGMENT_IDLE)]
     assert task["status"]["state"] == "TASK_STATE_FAILED" and SECRET not in str(task)
     assert world.runs == []  # the graph never ran, on any thread
     store = chat_mod._private_partition_store()
