@@ -28,10 +28,10 @@ from graph.subagents.config import SUBAGENT_REGISTRY
 
 # ── ceilings (chars) — mirror docs/explanation/prompt-contracts.md ───────────────────
 
-LEAD_DOCTRINE_MAX = 4_200  # Subagents + Operating model + Guidelines, all capabilities bound
+LEAD_DOCTRINE_MAX = 4_500  # Subagents + Operating model + Guidelines, all capabilities bound
 LEAD_SUBAGENTS_MAX = 2_000
 LEAD_OPERATING_MODEL_MAX = 1_900  # +directives (ADR 0127 D6)
-LEAD_GUIDELINES_MAX = 900
+LEAD_GUIDELINES_MAX = 1_150  # +batching line (#5098); covers the legacy `None` qualifier too
 LEAD_MINIMAL_MAX = 410  # no subagents, no autonomous primitives
 SUBAGENT_PROMPT_MAX = 8_500
 LEAD_VISIBLE_SUBAGENT_PROMPT_MAX = 4_000
@@ -46,8 +46,10 @@ _RAISE_HINT = (
 )
 
 ALL_CAPABILITY_TOOLS = frozenset().union(*CAPABILITY_GROUPS.values())
-# Every autonomous primitive plus the two tools the guidelines gate on.
-ALL_BOUND = ALL_CAPABILITY_TOOLS | {"task", "task_batch", "current_time"}
+# The file tools the batching guideline gates on (#5098).
+FILE_TOOLS = frozenset({"read_file", "search_files", "edit_file"})
+# Every autonomous primitive plus the tools the guidelines gate on.
+ALL_BOUND = ALL_CAPABILITY_TOOLS | FILE_TOOLS | {"task", "task_batch", "current_time"}
 FILLER_ONLY = frozenset({"current_time"})
 
 
@@ -109,6 +111,45 @@ def test_lead_minimal_within_budget():
     # The `task` guideline is gated on the tool being bound; a leak would sit under the
     # ceiling, so pin it by content too.
     assert "`task`" not in s["Guidelines"]
+
+
+BATCH_LEAD = "Make independent reads, searches and edits in the same step"
+
+
+def _guidelines(*tools: str) -> str:
+    return _sections(include_subagents=False, bound_tool_names=FILLER_ONLY | set(tools))["Guidelines"]
+
+
+def test_batching_guideline_names_only_bound_list_arguments():
+    """#5098: the line appears with any file tool and names a list argument only for a
+    tool that is bound."""
+    edit_only = _guidelines("edit_file")
+    assert BATCH_LEAD in edit_only
+    assert "`edit_file`'s `edits` list" in edit_only
+    assert "search_files" not in edit_only and "`queries`" not in edit_only
+
+    search_only = _guidelines("search_files")
+    assert BATCH_LEAD in search_only
+    assert "`search_files`' `queries` list" in search_only
+    assert "edit_file" not in search_only and "`edits`" not in search_only
+
+    read_only = _guidelines("read_file")
+    assert BATCH_LEAD in read_only
+    assert "`edits`" not in read_only and "`queries`" not in read_only
+
+    for bound in (ALL_BOUND, None):
+        full = _sections(include_subagents=True, bound_tool_names=bound)["Guidelines"]
+        assert full.count(BATCH_LEAD) == 1
+        assert "`edit_file`'s `edits` list" in full and "`search_files`' `queries` list" in full
+
+
+def test_batching_guideline_absent_without_file_tools():
+    """An agent with no file tools gets no batching guidance, and stays minimal."""
+    minimal = _guidelines()
+    assert BATCH_LEAD not in minimal
+    for word in ("edit_file", "search_files", "read_file", "`edits`", "`queries`"):
+        assert word not in minimal
+    _assert_under("lead minimal (ex-SOUL)", len(minimal), LEAD_MINIMAL_MAX)
 
 
 def test_build_system_prompt_is_parts_joined():

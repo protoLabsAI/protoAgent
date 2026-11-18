@@ -285,6 +285,23 @@ def build_system_prompt_parts(
         "- If a tool fails, read the error, retry once with corrected inputs, then report the concrete failure.",
         "- Answer naturally. Reasoning streams separately; don't narrate deliberation in the answer.",
     ]
+
+    # Batching (#5098): a coding agent that issues one file call per model step pays a
+    # round trip per call. Gated on a file tool being bound, and each list argument is
+    # named only when its tool is, so an agent without file tools gets no such guidance.
+    def _bound(name: str) -> bool:
+        return bound_tool_names is None or name in bound_tool_names
+
+    if _bound("read_file") or _bound("search_files") or _bound("edit_file"):
+        batching = "- Make independent reads, searches and edits in the same step, not one per turn."
+        hints = []
+        if _bound("edit_file"):
+            hints.append("`edit_file`'s `edits` list for several changes to one file")
+        if _bound("search_files"):
+            hints.append("`search_files`' `queries` list for several patterns")
+        if hints:
+            batching += " Use " + " and ".join(hints) + "."
+        guideline_lines.append(batching)
     async_tools = {"task", "task_batch", "delegate_to", "wait", "schedule_task", "create_watch"}
     if bound_tool_names is None or bound_tool_names & async_tools:
         guideline_lines.append(
