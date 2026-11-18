@@ -184,6 +184,7 @@ async def _native_turn(
                 request_metadata=turn_metadata,
                 fence=tool_fence,
                 images=turn_images,
+                incognito=incognito,
             )
         )
         if hold is not None and hold is not _turn_control._HITL_RESUME:

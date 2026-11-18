@@ -616,6 +616,7 @@ async def _hold_if_hitl_pending(
     request_metadata: dict | None,
     fence=None,
     images: list[tuple[str, str]] | None = None,
+    incognito: bool | None = None,
 ):
     """The HITL hold (#1560): decide what a FRESH message may do while this thread is
     parked at a ``request_user_input`` / ``ask_human`` / approval ``interrupt()``.
@@ -647,7 +648,9 @@ async def _hold_if_hitl_pending(
     each one is saved as a bridged attachment, unless the message is incognito, and the
     fold hands it to a vision model. Holding only the text dropped a screenshot the
     operator sent while a decision was open. The resumed turn then saw the words, not the
-    picture, and had to ask for it again (2026-11-17).
+    picture, and had to ask for it again (2026-11-17). ``incognito`` is the turn's own flag
+    when the caller has it (the non-streaming driver takes it as a parameter, not in its
+    metadata); otherwise it is read from ``request_metadata``.
 
     Autonomous turns are exempt EXCEPT when a decision is still awaiting an answer, and
     with no pending interrupt this returns ``None`` and the turn is untouched. Callers must
@@ -670,7 +673,8 @@ async def _hold_if_hitl_pending(
     if images:
         from runtime.state import STATE
 
-        incognito = bool((request_metadata or {}).get("incognito"))
+        if incognito is None:
+            incognito = bool((request_metadata or {}).get("incognito"))
         steering.enqueue(
             session_id,
             message,
