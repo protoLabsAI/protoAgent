@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.249.0",
+    "date": "2026-11-18",
+    "changes": [
+      "edit_file can change several places in one file in a single call (#5506).",
+      "search_files can run several queries in one call (#5508).",
+      "Agents can read a task's full scope with task_get (#5507).",
+      "Conversations in Work: the \"missing or stale state\" row of the Phase 1 proof matrix now rests on a test (#5498).",
+      "The lead prompt tells agents with file tools to batch independent reads, searches and edits in one step (#5510).",
+      "An agent can no longer \"cancel\" a job a plugin owns (#5500).",
+      "Workflow runs cut off by a restart no longer sit in the history as running forever (#5503).",
+      "A2A privacy proofs surface send failures while waiting for readiness (#5502).",
+      "A changed execute_code setting applies on the first save (#5495).",
+      "Recover private steers after restart (#5509).",
+      "Private steering refuses decisions outside the private partition (#5497).",
+      "Record the private steering dev-instance results and outstanding fixes (#5499)."
+    ]
+  },
+  {
     "version": "v0.248.0",
     "date": "2026-11-18",
     "changes": [
