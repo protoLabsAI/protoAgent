@@ -1216,6 +1216,7 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
 
     from a2a_impl import private_intake, stores
     from a2a_impl.requester_delivery import RequesterProjection
+    from tests._virtual_clock import VirtualClock
 
     store = stores.ReasoningCoalescingTaskStore(
         stores.make_sqlite_engine(str(tmp_path / "exit.db")), owner_resolver=stores.resolve_task_owner,
@@ -1230,6 +1231,10 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
     ready, proceed = asyncio.Event(), asyncio.Event()
     config = TaskPushNotificationConfig(id="original", url="https://8.8.8.8/hook")
     gated = fault != "timeout"  # the stall guard conflicts with holding the turn open
+    # The stall guard runs on a virtual clock (#5465): on the wall clock its 0.3 s window
+    # also timed every healthy step BEFORE the hang (the sealing write, the pushes), and a
+    # loaded Windows runner stretched one past it — the turn failed before `ready` was set.
+    clock = VirtualClock()
 
     async def factory(context, queue):
         config.task_id = context.task_id
@@ -1256,7 +1261,8 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
             await proceed.wait()  # the test cancels the turn while it holds here
             return
         if fault == "timeout":
-            await asyncio.sleep(3600)  # the stall guard fails it
+            await clock.sleep(3600)  # an hour of silence: the stall guard fails it
+            await asyncio.Event().wait()  # and the step never returns on its own
             return
         await proceed.wait()
         if fault in ("completion", "tool_error"):
@@ -1283,29 +1289,31 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
         async for event in iterator:
             target.append(_snapshot(event))
 
-    req = _msg("please proceed", mid="request", ctx=CTX)
-    running = asyncio.create_task(collect(handler.on_message_send_stream(req, peer), frames))
-    await asyncio.wait_for(ready.wait(), 5)
-    task_id = projections[0].binding["task_id"]
+    with pytest.MonkeyPatch.context() as mp:
+        clock.install(mp)
+        req = _msg("please proceed", mid="request", ctx=CTX)
+        running = asyncio.create_task(collect(handler.on_message_send_stream(req, peer), frames))
+        await asyncio.wait_for(ready.wait(), 5)
+        task_id = projections[0].binding["task_id"]
 
-    watching = None
-    if gated:
-        # A live re-attach while the turn is still working: the snapshot is content-free and
-        # every frame after it must stay that way too.
-        subscribed = handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), peer)
-        sub_frames.append(_snapshot(await asyncio.wait_for(anext(subscribed), 5)))
-        watching = asyncio.create_task(collect(subscribed, sub_frames))
+        watching = None
+        if gated:
+            # A live re-attach while the turn is still working: the snapshot is content-free and
+            # every frame after it must stay that way too.
+            subscribed = handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), peer)
+            sub_frames.append(_snapshot(await asyncio.wait_for(anext(subscribed), 5)))
+            watching = asyncio.create_task(collect(subscribed, sub_frames))
 
-    if fault == "cancel":
-        cancelled = await asyncio.wait_for(handler.on_cancel_task(CancelTaskRequest(id=task_id), peer), 5)
-        assert cancelled.status.state == TaskState.TASK_STATE_CANCELED
-    elif gated:
-        proceed.set()
-    # timeout: the stall guard ends it with no further prompting.
+        if fault == "cancel":
+            cancelled = await asyncio.wait_for(handler.on_cancel_task(CancelTaskRequest(id=task_id), peer), 5)
+            assert cancelled.status.state == TaskState.TASK_STATE_CANCELED
+        elif gated:
+            proceed.set()
+        # timeout: the stall guard ends it with no further prompting.
 
-    await asyncio.wait_for(asyncio.gather(*( [running] + ([watching] if watching else []) ),
-                                          return_exceptions=True), 15)
-    await router.drain()
+        await asyncio.wait_for(asyncio.gather(*( [running] + ([watching] if watching else []) ),
+                                              return_exceptions=True), 15)
+        await router.drain()
 
     # Every peer-readable surface: poll, (content-free) resubscribe snapshot, reopened history.
     got = await handler.on_get_task(GetTaskRequest(id=task_id), peer)

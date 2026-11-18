@@ -1652,8 +1652,22 @@ async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_pat
             # proactor loop orders that drain differently — so wait for it, don't assume it.
             await _settle_until(lambda: killed == [True])
             return
+        # Collect while the prompt is still blocked, then release it: the collector must
+        # wake on the run's completion. The 60 s budget is only a deadlock backstop — a
+        # 1 s budget raced the dispatch's finalization on a loaded Windows runner and
+        # reported "still running" for a run that was finishing fine.
+        collecting = asyncio.Event()
+        wait_work = mgr.wait_work
+
+        async def wait_collecting(job_id, timeout):
+            collecting.set()
+            return await wait_work(job_id, timeout)
+
+        monkeypatch.setattr(mgr, "wait_work", wait_collecting)
+        collection = asyncio.create_task(_invoke_delegate(tool, {**args, "timeout": 60}))
+        await asyncio.wait_for(collecting.wait(), 10)
         release.set()
-        assert await _invoke_delegate(tool, {**args, "timeout": 1}) == "original result"
+        assert await collection == "original result"
         # Collection also works from the durable row once the live task is gone.
         mgr.store = BackgroundStore(str(tmp_path / "jobs.db"))
         assert await _invoke_delegate(tool, args) == "original result"
@@ -1661,7 +1675,7 @@ async def test_acp_foreground_timeout_collects_original_run(monkeypatch, tmp_pat
         assert mgr.store.get(task_id).status == "completed"
         # A settled job must not prevent an intentional new run of the same ask.
         assert await _invoke_delegate(tool, {
-            "target": "coder", "query": "build once", "timeout": 1,
+            "target": "coder", "query": "build once", "timeout": 60,
         }) == "original result"
         assert calls == ["build once", "build once"]
     finally:

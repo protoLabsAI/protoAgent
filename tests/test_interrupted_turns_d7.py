@@ -103,6 +103,15 @@ def _past_iso(seconds: float = 5.0) -> str:
     return (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()
 
 
+def _far_cron() -> str:
+    """A recurring schedule whose next natural slot is months away. The tests make each
+    slot due explicitly (``UPDATE jobs SET next_fire``); with ``* * * * *`` a run that
+    straddled a wall-clock minute boundary also fired the natural slot — one tool run too
+    many (CI run 44143680563: 3 == 2)."""
+    at = datetime.now(UTC) + timedelta(days=180)
+    return f"{at.minute} {at.hour} {at.day} {at.month} *"
+
+
 def _query(path, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
     db = sqlite3.connect(str(path))
     db.row_factory = sqlite3.Row
@@ -679,7 +688,7 @@ async def test_recurring_job_interrupted_occurrence_is_skipped_and_next_slot_fir
 
     gen1 = _boot_generation(tmp_path, monkeypatch, coord, saver, agent)
     await gen1.sched.start()
-    gen1.sched.add_job("CRON-TOOL sweep the queue", "* * * * *", job_id="job-cron")
+    gen1.sched.add_job("CRON-TOOL sweep the queue", _far_cron(), job_id="job-cron")
     _execute(gen1.sched.path, "UPDATE jobs SET next_fire = ? WHERE id = 'job-cron'", (_past_iso(9),))
     await _wait_until(lambda: coord.tool_runs.get("cron_step") == 1, message="the tool call started")
     claim = await _accepted_unresolved_claim(gen1.sched, "job-cron")

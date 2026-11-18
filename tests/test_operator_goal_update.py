@@ -292,21 +292,35 @@ async def test_patch_waiting_for_completion_preserves_terminal_state(monkeypatch
 
 @pytest.mark.parametrize("winerror", [None, 5, 32, 33, 112])
 def test_patch_failed_replace_reports_failure_and_preserves_goal(monkeypatch, tmp_path, winerror):
+    import threading
+
     from graph.goals import store
     from graph.plugins import host
 
     client, ctrl = _client(monkeypatch, tmp_path)
     _seed(ctrl, outcome="old", status="achieved", finished_at=123)
     before = ctrl.store.get("s1").to_dict()
-    events, sleeps, attempts = [], [], []
+    events, sleeps, attempts, writers = [], [], [], set()
     error = _replace_error(winerror)
+    # `store.os` / `store.time` ARE the process-wide modules, so these fakes see every
+    # thread's calls. Count only the goal write's own: a background SDK retry on another
+    # thread (openai's `Retrying request in 0.47 seconds`) landed in `sleeps` on Windows CI.
+    real_replace, real_sleep = store.os.replace, store.time.sleep
 
     def denied_replace(source, destination):
+        if not str(source).startswith(str(tmp_path)):
+            return real_replace(source, destination)
+        writers.add(threading.get_ident())
         attempts.append(source)
         raise error
 
+    def recorded_sleep(seconds):
+        if threading.get_ident() not in writers:
+            return real_sleep(seconds)
+        sleeps.append(seconds)
+
     monkeypatch.setattr(store.os, "replace", denied_replace)
-    monkeypatch.setattr(store.time, "sleep", sleeps.append)
+    monkeypatch.setattr(store.time, "sleep", recorded_sleep)
     monkeypatch.setattr(host.HOST, "publish", lambda *args: events.append(args))
     response = client.patch("/api/goals/s1", json={"outcome": "edited"})
     assert response.status_code == 500

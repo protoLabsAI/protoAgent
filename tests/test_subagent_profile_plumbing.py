@@ -1,4 +1,5 @@
 """ADR 0128 S2b: real subagent stacks with a fake gateway client."""
+import contextvars
 from dataclasses import replace
 import json
 
@@ -17,6 +18,12 @@ from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
 from runtime.state import STATE
 
 PROBE = "profile-probe"
+# Set for the duration of each test: the fake client records a build only from inside it.
+# `llm._ReasoningChatOpenAI` is patched process-wide, so a thread another test left behind
+# (work handed to a thread outlives the test that started it) building a DEFAULT-config client
+# landed in `builds` mid-run — the extra `gateway:4000` / `test-key` row CI saw. Tasks and `to_thread`
+# copy the context, so every build the run itself makes still carries the marker.
+_THIS_TEST = contextvars.ContextVar("profile_probe_test", default=False)
 
 
 class ProbeModel(GenericFakeChatModel):
@@ -39,7 +46,8 @@ def harness(monkeypatch):
     monkeypatch.setattr("graph.model_window.context_window_for_slot", lambda *a: 196608)
 
     def fake_client(**kwargs):
-        builds.append(kwargs)
+        if _THIS_TEST.get():
+            builds.append(kwargs)
         return ProbeModel(messages=iter([AIMessage(
             content="done", usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
         )]), disable_streaming=True)
@@ -79,7 +87,9 @@ def harness(monkeypatch):
         assert "done" in out
         return rows
 
-    return config, builds, stacks, run
+    token = _THIS_TEST.set(True)
+    yield config, builds, stacks, run
+    _THIS_TEST.reset(token)
 
 
 @pytest.mark.parametrize("path", ["direct", "sdk", "workflow"])

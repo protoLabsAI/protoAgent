@@ -31,6 +31,7 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,9 +77,14 @@ def event_task_id(event: Any) -> str:
 class MessageLedger:
     """The client messages this handler has accepted, keyed by ``(contextId, messageId)``."""
 
-    def __init__(self, *, ttl_s: float = _TTL_S, max_entries: int = _MAX_ENTRIES) -> None:
+    def __init__(
+        self, *, ttl_s: float = _TTL_S, max_entries: int = _MAX_ENTRIES, clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._ttl_s = ttl_s
         self._max = max_entries
+        # Ages are read from ``clock``; a test steps it instead of sleeping past the TTL
+        # (on Windows a short sleep can land inside one monotonic tick and age nothing).
+        self._clock = clock
         self._entries: OrderedDict[tuple[str, str], _Accepted] = OrderedDict()
 
     def _prune(self, now: float) -> None:
@@ -96,7 +102,7 @@ class MessageLedger:
         key = _key(message)
         if key is None:
             return True, None
-        now = time.monotonic()
+        now = self._clock()
         self._prune(now)
         prior = self._entries.get(key)
         if prior is not None:
