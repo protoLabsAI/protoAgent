@@ -453,18 +453,32 @@ async def test_symlink_to_a_system_dir_is_hard_refused(tmp_path, applied, park):
 async def test_already_registered_outside_folder_needs_no_card(layout, applied, park):
     root, outside = layout
     entry = {"name": "munda", "path": str(outside.resolve()), "write": False}
-    out = await _tool(_cfg(root, projects=[entry])).ainvoke({"path": str(outside), "write": True})
+    tool = _tool(_cfg(root, projects=[entry]))
+    out = await tool.ainvoke({"path": str(outside)})
     assert "already registered" in out and "(read-only)" in out
     assert park.payloads == [] and applied == []
+    # write=true no longer goes unheard: it asks on the READ-WRITE card (never the
+    # outside-root one), and the operator keeping it read-only writes nothing (#783).
+    park.answer = _DENY_ANSWER
+    out = await tool.ainvoke({"path": str(outside), "write": True})
+    assert "still read-only" in out and applied == []
+    assert [c["title"] for c in park.payloads] == ["Make this project read-write?"]
 
 
 async def test_fence_only_outside_entry_is_promoted_at_its_own_mode(layout, applied, park):
     root, outside = layout
     fence = {"name": "munda", "path": str(outside.resolve()), "write": False}
-    out = await _tool(_cfg(root, filesystem_projects=[fence])).ainvoke({"path": str(outside), "write": True})
+    tool = _tool(_cfg(root, filesystem_projects=[fence]))
+    # The agent's write=true does not upgrade it: unapproved, nothing is written at all…
+    park.answer = _DENY_ANSWER
+    out = await tool.ainvoke({"path": str(outside), "write": True})
+    assert "still read-only" in out and applied == [] and len(park.payloads) == 1
+    # …and with no mode change asked, it is promoted at ITS mode with no card.
+    park.answer = None
+    out = await tool.ainvoke({"path": str(outside)})
     assert out.startswith("Promoted")
-    assert applied[0]["projects"][-1]["write"] is False  # the agent's write=true did not upgrade it
-    assert park.payloads == []
+    assert applied[0]["projects"][-1]["write"] is False
+    assert len(park.payloads) == 1
 
 
 async def test_config_off_restores_the_hard_refusal(layout, applied, park):

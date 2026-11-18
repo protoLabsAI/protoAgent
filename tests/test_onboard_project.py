@@ -1201,7 +1201,15 @@ async def test_binding_reuse_preserves_operator_access(
         return "Fetched and fast-forwarded 1 commit to origin/main."
 
     monkeypatch.setattr(onboard_tools, "_refresh_checkout", fake_refresh)
+    # write=true on the read-only binding now ASKS (projectBoard-plugin#783); the operator
+    # keeping it read-only leaves everything below exactly as it was.
+    import langgraph.types
+
+    cards: list[dict] = []
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda card: (cards.append(card), "deny")[1])
     out = await _tool(config).ainvoke({"repo": "acme/widget", "name": "agent-name", "write": True, "refresh": refresh})
+
+    assert [c["title"] for c in cards] == ["Make this project read-write?"]
 
     assert "registered-name is already registered" in out
     assert str(target) in out and "(read-only)" in out

@@ -1071,6 +1071,16 @@ binding comes from the directory's `origin` remote when that is GitHub; `default
 `origin/HEAD`, else the current branch. Idempotent: an already-registered path is reported, not
 re-written.
 
+**Changing an already-registered project's access.** For both this tool and `onboard_project`,
+an explicit `write` that differs from the registered mode is a request to change it.
+`write=true` on a read-only project parks on an operator approval card — **Make this project
+read-write?** (Allow read-write / Keep read-only) — composed from the folder's realpath and bound
+to it; only that allow answer writes, and `/bypass`, "allow for session", a plain or automatic
+approve and a dismissal all leave it read-only. `write=false` on a read-write project lowers it
+at once, with no card (it narrows the fence). Omit `write` to leave access alone. Only the
+`write` key of the `projects` entry (and of its explicit `filesystem.projects` entry, when one
+exists) is rewritten.
+
 Both tools are **present unless `onboarding.enabled: false`**, which removes them entirely. With
 `enabled` on but `root`/`allow` unset they refuse by naming the setting to change — that is how
 the agent tells the operator what to configure.
