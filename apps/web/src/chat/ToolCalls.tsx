@@ -514,7 +514,7 @@ function ToolGroup({
   // Only a real tool of ours has a row in Tools settings. A delegate's call ran on ITS tools,
   // and the cards a direct address opens (`@name`, `/<workflow>`, `/<subagent>`) are not
   // tools at all — "Manage @claude-code in Tools settings" led nowhere.
-  const manageBtn = call.delegated || isDirectAddressCard(call) ? null : (
+  const manageBtn = scriptChild || call.delegated || isDirectAddressCard(call) ? null : (
     <button
       type="button"
       className="pl-iconbtn tool-manage-btn"
@@ -581,10 +581,10 @@ function ToolGroup({
   const costTokens = toolCostTokens(call);
 
   const name = (
-    <span style={call.name === "execute_code" || scriptChild ? { whiteSpace: "normal", overflowWrap: "anywhere" } : undefined}>
+    <span style={scriptCount > 0 || scriptChild ? { whiteSpace: "normal", overflowWrap: "anywhere" } : undefined}>
       {scriptChild ? scriptCallLabel(call) : cardLabel(call)}
       {scriptChild && blockedByPolicy(call) ? " · blocked by policy" : null}
-      {call.name === "execute_code" ? <span className="tool-nested-count"> · {scriptSummary}</span> : null}
+      {scriptCount > 0 ? <span className="tool-nested-count"> · {scriptSummary}</span> : null}
       {kidCount > 0 ? (
         <span className="tool-nested-count">
           {" · "}
@@ -658,7 +658,7 @@ function ToolGroup({
       </>
     );
   }
-  if (!liveProgress) return call.name === "execute_code" ? (
+  if (!liveProgress) return scriptCount > 0 ? (
     <>{card}<ScriptCompletion key={call.id} call={call} summary={scriptSummary} /></>
   ) : card;
   return (

@@ -41,10 +41,22 @@ it("nests script labels between input and stdout in start order with accessible 
   expect([...body.children].map((el) => el.querySelector(".pl-toolcard__label")?.textContent))
     .toEqual(["input", "calls from script (3)", "result"]);
   expect(names(group)).toEqual(['tools.web_search "query 1"', 'tools.web_search "query 2"', 'tools.web_search "query 3"']);
+  expect(group.querySelector(".tool-manage-btn")).toBeNull();
+  expect(container.querySelector(".tool-manage-btn")?.getAttribute("aria-label")).toBe("Manage execute_code in Tools settings");
   for (const button of group.querySelectorAll<HTMLButtonElement>(".pl-toolcard__head")) {
     expect(button.disabled).toBe(false);
     button.focus();
     expect(document.activeElement).toBe(button);
+  }
+});
+
+it.each([false, true])("preserves plain execute_code headers and silence through settle (ordinary children: %s)", (withChildren) => {
+  const kids = withChildren ? [child(1, { name: "web_search" })] : [];
+  for (const status of ["running", "done", "error"] as const) {
+    render([{ ...parent, status }, ...kids]);
+    expect(header().querySelector(".pl-toolcard__name")?.textContent)
+      .toBe(withChildren ? "execute_code · 1 tool" : "execute_code");
+    expect(container.querySelector('[aria-live="polite"]')).toBeNull();
   }
 });
 
