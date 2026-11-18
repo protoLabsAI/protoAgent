@@ -193,13 +193,16 @@ async def test_a_send_that_failed_before_any_task_lets_its_retry_run():
 
 
 def test_ledger_forgets_old_messages():
-    ledger = message_dedupe.MessageLedger(ttl_s=0.0)
+    # A stepped clock, not a sleep: on Windows a 10 ms sleep can land inside one ~15.6 ms
+    # monotonic tick, so no time "passed" and the entry was still within its TTL.
+    now = [1000.0]
+    ledger = message_dedupe.MessageLedger(ttl_s=60.0, clock=lambda: now[0])
     message = _msg().message
     _, entry = ledger.accept(message)
     ledger.bind(entry, "task-1")
-    import time
-
-    time.sleep(0.01)
+    now[0] += 60.0
+    assert not ledger.accept(message)[0], "still remembered at exactly the TTL"
+    now[0] += 0.001
     assert ledger.accept(message)[0]
 
 

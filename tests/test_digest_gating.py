@@ -623,6 +623,7 @@ def test_load_memory_defaults_the_exclusion_to_the_ambient_session(tmp_path, mon
     assert "mine" in mw.load_memory(memory_path=str(tmp_path), exclude_session_id="")
 
 
+@pytest.mark.platform_sensitive
 @pytest.mark.parametrize("policy", ["newest", "relevant"])
 @pytest.mark.parametrize("legacy_names", [False, True])
 def test_automated_sessions_do_not_take_chat_digest_slots(tmp_path, policy, legacy_names):
@@ -636,7 +637,10 @@ def test_automated_sessions_do_not_take_chat_digest_slots(tmp_path, policy, lega
     automated += ["system:activity", "background:legacy"]
     for i, sid in enumerate(automated):
         _write(tmp_path, sid, "rocket launch", mtime=200 + i)
-        if legacy_names:
+        # A raw `job:1.json` cannot exist on Windows (":" is not a legal filename
+        # character, WinError 123), so no legacy file there carries a colon id; the
+        # colon-free ids (`palette-*`) still exercise the legacy names on every OS.
+        if legacy_names and (os.name != "nt" or ":" not in sid):
             (tmp_path / session_filename(sid)).rename(tmp_path / f"{sid}.json")
     if policy == "relevant" and not _fts_available(tmp_path):
         pytest.skip("SQLite FTS5 unavailable")
