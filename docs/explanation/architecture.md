@@ -72,8 +72,10 @@ The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ord
 
 **Model-call decoration** (wrap_model_call — outermost first)
 
-6. **ModelOverrideMiddleware** — per-chat-tab model override; outermost so everything below sees the ACTUAL model
-7. **TrajectoryMiddleware** — one request/response ref event per model call (ADR 0102); outside PromptCache because refs hash stored bytes, not wire decoration
+**PrivateProjectionMiddleware** is the outermost model wrapper, registered immediately after SteeringMiddleware. With private steering enabled, shared turns omit earlier private exchanges from model input without rewriting the checkpoint; private turns retain full history. Every wrapper below receives that projected view.
+
+6. **ModelOverrideMiddleware** — per-chat-tab model override; before PromptCache so caching uses the ACTUAL model
+7. **TrajectoryMiddleware** — one request/response ref event per model call (ADR 0102); outside PromptCache so refs hash the privacy-projected messages before cache decoration
 8. **PromptCacheMiddleware** — cache breakpoints on the stable system+tools prefix
 9. **PromptCaptureMiddleware** (optional) — records the EXACT assembled system prompt per call; directly after PromptCache by contract
 10. **TraceContextMiddleware** — stamps the live trace context onto gateway calls so the gateway's spans nest in ours

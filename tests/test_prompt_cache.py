@@ -310,15 +310,20 @@ def test_config_wires_middleware():
     # before_model-only gates that never wrap the model call).
     assert names[0] == "ToolCallRepairMiddleware"
     assert "WaitYieldMiddleware" in names
-    # ModelOverrideMiddleware is the outermost *model* wrapper — it swaps the
-    # per-tab model FIRST, so PromptCacheMiddleware (the next wrapper) sees the
-    # ACTUAL model when deciding whether to cache. ModelOverride doesn't touch the
+    # PrivateProjectionMiddleware is the outermost model wrapper, so every inner
+    # wrapper receives the public view on shared turns. ModelOverride still swaps
+    # the per-tab model before PromptCache decides whether to cache. It doesn't touch the
     # system message, so the cache breakpoint still lands on the stable prefix.
     wrappers = [m.__class__.__name__ for m in mw if type(m).wrap_model_call is not AgentMiddleware.wrap_model_call]
     # Trajectory sits BETWEEN them by design (ADR 0102 S1): inside ModelOverride
     # (logs the real per-tab model) but outside PromptCache (its refs must hash
-    # the STORED message bytes, not the view-only cache-marked copies).
-    assert wrappers[:3] == ["ModelOverrideMiddleware", "TrajectoryMiddleware", "PromptCacheMiddleware"]
+    # the privacy-projected message bytes, not the view-only cache-marked copies).
+    assert wrappers[:4] == [
+        "PrivateProjectionMiddleware",
+        "ModelOverrideMiddleware",
+        "TrajectoryMiddleware",
+        "PromptCacheMiddleware",
+    ]
     # RoomCast (#3049) mutates the prompt (system-suffix cast line): INSIDE
     # PromptCache (a suffix never disturbs the prefix anchors), OUTSIDE
     # PromptCapture (which must record the prompt cast line included).
