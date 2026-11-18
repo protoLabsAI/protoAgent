@@ -844,6 +844,15 @@ def _main():
                 log.info("[keep-awake] serving hold: %s", "held" if held else "not held")
             except Exception:
                 log.exception("[keep-awake] serving hold startup failed")
+        # Private pending turns a restart left behind (ADR 0131 P1h.4): reloaded BEFORE the
+        # scheduler below (or any steer restart) can claim a runner. Does nothing at all
+        # unless ``private_steering.enabled`` is on.
+        try:
+            from server.chat import recover_private_pending_turns
+
+            await recover_private_pending_turns()
+        except Exception:  # noqa: BLE001 — recovery must never block startup
+            log.exception("[steer] private pending-turn recovery failed at startup")
         if STATE.scheduler is not None:
             try:
                 await STATE.scheduler.start()

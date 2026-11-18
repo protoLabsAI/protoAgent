@@ -30,7 +30,9 @@ the crash is reported suspended for reconciliation, never re-dispatched — its 
 be replayed. A parked segment stays reserved. A private turn keeps its opaque ``input_ref``, so it
 is resumed through the private path and never falls back to a public input.
 
-**Dormant.** No live route drives this; only the P1c proof tests do. It depends only on
+**Mostly dormant.** No live route writes a pending turn yet; the one live reader is the
+server-start recovery (``server.chat.recover_private_pending_turns``, P1h.4, behind the
+private-steering flag). It depends only on
 the private partition/intake and ``graph.thread_ids`` — never ``server`` — so the import layering holds.
 """
 
@@ -91,6 +93,14 @@ async def pending_turns(task_store, session_id: str, context, *, states=None) ->
             out.append(dict(payload))
     out.sort(key=lambda p: p.get("seq", 0))
     return out
+
+
+async def sessions_with_pending_turns(task_store, context) -> list[str]:
+    """Every session holding a non-terminal pending turn (queued, running or parked).
+
+    What a restart must look at before any runner is claimed; raises on an unreadable
+    partition so the caller can fail closed."""
+    return await task_store.scheduling_contexts(context, kind=KIND_PENDING_TURN, states=_NON_TERMINAL)
 
 
 async def accept_pending_turn(
