@@ -1237,6 +1237,7 @@ async def _private_steer_or_start(
     - a live or HITL-parked session rides the guarded resume path
       (``a2a_impl.hitl_routing``): a ``hitl_resume`` loopback the parked-task router points at
       the ORIGINAL checkpoint, so the private prompt never reaches a peer-readable part.
+      A parked session without a human-owned private task is refused before recording.
 
     Idempotent: the dedupe key is consulted first (``find_private_steer``), so a retried msg_id
     — even after a restart, once the in-memory start guard is gone — reuses the one record
@@ -1247,9 +1248,14 @@ async def _private_steer_or_start(
     (``starting`` / ``_await_started_task``). Fail-closed: with no partition store/context, or
     if the record cannot be read or written, nothing is sent and no ordinary SendMessage falls
     back. Private text is never queued in the in-memory steering queue."""
-    from graph import steering
+    from a2a.types import TaskState
+    from a2a.types.a2a_pb2 import ListTasksRequest
+    from fastapi import HTTPException
+
+    from graph import steering, thread_ids
 
     from a2a_impl import private_intake
+    from a2a_impl.segment_schedule import recover_undrained_segments
 
     if store is None or context is None:
         log.warning("[steer] private steer for %s has no partition store/context — refusing", session_id)
@@ -1273,10 +1279,30 @@ async def _private_steer_or_start(
         ref, replied = await private_intake.find_private_steer(
             store, session_id=session_id, msg_id=mid, context=context
         )
+        # Restore a restarted conversation's original thread before the preflight,
+        # just as record_private_steer does before storing a fresh input.
+        if not replied and not thread_ids.resolver_metadata(session_id):
+            await recover_undrained_segments(store, session_id, context)
+        if not replied and not await _session_turn_idle(session_id) and not _turn_activity.is_active(session_id):
+            # A parked checkpoint reserves this conversation. Only the human's private
+            # partition can receive its private answer; ordinary operator-owned tasks
+            # are also readable by fleet peers. Check BEFORE recording any private text.
+            parked = await store.list_owner_scoped(
+                ListTasksRequest(context_id=session_id, status=TaskState.TASK_STATE_INPUT_REQUIRED, page_size=1),
+                context,
+            )
+            if not parked.tasks:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This conversation is waiting on a decision a private steer can't answer. Answer the decision first.",
+                )
         if not ref:
             ref = await private_intake.record_private_steer(
                 store, session_id=session_id, text=text, msg_id=mid, context=context
             )
+    except HTTPException:
+        steering.clear_starting(session_id, [mid])
+        raise
     except Exception:  # noqa: BLE001 — a failed read/write must never fall back to sending text
         steering.clear_starting(session_id, [mid])
         log.exception("[steer] could not record a private steer for %s — refusing (fail-closed)", session_id)

@@ -171,6 +171,33 @@ async def test_private_steer_into_a_parked_session_resumes_the_original_task(rig
     await _assert_private_only(rig, "chat-park", first["started_turn"])
 
 
+@pytest.mark.parametrize("owner", ["shared-bearer", "federation"])
+@pytest.mark.parametrize("kind", HUMANS)
+async def test_private_steer_refuses_a_parked_task_outside_the_private_partition(rig, owner, kind):
+    session = "chat-public-park"
+    sent = await rig.rpc(owner, "SendMessage", {
+        "message": {"messageId": "public-park", "contextId": session, "role": "ROLE_USER",
+                    "parts": [{"text": "park"}]},
+    })
+    task_id = sent["result"]["task"]["id"]
+    task = await poll_terminal(rig.clients[owner], task_id)
+    assert task["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    before = await rig.rows()
+    assert before[0].owner == ("" if owner == "shared-bearer" else "federation")
+    interrupt = await chat_mod._pending_interrupt({"configurable": {"thread_id": f"a2a:{session}"}})
+    assert interrupt is not None
+
+    response = await rig.steer(kind, session, SECRET, "private-answer", private=True)
+
+    assert response.status_code == 409 and SECRET not in response.text
+    assert response.json() == {"detail": "This conversation is waiting on a decision a private steer can't answer. Answer the decision first."}
+    assert await rig.rows() == before  # no private row, new task, or changed parked task
+    assert await poll_terminal(rig.clients[owner], task_id) == task
+    assert await chat_mod._pending_interrupt({"configurable": {"thread_id": f"a2a:{session}"}}) == interrupt
+    assert rig.seen == [("park", False)] and steering.pending_items(session) == []
+    assert not steering.starting(session, "private-answer")
+
+
 @pytest.mark.parametrize("flag,extra,status", [(False, {}, 403), (True, {"incognito": True}, 400),
                                                (True, {"images": [["image/png", "data:image/png;base64,AAA="]]}, 400)])
 @pytest.mark.parametrize("kind", HUMANS)
