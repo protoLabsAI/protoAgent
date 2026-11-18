@@ -29,6 +29,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 - [Command palette (⌘⇧K)](/guides/command-palette)
 - [Create and work with files and documents](/guides/documents-and-files)
 - [Enable document creation (desktop)](/guides/python-runtime)
+- [Let the agent run code and call tools from scripts](/guides/execute-code)
 - [Inspect and manage memory](/guides/manage-memory)
 - [Ingest documents & media](/guides/ingestion)
 - [Tune knowledge recall](/guides/knowledge)

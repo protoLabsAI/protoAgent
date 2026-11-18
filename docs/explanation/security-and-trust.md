@@ -31,14 +31,16 @@ snippet. So anything the agent *generates* and renders is sandboxed:
 This is the *one* place the sandbox isn't ceremony — it's the line between "code you installed" and
 "code the model emitted."
 
-## 3. The agent running code → opt-in, honestly partial
+## 3. The agent running code → an allowlist, honestly partial
 
 `execute_code` and the ACP coding-agent runtimes run real code. We don't pretend this is sandboxed:
 `execute_code`'s own docs say it is *"isolation, not a true sandbox"* — a subprocess with a hard
 timeout and a scrubbed env, but it can still touch the FS/network as the server user. The real
 controls are:
 
-- **Opt-in** — `execute_code` is off unless enabled.
+- **A switch you control** — `execute_code` is on by default with the Cowork pack (it creates documents);
+  `plugins.disabled: [execute_code]` turns it off. Scripts can call only a curated set of read tools
+  until you add more by name.
 - **Egress allowlist (ADR 0008)** — outbound HTTP is deny-by-default for private IPs, and a
   configured `egress.allowed_hosts` makes it a strict allowlist.
 - **The honest guidance**: enable it for trusted-model output, or run inside a hardened container.
@@ -52,7 +54,7 @@ boundary**. Run protoAgent in a container (the recommended isolation boundary, s
 
 - installed plugins are trusted (you chose them),
 - the agent's *generated* output is sandboxed (iframe),
-- `execute_code` is opt-in and egress-gated.
+- `execute_code` can be switched off, and the tools its scripts can call are an allowlist.
 
 That's the whole model, stated plainly: **trust what you install, sandbox what the model generates,
 contain the blast radius.** No security theater, no pretending a plugin's React was more dangerous

@@ -180,6 +180,7 @@
         "/guides/command-palette",
         "/guides/documents-and-files",
         "/guides/python-runtime",
+        "/guides/execute-code",
         "/guides/manage-memory",
         "/guides/ingestion",
         "/guides/knowledge",
@@ -250,6 +251,10 @@
             {
               "text": "Enable document creation (desktop)",
               "link": "/guides/python-runtime"
+            },
+            {
+              "text": "Let the agent run code and call tools from scripts",
+              "link": "/guides/execute-code"
             },
             {
               "text": "Inspect and manage memory",

@@ -11,7 +11,7 @@ are config flags in `config/langgraph-config.yaml`. This page is the map.
 |---|---|---|---|
 | Context compaction | `compaction.*` | **on** | Summarize old turns near the window limit so long sessions don't overflow |
 | Aux-model routing | `compaction.model`, `goal.eval_model` | main model | Run summarization + goal-verification on a cheaper/faster model |
-| Programmatic tool calling | `execute_code.*` | off | One script composes many tools in a single turn |
+| Programmatic tool calling | `execute_code.*` | on (with Cowork) | One script composes many tools in a single turn |
 | Prompt / prefix caching | `prompt_cache.*` | on (Anthropic-gated) | Cache the stable system+tools prefix across turns |
 | Cache warming | `prompt_cache.warm.*` | off | Keep the cached prefix warm for sporadic, latency-sensitive traffic |
 | Provider failover | any model-role chain (`model.name`, `routing.aux_model`, …) | none | Every model role falls back down its own chain when the primary is rate-limited, out of quota, or down ([fallback chains](../guides/model-fallback-chains.md)) |
@@ -90,10 +90,14 @@ structured `result` value) — collapsing the chain into a single turn.
 
 ```yaml
 execute_code:
-  enabled: true
   timeout: 30
-  tools: []   # empty = all tools except execute_code itself
+  tools: []          # empty = the curated read set
+  extra_tools: []    # add tools that return a lot, by name
 ```
+
+It is on by default with the Cowork pack. See
+[Let the agent run code and call tools from scripts](../guides/execute-code.md)
+for which tools to add and how to keep variables between calls.
 
 ::: warning Security
 `execute_code` runs **model-authored code** in a subprocess with a scrubbed env

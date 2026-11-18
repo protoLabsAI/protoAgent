@@ -363,26 +363,36 @@ compaction:
 
 ## `execute_code`
 
-Opt-in **programmatic tool calling** (the bundled `execute_code` plugin, `plugins/execute_code/`). Adds an `execute_code` tool: the model writes one Python script that calls several tools, loops/filters/composes their results in code, and `print()`s only the final answer — collapsing a long tool-call chain into a single turn (the model reads just the stdout, not every intermediate payload).
+Settings for the bundled `execute_code` plugin (`plugins/execute_code/`): a Python interpreter the agent runs scripts in, mainly to call several tools from one script and read only the result. For setup and usage, see [Let the agent run code and call tools from scripts](../guides/execute-code.md).
 
-The script runs in a **child process** with a **scrubbed environment** (only `PATH` + the bridge fds — no gateway keys / auth tokens) and a **hard timeout**. Tools are invoked back in the **parent** over an fd-based RPC bridge, so they run with the parent's credentials, audit, and trace context; the child only orchestrates. Inside the script, tools are reached via an injected `tools` object (`tools.web_search(query=...)`). The `execute_code` tool never exposes itself, so scripts can't recurse.
+The plugin is **on by default** while the Cowork pack is on. Turn it off with `plugins.disabled: [execute_code]`. There is no `execute_code.enabled` key; an old one in your config is ignored.
+
+A script runs in a **child process** with a **scrubbed environment** (no gateway keys or auth tokens) and a **hard timeout**. Tools are invoked back in the **parent** over a loopback bridge, so they run with the parent's credentials, denylist, rate limits, audit and trace context. Inside the script, tools are reached through an injected `tools` object (`tools.web_search(query=...)`); `tools.help(name)` returns one tool's signature.
 
 ```yaml
 execute_code:
-  enabled: false           # OFF by default — runs model-authored code
-  timeout: 30.0            # seconds before the child process is killed
-  tools: []                # allowlist; empty = all tools except execute_code
-  output_truncate: 6000    # cap on returned stdout (chars)
+  timeout: 30.0            # seconds before the script is stopped
+  output_truncate: 6000    # cap on returned stdout (chars); the rest spills to a scratch file
+  tools: []                # empty = the curated read set; a list REPLACES it
+  extra_tools: []          # added on top of whichever set applies
+  session_state: false     # experimental: one long-lived process per chat
+  kernel_idle_ttl: 600     # seconds before an idle session process is stopped
+  max_kernels: 4           # session processes kept at once
 ```
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `false` | Register the `execute_code` tool. |
-| `timeout` | `30.0` | Wall-clock limit; the child is killed past it. |
-| `tools` | `[]` | Tool-name allowlist exposed to scripts (empty = all but `execute_code`). |
-| `output_truncate` | `6000` | Max returned stdout chars. |
+| `timeout` | `30.0` | Wall-clock limit; the script is stopped past it. With `session_state` on, a timeout also discards that chat's state. |
+| `output_truncate` | `6000` | Max returned stdout chars. Longer output is cut and the full text is written to a scratch file whose path the result names. |
+| `tools` | `[]` | Tools a script may call. Empty means the curated read set: `read_file`, `list_dir`, `find_files`, `search_files`, `fetch_url`, `web_search`, `memory_search`, `knowledge_search`, `memory_list`, `current_time`. A non-empty list replaces that set. |
+| `extra_tools` | `[]` | Tools added to whichever set applies. Accepts MCP tool names and `mcp:<server>/*` for every tool from one server. |
+| `session_state` | `false` | Experimental ([ADR 0134](../adr/0134-execute-code-session-kernels-and-mcp-bridging.md)). Each chat gets one long-lived process, so variables carry across calls. Never saved; a restart clears it. |
+| `kernel_idle_ttl` | `600` | Only with `session_state`. An unused session process is stopped after this many seconds. |
+| `max_kernels` | `4` | Only with `session_state`. Starting one more stops the least recently used. |
 
-> **Security:** subprocess + env-scrub + timeout is *isolation, not a true sandbox* — the child can still touch the filesystem and network as the server user. Enable only for trusted-model output or inside a hardened container (seccomp / read-only FS / network policy). Narrow `tools` to the minimum the workload needs.
+`ask_human`, `request_user_input`, `task`, `task_batch` and `execute_code` itself can never be called from a script, whatever these lists say. Unregistered names are ignored with a log warning. Up to 25 tools are listed with full signatures in the tool's description; the rest are listed by name.
+
+> **Security:** subprocess + env-scrub + timeout is *isolation, not a true sandbox* — the child can still touch the filesystem and network as the server user. Use it for trusted-model output or inside a hardened container (seccomp / read-only FS / network policy), and add write tools to `extra_tools` only for a job that needs them.
 
 ## `tools`
 

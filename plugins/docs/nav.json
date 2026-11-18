@@ -88,6 +88,10 @@
               "title": "Enable document creation (desktop)"
             },
             {
+              "path": "guides/execute-code.md",
+              "title": "Let the agent run code and call tools from scripts"
+            },
+            {
               "path": "guides/manage-memory.md",
               "title": "Inspect and manage memory"
             },

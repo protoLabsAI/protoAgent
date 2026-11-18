@@ -62,6 +62,11 @@
       "decision": "reuse",
       "reason": "Keep platform-specific install/recovery text; file workflow visuals belong in documents-and-files rather than repeating them here."
     },
+    "guides/execute-code.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "Settings tables, config snippets and exact output strings carry this page; a screenshot of the nested tool cards would age with the chat UI."
+    },
     "guides/manage-memory.md": {
       "journey": "use",
       "decision": "media",
