@@ -11,9 +11,16 @@ import { HEAVY_PDF_ID, HEAVY_PDF_PAGES, heavyPdf } from "./pdfFixture.mjs";
 // thread.
 //
 // Measured in the frame itself with a 16 ms setInterval probe (an init script, which runs in every
-// frame and isn't subject to the frame's CSP): the longest gap between ticks while the document
-// loads and its first pages draw. On the old main-thread path this fixture's longest gap is
-// ~220 ms in Chromium; in a Worker it's about one frame.
+// frame and isn't subject to the frame's CSP): the longest gap between ticks from the moment the
+// file's bytes reach the frame until its first pages draw. On the old main-thread path this
+// fixture's longest gap is ~220 ms in Chromium; in a Worker it's about one frame.
+//
+// The window opens when the bytes ARRIVE, not when the page starts: before that the shell fetches
+// the file and posts ~26 MB into the frame, and in Chromium the frame shares its embedder's main
+// thread, so that delivery shows up in the frame's probe as one long gap. It is the same work
+// whichever engine parses, the Worker cannot remove it, and on a loaded CI runner it alone grew
+// past half the fallback's parse — so a probe that counted it compared delivery against parsing
+// and failed at random.
 
 const VIEW = "/plugins/artifact/view";
 const PDF = heavyPdf();
@@ -54,19 +61,25 @@ async function frame(page: Page): Promise<Frame> {
   return f;
 }
 
-type Measured = { engine: string | null | undefined; err: string; lag: number; errors: string[] };
+type Measured = { engine: string | null | undefined; err: string; lag: number; windowed: boolean; errors: string[] };
 
-// Load the heavy PDF in the artifact view and measure the frame's longest main-thread gap while
-// it loads and draws its first page. `noWorker` removes Worker from the artifact frame only, which
-// forces pdf.js onto its main-thread fallback.
+// Load the heavy PDF in the artifact view and measure the frame's longest main-thread gap from the
+// file's arrival until its first page is drawn. `noWorker` removes Worker from the artifact frame
+// only, which forces pdf.js onto its main-thread fallback.
 async function loadAndMeasure(page: Page, { noWorker = false } = {}): Promise<Measured> {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  // The lag probe, in every frame: the longest gap between 16 ms ticks, past the 16 ms itself.
+  // The lag probe, in every frame: the longest gap between 16 ms ticks, past the 16 ms itself,
+  // restarted when the PDF's bytes arrive. This listener is added before the frame's own, so it
+  // runs first: the parse and draw the frame starts on that message all land inside the window.
   await page.addInitScript((drop: boolean) => {
     if (drop && location.href === "about:srcdoc") (window as unknown as { Worker?: unknown }).Worker = undefined;
-    const w = window as unknown as { __lag: { max: number; last: number } };
+    const w = window as unknown as { __lag: { max: number; last: number; windowed?: boolean } };
     w.__lag = { max: 0, last: performance.now() };
+    addEventListener("message", (e) => {
+      if ((e.data as { type?: unknown } | null)?.type !== "protoArtifact:pdf:data") return;
+      w.__lag = { max: 0, last: performance.now(), windowed: true };
+    });
     setInterval(() => {
       const now = performance.now();
       w.__lag.max = Math.max(w.__lag.max, now - w.__lag.last - 16);
@@ -93,6 +106,7 @@ async function loadAndMeasure(page: Page, { noWorker = false } = {}): Promise<Me
     engine: document.getElementById("pages")?.getAttribute("data-engine"),
     err: document.getElementById("status")?.textContent ?? "",
     lag: (window as unknown as { __lag: { max: number } }).__lag.max,
+    windowed: Boolean((window as unknown as { __lag: { windowed?: boolean } }).__lag.windowed),
   }));
   return { ...got, errors };
 }
@@ -127,6 +141,8 @@ test("the Worker path blocks the main thread far less than the fallback", async 
     console.log(`pdf main-thread gap: worker=${Math.round(worker.lag)} ms fallback=${Math.round(main.lag)} ms`);
     expect(worker.engine).toBe("worker");
     expect(main.engine).toBe("main");
+    // Both probes measured from the bytes' arrival, not from page start (see the header).
+    expect([worker.windowed, main.windowed]).toEqual([true, true]);
     expect(worker.lag).toBeLessThanOrEqual(main.lag * 0.5);
   } finally {
     await fallbackPage.close();

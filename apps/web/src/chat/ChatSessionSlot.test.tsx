@@ -114,3 +114,17 @@ it("leaves continuation context for the composer when an automatic kickoff sends
   await send("Continue the conversation");
   expect(stream.mock.calls[1][0]).toBe(`Continue the conversation\n\n${reference}`);
 });
+
+it("saves a turn's task id the moment it lands, so a reload mid-turn can reattach to it", async () => {
+  let savedMidTurn = "";
+  vi.spyOn(api, "streamChat").mockImplementation(async (_text, _session, callbacks) => {
+    callbacks?.onTaskId?.("task-live-1");
+    // Read the saved transcript while the turn is still streaming — what a reload would load.
+    savedMidTurn = localStorage.getItem("protoagent.chat.sessions") ?? "";
+    callbacks?.onDone?.();
+  });
+  await send("Pick a fruit");
+  const saved = JSON.parse(savedMidTurn).sessions.find((s: { id: string }) => s.id === sessionId);
+  expect(saved.messages.filter((m: { role: string }) => m.role === "assistant").map((m: { status: string; taskId?: string }) => [m.status, m.taskId]))
+    .toEqual([["streaming", "task-live-1"]]);
+});

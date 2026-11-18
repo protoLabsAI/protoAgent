@@ -136,6 +136,19 @@ test("two sessions parked at once each reattach to their own task after a reload
   const second = await park(page, bodies, "gouda");
   expect(first).not.toBe(second);
 
+  // The reload reattaches through the SAVED transcript: wait until both parked bubbles are
+  // saved with their task ids. The console saves a task id as soon as it lands, but on
+  // IndexedDB that save is asynchronous, and a reload in the instant before it commits has
+  // nothing to reattach through.
+  await expect
+    .poll(async () => {
+      const saved = (await persistedChat(page))?.sessions ?? [];
+      return [first, second].map((id) =>
+        saved.find((s) => s.id === id)?.messages.filter((m) => m.role === "assistant").map((m) => m.taskId),
+      );
+    })
+    .toEqual([[taskFor(first)], [taskFor(second)]]);
+
   const subscriptions = () =>
     bodies.filter((b) => b.method === "SubscribeToTask").map((b) => String(b.params?.id ?? ""));
   const before = subscriptions().length;
@@ -174,6 +187,12 @@ for (const mode of ["DROPNET", "ERRFRAME"]) {
     const bodies = a2aLog(page);
     await page.goto("/app/", { waitUntil: "load" });
     const sessionId = await park(page, bodies, mode);
+    if (mode === "DROPNET") {
+      // The form is up, so the console has read the park: only now does the mock drop the
+      // socket. A drop the browser saw first would be a failure BEFORE the park.
+      const release = await page.request.post(`/api/__test__/turns/${encodeURIComponent(sessionId)}/release`);
+      expect((await release.json()).released).toBe(true);
+    }
     await expectWaiting(page, mode);
     // Not an error: no error bubble, the session is not in its error state.
     await expect(page.locator(`${SLOT} .pl-message--assistant`).last()).not.toContainText("stream failed");

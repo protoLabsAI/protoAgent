@@ -1327,11 +1327,16 @@ export function ChatSessionSlot({
           setTaskId(id);
           // Persist the task id on the assistant message so a stuck `streaming`
           // turn can be reconciled against the server task after a reload (below).
+          // Saved NOW, not on the ~2s streaming debounce: a reload inside that window
+          // otherwise finds a streaming bubble with no task id and cannot reattach (the
+          // unload flush only STARTS an IndexedDB write, which need not land), so a turn
+          // that parked on a question in its first two seconds lost its form.
           const cur = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
           if (cur) {
             chatStore.updateMessages(
               session.id,
               cur.messages.map((m) => (m.id === assistantId ? { ...m, taskId: id } : m)),
+              "immediate",
             );
           }
         },
