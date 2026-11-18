@@ -658,7 +658,8 @@ async def list_schedules() -> str
 
 This agent's scheduled jobs — one per line with id, next fire, schedule and prompt preview.
 Multi-agent isolation is real: each agent only sees jobs it created. `"No scheduled jobs."`
-when empty.
+when empty. A row ending `(plugin-owned: <plugin_id>)` is a job that plugin registered: its
+cadence is set in the plugin's config section, and `cancel_schedule` refuses it.
 
 ### `cancel_schedule` {#cancel_schedule}
 
@@ -669,6 +670,10 @@ async def cancel_schedule(job_id: str) -> str
 Cancel by id. Returns `"Canceled <id>."` or `"Error: no such job <id>."` Cross-agent
 cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when they
 share a sqlite path.
+
+A plugin-owned id (`plugin:<plugin_id>:<job>`) is refused with an `"Error: …"` naming the
+plugin, and nothing is canceled: the plugin re-creates the job whenever it registers, so
+the cadence changes in that plugin's config section in Settings.
 
 ### `wait`
 

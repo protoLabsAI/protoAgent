@@ -53,6 +53,21 @@ def _publish_scheduler_changed(job_id: str, action: str) -> None:
         pass
 
 
+def _plugin_job_owner(job_id: str) -> str | None:
+    """The plugin id owning ``job_id``, or ``None`` for an agent-created job (#5313).
+
+    Plugin-owned jobs carry ``plugin:<plugin_id>:<job>`` ids (``graph.sdk.plugin_job_prefix``)
+    and are re-armed by the plugin's idempotent ``schedule_recurring`` on its next register,
+    so an agent-side cancel can't stick. The owner is the segment between the first and
+    second colon — ``""`` for a malformed ``plugin:`` id, which is still not the agent's."""
+    from graph.sdk import _PLUGIN_JOB_PREFIX  # the one literal plugin_job_prefix builds from
+
+    jid = (job_id or "").strip()
+    if not jid.startswith(_PLUGIN_JOB_PREFIX):
+        return None
+    return jid[len(_PLUGIN_JOB_PREFIX) :].split(":", 1)[0]
+
+
 def _humanize_duration(seconds: int) -> str:
     """Turn a raw second count into a short, human phrase (300 -> "5 minutes").
 
@@ -217,7 +232,11 @@ def _build_scheduler_tools(scheduler) -> list:
 
     @tool
     async def list_schedules() -> str:
-        """List this agent's scheduled jobs (id, next fire, expiry, prompt preview)."""
+        """List this agent's scheduled jobs (id, next fire, expiry, prompt preview).
+
+        A row ending ``(plugin-owned: <plugin_id>)`` belongs to that plugin: its cadence is
+        changed in the plugin's config section, and ``cancel_schedule`` refuses it.
+        """
         jobs = await asyncio.to_thread(scheduler.list_jobs)
         if not jobs:
             return "No scheduled jobs."
@@ -231,14 +250,37 @@ def _build_scheduler_tools(scheduler) -> list:
             max_fires = getattr(j, "max_fires", None)
             fires = getattr(j, "fire_count", 0) or 0
             expiry = f"ttl={ttl}  max_fires={max_fires if max_fires is not None else '-'}  fires={fires}"
-            lines.append(f"{j.id}  next={next_fire}  schedule={j.schedule!r}  {expiry}  {preview}")
+            line = f"{j.id}  next={next_fire}  schedule={j.schedule!r}  {expiry}  {preview}"
+            # #5313: flag plugin-owned rows so the agent knows BEFORE it tries that
+            # ``cancel_schedule`` will refuse them — the plugin's config owns the cadence.
+            owner = _plugin_job_owner(str(j.id))
+            if owner is not None:
+                line += f"  (plugin-owned: {owner})" if owner else "  (plugin-owned)"
+            lines.append(line)
         return "\n".join(lines)
 
     @tool
     async def cancel_schedule(job_id: str) -> str:
-        """Cancel a scheduled job by the id from ``schedule_task`` / ``list_schedules``."""
+        """Cancel a scheduled job by the id from ``schedule_task`` / ``list_schedules``.
+
+        Plugin-owned jobs (``plugin:<plugin_id>:…`` ids) are refused: the plugin re-arms them,
+        so change the cadence in that plugin's config section instead.
+        """
         if not job_id or not job_id.strip():
             return "Error: job_id is required."
+        # #5313: a plugin-owned job is re-armed by its plugin's next register (an idempotent
+        # replace), so canceling here reported "Canceled" for a job that kept firing. Refuse
+        # before touching the scheduler — no cancel, no scheduler.changed event.
+        owner = _plugin_job_owner(job_id)
+        if owner is not None:
+            who = f"the `{owner}` plugin" if owner else "a plugin"
+            where = f"Settings, plugin `{owner}`" if owner else "Settings"
+            return (
+                f"Error: {job_id.strip()} is owned by {who}, which controls this job's cadence and "
+                "re-creates it whenever it registers — it was NOT canceled and will keep firing. "
+                f"Change or disable it in that plugin's config section ({where}), not with "
+                "cancel_schedule; tell the operator that is where the cadence changes."
+            )
         try:
             ok = await asyncio.to_thread(scheduler.cancel_job, job_id)
         except Exception as exc:  # noqa: BLE001
