@@ -1,9 +1,7 @@
-"""P1 proof K2: the steering-queue and derived-reader isolation scenarios re-run for every
-caller kind (federation, fleet-service, paired-agent, enrolled-console), each minted by
-``a2a_impl.auth`` and classified behind ``A2AAuthMiddleware`` — the path a live request takes.
-Each caller enters the scenario through the seam the PRODUCT reads (operator-only durable
-partition, principal-gated digest/prompt route, read-as-caller archive/record). No src/ change;
-the source test files are imported, not edited.
+"""P1 proof K2: the steering-queue and derived-reader isolation scenarios re-run for every caller kind
+(federation, fleet-service, paired-agent, enrolled-console), each minted by ``a2a_impl.auth`` and
+classified behind ``A2AAuthMiddleware`` — the path a live request takes, entering through the seam the
+PRODUCT reads. No src/ change; the source test files are imported, not edited.
 """
 
 from collections import namedtuple
@@ -24,8 +22,8 @@ from tests.test_steering import _clear_queue, test_no_model_call_mixes_audiences
 from tests.test_trace_export import _reset, test_later_public_terminal_export_uses_only_public_bytes as _src_export  # noqa: F401  (autouse: resets fleet export)
 from tests.test_tracing import _restore_tracing_module, session_langfuse, test_a_private_partition_records_no_content_now_or_on_a_later_public_turn as _src_tracing  # noqa: F401
 
-# The caller fixtures mint credentials via the platform-branching device registry
-# (security.devices) — tests/test_platform_sensitive_marks.py requires the module mark.
+# Caller fixtures mint credentials via the platform-branching device registry (security.devices) —
+# tests/test_platform_sensitive_marks.py requires the module mark.
 pytestmark = pytest.mark.platform_sensitive
 CALLER_KINDS = [pytest.param((case, kind, operator), id=label) for case, kind, operator, label in (
     ("federation", "federation", False, "federation"), ("fleet", "fleet-service", False, "fleet-service"),
@@ -36,11 +34,16 @@ _Caller = namedtuple("_Caller", "ctx principal is_operator token")
 
 @contextmanager
 def _caller_scope(caller):
-    # Bind the caller's verified principal + approval authority as the executor does; read by
-    # _restrict_prior_session_memory (digest) and current_verified_principal (harvest).
+    # Bind the caller's verified principal + approval authority as the executor does (read by the digest/harvest gates).
     from graph.middleware.request_context import approval_authority_scope, verified_principal_scope
     with verified_principal_scope(caller.ctx.state["principal_kind"]), approval_authority_scope(caller.ctx.state["trust_tier"] != "federation"):
         yield
+
+
+def assert_peer_refused():
+    """A non-operator peer's write to the operator-only durable partition is refused (PermissionError) BY
+    DESIGN — not a leak or product gap; peers must not enqueue into it, so later assertions are operator-only."""
+    return pytest.raises(PermissionError)
 
 
 def _resolve(case):
@@ -105,33 +108,30 @@ async def partition(tmp_path):
 
 @pytest.mark.parametrize("segment_audience", ["peer", "private"])
 async def test_no_model_call_mixes_audiences_per_caller_kind(caller, segment_audience, partition):
-    # The in-memory queue takes no principal: its one-audience-per-segment fold is structural, so
-    # run the source proof unchanged (keeps its assertions for all callers). The real per-caller
-    # gate is staging an audience-tagged steer durably — a write to the operator-only partition,
-    # so only the enrolled-console operator may introduce a private audience that could mix.
+    # The in-memory queue takes no principal (structural one-audience fold), so the source proof runs
+    # for all callers; the per-caller gate is the durable write to the operator-only partition.
     await _src_no_mix(segment_audience)
     stage = ss.accept_pending_turn(partition, session_id=f"q-{segment_audience}", audience=ss.AUDIENCE_PRIVATE,
                                    principal=caller.principal, dedupe="v", input_ref="private-input:x", context=caller.ctx)
-    if caller.is_operator:
-        turn = await stage
-        assert turn["audience"] == ss.AUDIENCE_PRIVATE and turn["principal"] == caller.principal and turn["state"] == ss.STATE_QUEUED
-    else:
-        with pytest.raises(PermissionError):
+    if not caller.is_operator:
+        with assert_peer_refused():
             await stage
+        return
+    turn = await stage  # operator-only, by design (see assert_peer_refused)
+    assert turn["audience"] == ss.AUDIENCE_PRIVATE and turn["principal"] == caller.principal and turn["state"] == ss.STATE_QUEUED
 
 
 async def test_cross_audience_steer_queues_behind_running_segment_per_caller_kind(caller, server_op, partition):
-    # A private segment runs (operator-staged); the caller submits the PEER steer under its OWN
-    # context — the operator-only intake admits only the operator (no operator-tier shortcut).
+    # A private segment runs (operator-staged); the caller submits the PEER steer under its OWN context — the operator-only intake admits only the operator (no shortcut).
     priv = await ss.accept_pending_turn(partition, session_id="chat-q", audience=ss.AUDIENCE_PRIVATE, principal="shared-operator-bearer", dedupe="m1", input_ref="private-input:x", context=server_op)
     gen = await ss.claim_segment(partition, "chat-q", audience=ss.AUDIENCE_PRIVATE, seq=priv["seq"], context=server_op)
     await ss.set_turn_state(partition, "chat-q", priv["seq"], ss.STATE_RUNNING, server_op)
     peer = ss.accept_pending_turn(partition, session_id="chat-q", audience=ss.AUDIENCE_PEER, principal=caller.principal, dedupe="m2", context=caller.ctx)
     if not caller.is_operator:
-        with pytest.raises(PermissionError):
+        with assert_peer_refused():
             await peer
         return
-    await peer
+    await peer  # the assertions below run only for the operator caller, by design
     assert await ss.try_fold(partition, "chat-q", generation=gen, audience=ss.AUDIENCE_PEER, seq=2, context=server_op) is None
     assert await ss.next_dispatch(partition, "chat-q", server_op) is None  # reserved by the private segment
     assert await ss.complete_segment(partition, "chat-q", generation=gen, context=server_op) is True
@@ -143,10 +143,10 @@ async def test_duplicate_message_id_gives_one_pending_turn_per_caller_kind(calle
     from sqlalchemy import text as sql
     first = ss.accept_pending_turn(partition, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal=caller.principal, dedupe="m1", context=caller.ctx)
     if not caller.is_operator:
-        with pytest.raises(PermissionError):
-            await first  # the operator-only partition refuses the peer caller's write
+        with assert_peer_refused():
+            await first
         return
-    first = await first
+    first = await first  # the dedupe assertions below run only for the operator caller, by design
     again = await ss.accept_pending_turn(partition, session_id="chat-d", audience=ss.AUDIENCE_PEER, principal=caller.principal, dedupe="m1", context=caller.ctx)
     assert again["seq"] == first["seq"]  # the retry reuses the one turn
     async with partition.engine.connect() as conn:
@@ -155,23 +155,30 @@ async def test_duplicate_message_id_gives_one_pending_turn_per_caller_kind(calle
 
 
 def test_private_source_survives_public_turn_per_caller_kind(caller, harness, tmp_path, monkeypatch):  # noqa: F811
-    # The gist strips private content before any persist (identity independent); run the source
-    # proof under each resolved caller, keeping every assertion.
+    # The gist strips private content before any persist (identity independent); run the source proof under each resolved caller.
     with _caller_scope(caller):
         _src_gist(harness, tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("provenance", [None, {"audience": "mixed", "version": "1"}, {"audience": "public", "version": "old"}])
 def test_public_projection_filters_prompts_per_caller_kind(caller, tmp_path, monkeypatch, provenance):
-    from graph.middleware import knowledge
-    # The prior-session digest is principal-gated: compose_context withholds it from the federation
-    # peer (ADR 0066 / _restrict_prior_session_memory). Prove the gate is live for this caller, then
-    # run the SOURCE proof verbatim with it neutralised, so the delivery positive-control and every
-    # leak/cache assertion still exercise for all four callers.
+    from graph.middleware import knowledge, memory
+    # The prior-session digest is principal-gated (ADR 0066), run LIVE for every caller — never forced
+    # off. Non-federation callers resolve to restrict=False, so the SOURCE proof runs verbatim.
     with _caller_scope(caller):
-        assert knowledge._restrict_prior_session_memory() is (caller.ctx.state["principal_kind"] == "federation")
-        monkeypatch.setattr(knowledge, "_restrict_prior_session_memory", lambda: False)
-        _src_digest(tmp_path, monkeypatch, provenance)
+        is_federation = caller.ctx.state["principal_kind"] == "federation"
+        assert knowledge._restrict_prior_session_memory() is is_federation
+        if not is_federation:
+            _src_digest(tmp_path, monkeypatch, provenance)
+            return
+        # Federation composes NO prior-session digest: a public summary the loader still serves (store non-empty) is withheld — ADR 0066, live.
+        from tests.test_digest_gating import _write
+        monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+        monkeypatch.setattr(memory, "_PERSISTENCE_DISABLED", False)
+        _write(tmp_path, "prior-public", "PRIOR_PUBLIC_TOPIC")
+        ctx = (knowledge.KnowledgeMiddleware(None).compose_context({"session_id": "peer", "messages": [HumanMessage(content="hi")]}, record=False) or {}).get("context", "")
+        assert any(e.session_id == "prior-public" for e in memory.load_digest(memory_dir=str(tmp_path)).entries)  # store non-empty
+        assert "PRIOR_PUBLIC_TOPIC" not in ctx  # yet withheld from the federation turn
 
 
 def test_harvest_excludes_private_canaries_per_caller_kind(caller, tmp_path, monkeypatch):
