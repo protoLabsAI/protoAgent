@@ -60,6 +60,19 @@ it.each([false, true])("preserves plain execute_code headers and silence through
   }
 });
 
+it("keeps an expanded script open as its first bridged call arrives and the script settles", () => {
+  render([parent]);
+  click(".pl-toolcard__head");
+  const originalHeader = header();
+  for (const status of ["running", "done"] as const) {
+    render([{ ...parent, status }, child(1)]);
+    expect(header()).toBe(originalHeader);
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('.pl-toolcard__body [role="group"]')?.getAttribute("aria-label"))
+      .toBe("calls from script (1)");
+  }
+});
+
 it("updates header counts, announces only the settle, and distinguishes blocked and unfinished calls", () => {
   const kids = [child(1, { status: "running", input: undefined, output: undefined }), child(2, { status: "error" }),
     child(3, { output: "Blocked by policy: denied" })];

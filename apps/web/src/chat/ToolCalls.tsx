@@ -658,9 +658,13 @@ function ToolGroup({
       </>
     );
   }
-  if (!liveProgress) return scriptCount > 0 ? (
-    <>{card}<ScriptCompletion key={call.id} call={call} summary={scriptSummary} /></>
-  ) : card;
+  // Keep the card in the same slot as the first bridged call streams in.
+  if (!liveProgress) return (
+    <>
+      {card}
+      {scriptCount > 0 ? <ScriptCompletion key={call.id} call={call} summary={scriptSummary} /> : null}
+    </>
+  );
   return (
     <>
       {card}
