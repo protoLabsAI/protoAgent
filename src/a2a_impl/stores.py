@@ -492,6 +492,8 @@ _PRIVATE_COLUMNS = {
 }
 PRIVATE_SCHEMA_VERSION = 1
 PRIVATE_AUDIENCE = "human-operator"
+#: SDK fields a private turn keeps only inside its partition record (``sdk_task``).
+_PARTITIONED_SDK_FIELDS = ("status", "artifacts", "history", "metadata")
 
 
 @dataclass(frozen=True)
@@ -556,30 +558,77 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
     return predicate
 
 
+def _recovered_column(task_model, column):
+    """``column`` with a human-owned row's partitioned SDK field restored over the plain one."""
+    from sqlalchemy import case, func, literal_column, type_coerce
+
+    recovered = func.json_extract(
+        literal_column(f"{task_model.__tablename__}.private_payload"), f"$.sdk_task.{column.name}"
+    )
+    if column.name == "status":
+        # Recovery/cancellation may update the public lifecycle state directly.
+        recovered = func.json_patch(recovered, column)
+    value = case(
+        (task_model.owner == HUMAN_OPERATOR_OWNER, func.coalesce(recovered, column)),
+        else_=column,
+    )
+    return type_coerce(value, column.type).label(column.name)
+
+
+async def _has_partition(conn, task_model) -> bool:
+    from sqlalchemy import inspect
+
+    names = await conn.run_sync(lambda c: {x["name"] for x in inspect(c).get_columns(task_model.__tablename__)})
+    return _PRIVATE_COLUMNS.keys() <= names
+
+
 async def task_read_columns(conn, task_model=TaskModel, *, context=None):
     """Recover private SDK fields only for a verified human, after row filtering."""
-    from sqlalchemy import case, func, inspect, literal_column, type_coerce
-
     columns = list(task_model.__table__.columns)
-    names = await conn.run_sync(lambda c: {x["name"] for x in inspect(c).get_columns(task_model.__tablename__)})
-    if not _human_operator(context) or not _PRIVATE_COLUMNS.keys() <= names:
+    if not _human_operator(context) or not await _has_partition(conn, task_model):
         return columns
-    payload = literal_column("private_payload")
-    projected = []
-    for column in columns:
-        if column.name in ("status", "artifacts", "history", "metadata"):
-            recovered = func.json_extract(payload, f"$.sdk_task.{column.name}")
-            if column.name == "status":
-                # Recovery/cancellation may update the public lifecycle state directly.
-                recovered = func.json_patch(recovered, column)
-            value = case(
-                (task_model.owner == HUMAN_OPERATOR_OWNER, func.coalesce(recovered, column)),
-                else_=column,
-            )
-            projected.append(type_coerce(value, column.type).label(column.name))
-        else:
-            projected.append(column)
-    return projected
+    return [
+        _recovered_column(task_model, column) if column.name in _PARTITIONED_SDK_FIELDS else column
+        for column in columns
+    ]
+
+
+async def task_internal_columns(conn, *names, task_model=TaskModel):
+    """The named SDK columns with a private turn's partitioned fields restored.
+
+    INTERNAL readers only (model-context recovery, rewind bookkeeping): a private turn's
+    reply lives only in the partition, and these readers ran on the plain columns before it
+    moved there. Like a context-less ``task_public_filter`` this is not an authorization
+    boundary and must never back a caller-facing route — those use ``task_read_columns``
+    with the verified request context."""
+    by_name = {column.name: column for column in task_model.__table__.columns}
+    partitioned = await _has_partition(conn, task_model)
+    return [
+        _recovered_column(task_model, by_name[name])
+        if partitioned and name in _PARTITIONED_SDK_FIELDS else by_name[name]
+        for name in names
+    ]
+
+
+async def task_private_inputs(conn, task_ids, task_model=TaskModel) -> dict[str, str]:
+    """Private-input text by private-only task id, for the INTERNAL readers above.
+
+    A private turn's history carries only the opaque reference to its input record. Records
+    of an unknown format, a tombstoned chat or a missing partition resolve to nothing."""
+    from sqlalchemy import func, literal_column, select
+
+    ids = sorted({i for i in task_ids if i})
+    if not ids or not await _has_partition(conn, task_model):
+        return {}
+    text_input = func.json_extract(
+        literal_column(f"{task_model.__tablename__}.private_payload"), "$.input"
+    )
+    rows = await conn.execute(
+        select(task_model.id, text_input)
+        .where(task_model.id.in_(ids), task_model.owner == HUMAN_OPERATOR_OWNER)
+        .where(await task_public_filter(conn, task_model, include_private=True))
+    )
+    return {task_id: value for task_id, value in rows if isinstance(value, str)}
 
 
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):

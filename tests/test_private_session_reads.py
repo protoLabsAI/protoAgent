@@ -188,3 +188,29 @@ async def test_missing_store_cannot_authorize_checkpoint_export(rig, session, mo
     response = await rig.clients["fleet-service"].get(f"/api/chat/sessions/{sid}/export")
     assert response.status_code == 503
     assert response.json() == {"detail": "Session read unavailable."}
+
+
+@pytest.mark.parametrize("session", [(True, True)], indirect=True)
+@pytest.mark.parametrize("bubble", [SECRET, REPLY])
+async def test_checkpoint_recovery_and_rewind_read_the_partition(rig, session, monkeypatch, bubble):
+    """Internal readers lose nothing when the reply leaves the plain columns: a retired
+    checkpoint is reseeded with the private prompt and reply, and rewind still matches
+    the private turn's bubbles."""
+    from unittest.mock import AsyncMock
+
+    from server.chat_rehydrate import mark_turns_rewound, recovered_messages
+
+    sid, _, task_id, _ = session
+    rows = await rig.rows()
+    assert all(REPLY not in str((row.history, row.artifacts)) for row in rows)
+    monkeypatch.setattr(STATE.graph, "aget_state", AsyncMock(return_value=SimpleNamespace(values={}, config={})),
+                        raising=False)
+    monkeypatch.setattr(STATE, "history_store", None, raising=False)
+    config = {"configurable": {"thread_id": sid}}
+    assert [m.content for m in await recovered_messages(config, sid)] == ["ordinary", "ok", SECRET, REPLY]
+
+    # Either bubble of the private turn (its prompt, its reply) resolves to that turn.
+    assert await mark_turns_rewound(sid, content=bubble, occurrence=0, before=True) == 1
+    assert [m.content for m in await recovered_messages(config, sid)] == ["ordinary", "ok"]
+    flagged = [row.id for row in await rig.rows() if "protoagent_rewound" in str(row.metadata)]
+    assert flagged == [task_id]

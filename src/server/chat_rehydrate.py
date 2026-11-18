@@ -54,7 +54,7 @@ async def recovered_messages(config: dict, session_id: str, *, incognito: bool =
         return []
 
     from a2a.server.tasks.database_task_store import TaskModel
-    from a2a_impl.stores import task_public_filter
+    from a2a_impl.stores import task_internal_columns, task_public_filter
     from sqlalchemy import func, select
 
     from a2a_impl.stores import task_newest_first
@@ -62,7 +62,9 @@ async def recovered_messages(config: dict, session_id: str, *, incognito: bool =
     async with engine.begin() as conn:
         rows = (
             await conn.execute(
-                select(TaskModel.history, TaskModel.artifacts)
+                # A private turn's reply lives only in its partition record; recover it so
+                # the model keeps the context its retired checkpoint held.
+                select(*(await task_internal_columns(conn, "history", "artifacts")))
                 .where(TaskModel.context_id == session_id).where(await task_public_filter(conn))
                 .where(TaskModel.status["state"].as_string().in_(_TERMINAL_STATES))
                 # Turns the operator discarded via rewind (graph/rewind_op) are flagged in
@@ -72,6 +74,7 @@ async def recovered_messages(config: dict, session_id: str, *, incognito: bool =
                 .limit(20)
             )
         ).fetchall()
+        inputs = await _private_inputs(conn, (history for history, _ in rows))
 
     messages = []
     for history, artifacts in reversed(rows):
@@ -79,7 +82,7 @@ async def recovered_messages(config: dict, session_id: str, *, incognito: bool =
         if any((m.get("metadata") or {}).get(k) for m in history for k in ("incognito", "hidden")):
             continue
         for msg in history:
-            text = _parts_text(msg)
+            text = _parts_text(msg, inputs)
             if text and msg.get("role") in (_ROLE_USER, _ROLE_AGENT):
                 cls = HumanMessage if msg["role"] == _ROLE_USER else AIMessage
                 messages.append(cls(content=text))
@@ -122,21 +125,24 @@ async def mark_turns_rewound(context_id: str, *, content: str | None, occurrence
         return 0
     try:
         from a2a.server.tasks.database_task_store import TaskModel
-        from a2a_impl.stores import task_public_filter
+        from a2a_impl.stores import task_internal_columns, task_public_filter
         from sqlalchemy import literal_column, select, update
 
         rowid = literal_column("tasks.rowid")
         async with engine.begin() as conn:
             rows = (
                 await conn.execute(
-                    select(rowid, TaskModel.history, TaskModel.artifacts)
+                    # Match the bubbles the operator sees: a private turn's prompt and reply
+                    # live only in the partition, not in the plain columns.
+                    select(rowid, *(await task_internal_columns(conn, "history", "artifacts")))
                     .where(TaskModel.context_id == context_id).where(await task_public_filter(conn))
                     .order_by(rowid.asc())
                 )
             ).fetchall()
+            inputs = await _private_inputs(conn, (history for _, history, _ in rows))
             seen, cut_rid = 0, None
             for rid, history, artifacts in rows:
-                for bubble in _turn_bubbles(history, artifacts):
+                for bubble in _turn_bubbles(history, artifacts, inputs):
                     if bubble == want:
                         if seen == occurrence:
                             cut_rid = rid
@@ -167,19 +173,33 @@ async def mark_turns_rewound(context_id: str, *, content: str | None, occurrence
         return 0
 
 
-def _turn_bubbles(history, artifacts):
+def _turn_bubbles(history, artifacts, inputs=None):
     """The content bubbles of one stored turn, chronologically — the operator's prompt(s)
     then the turn's answer — mirroring the console bubbles a rewind ``occurrence`` counts.
     Intermediate agent frames (tool calls, reasoning) are tool cards, not content bubbles,
     so they're skipped here even though :func:`recovered_messages` still feeds them to the
     model."""
     for msg in history or []:
-        if msg.get("role") == _ROLE_USER and (text := _parts_text(msg).strip()):
+        if msg.get("role") == _ROLE_USER and (text := _parts_text(msg, inputs).strip()):
             yield text
     answer = "\n\n".join(filter(None, (_parts_text(a).strip() for a in artifacts or [])))
     if answer:
         yield answer
 
 
-def _parts_text(message: dict) -> str:
-    return "".join(p["text"] for p in message.get("parts") or [] if isinstance(p.get("text"), str))
+async def _private_inputs(conn, histories) -> dict[str, str]:
+    """The private prompts the opaque references in ``histories`` stand for, by record id."""
+    from a2a_impl.private_intake import ref_task_id
+    from a2a_impl.stores import task_private_inputs
+
+    ids = {ref_task_id(_parts_text(msg)) for history in histories for msg in history or []}
+    return await task_private_inputs(conn, ids - {""})
+
+
+def _parts_text(message: dict, inputs: dict[str, str] | None = None) -> str:
+    text = "".join(p["text"] for p in message.get("parts") or [] if isinstance(p.get("text"), str))
+    if inputs:
+        from a2a_impl.private_intake import ref_task_id
+
+        return inputs.get(ref_task_id(text), text)
+    return text
