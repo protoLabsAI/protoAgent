@@ -157,6 +157,26 @@ def _reset_session_state():
 
 
 @pytest.fixture(autouse=True)
+def _cancel_pending_session_gists():
+    """A turn that persists a session with four or more messages arms a session-gist timer
+    (``graph.session_gist.schedule``). Left armed, it fires a second or more later, in the
+    same xdist worker, inside whichever test is running by then: it builds a real model
+    client from the default config and calls it, with the client's own retry sleeps. That
+    stray call is what added a `gateway:4000` build to the subagent profile test, a
+    `time.sleep` to the goal-store retry test, and a model call under the in-flight
+    limiter's queue-timeout test. Cancel whatever the test armed before the next one starts."""
+    yield
+    mod = sys.modules.get("graph.session_gist")
+    if mod is None:
+        return
+    with mod.card_lock:
+        timers = list(mod._pending.values())
+        mod._pending.clear()
+    for timer in timers:
+        timer.cancel()
+
+
+@pytest.fixture(autouse=True)
 def _reset_recovered_private_turns():
     """Recovery dispatch ownership must not leak between tests in the same worker."""
     def _reset():
