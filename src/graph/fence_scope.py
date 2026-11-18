@@ -55,3 +55,25 @@ def fence_scope(fence):
         yield
     finally:
         _FENCE.reset(token)
+
+
+_PRIVATE_SEGMENT: ContextVar = ContextVar("protoagent_private_segment", default=None)
+
+
+def in_private_segment() -> bool:
+    """Read the live segment selector shared by the executor and its stream tasks."""
+    selector = _PRIVATE_SEGMENT.get()
+    return selector is not None and bool(selector())
+
+
+@contextlib.contextmanager
+def private_segment_scope(selector):
+    """Bind a live private-segment selector for this execution, including resumes.
+
+    Scopes nest by OR: an inner scope never switches an enclosing private segment off."""
+    outer = _PRIVATE_SEGMENT.get()
+    token = _PRIVATE_SEGMENT.set(selector if outer is None else lambda: bool(selector()) or bool(outer()))
+    try:
+        yield
+    finally:
+        _PRIVATE_SEGMENT.reset(token)

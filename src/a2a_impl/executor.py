@@ -858,7 +858,8 @@ class ProtoAgentExecutor(AgentExecutor):
         # protoAgent's ``_chat_langgraph_stream``; ``request_metadata`` is the
         # merged A2A request metadata, passed through so the backend's thread_id
         # resolver (#571) can scope memory off it.
-        # Dormant proof seam: no server route installs this factory.
+        # Dormant proof seam: no server route installs this factory. The live private-steer
+        # runner binds the same private segment tool fence itself (server.chat).
         self._requester_projection_factory = requester_projection_factory
         self._stream_factory = stream_fn_factory
         # ``structured_finalizer(skill_id, final_text)`` → an emit DataPart dict
@@ -1375,6 +1376,9 @@ class ProtoAgentExecutor(AgentExecutor):
         # — the chat driver's per-thread lock release, trace flush, turn bookkeeping —
         # waited for the event loop's async-generator finalizer (GC).
         guarded: AsyncGenerator[tuple[str, Any], None] | None = None
+        tool_scope = projection.tool_scope() if projection is not None else None
+        if tool_scope is not None:
+            tool_scope.__enter__()
         try:
             guarded = _stall_guarded(
                 self._stream_factory(
@@ -1737,6 +1741,8 @@ class ProtoAgentExecutor(AgentExecutor):
                     except Exception:  # noqa: BLE001 — the turn's outcome is already recorded
                         logger.exception("[a2a] stream cleanup raised for task %s", context.task_id)
             finally:
+                if tool_scope is not None:
+                    tool_scope.__exit__(None, None, None)
                 # The pair of `turn_started` (#3933): fired on EVERY exit, including the
                 # crash paths where a terminal update itself raised before the terminal
                 # hook ran, so a host that registered this turn on `turn_started` always

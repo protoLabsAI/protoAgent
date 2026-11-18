@@ -76,6 +76,12 @@ class RequesterProjection:
         self.private_ref = ref
         self.bind_files()
 
+    def tool_scope(self):
+        """Follow begin_private even when it runs in a child stream task."""
+        from graph.fence_scope import private_segment_scope
+
+        return private_segment_scope(lambda: bool(self.private_ref))
+
     @property
     def file_owner(self):
         return ref_task_id(self.private_ref) if self.private_ref else ""
