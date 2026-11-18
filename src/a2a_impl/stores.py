@@ -624,9 +624,9 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
                 "record": json.dumps(record, sort_keys=True)})
             return result.rowcount == 1
 
-    async def _reader(self, context, *, human_only=False):
+    async def _reader(self, context, *, human_only=False, sibling_of=None, private=False):
         """An isolated SDK reader preserves SDK pagination and owner semantics."""
-        from sqlalchemy import case, false
+        from sqlalchemy import case, false, func
         from sqlalchemy.orm import aliased
 
         await self._ensure_initialized()
@@ -635,6 +635,11 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         human = _human_operator(context)
         if human_only:
             visible &= self.task_model.owner == HUMAN_OPERATOR_OWNER if human else false()
+        if sibling_of is not None:
+            owner = select(self.task_model.owner).where(self.task_model.id == sibling_of).scalar_subquery()
+            visible &= self.task_model.owner == func.coalesce(
+                owner, HUMAN_OPERATOR_OWNER if private else self.owner_resolver(context),
+            )
         # Project both human-readable operator partitions into the SDK reader's owner
         # without changing stored owners or its pagination/counting behavior.
         columns = [
@@ -964,6 +969,13 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     async def list_owner_scoped(self, params, context: ServerCallContext):
         """List only verified-human private tasks for the guarded resume fallback."""
         reader = await self._reader(context, human_only=True)
+        return await DatabaseTaskStore.list(reader, params, context)
+
+    async def list_sibling_tasks(self, params, context: ServerCallContext, task_id: str, *, private=False):
+        """Settle only the saved turn's partition, preserving ordinary tier ownership."""
+        # The executor can finish before the SDK persists its new task. Use the
+        # producer's audience only in that window; a saved owner always wins.
+        reader = await self._reader(context, sibling_of=task_id, private=private)
         return await DatabaseTaskStore.list(reader, params, context)
 
     async def context_foreign(self, context_id: str, context: ServerCallContext) -> bool:

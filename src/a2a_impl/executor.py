@@ -1763,7 +1763,8 @@ class ProtoAgentExecutor(AgentExecutor):
             _end_run_scope(run_token)
             if touches_pause:
                 hitl_routing.schedule_settle_siblings(
-                    context.context_id, context.task_id, getattr(context, "call_context", None)
+                    context.context_id, context.task_id, getattr(context, "call_context", None),
+                    private=_private() or bool(hitl_routing.private_input_ref(context.message)),
                 )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:

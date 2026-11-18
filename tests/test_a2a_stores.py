@@ -1447,7 +1447,7 @@ async def test_ordinary_save_after_chat_deletion_persists_final_state(tmp_path, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("principal,human", [
     ("shared-operator-bearer", True), ("device", True),
-    ("fleet-service", False), ("paired-agent", False), ("federation", False),
+    ("fleet-service", False), ("agent-device", False), ("federation", False),
 ])
 async def test_private_task_owner_survives_restart_and_pagination(tmp_path, principal, human):
     from a2a.types import a2a_pb2
@@ -1484,6 +1484,21 @@ async def test_private_task_owner_survives_restart_and_pagination(tmp_path, prin
         assert (ordinary.id in ids) is (principal != "federation")
         scoped = await store.list_owner_scoped(a2a_pb2.ListTasksRequest(context_id="c"), caller)
         assert {task.id for task in scoped.tasks} == ({private.id} if human else set())
+        # Settlement uses the saved turn's partition, not the private-resume filter:
+        # ordinary turns must still settle siblings without touching private pauses.
+        for turn, expected in (
+            (ordinary, {ordinary.id} if principal != "federation" else set()),
+            (private, {private.id} if human else set()),
+        ):
+            siblings = await store.list_sibling_tasks(
+                a2a_pb2.ListTasksRequest(context_id="c"), caller, turn.id,
+            )
+            assert {task.id for task in siblings.tasks} == expected
+            pending = await store.list_sibling_tasks(
+                a2a_pb2.ListTasksRequest(context_id="c"), caller, "not-yet-saved",
+                private=turn.id == private.id,
+            )
+            assert {task.id for task in pending.tasks} == expected
         if not human:
             with pytest.raises(PermissionError):
                 await store.save(private, caller)
