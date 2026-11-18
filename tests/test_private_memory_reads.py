@@ -122,15 +122,38 @@ async def test_pre_marker_private_turn_withholds_shared_writers(box, monkeypatch
 
 
 @pytest.mark.parametrize("missing_engine", [True, False])
-async def test_unknown_task_ownership_withholds_shared_writers(box, monkeypatch, missing_engine):
+async def test_unknown_task_ownership_shares_nothing_and_loses_nothing(box, monkeypatch, missing_engine):
+    """An unreadable ownership answer is neither "private" nor "public": nothing reaches a
+    shared read, the archive is kept in the private partition, and the harvest fails so the
+    retire sweep keeps the thread instead of deleting it unharvested."""
     from sqlalchemy.engine import URL
+
+    from server import maintenance_loops
 
     engine = None if missing_engine else SimpleNamespace(url=URL.create("sqlite+aiosqlite", database=str(box.memory / "missing.db")))
     monkeypatch.setattr(STATE, "a2a_task_engine", engine)
     state = {"session_id": SID, "messages": [HumanMessage(content=SECRET), AIMessage(content=REPLY)]}
-    _, harvested = await _run_writers(state)
-    assert SECRET not in _retained(box) and REPLY not in _retained(box)
-    assert harvested is None
+    compacted, harvested = await _run_writers(state)
+    assert harvested is None  # best-effort callers still get None
+    shared = [p.read_text(encoding="utf-8") for p in Path(box.memory).rglob("*") if p.is_file()]
+    shared += [e.content for e in box.history.list_for_session(SID)] + [e.content for e in box.history.search("zq")]
+    assert SECRET not in "\n".join(shared) and REPLY not in "\n".join(shared)
+    kept = box.history.list_for_session(SID, include_private=True)
+    assert not compacted["refused"] and len(kept) == 2  # automatic, then manual
+    assert all(e.audience == "human-operator" and SECRET in e.content and REPLY in e.content for e in kept)
+
+    # The retire sweep: a harvest that cannot decide is a FAILED harvest, so the thread survives.
+    deleted = []
+    checkpointer = SimpleNamespace(
+        aget_tuple=AsyncMock(return_value=SimpleNamespace(checkpoint={"channel_values": state}, metadata={}))
+    )
+    monkeypatch.setattr(STATE, "checkpointer", checkpointer)
+    monkeypatch.setattr(STATE, "checkpoint_path", "checkpoints.db")
+    monkeypatch.setattr(STATE.graph_config, "checkpoint_harvest_enabled", True, raising=False)
+    monkeypatch.setattr("graph.checkpoint_prune.delete_thread", lambda *a, **kw: deleted.append(a))
+    monkeypatch.setattr(maintenance_loops, "_HARVEST_FAILURES", {})
+    assert await maintenance_loops._retire_thread(SID) is None
+    assert deleted == [] and maintenance_loops._HARVEST_FAILURES == {SID: 1}
 
 
 async def test_private_turn_input_is_stamped(box):

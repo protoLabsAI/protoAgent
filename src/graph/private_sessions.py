@@ -17,6 +17,11 @@ Durable task ownership also protects pre-marker conversations. Their unstamped
 transcripts cannot be safely partitioned, so archives are withheld too. A new marker
 records this condition when older private tasks exist; a later stamped turn cannot
 clear it. Conversations without private turns keep their existing writer behavior.
+
+When ownership cannot be READ (:class:`OwnershipUnknown`) nothing is exposed and nothing
+is thrown away: a per-turn writer (card, gist) skips this pass and the next one retries, a
+reader hides the session, the retirement harvest fails so its caller keeps the thread for
+a retry, and the compaction archive is kept whole in the private partition.
 """
 
 from __future__ import annotations
@@ -35,6 +40,11 @@ _fallback: set[str] = set()
 _mark_lock = threading.Lock()
 
 
+class OwnershipUnknown(RuntimeError):
+    """Durable task ownership could not be read, so whether a conversation has a private
+    turn is unknown — neither "it has one" nor "it has none"."""
+
+
 def _marker(session_id: str) -> str:
     from graph.middleware.memory import memory_path
 
@@ -47,6 +57,9 @@ def _owned_private_turn(session_id: str) -> bool:
     Writers include synchronous middleware and timer threads, so use a short-lived
     SQLite connection to the runtime engine's database, not its async connection pool.
     Never cache a negative answer: another turn can change ownership at any time.
+    Raises :class:`OwnershipUnknown` when the answer cannot be read — a caller must not
+    take that for "private" (an ordinary conversation would lose its archive and harvest)
+    nor for "public".
     """
     import sqlite3
     from contextlib import closing
@@ -58,19 +71,23 @@ def _owned_private_turn(session_id: str) -> bool:
 
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
-        return bool(getattr(STATE.graph_config, "private_steering_enabled", False))
+        if getattr(STATE.graph_config, "private_steering_enabled", False):
+            raise OwnershipUnknown("no task store")
+        return False
     try:
         if engine.url.get_backend_name() != "sqlite" or not engine.url.database:
-            return True
+            raise OwnershipUnknown("task store is not a readable SQLite file")
         uri = Path(engine.url.database).resolve().as_uri() + "?mode=ro"
         with closing(sqlite3.connect(uri, uri=True, timeout=2)) as conn:
             return conn.execute(
                 f"SELECT 1 FROM {TaskModel.__tablename__} WHERE context_id=? AND owner=? LIMIT 1",
                 (session_id, HUMAN_OPERATOR_OWNER),
             ).fetchone() is not None
-    except Exception:
-        log.warning("[memory] private task ownership unavailable — withholding shared memory", exc_info=True)
-        return True
+    except OwnershipUnknown:
+        raise
+    except Exception as exc:
+        log.warning("[memory] private task ownership unavailable", exc_info=True)
+        raise OwnershipUnknown(str(exc)) from exc
 
 
 def mark(session_id: str) -> None:
@@ -84,7 +101,10 @@ def mark(session_id: str) -> None:
             path = _marker(session_id)
             if not os.path.exists(path):
                 # A new stamped turn must not make older, unstamped turns safe to archive.
-                legacy = _owned_private_turn(session_id)
+                try:
+                    legacy = _owned_private_turn(session_id)
+                except OwnershipUnknown:
+                    legacy = True  # this session does have a private turn: keep the safe mark
                 atomic_write(path, "unlabelled" if legacy else "")
     except Exception:
         _fallback.add(session_id)
@@ -111,7 +131,10 @@ def public_part(messages: list, *session_ids: str | None) -> list:
     message, so the turn's unstamped replies and tool results go with its input. A compaction
     summary opens one too — it may have folded a private turn, and the tail kept after it
     may begin mid-turn. (Where the private replies are themselves stamped, the partition is
-    fully labelled and the stamps alone decide, as they always did.)"""
+    fully labelled and the stamps alone decide, as they always did.)
+
+    Raises :class:`OwnershipUnknown` when an unmarked conversation's ownership cannot be
+    read; the caller decides how to keep the transcript without sharing it."""
     messages = list(messages or [])
     from graph.conversation_audience import is_private_message, public_messages
 
@@ -147,13 +170,25 @@ def private_kwargs() -> dict:
     return {AUDIENCE_KWARG: PRIVATE_AUDIENCE} if in_private_segment() else {}
 
 
-def withheld(session_id: str) -> bool:
+def withheld(session_id: str, *, raise_unknown: bool = False) -> bool:
     """Whether shared derived memory must NOT be written for ``session_id`` right now: a
-    private turn is running (it is marked on the way), or one ran earlier."""
+    private turn is running (it is marked on the way), or one ran earlier.
+
+    When ownership cannot be read the answer is "withhold this pass" — right for a writer
+    that runs again on the next turn. A writer whose skip is FINAL (the retirement harvest:
+    its caller deletes the thread afterwards) passes ``raise_unknown=True`` and gets
+    :class:`OwnershipUnknown` instead, so it can fail and be retried."""
     if in_private_segment():
         mark(session_id)
         return True
-    return is_marked(session_id) or _owned_private_turn(session_id)
+    if is_marked(session_id):
+        return True
+    try:
+        return _owned_private_turn(session_id)
+    except OwnershipUnknown:
+        if raise_unknown:
+            raise
+        return True
 
 
 def _unlabelled_private_turns(session_id: str) -> bool:
@@ -188,7 +223,10 @@ def hidden_from_caller():
     def hidden(session_id: str) -> bool:
         session_id = str(session_id or "")
         if session_id not in verdicts:
-            verdicts[session_id] = _owned_private_turn(session_id)
+            try:
+                verdicts[session_id] = _owned_private_turn(session_id)
+            except OwnershipUnknown:
+                verdicts[session_id] = True
         return verdicts[session_id]
 
     return hidden
