@@ -40,9 +40,16 @@ def record_success(name: str) -> None:
     _LAST[name] = {"ok": True, "at": time.time()}
 
 
+def clean_error(error: str) -> str:
+    """The one-line, capped form of a dispatch error. Shared with the health record
+    (``health.record_dispatch_failure``) so the badge and ``last_dispatch`` show the
+    same reason text for the same failure."""
+    return " ".join(str(error).split())[:_ERROR_LIMIT]
+
+
 def record_failure(name: str, error: str) -> None:
     """Note that a dispatch to ``name`` raised, with the operator-facing reason."""
-    _LAST[name] = {"ok": False, "at": time.time(), "error": " ".join(str(error).split())[:_ERROR_LIMIT]}
+    _LAST[name] = {"ok": False, "at": time.time(), "error": clean_error(error)}
 
 
 def snapshot() -> dict[str, dict]:

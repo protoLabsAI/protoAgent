@@ -976,9 +976,9 @@ def _build_list_agents(registry: DelegateRegistry):
     def list_agents(detail: bool = False) -> str:
         """List configured delegates with cached reachability and evidence age.
 
-        🟢 recently reachable · 🔴 recent probe failure · ⚪ stale or never probed.
+        🟢 recently reachable · 🔴 recent probe or dispatch failure · ⚪ stale or never probed.
         Results older than 6 minutes are stale, not proof a peer is down. A successful
-        dispatch clears an older failed probe. Read this before choosing a delegate.
+        dispatch clears an older failure. Read this before choosing a delegate.
         Set detail=true for probe timestamps, errors, next probe and last dispatch.
         Both modes read in-memory caches only: no network, subprocess, or probe refresh.
         """
