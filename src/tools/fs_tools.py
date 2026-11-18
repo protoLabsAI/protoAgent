@@ -1583,8 +1583,38 @@ def build_fs_tools(config) -> list:
         return f"{'Overwrote' if existed else 'Created'} {path} ({len(content)} chars)."
 
     @tool
-    def edit_file(project: str, path: str, old: str, new: str) -> str:
-        """Replace the first exact occurrence of `old` with `new` in a file (read-write project)."""
+    def edit_file(
+        project: str,
+        path: str,
+        old: str = "",
+        new: str = "",
+        edits: list[dict[str, str]] | None = None,
+    ) -> str:
+        """Edit a file in a read-write project: replace the one exact occurrence of `old` with `new`,
+        or pass `edits=[{"old": ..., "new": ...}, ...]` to change several places in ONE call —
+        applied in order, each `old` must match exactly once, and nothing is written if any fails."""
+        # Argument checks come first (#5098): a malformed call is refused before the file is
+        # resolved, read or locked.
+        if edits and (old or new):
+            return "Error: pass either old/new or edits, not both."
+        if not edits and not old:
+            return "Error: pass old/new or a non-empty edits list."
+        pairs: list[tuple[str, str]] | None = None
+        if edits:
+            total = len(edits)
+            pairs = []
+            for n, item in enumerate(edits, 1):
+                item_old = item.get("old") if isinstance(item, dict) else None
+                item_new = item.get("new") if isinstance(item, dict) else None
+                if not isinstance(item_old, str) or not isinstance(item_new, str):
+                    return f"Error: edit {n} of {total}: needs string `old` and `new` keys."
+                if not item_old:
+                    return f"Error: edit {n} of {total}: `old` is empty."
+                if item_old == item_new:
+                    return f"Error: edit {n} of {total}: `old` and `new` are identical — nothing to change."
+                pairs.append((item_old, item_new))
+        elif old == new:
+            return "Error: `old` and `new` are identical — nothing to change."
         registry = registry_ref.get()
         try:
             target = registry.resolve(project, path)
@@ -1600,21 +1630,42 @@ def build_fs_tools(config) -> list:
         # would report success.
         with _edit_lock(target):
             text = _read_text_verbatim(target)
-            needle, replacement = old, new
-            if needle not in text and "\r\n" in text:
-                # A CRLF file and an LF needle (what a model almost always sends). Match in the
-                # file's own convention rather than normalizing the file, so a one-line edit
-                # doesn't rewrite every line ending in it.
-                needle, replacement = _to_crlf(old), _to_crlf(new)
-            if needle not in text:
-                return f"Error: `old` not found in {path}."
-            if text.count(needle) > 1:
-                return f"Error: `old` is not unique in {path} ({text.count(needle)} matches) — add context."
-            try:
-                _write_text_verbatim(target, text.replace(needle, replacement, 1))
-            except OSError as exc:
-                return f"Error: cannot write {path}: {exc}"
+            if pairs is not None:
+                # List form (#5098): every pair is matched against the text as the earlier
+                # pairs left it, all in memory — the file is written once, only if all apply.
+                total = len(pairs)
+                for n, (pair_old, pair_new) in enumerate(pairs, 1):
+                    needle, replacement = pair_old, pair_new
+                    if needle not in text and "\r\n" in text:
+                        needle, replacement = _to_crlf(pair_old), _to_crlf(pair_new)
+                    matches = text.count(needle)
+                    if matches != 1:
+                        shown = pair_old[:60].replace("\r\n", "⏎").replace("\n", "⏎").replace("\r", "⏎")
+                        problem = "not found" if matches == 0 else f"not unique ({matches} matches) — add context"
+                        return f"Error: edit {n} of {total}: old={shown}… {problem}"
+                    text = text.replace(needle, replacement, 1)
+                try:
+                    _write_text_verbatim(target, text)
+                except OSError as exc:
+                    return f"Error: cannot write {path}: {exc}"
+            else:
+                needle, replacement = old, new
+                if needle not in text and "\r\n" in text:
+                    # A CRLF file and an LF needle (what a model almost always sends). Match in the
+                    # file's own convention rather than normalizing the file, so a one-line edit
+                    # doesn't rewrite every line ending in it.
+                    needle, replacement = _to_crlf(old), _to_crlf(new)
+                if needle not in text:
+                    return f"Error: `old` not found in {path}."
+                if text.count(needle) > 1:
+                    return f"Error: `old` is not unique in {path} ({text.count(needle)} matches) — add context."
+                try:
+                    _write_text_verbatim(target, text.replace(needle, replacement, 1))
+                except OSError as exc:
+                    return f"Error: cannot write {path}: {exc}"
         _announce_change(project, proj.root, target)
+        if pairs is not None:
+            return f"Edited {path} ({len(pairs)} edits)."
         return f"Edited {path}."
 
     @tool
