@@ -315,93 +315,26 @@
   border-top: 1px solid var(--pl-color-border);
 }
 
-/* Server-initiated RESULT card (#3028) — a SETTLED scheduled fire, watch reaction, or
-   autonomous wake, delivered back to the chat that set it up. Visually SECONDARY to an
-   operator's own answer: a muted, COLLAPSED one-line summary (icon · label · preview · time)
-   that expands to the full result. Built in ChatMessageView (ServerResultCard). The DS
-   assistant message is plain (no bubble), so we only let its content wrapper host a full-width
-   card; specificity is stacked on the message root the same way .chat-report neutralizes the
-   system pill, and the bare variant covers a card rendered outside the chat slot (the shared
-   renderer also serves the ⌘K palette chat). */
-.chat-server-result.pl-message--assistant {
+/* Server-initiated RESULT card — a SETTLED scheduled fire, watch reaction, inbox/webhook
+   trigger, delegated task or self-improvement review, delivered back to the chat it ran in.
+   It IS the raised .chat-scheduled-card above (built in ChatMessageView), collapsed to its
+   head until opened, so every automation result in a thread reads as one family. It rides
+   an ASSISTANT message, which the DS renders plain (no bubble), so here we only let that
+   message's content wrapper host a full-width card; specificity is stacked on the message
+   root the same way .chat-report neutralizes the system pill, and the bare variant covers a
+   card rendered outside the chat slot (the shared renderer also serves the ⌘K palette chat). */
+.chat-scheduled.pl-message--assistant {
   justify-content: stretch;
 }
-.chat-session-slot .pl-message--assistant.chat-server-result .pl-message__content,
-.pl-message--assistant.chat-server-result .pl-message__content {
+.chat-session-slot .pl-message--assistant.chat-scheduled .pl-message__content,
+.pl-message--assistant.chat-scheduled .pl-message__content {
   display: block;
   width: 100%;
   max-width: 100%;
 }
-/* A quiet raised surface (recessed fill + hairline border) so it reads as an automation
-   by-product, not a first-class reply. */
-.chat-server-result-card {
-  border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius-lg);
-  background: var(--pl-color-bg-inset, var(--pl-color-bg-raised));
-  overflow: hidden;
-}
-.chat-server-result-card--failed {
-  border-color: var(--pl-color-status-error);
-}
-/* Collapsed summary — one clickable line. The whole row is the disclosure toggle. */
-.chat-server-result-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--pl-space-2);
-  width: 100%;
-  padding: var(--pl-space-1_5) var(--pl-space-2_5);
-  border: none;
-  background: none;
-  color: var(--pl-color-fg-muted);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.chat-server-result-summary:hover {
-  background: var(--pl-color-bg-hover);
-}
-.chat-server-result-icon {
-  flex: 0 0 auto;
-  color: var(--pl-color-fg-muted);
-}
-.chat-server-result-label {
-  flex: 0 0 auto;
-  font-weight: 600;
-  font-size: var(--pl-font-size-sm);
-  color: var(--pl-color-fg);
-}
-/* The preview takes the slack and ellipsizes on one line; the full text is in the body below. */
-.chat-server-result-preview {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: var(--pl-font-size-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-server-result-time {
-  flex: 0 0 auto;
-  font-size: var(--pl-font-size-xs);
-  color: var(--pl-color-fg-muted);
-}
-.chat-server-result-chevron {
-  flex: 0 0 auto;
-  color: var(--pl-color-fg-muted);
-  transition: transform 0.15s ease;
-}
-.chat-server-result--open .chat-server-result-chevron {
+.chat-scheduled-card--open .chat-scheduled-chip-chevron {
   transform: rotate(180deg);
 }
-/* Expanded body — the FULL markdown answer + tool cards, no truncation. A hairline separates
-   it from the summary; the CONTENT reads at full foreground strength (only the chrome is muted). */
-.chat-server-result-body {
-  padding: var(--pl-space-2_5) var(--pl-space-3) var(--pl-space-3);
-  border-top: 1px solid var(--pl-color-border);
-  color: var(--pl-color-fg);
-  font-size: var(--pl-font-size-base);
-}
-.chat-server-result-body .markdown > :first-child { margin-top: 0; }
-.chat-server-result-body .markdown > :last-child { margin-bottom: 0; }
 
 /* Per-turn token/cost footer under an assistant answer (#1372) — a quiet, monospace row of
    prompt ↑ / output ↓ / cost chips; full breakdown lives in the title tooltip. */

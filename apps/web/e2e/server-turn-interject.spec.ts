@@ -464,7 +464,7 @@ test("the server's consumed marker settles a queued interjection at the boundary
   h.release(terminalFrames(session));
   await expect(page.locator(".pl-toast", { hasText: "Task resumed" })).toBeVisible();
   await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
-  await expect(page.locator(`${SLOT} .chat-server-result`)).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .chat-scheduled-card`)).toHaveCount(0);
   await expect(page.locator(SLOT).getByText(PRE)).toBeVisible();
   await expect(page.locator(SLOT).getByText(POST)).toBeVisible();
   await expect(page.locator(".pl-toolcard").filter({ hasText: "github_pr_diff" }).first()).toBeVisible();
