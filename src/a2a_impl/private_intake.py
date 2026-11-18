@@ -19,7 +19,8 @@ SendMessage.
 
 **Dormant.** No live route sets ``private`` and nothing in the request path grants private
 access off a delegation yet; only the P1b.2 proof tests reach this. It depends only on neutral
-modules (``a2a_impl.stores`` + the ``graph.fleet.delegation`` shape) — never ``server`` — so the
+modules (the private store/scheduler, ``graph.thread_ids``, and the
+``graph.fleet.delegation`` shape) — never ``server`` — so the
 import layering holds.
 """
 
@@ -100,6 +101,12 @@ async def record_private_steer(task_store, *, session_id, text, msg_id, context,
     key is consulted by :func:`find_private_steer` BEFORE this is called, so a retried msg_id
     reuses the one record rather than minting a second shell. Raises on any failure; the caller
     must then NOT fall back to an ordinary SendMessage (fail closed)."""
+    # A fresh message can arrive before startup recovery. Recover the owning
+    # turn's durable scope before snapshotting it or checking its parked thread.
+    if not thread_ids.resolver_metadata(session_id):
+        from a2a_impl.segment_schedule import recover_undrained_segments
+
+        await recover_undrained_segments(task_store, session_id, context)
     task_id = _private_task_id(session_id)
     shell = a2a_pb2.Task(id=task_id, context_id=session_id)
     payload = {

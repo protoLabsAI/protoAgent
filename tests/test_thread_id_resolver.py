@@ -151,7 +151,6 @@ async def test_nonstreaming_chat_holds_the_thread_lock(monkeypatch):
     assert locked_during_invoke == [True]
 
 
-@pytest.mark.platform_sensitive
 async def test_ordinary_turn_keeps_resolver_metadata_memory_only(tmp_path, monkeypatch):
     from a2a.server.context import ServerCallContext
     from a2a_impl import stores
@@ -177,7 +176,6 @@ async def test_ordinary_turn_keeps_resolver_metadata_memory_only(tmp_path, monke
         await engine.dispose()
 
 
-@pytest.mark.platform_sensitive
 async def test_private_input_restores_its_snapshot_before_acceptance(tmp_path, monkeypatch):
     from a2a.server.context import ServerCallContext
     from a2a_impl import private_intake as pi, segment_schedule as ss, stores
@@ -204,5 +202,67 @@ async def test_private_input_restores_its_snapshot_before_acceptance(tmp_path, m
         thread_ids.forget_resolver_metadata("private")
         assert await pi.resolve_private_input(store, ref, delegation=SimpleNamespace(operation=ref), context=human) == "secret"
         assert _resolve_turn_thread_id({"private_input": True}, "private") == "proj:atlas:private"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("restart_state", ["queued-behind-peer", "parked"])
+async def test_private_routing_restored_when_work_starts_after_restart(tmp_path, monkeypatch, restart_state):
+    from a2a.server.context import ServerCallContext
+    from a2a_impl import private_intake as pi, segment_schedule as ss, stores
+    from graph import thread_ids
+    from server.chat import _resolve_turn_thread_id
+
+    path = str(tmp_path / "tasks.db")
+    engine = stores.make_sqlite_engine(path)
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    human = ServerCallContext(state={"principal_kind": "device"})
+    sid = "restart-routing"
+    monkeypatch.setattr(STATE, "thread_id_resolver", lambda md, sid: f"proj:{md.get('project')}:{sid}")
+    try:
+        await store.initialize()
+        if restart_state == "queued-behind-peer":
+            await ss.accept_pending_turn(store, session_id=sid, audience="peer",
+                principal="peer", dedupe="peer", context=human)
+        _resolve_turn_thread_id({"project": "atlas"}, sid)
+        ref = await pi.record_private_steer(store, session_id=sid, text="original", msg_id="original", context=human)
+        turn = await ss.accept_pending_turn(store, session_id=sid, audience="private",
+            principal="device", dedupe="original", input_ref=ref, context=human)
+        if restart_state == "parked":
+            generation = await ss.claim_segment(store, sid, audience="private", seq=turn["seq"], context=human)
+            await ss.set_turn_state(store, sid, turn["seq"], ss.STATE_PARKED, human)
+            assert await ss.park_segment(store, sid, generation=generation, interrupt_id="pause", context=human)
+        await engine.dispose()
+        thread_ids.forget_resolver_metadata(sid)
+        engine = stores.make_sqlite_engine(path)
+        store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+        await store.initialize()
+        if restart_state == "parked":
+            # A NEW message arrives before any explicit recovery, not a dedupe retry.
+            fresh = await pi.record_private_steer(store, session_id=sid, text="continue", msg_id="new", context=human)
+            record = await store.get_record(pi.ref_task_id(fresh), human)
+            assert record.private_payload["resolver_metadata"] == {"project": "atlas"}
+            assert _resolve_turn_thread_id({"private_input": True}, sid) == f"proj:atlas:{sid}"
+            thread_ids.forget_resolver_metadata(sid)
+            assert await pi.resolve_private_input(store, fresh, delegation=SimpleNamespace(operation=fresh), context=human) == "continue"
+        else:
+            recovery = await ss.recover_undrained_segments(store, sid, human)
+            assert recovery["audience"] == "peer"
+
+            async def send_peer(turn):
+                _resolve_turn_thread_id({"project": "peer-project"}, sid)
+                return "peer-task"
+
+            assert await ss.dispatch_pending_turn(store, sid, human, send_peer) == "peer-task"
+            segment = await ss.read_segment(store, sid, human)
+            assert await ss.complete_segment(store, sid, generation=segment["generation"], context=human)
+
+            async def send_private(turn):
+                assert turn["input_ref"] == ref
+                assert _resolve_turn_thread_id({"private_input": True}, sid) == f"proj:atlas:{sid}"
+                return "private-task"
+
+            assert await ss.dispatch_pending_turn(store, sid, human, send_private) == "private-task"
+        assert _resolve_turn_thread_id({"private_input": True}, sid) == f"proj:atlas:{sid}"
     finally:
         await engine.dispose()

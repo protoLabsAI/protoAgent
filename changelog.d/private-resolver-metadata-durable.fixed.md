@@ -1,1 +1,1 @@
-- **Private recovery preserves thread routing.** Persist resolver inputs with private work so recovery after a killed process restores the original checkpoint thread, while ordinary turns remain memory-only.
+- **Private recovery preserves thread routing.** Persist resolver inputs with private work so recovery after a killed process restores the original checkpoint thread, including queued private turns dispatched after peer work and new steers arriving before recovery, while ordinary turns remain memory-only.

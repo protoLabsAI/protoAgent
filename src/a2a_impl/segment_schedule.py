@@ -31,7 +31,7 @@ be replayed. A parked segment stays reserved. A private turn keeps its opaque ``
 is resumed through the private path and never falls back to a public input.
 
 **Dormant.** No live route drives this; only the P1c proof tests do. It depends only on
-``a2a_impl.stores`` (the partition) — never ``server`` — so the import layering holds.
+the private partition/intake and ``graph.thread_ids`` — never ``server`` — so the import layering holds.
 """
 
 from __future__ import annotations
@@ -385,6 +385,13 @@ async def dispatch_pending_turn(task_store, session_id: str, context, send) -> s
     turn = await task_store.update_scheduling_payloads(session_id, context, claim)
     if turn is None:
         return None
+    # Recovery may have selected a peer ahead of this turn, and intervening
+    # turns may have replaced the session cache. Restore the claimed snapshot
+    # immediately before send resolves the checkpoint thread.
+    if turn["audience"] == AUDIENCE_PRIVATE:
+        metadata = turn.get("resolver_metadata")
+        if isinstance(metadata, dict):
+            thread_ids.remember_resolver_metadata(session_id, metadata)
     task_id = await send(turn)
     if task_id is None:
         def requeue(records):
