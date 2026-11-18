@@ -994,6 +994,18 @@ def _on_custom_goal_probe(st: _TurnStreamState, event: dict, name: str, parent_t
         yield ("goal_status", {"text": f"🎯 {text}"})
 
 
+def _ptc_int(value) -> int:
+    # The `ptc_call` payload is untrusted plugin wire data: a non-numeric `output_chars`
+    # or `duration_ms` (a dict, a string like "lots", a NaN float) must degrade to 0, never
+    # raise. The dispatch loop (`astream`, below) runs `handler(...)` with no try/except, so
+    # a raise here would abort the WHOLE turn stream — contrary to the card's never-raise
+    # rule. `int(value or 0)` alone still raises on a non-numeric string, so catch and floor.
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _on_custom_ptc_call(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
     # The execute_code plugin bridges a script's host-tool call out as a `ptc_call` custom
     # event (card bd-dr0i7): the Python runtime invoked a bound tool from INSIDE a running
@@ -1034,9 +1046,9 @@ def _on_custom_ptc_call(st: _TurnStreamState, event: dict, name: str, parent_too
                 # true pre-truncation size in `output_chars`; carry both through (coercing
                 # the preview the same way other cards do).
                 "output": _chat()._coerce_tool_value(data.get("output", "")),
-                "output_chars": int(data.get("output_chars", 0) or 0),
+                "output_chars": _ptc_int(data.get("output_chars", 0)),
                 "error": bool(data.get("error")),
-                "duration_ms": int(data.get("duration_ms", 0) or 0),
+                "duration_ms": _ptc_int(data.get("duration_ms", 0)),
                 "parentId": parent,
             },
         )

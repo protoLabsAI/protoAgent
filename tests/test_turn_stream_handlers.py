@@ -259,5 +259,28 @@ async def test_ptc_call_malformed_payloads_yield_no_frames_and_do_not_raise(env)
     assert frames == []
 
 
+@pytest.mark.asyncio
+async def test_ptc_call_end_non_numeric_sizes_degrade_to_zero_and_do_not_raise(env):
+    # A malformed plugin payload can carry a non-numeric `output_chars`/`duration_ms`. The
+    # dispatch loop has no try/except, so coercing them must never raise (card never-raise
+    # rule): they floor to 0 and the frame is still emitted with its id/name/parent intact.
+    env.install(_ptc_end(output_chars="lots", duration_ms={"not": "a number"}))
+    frames = [f async for f in _stream() if f[0] == "tool_end"]
+    assert frames == [
+        (
+            "tool_end",
+            {
+                "id": "p1",
+                "name": "ptc:read_file",
+                "output": "hello",
+                "output_chars": 0,
+                "error": False,
+                "duration_ms": 0,
+                "parentId": "ec1",
+            },
+        ),
+    ]
+
+
 def test_ptc_call_is_registered():
     assert turn_stream._handler_for("on_custom_event", "ptc_call") is turn_stream._on_custom_ptc_call
