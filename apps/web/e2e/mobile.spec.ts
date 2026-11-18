@@ -499,11 +499,17 @@ test("mobile: Conversations pins above the chats, and its list and a thread fill
   await expect(item.locator(".pl-dot--pulse")).toHaveCount(0);
   await expect(item.locator('[aria-label^="Delete"]')).toHaveCount(0);
 
-  // Sheet order: New → the item → a divider → the chat rows.
-  const topOf = async (sel: string) => (await page.locator(sel).first().boundingBox())!.y;
-  expect(await topOf(".session-sheet-new")).toBeLessThan(await topOf(".session-sheet-convo"));
-  expect(await topOf(".session-sheet-convo")).toBeLessThan(await topOf(".session-sheet-divider"));
-  expect(await topOf(".session-sheet-divider")).toBeLessThan(await topOf(".session-sheet-row"));
+  // Sheet order: New → the item → a divider → the chat rows. All four tops are read in ONE
+  // pass: the sheet slides up as it opens, so two separate reads landed on different frames
+  // and compared a later, higher position with an earlier, lower one.
+  const order = [".session-sheet-new", ".session-sheet-convo", ".session-sheet-divider", ".session-sheet-row"];
+  const tops = await page.evaluate(
+    (selectors) => selectors.map((sel) => document.querySelector(sel)?.getBoundingClientRect().top ?? null),
+    order,
+  );
+  expect(tops.every((top) => top !== null), `all four are in the sheet: ${JSON.stringify(tops)}`).toBe(true);
+  expect([...tops].sort((a, b) => a! - b!), "New, item, divider, rows from top to bottom").toEqual(tops);
+  expect(new Set(tops).size, "four distinct positions").toBe(4);
 
   // Tapping it closes the sheet and shows the list full screen under a "From others" header.
   await item.click();

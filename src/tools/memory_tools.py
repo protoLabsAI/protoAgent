@@ -808,9 +808,13 @@ def _build_memory_tools(
             limit: 1–20.
             surface: optional ``chat``, ``a2a/other``, ``activity``, ``palette`` or ``background``.
         """
+        from graph.private_sessions import hidden_from_caller
         from graph.session_search import SessionSearchUnavailable, search_sessions
 
         sid = _session_id_from(state)
+        # Sessions with private turns are not readable by a caller that is not a human
+        # operator (the memory routes' guard); nothing is hidden from a human operator.
+        hidden = hidden_from_caller()
         try:
             rows = await asyncio.to_thread(
                 search_sessions,
@@ -819,6 +823,7 @@ def _build_memory_tools(
                 limit=limit,
                 surface=surface or None,
                 exclude_session_id=sid,
+                **({} if hidden is None else {"hidden": hidden}),
             )
         except (ValueError, SessionSearchUnavailable) as exc:
             return f"Error: {exc}."
@@ -854,6 +859,7 @@ def _build_memory_tools(
         from graph.middleware.memory import format_session_summary, is_safe_session_id, session_file_candidates
         from graph.middleware.redaction import redact
         from graph.output_format import strip_reasoning
+        from graph.private_sessions import hidden_from_caller
 
         sid = (session_id or "").strip()
         # Filename guard: ids map onto files under memory_path(), so anything
@@ -862,10 +868,14 @@ def _build_memory_tools(
             return f"Error: invalid session_id {session_id!r} — pass an id from <prior_sessions>."
 
         store = history_store_getter() if history_store_getter else history_store
+        # A session with private turns reads as missing to a caller that is not a human
+        # operator (the memory routes' guard); nothing is hidden from a human operator.
+        hidden = hidden_from_caller()
+        withheld = hidden is not None and await asyncio.to_thread(hidden, sid)
         if entry is not None:
             if store is None:
                 return "Error: session history is unavailable."
-            record = await asyncio.to_thread(store.get, entry)
+            record = None if withheld else await asyncio.to_thread(store.get, entry)
             if record is None or record.session_id != sid:
                 return f"No history entry {entry} found for session {sid!r}."
             rendered = (
@@ -877,6 +887,8 @@ def _build_memory_tools(
                 rendered = rendered[: _RECALL_SESSION_MAX_CHARS - len(suffix)] + suffix
             return rendered
 
+        if withheld:
+            return f"No session {sid!r} found — pass an id from <prior_sessions>."
         # Shared filename mapper: the '%3A'-encoded name first (Windows-safe
         # writer output), then the legacy raw-':' name for pre-encoding files.
         summary = None

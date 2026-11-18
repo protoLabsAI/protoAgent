@@ -252,3 +252,60 @@ async def test_missing_task_store_fails_closed(leaked, monkeypatch):
         response = await leaked.rig.clients["fleet-service"].get(path)
         assert response.status_code == 503 and SECRET not in response.text
         assert (await leaked.rig.op.get(path)).status_code == 200
+
+
+@pytest.mark.parametrize("leaked", CASES, indirect=True)
+@pytest.mark.parametrize("kind", [k for k in KINDS if k != "federation"])
+async def test_agent_recall_tools_follow_the_turn_caller(leaked, kind):
+    """``session_search`` / ``recall_session`` under the principal the real auth middleware
+    binds for the request driving the turn: a peer caller's turn reads nothing from a session
+    with private turns (it looks missing), a human operator's turn reads what it always did."""
+    from tools.memory_tools import _build_memory_tools
+
+    tools = {t.name: t for t in _build_memory_tools(None, history_store=leaked.history)}
+    entry = leaked.history.list_for_session(SID)[0].id
+
+    @leaked.rig.app.get("/api/_probe/recall-tools")
+    async def _probe():
+        return {
+            "search": await tools["session_search"].ainvoke({"query": leaked.text}),
+            "summary": await tools["recall_session"].ainvoke({"session_id": SID}),
+            "entry": await tools["recall_session"].ainvoke({"session_id": SID, "entry": entry}),
+            "other": await tools["recall_session"].ainvoke({"session_id": OTHER}),
+            "missing": await tools["recall_session"].ainvoke({"session_id": "chat-missing"}),
+            "missing_entry": await tools["recall_session"].ainvoke({"session_id": "chat-missing", "entry": entry}),
+        }
+
+    out = (await leaked.rig.clients[kind].get("/api/_probe/recall-tools")).json()
+    assert "elsewhere" in out["other"]  # a session without private turns is readable by every caller
+    if leaked.private and kind not in HUMANS:
+        assert all(SECRET not in text for text in out.values())
+        assert out["search"] == "No matching prior sessions."
+        assert out["summary"] == out["missing"].replace("chat-missing", SID)
+        assert out["entry"] == out["missing_entry"].replace("chat-missing", SID)
+    else:
+        assert SID in out["search"] and all(leaked.text in out[k] for k in ("search", "summary", "entry"))
+
+
+@pytest.mark.parametrize("leaked", [(True, True)], indirect=True)
+async def test_agent_recall_tools_fail_closed_and_keep_readable_hits(leaked, monkeypatch):
+    from graph.middleware.request_context import verified_principal_scope
+    from tools.memory_tools import _build_memory_tools
+
+    tools = {t.name: t for t in _build_memory_tools(None, history_store=leaked.history)}
+    for sid in (SID, OTHER):  # the hidden session's hits must not crowd the readable one out
+        (leaked.memory / f"{sid}.json").write_text(json.dumps({
+            "session_id": sid, "messages": [{"role": "user", "content": f"shared needle {SECRET if sid == SID else ''}"}],
+            "message_count": 1, "tool_calls": [], "final_output": "ok", "timestamp": "2026-11-18T00:00:00+00:00",
+        }), encoding="utf-8")
+        leaked.history.add(f"shared needle {sid}", kind="archive", session_id=sid, heading="Conversation archive")
+    with verified_principal_scope("agent-device"):
+        found = await tools["session_search"].ainvoke({"query": "shared needle", "limit": 1})
+        assert OTHER in found and SID not in found and SECRET not in found
+        with private_segment_scope(lambda: True):  # a private turn is the human operator's own
+            assert SECRET in await tools["recall_session"].ainvoke({"session_id": SID})
+        monkeypatch.setattr(STATE, "a2a_task_engine", None)  # ownership unknown: nothing is readable
+        assert await tools["session_search"].ainvoke({"query": "shared needle"}) == "No matching prior sessions."
+        assert "elsewhere" not in await tools["recall_session"].ainvoke({"session_id": OTHER})
+    with verified_principal_scope("shared-operator-bearer"):
+        assert SECRET in await tools["recall_session"].ainvoke({"session_id": SID})

@@ -1,1 +1,0 @@
-- **Private steering refuses decisions outside the private partition.** A conversation parked by an ordinary operator or federation task now returns a fixed refusal before storing private text or starting another task. Human-owned private decisions still resume their original task.

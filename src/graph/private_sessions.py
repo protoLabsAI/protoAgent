@@ -166,3 +166,29 @@ def _unlabelled_private_turns(session_id: str) -> bool:
         return _owned_private_turn(session_id)
     except Exception:
         return True
+
+
+def hidden_from_caller():
+    """The session-memory read guard for the running turn's caller, for the agent's own
+    recall tools: ``None`` when nothing is hidden (the caller is a human operator, or the
+    turn itself is a private one — only a human operator starts those), otherwise a
+    predicate that is true for a session with private (human-operator-owned) turns.
+
+    The same verdict as the memory routes' guard (``operator_api.chat_routes._hidden_session``):
+    the principal is the one authentication stamped on the request driving the turn, and a
+    session is hidden by durable task ownership. An unknown answer hides the session. Call
+    it in the tool body (the principal is turn-scoped); the predicate may run on a thread."""
+    from a2a_impl.auth import is_human_operator
+    from graph.middleware.request_context import current_verified_principal
+
+    if in_private_segment() or is_human_operator(current_verified_principal()):
+        return None
+    verdicts: dict[str, bool] = {}
+
+    def hidden(session_id: str) -> bool:
+        session_id = str(session_id or "")
+        if session_id not in verdicts:
+            verdicts[session_id] = _owned_private_turn(session_id)
+        return verdicts[session_id]
+
+    return hidden
