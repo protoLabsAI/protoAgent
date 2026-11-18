@@ -938,7 +938,7 @@ def _redeem_loopback_delegation(headers, *, context: str, operation: str, task_i
 # steer_or_start_turn below); the loopback then carries only this opaque reference plus the
 # single-use delegation (above), never the private text, never images. The reference is
 # resolved back to the text ONLY here, inside the trusted runner, before the graph runs —
-# fail-closed, with no SendMessage fallback. Dormant: no live route sets ``private``.
+# fail-closed, with no SendMessage fallback. Live only via the steer route (P1h.3, flag on).
 # The one wire constant is imported from the partition module so the two can never drift.
 from a2a_impl.private_intake import PRIVATE_INPUT_PREFIX as _PRIVATE_INPUT_PREFIX  # noqa: E402
 
@@ -1010,23 +1010,22 @@ async def _fold_private_reply_frames(frames, ref: str, store, context):
     the reply, and the record's ``replied`` marker stops a retried steer — even one re-sent
     after a restart, once the in-memory start guard is gone — from starting a SECOND turn for
     the same input. A turn that re-parks (no ``done``) folds nothing, so its resume still runs.
+    The fold runs BEFORE the ``done`` frame is handed on: the A2A executor finalizes the task
+    and closes this generator at that frame, so nothing after the ``yield`` would ever run.
     Best-effort: a failed fold is logged and never breaks the turn; the inner stream is closed
     on this generator's own close so its cleanup never waits for GC (#3877)."""
-    reply: str | None = None
+    from a2a_impl import private_intake
+
     async with contextlib.aclosing(frames) as _frames:
         async for frame in _frames:
             if isinstance(frame, tuple) and len(frame) == 2 and frame[0] == "done":
                 payload = frame[1]
                 reply = payload if isinstance(payload, str) else str(getattr(payload, "text", "") or "")
+                try:
+                    await private_intake.record_private_reply(store, ref, reply, context)
+                except Exception:  # noqa: BLE001 — recovery convenience, never breaks the turn it describes
+                    log.warning("[private] could not fold a private turn's reply into its record", exc_info=True)
             yield frame
-    if reply is None:
-        return
-    from a2a_impl import private_intake
-
-    try:
-        await private_intake.record_private_reply(store, ref, reply, context)
-    except Exception:  # noqa: BLE001 — recovery convenience, never breaks the turn it describes
-        log.warning("[private] could not fold a private turn's reply into its record", exc_info=True)
 
 
 def _resolve_turn_thread_id(request_metadata: dict | None, session_id: str) -> str:
@@ -1218,7 +1217,7 @@ async def _await_started_task(session_id: str, msg_id: str) -> str:
 async def _private_steer_or_start(
     session_id: str, text: str, mid: str, *, store, context, settings: dict | None = None
 ) -> dict[str, Any]:
-    """Dormant private idle / parked-steer intake (ADR 0131 P1b.2).
+    """Private idle / parked-steer intake (ADR 0131 P1b.2; reached via the steer route, P1h.3).
 
     Records the steer and its dedupe key into the P1b.1 partition BEFORE any turn starts, then
     delivers it carrying ONLY the opaque reference bound to a single-use delegation, never the
@@ -1318,10 +1317,10 @@ async def steer_or_start_turn(
     the reply carries ``started_turn: <task_id>`` for the console to attach to. A repeat of
     an already-started ``msg_id`` answers with the first task — one turn per message.
 
-    ``private`` (ADR 0131 P1b.2, dormant) routes the steer through the P1b.1 partition
-    intake (``_private_steer_or_start``): the text is recorded privately and the loopback
-    carries only an opaque reference. No live route sets it, so the ordinary path below is
-    unchanged."""
+    ``private`` (ADR 0131 P1b.2) routes the steer through the P1b.1 partition intake
+    (``_private_steer_or_start``): the text is recorded privately and the loopback carries
+    only an opaque reference. Only the steer route's ``private: true`` branch sets it
+    (P1h.3: flag on + a verified human operator), so the ordinary path below is unchanged."""
     import uuid
 
     from graph import steering

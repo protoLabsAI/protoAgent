@@ -19,6 +19,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import HumanMessage
 
 from graph import steering
+from graph.fence_scope import in_private_segment
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,12 @@ class SteeringMiddleware(AgentMiddleware):
         # call never folds in the other audience's queued inputs — they wait for their own
         # segment. No audience (every ordinary turn) drains the whole queue, exactly as before.
         audience = state.get("segment_audience") if isinstance(state, dict) else getattr(state, "segment_audience", None)
+        if not audience and in_private_segment():
+            # A live privately-steered turn (ADR 0131 P1h.3) is a private segment even though
+            # nothing stamped its state: an ordinary steer that arrives while it runs is a
+            # PEER input and must wait for its own turn (the turn-end restart starts it),
+            # never fold into the private model call.
+            audience = steering.AUDIENCE_PRIVATE
         queued = steering.drain(session_id, audience) if audience else steering.drain(session_id)
         if not queued:
             return None, []

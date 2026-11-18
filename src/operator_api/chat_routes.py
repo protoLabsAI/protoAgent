@@ -131,6 +131,7 @@ class _delete_lock:
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import (
+    _private_partition_store,
     _resolve_thread_id,
     aside_session,
     chat,
@@ -144,6 +145,7 @@ from server.chat import (
     live_state_fields,
     migrate_chat_session_list,
     note_session_deleted,
+    private_steering_enabled,
     read_chat_session_list,
     register_chat_session_list,
     rename_chat_session_list,
@@ -1090,6 +1092,47 @@ async def _v1_finish_reason(session_id: str) -> str:
     if _has_unresolved_tool_calls(last):
         return "length"
     return "stop"
+
+
+_PRIVATE_STEER_UNAVAILABLE = "Private steering is not available for this request."
+_PRIVATE_STEER_TEXT_ONLY = "A private steer carries text only: no attachments, no incognito."
+_PRIVATE_STEER_UNDELIVERED = "The private steer could not be delivered. Nothing was sent publicly."
+
+
+async def _private_steer(session_id: str, request: Request, body: dict, text: str, msg_id: str | None) -> dict:
+    """The steer route's ``private: true`` branch (ADR 0131 P1h.3): private, or refused.
+
+    Every refusal happens BEFORE anything is stored, queued or started, with a fixed message
+    that never echoes the text. The caller's kind is the one the auth middleware verified
+    (``request.state.principal_kind``), never anything in the body: the fleet service token,
+    an ``agent`` device, a federation peer, a legacy API key and an open instance are all
+    refused. Images cannot ride the private path and incognito is not carried by it, so both
+    are refused rather than dropped. A private steer that then fails closed inside
+    ``steer_or_start_turn`` (no partition, an unwritable record, a turn that would not start)
+    answers 503 — it is never retried as an ordinary steer."""
+    from a2a.server.context import ServerCallContext
+
+    from a2a_impl.auth import is_human_operator
+
+    kind = getattr(request.state, "principal_kind", "open/unknown")
+    if not private_steering_enabled() or not is_human_operator(kind):
+        raise HTTPException(status_code=403, detail=_PRIVATE_STEER_UNAVAILABLE)
+    if body.get("images") or body.get("incognito"):
+        raise HTTPException(status_code=400, detail=_PRIVATE_STEER_TEXT_ONLY)
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    result = await steer_or_start_turn(
+        session_id,
+        text,
+        msg_id,
+        settings=_coerce_turn_settings(body),
+        private=True,
+        private_store=_private_partition_store(),
+        private_context=ServerCallContext(state={"principal_kind": kind}),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=_PRIVATE_STEER_UNDELIVERED)
+    return result
 
 
 def register_chat_routes(app, ui: str) -> None:
@@ -2043,7 +2086,7 @@ def register_chat_routes(app, ui: str) -> None:
         )
 
     @app.post("/api/chat/sessions/{session_id}/steer")
-    async def _api_steer(session_id: SessionId, body: dict | None = None):
+    async def _api_steer(session_id: SessionId, request: Request, body: dict | None = None):
         """Queue a user message into a RUNNING turn (mid-turn steering).
 
         The next model call folds it in via ``SteeringMiddleware``, so the user
@@ -2062,11 +2105,21 @@ def register_chat_routes(app, ui: str) -> None:
         incognito (ADR 0069 D3b) is asserted by the console exactly as on a normal send,
         and so are the tab's per-message ``model`` / ``reasoning_effort`` /
         ``bypass_permissions`` — a turn started (now or at turn-end) for this message
-        runs under them, not under the configured defaults."""
+        runs under them, not under the configured defaults.
+
+        ``private: true`` (ADR 0131 P1h.3) asks for a PRIVATE steer: the text is recorded
+        only in the private partition and the turn carries an opaque reference
+        (``_private_steer_or_start``). It is honored only with ``private_steering.enabled``
+        on, a verified human-operator credential (the shared bearer or a paired ``device``)
+        and no attachments. Anything else is refused: a steer asked to be private is NEVER
+        downgraded to an ordinary, peer-readable one. Without ``private`` nothing changes."""
         from fastapi import HTTPException
 
         text = str((body or {}).get("text", "")).strip()
         msg_id = str((body or {}).get("id", "")).strip() or None
+        # Any truthy value asks for privacy — a malformed flag must refuse, not go public.
+        if (body or {}).get("private"):
+            return await _private_steer(session_id, request, body or {}, text, msg_id)
         # Optional attachments in the same shape a normal send takes; malformed input is
         # dropped here (not 500'd at the bridge, not folded as a bogus image block).
         images = _coerce_attachment_images((body or {}).get("images"))
