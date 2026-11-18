@@ -532,8 +532,7 @@ class AcpAdapter(Adapter):
         return await forget_session(self._spec(d))
 
     async def probe(self, d: Delegate) -> dict:
-        """Reachability check for the panel's Test button (also the periodic health
-        prober's per-delegate check).
+        """Handshake-only reachability check for periodic health probes.
 
         Does a REAL ACP `initialize` handshake (spawn the command, complete the
         protocol handshake, close) — and NOTHING more: no `session/new`, no
@@ -544,8 +543,13 @@ class AcpAdapter(Adapter):
         probe stays genuinely cheap + side-effect-free: it never opens a session every
         120s the way the old `_ensure_started` path did (#1300).
         """
-        import asyncio
-        import os
+        return await self._probe(d, deep=False)
+
+    async def deep_probe(self, d: Delegate) -> dict:
+        """Test the configured model with one prompt in an unpersisted session."""
+        return await self._probe(d, deep=True)
+
+    async def _probe(self, d: Delegate, *, deep: bool) -> dict:
         import shutil
 
         # Bare `claude` is on PATH but has no native ACP mode — the classic false-green.
@@ -577,26 +581,53 @@ class AcpAdapter(Adapter):
         if not os.path.isdir(wd):
             return {"ok": False, "error": f"workdir does not exist: {wd}"}
 
-        # Real handshake — `handshake()` spawns the agent and runs ACP `initialize`
-        # ONLY (no session/new, no session/load), so it's a cheap, genuinely
-        # side-effect-free liveness check (#1300).
+        # Both checks start with initialize. Only the explicit Test endpoint
+        # follows it with a model call; periodic probes stay cheap (#1300).
         from plugins.coding_agent.acp_client import AcpClient
 
-        client = AcpClient(command=d.command, args=d.args, cwd=wd, env=(d.env or None), name=d.name)
+        client = AcpClient(
+            command=d.command,
+            args=d.args,
+            cwd=wd,
+            env=(d.env or None),
+            name=d.name,
+            **({
+                "record_runs": False,
+                "env_remove": d.env_remove,
+                "env_passthrough": d.env_passthrough,
+            } if deep else {}),
+        )
+        phase = "handshake"
         try:
             await asyncio.wait_for(client.handshake(), timeout=45)
+            if deep:
+                phase = "prompt round-trip"
+                # Open session/new on the handshaken process. No session_id_path
+                # or pooled client means this test session is never persisted.
+                reply = await asyncio.wait_for(
+                    client.prompt("Reply with OK.", timeout=60, fresh_session=True), timeout=60
+                )
+                # A returned prompt can still be refused, interrupted, or empty.
+                failure = client.unfinished_reason() or client.empty_reply_failure(reply)
+                if failure is not None:
+                    return {"ok": False, "error": f"ACP prompt round-trip failed: {failure}"}
         except asyncio.TimeoutError:
+            if phase != "handshake":
+                return {"ok": False, "error": "ACP prompt round-trip timed out after 60 seconds."}
             # A binary that isn't an ACP server typically prints its usage/error to stderr
             # and then waits — indistinguishable from a slow handshake unless we show what
             # it said. The client keeps a tail of that stream for exactly this.
             tail = client.stderr_tail()
             hint = f"\nIts stderr:\n{tail}" if tail else ""
             return {"ok": False, "error": f"ACP handshake timed out — does {d.command!r} speak ACP?{hint}"}
-        except Exception as exc:  # noqa: BLE001 — spawn/handshake failure → tool-visible string
-            return {"ok": False, "error": f"ACP handshake failed: {type(exc).__name__}: {exc}"}
+        except Exception as exc:  # noqa: BLE001 — ACP failure → tool-visible string
+            return {"ok": False, "error": f"ACP {phase} failed: {type(exc).__name__}: {exc}"}
         finally:
             try:
                 await client.close()
             except Exception:  # noqa: BLE001 — best-effort teardown
                 pass
+        if deep:
+            model = f" (model {client._model_id})" if client._model_id else ""
+            return {"ok": True, "detail": f"ACP prompt round-trip passed{model} — {d.command}"}
         return {"ok": True, "detail": f"ACP handshake OK (protocol {client._protocol_version}) — {d.command}"}
