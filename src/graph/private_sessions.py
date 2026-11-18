@@ -19,7 +19,7 @@ compaction archive is kept whole in the private partition — never shared, neve
 new marker records this condition when older private tasks exist; a later stamped turn
 cannot clear it. Conversations without private turns keep their existing writer behavior.
 
-When ownership cannot be READ (:class:`OwnershipUnknown`) nothing is exposed and nothing
+With private steering enabled, when ownership cannot be READ (:class:`OwnershipUnknown`) nothing is exposed and nothing
 is thrown away: a per-turn writer (card, gist) skips this pass and the next one retries, a
 reader hides the session, the retirement harvest fails so its caller keeps the thread for
 a retry, and the compaction archive is kept whole in the private partition.
@@ -63,9 +63,10 @@ def _owned_private_turn(session_id: str) -> bool:
     Writers include synchronous middleware and timer threads, so use a short-lived
     SQLite connection to the runtime engine's database, not its async connection pool.
     Never cache a negative answer: another turn can change ownership at any time.
-    Raises :class:`OwnershipUnknown` when the answer cannot be read — a caller must not
-    take that for "private" (an ordinary conversation would lose its archive and harvest)
-    nor for "public".
+    Raises :class:`OwnershipUnknown` when private steering is enabled and the answer cannot
+    be read — a caller must not take that for "private" (an ordinary conversation would lose its archive and harvest)
+    nor for "public". With the flag off, unavailable ownership preserves ordinary memory
+    behavior; successfully read private ownership still protects existing private turns.
     """
     import sqlite3
     from contextlib import closing
@@ -90,8 +91,12 @@ def _owned_private_turn(session_id: str) -> bool:
                 (session_id, HUMAN_OPERATOR_OWNER),
             ).fetchone() is not None
     except OwnershipUnknown:
-        raise
+        if getattr(STATE.graph_config, "private_steering_enabled", False):
+            raise
+        return False
     except Exception as exc:
+        if not getattr(STATE.graph_config, "private_steering_enabled", False):
+            return False
         log.warning("[memory] private task ownership unavailable", exc_info=True)
         raise OwnershipUnknown(str(exc)) from exc
 

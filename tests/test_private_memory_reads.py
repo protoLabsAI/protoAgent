@@ -210,12 +210,27 @@ async def test_gist_is_withheld_from_an_earlier_public_card(box, monkeypatch):
     assert scheduled == [] and (box.memory / f"{SID}.json").read_text(encoding="utf-8") == card
 
 
-async def test_unmarked_session_writers_are_unchanged(box):
+@pytest.mark.parametrize("store_failure", [None, "missing", "sqlite", "unsupported"])
+async def test_unmarked_session_writers_are_unchanged(box, monkeypatch, store_failure):
+    from sqlalchemy.engine import URL
+
     await _steer(box.rig, "ordinary", "public")
-    state = {"session_id": SID, "messages": [HumanMessage(content="ordinary"), AIMessage(content="ok")]}
+    if store_failure:
+        box.rig.config.private_steering_enabled = False
+        engine = None if store_failure == "missing" else SimpleNamespace(url=URL.create(
+            "postgresql" if store_failure == "unsupported" else "sqlite+aiosqlite",
+            database=str(box.memory / "missing.db"),
+        ))
+        monkeypatch.setattr(STATE, "a2a_task_engine", engine)
+    scheduled = []
+    monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool, cancel=bool))
+    state = {"session_id": SID, "messages": [HumanMessage(content="ordinary"), AIMessage(content="ok")] * 2}
     compacted, harvested = await _run_writers(state)
     assert json.loads((box.memory / f"{SID}.json").read_text(encoding="utf-8"))["messages"][0]["content"] == "ordinary"
     assert not compacted["refused"] and harvested is not None
+    assert scheduled
+    archives = box.history.list_for_session(SID, kinds=["archive"])
+    assert len(archives) == 2 and all("ordinary" in entry.content for entry in archives)
     assert not (box.memory / ".private-sessions").exists()
 
 
