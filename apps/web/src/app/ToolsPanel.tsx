@@ -438,7 +438,7 @@ function ManagedProjectRow({ project: p, index, shadowed }: { project: ManagedPr
   const writable = !isNo(p.write);
   const errorId = `mp-err-${index}`;
   const setWrite = useMutation({
-    mutationFn: (write: boolean) => api.setProjectWrite(p.name, write),
+    mutationFn: (write: boolean) => api.setProjectWrite(p.name, write, p.path),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["managed-projects"] }),
   });
 

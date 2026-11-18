@@ -82,6 +82,16 @@ afterEach(async () => {
 });
 
 describe("Managed projects ▸ access switch", () => {
+  it("targets the selected folder when project names repeat", async () => {
+    setProjectWrite.mockResolvedValue({ ok: true });
+    await mount(registry({ projects: [
+      { ...PROJECTS[1], name: "duplicate", path: "/first" },
+      { ...PROJECTS[1], name: "duplicate", path: "/second" },
+    ] }));
+    await click(switches()[1]);
+    expect(setProjectWrite).toHaveBeenCalledWith("duplicate", false, "/second");
+  });
+
   it("shows a labelled switch reflecting write on every row except `fs: false`", async () => {
     await mount();
     expect(sw("locked").checked).toBe(false);
@@ -111,7 +121,7 @@ describe("Managed projects ▸ access switch", () => {
 
     await click(dialogButton("Allow writes")!);
     expect(setProjectWrite).toHaveBeenCalledTimes(1);
-    expect(setProjectWrite).toHaveBeenCalledWith("locked", true);
+    expect(setProjectWrite).toHaveBeenCalledWith("locked", true, "/p/locked");
     expect(dialogButton("Allow writes")).toBeUndefined();
   });
 
@@ -129,14 +139,14 @@ describe("Managed projects ▸ access switch", () => {
     await mount();
     await click(sw("open"));
     expect(dialogButton("Allow writes")).toBeUndefined();
-    expect(setProjectWrite).toHaveBeenCalledWith("open", false);
+    expect(setProjectWrite).toHaveBeenCalledWith("open", false, "/p/open");
   });
 
   it("a no-delete row sends write:false when turned off", async () => {
     setProjectWrite.mockResolvedValue({ ok: true, name: "keeper", path: "/p/keeper", write: false });
     await mount();
     await click(sw("keeper"));
-    expect(setProjectWrite).toHaveBeenCalledWith("keeper", false);
+    expect(setProjectWrite).toHaveBeenCalledWith("keeper", false, "/p/keeper");
   });
 
   it("is busy and says Saving… while the request runs, then refetches the registry", async () => {

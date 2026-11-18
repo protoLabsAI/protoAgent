@@ -133,9 +133,10 @@ export const workspaceApi = {
   // PATCH edits only the `write` key in place — on the registry entry and on an explicit
   // fence entry that already mirrors it — so, unlike the fs-projects POST, it does not
   // materialize the registry. Setting the mode it already has is a 200 that writes nothing.
-  setProjectWrite(name: string, write: boolean) {
+  // The optional declared path distinguishes rows sharing a display name.
+  setProjectWrite(name: string, write: boolean, path?: string) {
     return request<{ ok: boolean; name: string; path: string; write: boolean }>(
-      `/api/projects/${encodeURIComponent(name)}`,
+      `/api/projects/${encodeURIComponent(name)}${path !== undefined ? `?path=${encodeURIComponent(path)}` : ""}`,
       { method: "PATCH", body: { write } },
     );
   },
