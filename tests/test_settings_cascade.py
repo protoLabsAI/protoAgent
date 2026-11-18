@@ -603,6 +603,9 @@ def test_allow_run_defaults_true_on_interactive_tier(monkeypatch):
 
 def test_allow_run_defaults_false_on_headless_tier(monkeypatch):
     monkeypatch.setenv("PROTOAGENT_UI", "none")
+    # A shell inside a hub member carries the fleet-member marker (#5322), which turns
+    # the headless default back ON; this test pins the plain headless instance.
+    monkeypatch.delenv("PROTOAGENT_FLEET_MEMBER", raising=False)
     assert LangGraphConfig.from_dict({}).filesystem_allow_run is False
 
 
