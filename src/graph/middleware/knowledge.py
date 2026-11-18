@@ -466,8 +466,11 @@ class KnowledgeMiddleware(AgentMiddleware):
         pool, exists = load_digest_pool(
             memory_path or _memory_path(), max_sessions + 1, closed_days=opts.prior_sessions_closed_days
         )
-        # Stash the PRE-TRIM, UNFILTERED pool: _cached_digest re-filters and
+        # Stash the pre-trim pool before active-session exclusion: _cached_digest re-filters and
         # re-renders per call while the disk read stays TTL-cached.
+        from graph.private_sessions import hidden_from_caller
+
+        self._prior_sessions_human = hidden_from_caller() is None
         self._prior_sessions_pool = list(pool)
         self._prior_sessions_dir_exists = exists
         self._prior_sessions_max = max_sessions
@@ -507,12 +510,22 @@ class KnowledgeMiddleware(AgentMiddleware):
                 max_tokens=opts.prior_sessions_max_tokens,
                 closed_days=opts.prior_sessions_closed_days,
             )
+        from graph.private_sessions import hidden_from_caller
+
+        hidden = hidden_from_caller()
+        human = hidden is None
+        # A cached digest cannot cross caller visibility or retain a session that
+        # acquired a private turn since it was loaded. Reload to refill the limit.
+        visibility_changed = getattr(self, "_prior_sessions_human", human) != human or (
+            hidden is not None and any(hidden(e.session_id) for e in (self._prior_sessions_pool or []))
+        )
         now = time.monotonic()
         # A caps change (settings save) also invalidates: the pool is READ at
         # max_sessions + 1, so a raised ceiling can't be served by trimming what
         # is already in hand — it needs the wider disk read.
         if (
-            (self._prior_sessions_cache is None and self._prior_sessions_pool is None)
+            visibility_changed
+            or (self._prior_sessions_cache is None and self._prior_sessions_pool is None)
             or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S
             or (self._prior_sessions_pool is not None and self._prior_sessions_max != opts.prior_sessions_max)
         ):

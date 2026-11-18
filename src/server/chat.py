@@ -858,6 +858,11 @@ def _vision_human_message(
     # with its time (ADR 0127 D3). Providers never see ``additional_kwargs``.
     from graph.compaction_engine import sent_at_kwargs
 
+    # A privately-steered turn's input says so (empty for an ordinary turn): the compaction
+    # archive drops the whole private turn by it (graph.private_sessions.public_part).
+    from graph.private_sessions import private_kwargs
+
+    stamps = {**sent_at_kwargs(), **private_kwargs()}
     note = "" if incognito else _bridge_attachment_ids(images, session_id)
     if images and getattr(STATE.graph_config, "model_vision", False):
         blocks: list[dict] = [{"type": "text", "text": message}] if message else []
@@ -872,8 +877,8 @@ def _vision_human_message(
             blocks.append({"type": "text", "text": "[an attached image was omitted: too large to send to the model]"})
         if note:
             blocks.append({"type": "text", "text": note})
-        return HumanMessage(content=blocks, additional_kwargs=sent_at_kwargs())
-    return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message, additional_kwargs=sent_at_kwargs())
+        return HumanMessage(content=blocks, additional_kwargs=stamps)
+    return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message, additional_kwargs=stamps)
 
 
 # ── loopback human-operator delegation (ADR 0131 P1a.2; dormant) ─────────────────
@@ -1475,6 +1480,11 @@ async def _private_steer_or_start(
                     detail="This conversation is waiting on a decision a private steer can't answer. Answer the decision first.",
                 )
         if not ref:
+            # Establish whether older unlabelled private turns exist BEFORE this
+            # intake creates its own private task and scheduling records.
+            from graph.private_sessions import mark as _mark_private_session
+
+            await asyncio.to_thread(_mark_private_session, session_id)
             ref = await private_intake.record_private_steer(
                 store, session_id=session_id, text=text, msg_id=mid, context=context
             )
@@ -2644,6 +2654,12 @@ async def _chat_langgraph_stream_impl(
             return
         _private_ref = message
         message = _resolved
+        # From here this conversation's checkpoint holds private text: the shared derived
+        # memory writers (session card, gist, harvest) skip it from now on, and a compaction
+        # archive keeps only its ordinary turns.
+        from graph.private_sessions import mark as _mark_private_session
+
+        await asyncio.to_thread(_mark_private_session, session_id)
 
     # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
     # test-built, falling back to the default with a notice when it can't be. Everything

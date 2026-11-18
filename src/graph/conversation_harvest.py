@@ -8,9 +8,9 @@ import re
 from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.conversation_audience import (
+    PRIVATE_AUDIENCE,
     PUBLIC_AUDIENCE,
     SOURCE_VERSION,
-    public_messages,
     public_projection,
 )
 from graph.message_blocks import text_of
@@ -140,11 +140,30 @@ def archive_payload(
     Conversations in Work (ADR 0131 §5): private-partition messages never enter a shared
     archive. They are dropped before rendering, and the row records the public audience and
     projection version. A conversation without a private partition is unaffected — it has no
-    private messages to drop.
+    private messages to drop. A conversation WITH a private (human-operator) turn keeps its
+    public archive: the whole private turn — input, replies and tool results — is dropped
+    (:func:`graph.private_sessions.public_part`), the ordinary turns are archived as before.
+    When the private turns cannot be told apart — it cannot be read whether an unmarked
+    conversation has one, or it has one recorded before audience stamps and session markers,
+    which leaves no boundary to drop it by — the whole transcript is archived into the
+    PRIVATE partition instead (the row's audience says so): shared history reads never
+    return it, and the compaction that follows loses nothing.
 
     ``trailing_date`` defaults to today (see :func:`message_dates`)."""
+    from graph.private_sessions import OwnershipUnknown, UnlabelledPrivateTurns, public_part
+
     today = _today()
-    messages = public_messages(messages)
+    audience = PUBLIC_AUDIENCE
+    try:
+        messages = public_part(messages, session_id, thread_id)
+    except (OwnershipUnknown, UnlabelledPrivateTurns) as exc:
+        log.warning(
+            "[archive] session %s cannot be split into public and private turns (%s) — "
+            "archiving it into the private partition (kept, not shared)",
+            session_id,
+            type(exc).__name__,
+        )
+        messages, audience = list(messages or []), PRIVATE_AUDIENCE
     trailing = trailing_date if _DAY.match(trailing_date or "") else today
     dates = message_dates(messages, session_id, trailing_date=trailing)
     lines: list[str] = []
@@ -181,7 +200,7 @@ def archive_payload(
         "span_end": max(days) if days else None,
         "heading": f"Conversation archive ({prefix}{session_id}, {label})",
         "namespace": f"chat-archive:{session_id}",
-        "audience": PUBLIC_AUDIENCE,
+        "audience": audience,
         "source_version": SOURCE_VERSION,
     }
 
@@ -815,6 +834,18 @@ async def harvest_thread(
         import asyncio
 
         session_id = str(channel_values.get("session_id") or thread_id)
+        from graph.private_sessions import withheld
+
+        # ``raise_unknown``: the retire path deletes the thread after a None, so an
+        # unreadable ownership answer must FAIL the harvest (kept for the next sweep's
+        # retry, #2946) rather than pass for "has private turns".
+        if await asyncio.to_thread(withheld, session_id, raise_unknown=True) or await asyncio.to_thread(
+            withheld, thread_id, raise_unknown=True
+        ):
+            # Checkpoint messages carry no per-turn audience, so the projection below
+            # cannot drop a private turn's messages: skip the whole conversation.
+            log.info("[harvest] thread %s has private turns — skipping harvest", thread_id)
+            return None
         # Conversations in Work (ADR 0131 §5): a later ordinary turn can clear `incognito`
         # while older private messages remain in the checkpoint (#5403), so protection can't
         # ride the thread flag above — it follows the retained data. Read archives INCLUDING

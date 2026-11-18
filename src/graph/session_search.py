@@ -250,11 +250,14 @@ def search_session_summaries(
     surface: str | None = None,
     exclude_session_id: str = "",
     exclude_surfaces: tuple[str, ...] = (),
+    hidden=None,
 ) -> list[dict]:
     """Search persisted session content and return bounded attributed excerpts.
 
     The index is derived and synchronized before every query. Results are ordered by
     FTS5 relevance, then newest timestamp, and never include ``exclude_session_id``.
+    ``hidden`` (a ``session_id -> bool`` predicate, default none) drops sessions the caller
+    may not read before the limit applies, so they cannot crowd out readable ones.
     """
     base = memory_dir or memory_path()
     if not os.path.isdir(base):
@@ -281,7 +284,7 @@ def search_session_summaries(
         if exclude_session_id:
             clauses.append("files.session_id != ?")
             params.append(exclude_session_id)
-        params.append(clamped_limit)
+        params.append(clamped_limit if hidden is None else -1)
         rows = conn.execute(
             f"""
             SELECT files.session_id, files.timestamp, files.surface,
@@ -294,8 +297,16 @@ def search_session_summaries(
             LIMIT ?
             """,
             params,
-        ).fetchall()
-        return [dict(row) for row in rows]
+        )
+        if hidden is None:
+            return [dict(row) for row in rows.fetchall()]
+        visible: list[dict] = []
+        for row in rows:
+            if not hidden(row["session_id"]):
+                visible.append(dict(row))
+                if len(visible) >= clamped_limit:
+                    break
+        return visible
     except sqlite3.Error as exc:
         raise SessionSearchUnavailable(f"session search failed: {exc}") from exc
     finally:
@@ -310,6 +321,7 @@ def search_sessions(
     limit: int = 5,
     surface: str | None = None,
     exclude_session_id: str = "",
+    hidden=None,
 ) -> list[dict]:
     """Interleave independently ranked summary and history hits under one limit.
 
@@ -317,6 +329,8 @@ def search_sessions(
     relevance order and alternate sources so both can be discovered.
     """
     kwargs = dict(memory_dir=memory_dir, limit=limit, surface=surface, exclude_session_id=exclude_session_id)
+    if hidden is not None:  # a caller that may not read every session (see ``search_session_summaries``)
+        kwargs["hidden"] = hidden
     if history_store is None:
         return search_session_summaries(query, **kwargs)
     selected_surface = (surface or "").strip().lower()
@@ -336,6 +350,7 @@ def search_sessions(
                 for entry in entries
                 if entry.session_id != exclude_session_id
                 and (not selected_surface or entry.surface == selected_surface)
+                and not (hidden is not None and hidden(entry.session_id))
             ]
             if len(eligible) >= cap or len(entries) < fetch_limit:
                 break

@@ -46,7 +46,7 @@ import os
 from contextlib import closing
 from dataclasses import asdict
 
-from fastapi import Query
+from fastapi import Query, Request
 from fastapi.responses import JSONResponse
 
 from operator_api.knowledge_routes import _knowledge_row
@@ -401,6 +401,16 @@ def _memory_stats() -> dict:
     return {"memory": memory, "knowledge": knowledge, "history": history}
 
 
+async def _hidden_sessions(request: Request) -> frozenset[str]:
+    """Sessions whose derived memory this caller may not read: the ones with private
+    (human-operator) turns, for a caller that is not a human operator. Shares the chat
+    session reads' guard (``chat_routes._hidden_session``); empty for a human operator and
+    for a box with no private turns, so those responses are unchanged."""
+    from operator_api.chat_routes import _hidden_session_ids, _read_context
+
+    return await _hidden_session_ids(_read_context(request))
+
+
 def register_memory_routes(app) -> None:
     """Register the ``/api/memory/*`` memory-inspector routes."""
 
@@ -488,20 +498,25 @@ def register_memory_routes(app) -> None:
     # digest_entry) so the inspector shows exactly what the agent is told.
 
     @app.get("/api/memory/sessions")
-    async def _api_memory_sessions(session_id: str = ""):
+    async def _api_memory_sessions(request: Request, session_id: str = ""):
         # ``session_id`` = the chat the operator is looking at, so its own summary
         # is reported the way the agent sees it (never a "prior" session of itself).
         # Optional: an older console omits it and gets the whole-box view.
+        hidden = await _hidden_sessions(request)
         sessions, policy = await asyncio.to_thread(_list_sessions, session_id)
+        if hidden:
+            sessions = [s for s in sessions if s.get("session_id") not in hidden]
         return {"sessions": sessions, "digest_policy": policy}
 
     @app.get("/api/memory/sessions/{session_id}")
-    async def _api_memory_session_get(session_id: str):
+    async def _api_memory_session_get(session_id: str, request: Request):
         from graph.middleware.memory import digest_entry, format_session_summary
+        from operator_api.chat_routes import _guard_session_read
 
         paths = _session_paths(session_id)
         if paths is None:
             return JSONResponse({"detail": "invalid session_id"}, status_code=400)
+        await _guard_session_read(session_id, request)
         try:
             summary = await asyncio.to_thread(_read_summary, paths)
         except FileNotFoundError:
@@ -785,37 +800,46 @@ def register_memory_routes(app) -> None:
     # is off (``middleware.knowledge`` disabled), never 500s the console.
 
     @app.get("/api/memory/history/sessions")
-    async def _api_memory_history_sessions():
+    async def _api_memory_history_sessions(request: Request):
         store = STATE.history_store
         if store is None:
             return {"enabled": False, "sessions": []}
+        hidden = await _hidden_sessions(request)
         try:
             sessions = await asyncio.to_thread(store.sessions)
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[memory] history session list failed")
             return {"enabled": True, "sessions": []}
+        if hidden:
+            sessions = [s for s in sessions if s.get("session_id") not in hidden]
         return {"enabled": True, "sessions": sessions}
 
     @app.get("/api/memory/history/search")
-    async def _api_memory_history_search(q: str = "", limit: int = _HISTORY_SEARCH_LIMIT):
+    async def _api_memory_history_search(request: Request, q: str = "", limit: int = _HISTORY_SEARCH_LIMIT):
         store = STATE.history_store
         if store is None:
             return {"enabled": False, "query": q, "results": []}
+        hidden = await _hidden_sessions(request)
         try:
             results = await asyncio.to_thread(_history_search, store, q, limit)
         except Exception:  # noqa: BLE001 — a bad index must not 500 the console
             log.exception("[memory] history search failed")
             results = []
+        if hidden:
+            results = [r for r in results if r.get("session_id") not in hidden]
         return {"enabled": True, "query": q, "results": results}
 
     @app.get("/api/memory/history/entries/{entry_id}")
-    async def _api_memory_history_entry(entry_id: int):
+    async def _api_memory_history_entry(entry_id: int, request: Request):
+        from operator_api.chat_routes import _guard_session_read
+
         store = STATE.history_store
         if store is None:
             return {"enabled": False, "entry": None}
         entry = await asyncio.to_thread(store.get, entry_id)
         if entry is None:
             return JSONResponse({"detail": "no history entry with that id"}, status_code=404)
+        await _guard_session_read(str(entry.session_id or ""), request)
         return {"enabled": True, "entry": _history_entry_full(entry)}
 
     @app.delete("/api/memory/history/entries/{entry_id}")

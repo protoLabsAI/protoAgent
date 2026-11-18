@@ -128,7 +128,13 @@ class SteeringMiddleware(AgentMiddleware):
         from graph.compaction_engine import sent_at_kwargs
 
         # Stamped like a chat message, so a compaction's verbatim operator block can date it.
-        update: dict = {"messages": [HumanMessage(content=content, additional_kwargs=sent_at_kwargs())]}
+        # A fold into a private segment stays part of that private turn (never archived).
+        stamps = sent_at_kwargs()
+        if audience == steering.AUDIENCE_PRIVATE:
+            from graph.conversation_audience import AUDIENCE_KWARG, PRIVATE_AUDIENCE
+
+            stamps[AUDIENCE_KWARG] = PRIVATE_AUDIENCE
+        update: dict = {"messages": [HumanMessage(content=content, additional_kwargs=stamps)]}
         # A message that arrived FENCED (#2972 — e.g. held behind a parked interrupt by
         # the HITL hold) carries its fence: the rest of the pass that reads it runs under
         # the intersection of every folded fence and the pass's own (narrowest wins), so
