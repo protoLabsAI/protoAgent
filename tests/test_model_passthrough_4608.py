@@ -65,7 +65,9 @@ class _FakeChat(BaseChatModel):
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         self.captured["tools"] = tools
         self.captured["tool_choice"] = tool_choice
-        return self
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        return self.bind(tools=tools, **kwargs)
 
 
 def _reply(content="", *, tool_calls=None, input_tokens=11, output_tokens=7):
@@ -290,11 +292,28 @@ def test_plain_reply_has_content_and_usage(harness):
 # ── per-connection-type param adaptation (the two review blockers) ───────────────────────────────
 
 
-def test_temperature_forwarded_to_openai_compat(harness):
+@pytest.fixture(params=[False, True], ids=["unbound", "bound-tools"])
+def tool_params(request):
+    # Exercise the real RunnableBinding as well as direct ainvoke (#5501).
+    if not request.param:
+        return {}
+    return {
+        "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
+        "tool_choice": "required",
+    }
+
+
+def test_temperature_forwarded_to_openai_compat(harness, tool_params):
     r = _post(
         harness,
         "prod-gateway",
-        {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "temperature": 0, "max_tokens": 64},
+        {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0,
+            "max_tokens": 64,
+            **tool_params,
+        },
     )
     assert r.status_code == 200, r.text
     kw = harness.state["llm"].captured["kwargs"]
@@ -303,7 +322,7 @@ def test_temperature_forwarded_to_openai_compat(harness):
     assert kw.get("max_tokens") == 64
 
 
-def test_temperature_dropped_for_anthropic_oauth(harness):
+def test_temperature_dropped_for_anthropic_oauth(harness, tool_params):
     # The whole point of the endpoint: an eval setting temperature=0 against a Claude
     # subscription must NOT 502 — Claude rejects temperature, so we omit it.
     r = _post(
@@ -314,6 +333,7 @@ def test_temperature_dropped_for_anthropic_oauth(harness):
             "messages": [{"role": "user", "content": "hi"}],
             "temperature": 0,
             "max_tokens": 64,
+            **tool_params,
         },
     )
     assert r.status_code == 200, r.text
@@ -322,13 +342,19 @@ def test_temperature_dropped_for_anthropic_oauth(harness):
     assert kw.get("max_tokens") == 64  # but Anthropic takes max_tokens
 
 
-def test_temperature_and_max_tokens_dropped_for_openai_codex(harness):
+def test_temperature_and_max_tokens_dropped_for_openai_codex(harness, tool_params):
     # The Codex Responses backend rejects both max_output_tokens and non-default
     # temperature on its reasoning models, so neither is forwarded.
     r = _post(
         harness,
         "codex-sub",
-        {"model": "gpt-5-codex", "messages": [{"role": "user", "content": "hi"}], "temperature": 0.2, "max_tokens": 64},
+        {
+            "model": "gpt-5-codex",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.2,
+            "max_tokens": 64,
+            **tool_params,
+        },
     )
     assert r.status_code == 200, r.text
     assert harness.state["calls"] == [("native", "openai-codex", "gpt-5-codex")]
