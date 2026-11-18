@@ -181,13 +181,19 @@ async def test_read_failure_never_falls_back_to_private_live_state(rig, session,
     assert task_id not in response.text
 
 
-@pytest.mark.parametrize("session", [(True, True)], indirect=True)
-async def test_missing_store_cannot_authorize_checkpoint_export(rig, session, monkeypatch):
-    sid, _, _, _ = session
-    monkeypatch.setattr(STATE, "a2a_task_engine", None)
+@pytest.mark.parametrize("session", [(True, True), (True, False)], indirect=True)
+@pytest.mark.parametrize("missing", [True, False])
+async def test_export_distinguishes_missing_store_from_unreadable_store(rig, session, monkeypatch, missing):
+    sid, _, _, private = session
+    monkeypatch.setattr(STATE, "a2a_task_engine", None if missing else object())
     response = await rig.clients["fleet-service"].get(f"/api/chat/sessions/{sid}/export")
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Session read unavailable."}
+    assert response.status_code == (403 if private else 200 if missing else 503)
+    if private or not missing:
+        assert response.json() == {"detail": "Session read unavailable."}
+        assert SECRET not in response.text and REPLY not in response.text
+    else:
+        assert "ordinary" in response.json()["markdown"]
+        assert "ok" in response.json()["markdown"]
 
 
 @pytest.mark.parametrize("session", [(True, True)], indirect=True)

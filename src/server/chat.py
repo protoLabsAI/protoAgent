@@ -1492,6 +1492,9 @@ async def _private_steer_or_start(
         if joined:
             return {"ok": True, "id": mid, "started_turn": joined, "private": True,
                     "pending": steering.pending(session_id)}
+        if steering.starting(session_id, mid):
+            # A slow intake can outlive the bounded join. It still owns this start.
+            return {"ok": True, "id": mid, "private": True, "pending": steering.pending(session_id)}
     # Claim the start SYNCHRONOUSLY — no await since the ``starting`` check above — so a
     # concurrent duplicate observes ``starting`` and joins it, never racing the partition
     # read/write below to a second shell. Cleared on every refusal path so the mark never lingers.
@@ -1501,6 +1504,13 @@ async def _private_steer_or_start(
         ref, replied = await private_intake.find_private_steer(
             store, session_id=session_id, msg_id=mid, context=context
         )
+        if ref and not replied:
+            record = await store.get_record(private_intake.ref_task_id(ref), context)
+            previous = (record.private_payload or {}).get("started_task") if record else None
+            if previous:
+                steering.note_started(session_id, mid, previous)
+                return {"ok": True, "id": mid, "started_turn": previous, "private_ref": ref,
+                        "private": True, "pending": steering.pending(session_id)}
         # Restore a restarted conversation's original thread before the preflight,
         # just as record_private_steer does before storing a fresh input.
         if not replied and not thread_ids.resolver_metadata(session_id):
@@ -1574,6 +1584,11 @@ async def _private_steer_or_start(
     )
     if task_id:
         steering.note_started(session_id, mid, task_id)
+        # Keep transport retries idempotent after the process-local guard is lost.
+        def remember_start(records):
+            records[private_intake.ref_task_id(ref)]["started_task"] = task_id
+
+        await store.update_scheduling_payloads(session_id, context, remember_start)
         return {"ok": True, "id": mid, "started_turn": task_id, "private_ref": ref, "private": True,
                 "pending": steering.pending(session_id)}
     steering.clear_starting(session_id, [mid])

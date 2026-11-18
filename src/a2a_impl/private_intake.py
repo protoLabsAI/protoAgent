@@ -70,13 +70,12 @@ async def find_private_steer(task_store, *, session_id, msg_id, context, kind=PR
     a restart once the in-memory start guard is gone — reuses the one record instead of minting
     a second private shell (and so a steer whose turn already replied starts no second turn).
 
-    Scans this session's operator-visible timeline (``history_records``, newest-first). Raises
-    on an unreadable partition; the caller folds that into its fail-closed refusal."""
+    Reads the complete operator-only partition, independent of the UI history window.
+    Raises on an unreadable partition; the caller fails closed."""
     dedupe = str(msg_id or "")
     if not dedupe:
         return "", False
-    for record in await task_store.history_records(session_id, context):
-        payload = getattr(record, "private_payload", None)
+    for task_id, payload in (await task_store.scheduling_payloads(session_id, context)).items():
         if (
             isinstance(payload, dict)
             and payload.get("version") == PRIVATE_SCHEMA_VERSION
@@ -88,7 +87,7 @@ async def find_private_steer(task_store, *, session_id, msg_id, context, kind=PR
             metadata = payload.get("resolver_metadata")
             if payload.get("reply") is None and isinstance(metadata, dict):
                 thread_ids.remember_resolver_metadata(session_id, metadata)
-            return private_ref(record.task.id), payload.get("reply") is not None
+            return private_ref(task_id), payload.get("reply") is not None
     return "", False
 
 

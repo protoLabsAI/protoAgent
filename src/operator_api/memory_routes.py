@@ -411,6 +411,16 @@ async def _hidden_sessions(request: Request) -> frozenset[str]:
     return await _hidden_session_ids(_read_context(request))
 
 
+def _visible_sessions(rows: list[dict], hidden: frozenset[str], request: Request) -> list[dict]:
+    from a2a_impl.auth import is_human_operator
+    from graph.private_sessions import is_marked
+    from operator_api.chat_routes import _read_context
+
+    human = is_human_operator(_read_context(request).state.get("principal_kind"))
+    return [row for row in rows if row.get("session_id") not in hidden
+            and (human or not is_marked(str(row.get("session_id") or "")))]
+
+
 def register_memory_routes(app) -> None:
     """Register the ``/api/memory/*`` memory-inspector routes."""
 
@@ -504,8 +514,7 @@ def register_memory_routes(app) -> None:
         # Optional: an older console omits it and gets the whole-box view.
         hidden = await _hidden_sessions(request)
         sessions, policy = await asyncio.to_thread(_list_sessions, session_id)
-        if hidden:
-            sessions = [s for s in sessions if s.get("session_id") not in hidden]
+        sessions = _visible_sessions(sessions, hidden, request)
         return {"sessions": sessions, "digest_policy": policy}
 
     @app.get("/api/memory/sessions/{session_id}")
@@ -810,8 +819,7 @@ def register_memory_routes(app) -> None:
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[memory] history session list failed")
             return {"enabled": True, "sessions": []}
-        if hidden:
-            sessions = [s for s in sessions if s.get("session_id") not in hidden]
+        sessions = _visible_sessions(sessions, hidden, request)
         return {"enabled": True, "sessions": sessions}
 
     @app.get("/api/memory/history/search")
@@ -825,8 +833,7 @@ def register_memory_routes(app) -> None:
         except Exception:  # noqa: BLE001 — a bad index must not 500 the console
             log.exception("[memory] history search failed")
             results = []
-        if hidden:
-            results = [r for r in results if r.get("session_id") not in hidden]
+        results = _visible_sessions(results, hidden, request)
         return {"enabled": True, "query": q, "results": results}
 
     @app.get("/api/memory/history/entries/{entry_id}")
