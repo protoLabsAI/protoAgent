@@ -706,6 +706,9 @@ def load_digest_pool(
     open chats, each marked "closed", for that many days. A session that is still
     open takes precedence over its closed record — the open card wins, so the
     idle sweep harvesting a still-live tab never double-lists it. Never raises."""
+    from graph.private_sessions import hidden_from_caller
+
+    hidden = hidden_from_caller()
     if memory_dir is None:
         memory_dir = memory_path()
     if not os.path.isdir(memory_dir):
@@ -750,6 +753,8 @@ def load_digest_pool(
         if not public_card(summary):
             continue
         sid = str(summary.get("session_id") or "unknown")
+        if hidden is not None and hidden(sid):
+            continue
         if exclude_session_id and sid == exclude_session_id:
             continue
         if _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
@@ -920,6 +925,9 @@ def load_closed_pool(
     marked "closed" (ADR 0132 D3b). ``[]`` when the carry-over is off, nothing is closed,
     or the dir is absent. Mirrors :func:`load_digest_pool`'s per-surface exclusion and
     active-session skip. Never raises."""
+    from graph.private_sessions import hidden_from_caller
+
+    hidden = hidden_from_caller()
     if closed_days <= 0:
         return []
     cdir = _closed_dir(memory_dir)
@@ -956,6 +964,8 @@ def load_closed_pool(
         if not public_card(summary):
             continue
         sid = str(summary.get("session_id") or "unknown")
+        if hidden is not None and hidden(sid):
+            continue
         if exclude_session_id and sid == exclude_session_id:
             continue
         if _surface_for(sid) in _DIGEST_EXCLUDED_SURFACES:
@@ -985,6 +995,9 @@ def load_digest(
     unavailable/erroring index, or zero matches. ``off`` is the caller's job —
     this function is simply never called. Adds one index sync + one FTS query +
     ≤N small JSON reads per call under ``relevant``. Never raises."""
+    from graph.private_sessions import hidden_from_caller
+
+    hidden = hidden_from_caller()
     q = (query or "").strip()
     if policy == "relevant" and q:
         try:
@@ -997,6 +1010,7 @@ def load_digest(
                 limit=max_sessions,
                 exclude_session_id=exclude_session_id,
                 exclude_surfaces=_DIGEST_EXCLUDED_SURFACES,
+                hidden=hidden,
             )
         except Exception:  # noqa: BLE001 — no FTS5 / no terms / index error → newest
             log.debug("[memory] relevant digest unavailable — falling back to newest", exc_info=True)
@@ -1016,6 +1030,8 @@ def load_digest(
                 except (OSError, json.JSONDecodeError, ValueError):
                     break
                 if not public_card(summary):
+                    break
+                if hidden is not None and hidden(str(summary.get("session_id") or "")):
                     break
                 if _surface_for(str(summary.get("session_id") or "unknown")) in _DIGEST_EXCLUDED_SURFACES:
                     break

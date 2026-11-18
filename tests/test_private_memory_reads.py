@@ -309,3 +309,63 @@ async def test_agent_recall_tools_fail_closed_and_keep_readable_hits(leaked, mon
         assert "elsewhere" not in await tools["recall_session"].ainvoke({"session_id": OTHER})
     with verified_principal_scope("shared-operator-bearer"):
         assert SECRET in await tools["recall_session"].ainvoke({"session_id": SID})
+
+
+@pytest.mark.parametrize("leaked", [(True, True)], indirect=True)
+@pytest.mark.parametrize("policy", ["newest", "relevant", "fallback", "closed"])
+async def test_prompt_digest_respects_legacy_private_ownership(leaked, monkeypatch, policy):
+    from datetime import datetime, timezone
+
+    from graph.middleware.memory import load_digest
+    from graph.middleware.request_context import verified_principal_scope
+
+    # Pre-deploy cards have neither provenance nor a marker; durable ownership is authoritative.
+    for path in (leaked.memory / ".private-sessions").iterdir():
+        path.unlink()
+    for sid in (OTHER, SID):
+        path = leaked.memory / f"{sid}.json"
+        card = json.loads(path.read_text(encoding="utf-8"))
+        card["gist"] = "shared topic"
+        if policy == "closed":
+            card["closed_at"] = datetime.now(timezone.utc).isoformat()
+            path.unlink()
+            path = leaked.memory / "closed" / path.name
+            path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(card), encoding="utf-8")
+    from graph.middleware.knowledge import KnowledgeMiddleware
+    from graph.projection import ProjectionOptions
+
+    middleware = KnowledgeMiddleware(None, options=ProjectionOptions(prior_sessions_max=1))
+    with verified_principal_scope("shared-operator-bearer"):
+        middleware.load_memory()  # prime the shared cache with human-visible content
+    kwargs = dict(memory_dir=str(leaked.memory), max_sessions=1, closed_days=14)
+    selection = "relevant" if policy in ("relevant", "fallback") else "newest"
+    query = "unmatched" if policy == "fallback" else "shared topic"
+    for principal in ("fleet-service", "agent-device", "shared-operator-bearer", "device"):
+        with verified_principal_scope(principal):
+            result = load_digest(selection, query=query, **kwargs)
+            context = middleware.compose_context({"messages": []}, record=False)["context"]
+        if principal in ("fleet-service", "agent-device"):
+            assert SECRET not in result.block and SECRET not in context
+            assert [entry.session_id for entry in result.entries] == [OTHER]
+        else:
+            assert SECRET in result.block and SECRET in context
+    monkeypatch.setattr(STATE, "a2a_task_engine", None)
+    with verified_principal_scope("agent-device"):
+        assert load_digest(selection, query=query, **kwargs).entries == []
+        assert SECRET not in middleware.compose_context({"messages": []}, record=False)["context"]
+
+
+@pytest.mark.parametrize("leaked", [(True, False)], indirect=True)
+async def test_prompt_cache_rechecks_sessions_after_private_turn(leaked):
+    from graph.middleware.knowledge import KnowledgeMiddleware
+    from graph.middleware.request_context import verified_principal_scope
+
+    middleware = KnowledgeMiddleware(None)
+    with verified_principal_scope("agent-device"):
+        before = middleware.compose_context({"messages": []}, record=False)["context"]
+        assert SID in before and OTHER in before
+    await _steer(leaked.rig, SECRET, "private", private=True)
+    with verified_principal_scope("agent-device"):
+        after = middleware.compose_context({"messages": []}, record=False)["context"]
+        assert SID not in after and OTHER in after
