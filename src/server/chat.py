@@ -1515,14 +1515,13 @@ async def recover_durable_steers(session_id: str, *, store=None, context=None) -
 # claims a runner, then sends the queued private ones through the private path. Flag off: no
 # store is built and nothing is read. The principal kind the recovery reads the partition
 # under: the instance's own operator credential (what ``auth.is_human_operator`` accepts).
-_RECOVERY_PRINCIPAL_KIND = "shared-operator-bearer"
 # reference → session of each private turn this process's recovery dispatched: its ``done``
 # fold releases the durable runner (``_settle_recovered_private_turn``).
 _RECOVERED_PRIVATE_TURNS: dict[str, str] = {}
 
 
 async def _settle_recovered_private_turn(ref: str, store, context) -> None:
-    """Release the durable runner when a recovery-dispatched private turn finishes.
+    """Release the durable runner and dispatch its next queued private turn.
 
     Only a ``done`` reaches this (``_fold_private_reply_frames``). A turn that parks, fails or
     is cut down keeps its segment reserved, so the next restart reports it suspended instead
@@ -1536,9 +1535,12 @@ async def _settle_recovered_private_turn(ref: str, store, context) -> None:
         seg = await _ss.read_segment(store, session_id, context)
         running = await _ss.pending_turns(store, session_id, context, states=(_ss.STATE_RUNNING,))
         if any(t["seq"] == seg.get("seq") and t.get("input_ref") == ref for t in running):
-            await _ss.complete_segment(store, session_id, generation=int(seg["generation"]), context=context)
+            if await _ss.complete_segment(store, session_id, generation=int(seg["generation"]), context=context):
+                # SendMessage returns immediately; the next execution waits for this
+                # turn's stream to close through the existing session serialization.
+                await _dispatch_recovered_private_turn(session_id, store, context)
     except Exception:  # noqa: BLE001 — never breaks the turn it describes
-        log.warning("[steer] could not release the recovered private segment for %s", session_id, exc_info=True)
+        log.warning("[steer] could not advance the recovered private segment for %s", session_id, exc_info=True)
 
 
 async def _dispatch_recovered_private_turn(session_id: str, store, context) -> str | None:
@@ -1623,12 +1625,13 @@ async def recover_private_pending_turns() -> dict | None:
     from a2a.server.context import ServerCallContext
 
     from a2a_impl import segment_schedule as _ss
+    from graph.fleet.delegation import DELEGATED_PRINCIPAL_KIND
 
     try:
         store = _private_partition_store()
         if store is None:
             return None
-        context = ServerCallContext(state={"principal_kind": _RECOVERY_PRINCIPAL_KIND})
+        context = ServerCallContext(state={"principal_kind": DELEGATED_PRINCIPAL_KIND})
         sessions = await _ss.sessions_with_pending_turns(store, context)
     except Exception:  # noqa: BLE001 — an unreadable partition must not stop the server starting
         log.warning("[steer] private pending-turn recovery could not read the partition — skipped", exc_info=True)

@@ -157,6 +157,19 @@ def _reset_session_state():
 
 
 @pytest.fixture(autouse=True)
+def _reset_recovered_private_turns():
+    """Recovery dispatch ownership must not leak between tests in the same worker."""
+    def _reset():
+        mod = sys.modules.get("server.chat")
+        if mod is not None:
+            mod._RECOVERED_PRIVATE_TURNS.clear()
+
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _reset_resolver_metadata():
     """Reset the per-session resolver-input cache (``graph.thread_ids._RESOLVER_METADATA``,
     ADR 0131 P1b.2) around every test.

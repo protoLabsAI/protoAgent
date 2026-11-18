@@ -45,23 +45,27 @@ async def _crashed(session, head_state="queued", *, replied=False):
 
 
 @pytest.mark.parametrize("replied", [False, True])
-async def test_a_queued_private_turn_restarts_through_the_private_path(rig, replied):  # noqa: F811
+async def test_restarted_private_turns_drain_followers_through_the_private_path(rig, replied):  # noqa: F811
     store, ref = await _crashed("chat-q", replied=replied)
     out = await chat_mod.recover_private_pending_turns()
     assert [t["dedupe"] for t in out["recovered"]["chat-q"]["queued"]] == ["m1", "m2"]
     await out["dispatch"]
     # The head that already holds a reply ran before the crash: closed, never run a second time.
-    ran = 2 if replied else 1
-    task_id = next(row.id for row in await rig.rows() if "private-input:" in str(row.history))
-    task = await poll_terminal(rig.op, task_id)
-    assert task["status"]["state"] == "TASK_STATE_COMPLETED" and rig.seen == [(f"{SECRET} {ran}", False)]
-    assert [t["dedupe"] for t in await ss.pending_turns(store, "chat-q", OP)] == ([] if replied else ["m2"])
+    for n in ([2] if replied else [1, 2]):
+        task_id = next(row.id for row in await rig.rows()
+                       if "private-input:" in str(row.history) and f'"messageId": "m{n}"' in row.history)
+        task = await poll_terminal(rig.op, task_id)
+        assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+        # Each completion dispatches its follower before publishing the done frame.
+        (part,) = task["history"][0]["parts"]
+        assert pi.is_private_ref(part["text"]) and (n != 1 or part["text"] == ref)
+        await _assert_private_only(rig, "chat-q", task_id)
+    assert rig.seen == [(f"{SECRET} {n}", False) for n in ([2] if replied else [1, 2])]
+    assert await ss.pending_turns(store, "chat-q", OP) == []
     assert (await ss.read_segment(store, "chat-q", OP))["state"] == ss.SEGMENT_IDLE  # the runner is released
     # The loopback carried only the opaque reference; the reply was folded back privately.
-    (part,) = task["history"][0]["parts"]
-    assert pi.is_private_ref(part["text"]) and (replied or part["text"] == ref)
     assert any(f'"reply": "{REPLY}"' in (row.private_payload or "") for row in await rig.rows())
-    await _assert_private_only(rig, "chat-q", task_id)
+    assert chat_mod._RECOVERED_PRIVATE_TURNS == {}
 
 
 @pytest.mark.parametrize("head_state", ["running", "parked"])
@@ -80,6 +84,32 @@ async def test_an_interrupted_or_parked_private_turn_stays_reserved(rig, head_st
         gen = view["segment"]["generation"]
         assert await ss.resume_segment(store, "chat-r", generation=gen, interrupt_id="wrong", context=OP) is None
         assert await ss.resume_segment(store, "chat-r", generation=gen, interrupt_id="i1", context=OP) == gen + 1
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+async def test_follower_delivery_failure_preserves_work_without_failing_completed_head(rig, monkeypatch, ambiguous):  # noqa: F811
+    store, _ref = await _crashed("chat-follow")
+    start = chat_mod._start_steer_turn
+
+    async def _send(session_id, text, msg_id, **kwargs):
+        if msg_id == "m2":
+            if ambiguous:
+                raise RuntimeError("delivery outcome unknown")
+            return ""
+        return await start(session_id, text, msg_id, **kwargs)
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", _send)
+    out = await chat_mod.recover_private_pending_turns()
+    await out["dispatch"]
+    task_id = next(row.id for row in await rig.rows() if "private-input:" in str(row.history))
+    assert (await poll_terminal(rig.op, task_id))["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert rig.seen == [(f"{SECRET} 1", False)]
+    (follower,) = await ss.pending_turns(store, "chat-follow", OP)
+    assert follower["dedupe"] == "m2"
+    assert follower["state"] == (ss.STATE_RUNNING if ambiguous else ss.STATE_QUEUED)
+    assert (await ss.read_segment(store, "chat-follow", OP))["state"] == (
+        ss.STATE_RUNNING if ambiguous else ss.SEGMENT_IDLE
+    )
 
 
 async def test_flag_off_startup_never_touches_the_partition(rig, monkeypatch):  # noqa: F811
