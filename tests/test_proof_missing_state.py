@@ -125,8 +125,8 @@ async def _assert_never_public_and_never_peer_readable(world, session, ref):
 
 # ── case 1: a parked private segment whose checkpoint is deleted ─────────────────
 
-@_proof_failure("a private resume whose parked checkpoint is gone runs the private input as a fresh "
-                "message on the now-empty thread")
+# Fails closed since #5504: the live route's durable segment stays parked on the ORIGINAL interrupt,
+# and a resume that no longer carries that interrupt is refused at the claim, never run fresh.
 async def test_parked_private_segment_with_a_deleted_checkpoint_fails_closed(world):
     session, thread = "chat-gone", "a2a:chat-gone"
     first = (await world.steer("shared-bearer", session, f"{SECRET} park", "m1", private=True)).json()
@@ -201,12 +201,10 @@ RESTARTS = {  # id: (resolver at acceptance, resolver after restart, checkpoint 
     "unregistered-resolver-resume": (True, None, False, True),
     "raising-resolver-resume": (True, _raising, False, True),
 }
-FAILURES = {
+FAILURES = {  # the two parked-resume cases fail closed since #5504 (the claim refuses a non-matching resume)
     "missing-checkpoint": "restart recovery dispatches a private pending turn whose bound checkpoint is gone onto a fresh thread",
     "unregistered-resolver-recovery": "with the resolver unregistered, restart recovery runs the private turn on the default a2a:<session> thread",
     "raising-resolver-recovery": "with a raising resolver, restart recovery runs the private turn on the default a2a:<session> thread",
-    "unregistered-resolver-resume": "with the resolver unregistered, a private resume runs on the default a2a:<session> thread, not the parked one",
-    "raising-resolver-resume": "with a raising resolver, a private resume runs on the default a2a:<session> thread, not the parked one",
 }
 
 
