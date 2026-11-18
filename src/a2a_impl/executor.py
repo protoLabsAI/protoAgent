@@ -858,7 +858,8 @@ class ProtoAgentExecutor(AgentExecutor):
         # protoAgent's ``_chat_langgraph_stream``; ``request_metadata`` is the
         # merged A2A request metadata, passed through so the backend's thread_id
         # resolver (#571) can scope memory off it.
-        # Dormant proof seam: no server route installs this factory.
+        # Dormant proof seam: no server route installs this factory. The live private-steer
+        # runner binds the same private segment tool fence itself (server.chat).
         self._requester_projection_factory = requester_projection_factory
         self._stream_factory = stream_fn_factory
         # ``structured_finalizer(skill_id, final_text)`` → an emit DataPart dict

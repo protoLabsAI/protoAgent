@@ -36,7 +36,7 @@ import time
 from typing import Any
 
 from graph import upstream_errors as _upstream_errors
-from graph.fence_scope import fence_scope
+from graph.fence_scope import fence_scope, private_segment_scope
 from graph.image_limits import fit_data_uri
 from graph.middleware.redaction import redact as _redact
 from graph.middleware.wait_yield import schedule_turn_reply, wait_turn_reply
@@ -950,6 +950,22 @@ def _private_partition_store():
     from a2a_impl.stores import ReasoningCoalescingTaskStore, resolve_task_owner
 
     return ReasoningCoalescingTaskStore(engine, owner_resolver=resolve_task_owner)
+
+
+@contextlib.asynccontextmanager
+async def _private_segment_tool_scope(private: bool):
+    """Run a privately-steered turn's graph under the private segment tool fence.
+
+    The live seam for ``graph.tool_access.private_segment_fence``: every model call and tool
+    call of the turn (they run in tasks that copy this context) sees a private segment, so
+    ``SubagentFenceMiddleware`` permits only local read tools. An ordinary turn binds nothing
+    and keeps exactly its own fence. Not gated on any flag — a resolved private reference IS
+    the private segment."""
+    if not private:
+        yield
+        return
+    with private_segment_scope(lambda: True):
+        yield
 
 
 async def _resolve_private_turn_input(message: str, session_id: str, request_metadata: dict | None):
@@ -2254,6 +2270,9 @@ async def _chat_langgraph_stream_impl(
         # An INHERITED pick (the goal's, not this request's) falls back to the default if
         # its provider rejects it mid-turn, instead of failing every re-drive (#3957).
         inherited_pick_scope(_eff_model if _eff_model != _req_model else ""),
+        # A privately-steered turn (fresh or a guarded resume) may only call local read
+        # tools: its private values must not leave through a tool call.
+        _private_segment_tool_scope(bool(_private_ref)),
     ):
         # Set only once the NATIVE turn is about to run: recovery in the handler below
         # retries that thread, and must not fire for a failure

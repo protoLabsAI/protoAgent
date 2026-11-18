@@ -210,9 +210,12 @@ async def _scenario(tmp_path, monkeypatch, kind, exit_kind):
         assert calls == ["request"]
         # A future effect guard may suppress a forbidden request. Do not require the leak.
         assert len(requests) <= int(exit_kind.startswith("outbound"))
-        if exit_kind == "outbound_selected":
-            assert all(json.loads(body) == {"value": RESULT} for body in requests)
-        assert requests == []
+        # DELIBERATE refusal assertion (private segment tool fence): `outbound` is not an
+        # allow-listed local read, so even the SELECTED value is refused at the tool boundary
+        # (this replaces the old "RESULT is posted once" expectation). The selected result
+        # still reaches the requester exactly once — through the sealed delivery, asserted
+        # per surface above — never through a tool call.
+        assert [json.loads(body) for body in requests] == []
         return delivery, private_progress, requests
     finally:
         for task in tasks:
