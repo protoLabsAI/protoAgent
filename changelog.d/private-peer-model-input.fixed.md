@@ -1,0 +1,1 @@
+- **Private steering stays out of later shared model inputs.** Shared turns omit earlier private inputs, replies and tool exchanges without rewriting the checkpoint; private turns retain their full history. Unreadable privacy ownership fails closed.

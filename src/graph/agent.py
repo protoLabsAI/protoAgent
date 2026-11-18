@@ -426,6 +426,12 @@ def _build_middleware(
 
     middleware.append(SteeringMiddleware())
 
+    # Outermost model wrapper: overrides, trajectory, cache, prompt and wire
+    # capture must all receive the public view on shared-audience turns.
+    from graph.middleware.private_projection import PrivateProjectionMiddleware
+
+    middleware.append(PrivateProjectionMiddleware())
+
     # Outside messages (ADR 0003 amendment) — a note another session left with
     # `protoagent dm` is folded into the operator's live chat at the next model
     # call, as information only. No-op (no SQLite touch) when nothing is pending.
@@ -434,7 +440,7 @@ def _build_middleware(
 
         middleware.append(OutsideMessageMiddleware(inbox_store))
 
-    # Per-turn model override (per chat tab). Outermost wrap_model_call so the
+    # Per-turn model override (per chat tab). Outside PromptCache so the
     # PromptCache below sees the ACTUAL model when deciding caching. No-op unless
     # the turn carries state["model"].
     from graph.middleware.model_override import ModelOverrideMiddleware
