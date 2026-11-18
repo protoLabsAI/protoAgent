@@ -2,6 +2,7 @@
 private turns, and the memory inspector reads hide it from callers that are not human operators."""
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -345,16 +346,21 @@ async def test_prompt_digest_respects_legacy_private_ownership(leaked, monkeypat
     # Pre-deploy cards have neither provenance nor a marker; durable ownership is authoritative.
     for path in (leaked.memory / ".private-sessions").iterdir():
         path.unlink()
-    for sid in (OTHER, SID):
+    now = datetime.now(timezone.utc)
+    for index, sid in enumerate((OTHER, SID)):
         path = leaked.memory / f"{sid}.json"
         card = json.loads(path.read_text(encoding="utf-8"))
         card["gist"] = "shared topic"
         if policy == "closed":
-            card["closed_at"] = datetime.now(timezone.utc).isoformat()
+            card["closed_at"] = now.isoformat()
             path.unlink()
             path = leaked.memory / "closed" / path.name
             path.parent.mkdir(exist_ok=True)
         path.write_text(json.dumps(card), encoding="utf-8")
+        # Newest selection uses mtime, not write order. Windows can give both
+        # writes the same timestamp, in which case the filename breaks the tie.
+        stamp = now.timestamp() - (1 - index) * 60
+        os.utime(path, (stamp, stamp))
     from graph.middleware.knowledge import KnowledgeMiddleware
     from graph.projection import ProjectionOptions
 
@@ -363,7 +369,8 @@ async def test_prompt_digest_respects_legacy_private_ownership(leaked, monkeypat
         middleware.load_memory()  # prime the shared cache with human-visible content
     kwargs = dict(memory_dir=str(leaked.memory), max_sessions=1, closed_days=14)
     selection = "relevant" if policy in ("relevant", "fallback") else "newest"
-    query = "unmatched" if policy == "fallback" else "shared topic"
+    # Gists are not indexed: use message text to exercise a real FTS hit.
+    query = SECRET if policy == "relevant" else "unmatched"
     for principal in ("fleet-service", "agent-device", "shared-operator-bearer", "device"):
         with verified_principal_scope(principal):
             result = load_digest(selection, query=query, **kwargs)
