@@ -139,8 +139,8 @@ async def test_pre_marker_private_turn_withholds_shared_writers(box, monkeypatch
     assert all(e.audience == "human-operator" and "ordinary" in e.content and "ok" in e.content for e in kept)
 
 
-@pytest.mark.parametrize("missing_engine", [True, False])
-async def test_unknown_task_ownership_shares_nothing_and_loses_nothing(box, monkeypatch, missing_engine):
+@pytest.mark.parametrize("backend", ["postgresql", "sqlite+aiosqlite"])
+async def test_unknown_task_ownership_shares_nothing_and_loses_nothing(box, monkeypatch, backend):
     """An unreadable ownership answer is neither "private" nor "public": nothing reaches a
     shared read, the archive is kept in the private partition, and the harvest fails so the
     retire sweep keeps the thread instead of deleting it unharvested."""
@@ -148,7 +148,7 @@ async def test_unknown_task_ownership_shares_nothing_and_loses_nothing(box, monk
 
     from server import maintenance_loops
 
-    engine = None if missing_engine else SimpleNamespace(url=URL.create("sqlite+aiosqlite", database=str(box.memory / "missing.db")))
+    engine = SimpleNamespace(url=URL.create(backend, database=str(box.memory / "missing.db")))
     monkeypatch.setattr(STATE, "a2a_task_engine", engine)
     state = {"session_id": SID, "messages": [HumanMessage(content=SECRET), AIMessage(content=REPLY)]}
     compacted, harvested = await _run_writers(state)
@@ -301,12 +301,38 @@ async def test_history_entry_read(leaked, kind):
         assert response.status_code == 403 and response.json() == {"detail": "Session read unavailable."}
 
 
-@pytest.mark.parametrize("leaked", [(True, True)], indirect=True)
-async def test_missing_task_store_fails_closed(leaked, monkeypatch):
+@pytest.mark.parametrize("leaked", [(True, True), (True, False)], indirect=True)
+async def test_missing_task_store_preserves_public_reads_and_private_markers(leaked, monkeypatch):
     monkeypatch.setattr(STATE, "a2a_task_engine", None)
-    for path in ("/api/memory/sessions", f"/api/memory/sessions/{SID}", f"/api/memory/history/search?q={SECRET}"):
+    client = leaked.rig.clients["fleet-service"]
+    detail = await client.get(f"/api/memory/sessions/{SID}")
+    assert detail.status_code == (403 if leaked.private else 200)
+    if leaked.private:
+        assert detail.json() == {"detail": "Session read unavailable."}
+        assert SECRET not in detail.text
+    else:
+        assert leaked.text in detail.text
+    for path, field in (("sessions", "sessions"), ("history/sessions", "sessions"),
+                        ("history/search?q=user", "results")):
+        response = await client.get(f"/api/memory/{path}")
+        assert response.status_code == 200
+        ids = {row["session_id"] for row in response.json()[field]}
+        assert ids == ({OTHER} if leaked.private else {SID, OTHER})
+        assert SECRET not in response.text
+        operator = await leaked.rig.op.get(f"/api/memory/{path}")
+        assert operator.status_code == 200
+        assert {row["session_id"] for row in operator.json()[field]} == {SID, OTHER}
+    operator = await leaked.rig.op.get(f"/api/memory/sessions/{SID}")
+    assert operator.status_code == 200 and leaked.text in operator.text
+
+
+@pytest.mark.parametrize("leaked", [(True, False)], indirect=True)
+async def test_unreadable_task_store_fails_closed(leaked, monkeypatch):
+    monkeypatch.setattr(STATE, "a2a_task_engine", object())
+    for path in ("/api/memory/sessions", f"/api/memory/sessions/{SID}",
+                 "/api/memory/history/search?q=user", "/api/memory/history/sessions"):
         response = await leaked.rig.clients["fleet-service"].get(path)
-        assert response.status_code == 503 and SECRET not in response.text
+        assert response.status_code == 503 and leaked.text not in response.text
         assert (await leaked.rig.op.get(path)).status_code == 200
 
 
@@ -360,7 +386,7 @@ async def test_agent_recall_tools_fail_closed_and_keep_readable_hits(leaked, mon
         assert OTHER in found and SID not in found and SECRET not in found
         with private_segment_scope(lambda: True):  # a private turn is the human operator's own
             assert SECRET in await tools["recall_session"].ainvoke({"session_id": SID})
-        monkeypatch.setattr(STATE, "a2a_task_engine", None)  # ownership unknown: nothing is readable
+        monkeypatch.setattr(STATE, "a2a_task_engine", object())  # unreadable ownership: nothing is readable
         assert await tools["session_search"].ainvoke({"query": "shared needle"}) == "No matching prior sessions."
         assert "elsewhere" not in await tools["recall_session"].ainvoke({"session_id": OTHER})
     with verified_principal_scope("shared-operator-bearer"):
@@ -412,7 +438,7 @@ async def test_prompt_digest_respects_legacy_private_ownership(leaked, monkeypat
             assert [entry.session_id for entry in result.entries] == [OTHER]
         else:
             assert SECRET in result.block and SECRET in context
-    monkeypatch.setattr(STATE, "a2a_task_engine", None)
+    monkeypatch.setattr(STATE, "a2a_task_engine", object())
     with verified_principal_scope("agent-device"):
         assert load_digest(selection, query=query, **kwargs).entries == []
         assert SECRET not in middleware.compose_context({"messages": []}, record=False)["context"]
