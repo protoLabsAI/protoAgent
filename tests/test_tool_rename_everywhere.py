@@ -162,8 +162,13 @@ async def test_execute_code_factory_bridges_memory_search_for_a_legacy_list():
     register(reg)
     ec = reg.late_tool_factories[0]([read_file, memory_search], LangGraphConfig())
     assert "tools.memory_search(query" in ec.description
-    out = await ec.ainvoke({"code": "print(tools.memory_search(query='voice'))"})
-    assert out.strip() == "memory: voice"
+    # execute_code declares an InjectedToolCallId, so it must be invoked via a full
+    # ToolCall (not a plain {"code": ...} dict); the body is on the ToolMessage.
+    msg = await ec.ainvoke(
+        {"name": "execute_code", "args": {"code": "print(tools.memory_search(query='voice'))"},
+         "id": "rn-call", "type": "tool_call"}
+    )
+    assert msg.content.strip() == "memory: voice"
 
 
 # ── operator MCP allowlist (config parse + the sidecar's env list) ────────────

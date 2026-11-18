@@ -77,6 +77,7 @@ class AuditLogger:
         result_summary: str,
         duration_ms: int,
         success: bool,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         trace_id = None
         trust_tier = None
@@ -101,6 +102,12 @@ class AuditLogger:
             entry["trace_id"] = trace_id
         if trust_tier:
             entry["trust_tier"] = trust_tier
+        # Caller-supplied keys merge into the row verbatim (not through
+        # _sanitize_args, which clips at 500 chars) — execute_code's ptc:/ptc:script
+        # rows use this to carry parent_call_id, script_sha256 and the full script.
+        # Absent/None leaves the row shape exactly as it was for every other caller.
+        if extra:
+            entry.update(extra)
 
         path = self._ensure_path()
         if path is not None:

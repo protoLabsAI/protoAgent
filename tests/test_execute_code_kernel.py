@@ -36,6 +36,13 @@ async def _no_leaked_kernels():
         assert not _pid_alive(pid), f"kernel pid {pid} survived teardown"
 
 
+async def _invoke_ec(ec, code, **args):
+    """Invoke a built execute_code tool via a full ToolCall (required now that the
+    tool declares an InjectedToolCallId) and return the text body."""
+    msg = await ec.ainvoke({"name": "execute_code", "args": {"code": code, **args}, "id": "k-call", "type": "tool_call"})
+    return msg.content
+
+
 async def _run(code, session_id, *, tool_map=None, timeout=30.0, truncate=6000, fresh=False):
     return await kernel.run_in_kernel(
         code,
@@ -75,12 +82,12 @@ async def test_two_sessions_do_not_share_variables():
 @pytest.mark.asyncio
 async def test_empty_session_id_takes_one_shot_path():
     ec = build_execute_code_tool([], session_state=True)
-    await ec.ainvoke({"code": "z = 7", "state": {"session_id": ""}})
+    await _invoke_ec(ec, "z = 7", state={"session_id": ""})
     # No kernel is keyed by "" — the empty session degrades to the one-shot path…
     assert kernel._pool.kernels == {}
     # …so the variable does NOT persist to the next call.
-    out = await ec.ainvoke(
-        {"code": "try:\n    print(z)\nexcept NameError:\n    print('no-persist')", "state": {"session_id": ""}}
+    out = await _invoke_ec(
+        ec, "try:\n    print(z)\nexcept NameError:\n    print('no-persist')", state={"session_id": ""}
     )
     assert "no-persist" in out
     assert kernel._pool.kernels == {}

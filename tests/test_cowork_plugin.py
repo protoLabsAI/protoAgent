@@ -460,9 +460,12 @@ _WATCH_ARGS_THE_SKILLS_NAME = frozenset(
 
 
 def _in_tree_tool_names() -> set[str]:
-    """Every ``@tool``-decorated tool name in the tree — ``@tool`` and
-    ``@tool("explicit_name", …)`` both, since the explicit form is what
-    ``execute_code`` uses. AST, not imports: the point is a cheap, total sweep."""
+    """Tool names declared by decorators or named StructuredTool factories.
+
+    Include local StructuredTool subclasses: execute_code uses one to support
+    direct calls without a model tool-call id. AST, not imports: the point is a
+    cheap, total sweep.
+    """
     roots = ("tools", "graph", "plugins", "knowledge", "scheduler", "server", "operator_api", "runtime")
     names: set[str] = set()
     for root in roots:
@@ -474,7 +477,28 @@ def _in_tree_tool_names() -> set[str]:
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
             except SyntaxError:  # a fixture of deliberately broken source
                 continue
+            tool_classes = {"StructuredTool"}
+            classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+            while True:
+                subclasses = {
+                    node.name for node in classes
+                    if any(isinstance(base, ast.Name) and base.id in tool_classes for base in node.bases)
+                }
+                if subclasses <= tool_classes:
+                    break
+                tool_classes.update(subclasses)
             for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "from_function"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in tool_classes
+                ):
+                    for keyword in node.keywords:
+                        if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+                            if isinstance(keyword.value.value, str):
+                                names.add(keyword.value.value)
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 for dec in node.decorator_list:
