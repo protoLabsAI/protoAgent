@@ -693,7 +693,13 @@ The conditions on that CONTINUE, as Josh set them:
   (**bd-v8szk**).
 - **Default turned on, decided by Josh 2026-11-18:** "turn it on and test it to
   ensure it works". `private_steering.enabled` is now **default on**; set it to
-  `false` to turn it off.
+  `false` to turn it off. Its end-to-end check found every server surface clean, but
+  the agent repeated a private note when a peer asked it to quote the conversation.
+  Josh, 2026-11-18: "its not imperative that the side instructions remain 'private',
+  best attempts are fine." So the agent keeps the private exchange in context, so
+  steering still applies, and it is labelled confidential as a best-effort guard.
+  The server guarantee (never on a peer channel or in peer-readable storage) is
+  unchanged.
 
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
