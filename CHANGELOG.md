@@ -15,6 +15,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.249.0] - 2026-11-18
+
+### Added
+- **`edit_file` can change several places in one file in a single call (#5506).** Pass
+  `edits=[{"old": …, "new": …}, …]` instead of `old`/`new` and the pairs are applied in order
+  to the evolving text, under the same per-path edit lock, CRLF handling and change
+  announcement as a single edit. Each `old` must match exactly once at its turn; if any pair is
+  missing or ambiguous the call returns `Error: edit N of M: …` and the file is left
+  byte-identical. A coding agent no longer pays one model round trip per edit site, or reaches
+  for `sed -i` / heredocs through the shell that skip those safeguards. The single `old`/`new`
+  form matches and reports as before; an empty `old` or `old == new` is now refused in both
+  forms instead of being attempted. Refs #5098.
+
+- **`search_files` can run several queries in one call (#5508).** Pass `queries=["…", "…"]` (up to 8)
+  instead of `query` and each one runs through the same search path as a single query —
+  ripgrep fast path or Python walk, honouring `path`, `regex`, `context_lines` and
+  `include_generated` — and renders under its own `## <query>` heading, in input order, with
+  its own per-query caps and no-match / unreadable-path notes. The combined output shares one
+  400-line budget: past it the result is cut at a line boundary and ends with
+  `… (output cap reached after query K of N; narrow the queries or split the call)`, so the
+  queries that were not shown are named rather than dropped silently. A coding agent no longer
+  pays one model round trip per pattern, or loops over patterns in the shell. The single
+  `query` form returns exactly what it did before; passing both forms, neither, more than 8
+  queries, or an empty string inside `queries` is a clear error. Refs #5098.
+
+- **Agents can read a task's full scope with `task_get` (#5507).** The read-only tool returns descriptions, asks, linked work and origin metadata, and is available through ACP and operator MCP. Refs #5319.
+
+- **Conversations in Work: the "missing or stale state" row of the Phase 1 proof matrix now rests on a test (#5498).** Adds `tests/test_proof_missing_state.py`, which injects the two faults no test covered: a private turn whose LangGraph checkpoint is deleted (while parked on a HITL interrupt, and while pending across a real `SIGKILL` and restart recovery), and a private turn accepted under a custom thread-id resolver that is unregistered, or raises, after the restart. Each case runs through the real auth middleware, steer route, loopback send, stream runner, SQLite partition and SQLite checkpointer, and asserts that no public input is sent, the private record is intact, and the private canary is absent from `GetTask`, `ListTasks`, `/turns` and `/steer` for the federation, fleet-service, paired-agent and enrolled-console callers. No product code changes. Those assertions hold; what does not is recorded as six strict `xfail`s marked `PROOF FAILURE`: with the checkpoint gone the private input runs as a fresh message on the empty thread (resume and restart recovery), and with the resolver unregistered or raising, restart recovery and a private resume continue the turn on the default `a2a:<session>` thread instead of the checkpoint it was bound to. A control case (same resolver, checkpoint present) passes on the bound thread.
+
+### Changed
+- **The lead prompt tells agents with file tools to batch independent reads, searches and edits in one step (#5510).**
+  The Guidelines section gains one line — "Make independent reads, searches and edits in the same
+  step, not one per turn" — and points at `edit_file`'s `edits` list and `search_files`' `queries`
+  list, so a multi-file change costs a few model round trips instead of one per call. The line is
+  present only when `read_file`, `search_files` or `edit_file` is bound, and names each list argument
+  only when its tool is bound; an agent with no file tools gets the same prompt as before. The
+  Guidelines budget ceiling rises from 900 to 1,150 characters and the lead doctrine ceiling from
+  4,200 to 4,500 (see `docs/explanation/prompt-contracts.md`). Refs #5098.
+
+### Fixed
+- **An agent can no longer "cancel" a job a plugin owns (#5500).** `cancel_schedule` on a `plugin:<plugin_id>:…` job used to report "Canceled" while the owning plugin re-created the job on its next register, so the job kept firing and the agent told the operator it was gone. The tool now refuses with an error naming the plugin and pointing to that plugin's config section in Settings, where the cadence really changes, and `list_schedules` marks those rows `(plugin-owned: <plugin_id>)`. Agent-created jobs cancel as before. Refs #5313.
+
+- **Workflow runs cut off by a restart no longer sit in the history as running forever (#5503).** A run record left `running` when the process died was never resumed and never pruned, so `.runs/` grew without bound and the history showed runs as live that had no process behind them (#5411). Starting a run now marks any `running` record that has not been written for 7 days as `failed` with an `interrupted` marker and an explanatory `error`, after which it is pruned under the usual keep-the-newest rule. Paused runs, which wait on an operator, and recently written running runs are left alone.
+
+- **A2A privacy proofs surface send failures while waiting for readiness (#5502).** Race the private segment's readiness event against send completion, retaining a generous hang guard and the virtual stall clock so loaded runners do not obscure failures behind a readiness timeout. Refs #5465.
+
+- **A changed execute_code setting applies on the first save (#5495).** Turning on "Keep state across a session's runs", or editing the bridged tools or kernel limits, did nothing until the config was reloaded a second time, because the tool was rebuilt from the previous values. It now reads the new ones.
+
+- **Recover private steers after restart (#5509).** Private steering now durably records accepted turns before sending, tracks running and parked segments, and completes them with private replies. Failed, canceled, or closed executions release their reservations before the next private steer of the session may claim, and private steers run in the order they were accepted: an older one whose delivery was refused is started first instead of being left queued until a restart. Queued private steers recover through the private path; crash-interrupted running turns remain suspended without replay. The default-off setting and ordinary steering are unchanged. Refs #5504.
+
+- **Private steering refuses decisions outside the private partition (#5497).** A conversation parked by an ordinary operator or federation task now returns a fixed refusal before storing private text or starting another task. Human-owned private decisions still resume their original task.
+
+- **With the chat open in two tabs, a reply is saved correctly again (#5513).** Since v0.248.0 the console saved a turn's task id the moment it arrived. A second tab took that as a turn it had to pick up and started its own requests for it while the first tab was still streaming, and its copy could replace the finished reply in the saved conversation. The task id is saved on the normal two-second timer again. This also brings back an older limit that v0.248.0 had removed: if you reload within two seconds of sending a message that then asks you a question, the question's form may not come back.
+
+### Docs
+- **Record the private steering dev-instance results and outstanding fixes (#5499).**
+  The proposal's P1h.5 note (2026-11-18) records steps 1, 4 and 5 PASS at
+  `10f042a83`, with no canary leak. Step 2 (parked resume) FAILED and is fixed by
+  bd-kaztd: a private steer into a session parked on a decision it may not answer
+  is refused, not started beside it. Step 3 (restart) FAILED: a private steer sent
+  while a public turn ran, then a kill and restart, came back FAILED ("Task
+  interrupted by an agent restart; its runner did not survive.") and restart
+  recovery found nothing, because no live route writes a durable pending turn.
+  Nothing leaked. The restart defect is being fixed under protoAgent#5504
+  (card bd-upbbz); it is not accepted v1 behaviour. Steps 2 and 3 are rerun on
+  the dev instance after both fixes merge (bd-v8szk). `private_steering.enabled` stays default off pending Josh's
+  separate go.
+
 ## [0.248.0] - 2026-11-18
 
 ### Added
