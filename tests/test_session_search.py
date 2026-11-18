@@ -369,3 +369,19 @@ async def test_recall_history_and_large_summary_stay_within_cap(monkeypatch, tmp
     assert f"- entry={entries[-1]} ·" in output
     assert output.count("- entry=") == 20
     assert "older entries omitted; use session_search" in output
+
+
+async def test_recall_session_does_not_open_a_private_archive_by_id(monkeypatch, tmp_path, history):
+    # The index hides spans retained in the private partition (ADR 0131 §5); naming the id
+    # directly must not get around that.
+    from tools.memory_tools import _build_memory_tools
+
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+    public = history.add("public palette notes", session_id="chat-prior", kind="archive", audience="public")
+    private = history.add("PRIVATE-ARCHIVE-CANARY", session_id="chat-prior", kind="archive", audience="human-operator")
+    recall = {item.name: item for item in _build_memory_tools(object(), history_store=history)}["recall_session"]
+    assert "public palette notes" in await recall.ainvoke({"session_id": "chat-prior", "entry": public})
+    by_id = await recall.ainvoke({"session_id": "chat-prior", "entry": private})
+    assert "PRIVATE-ARCHIVE-CANARY" not in by_id and f"No history entry {private} found" in by_id
+    assert "PRIVATE-ARCHIVE-CANARY" not in await recall.ainvoke({"session_id": "chat-prior"})
+
