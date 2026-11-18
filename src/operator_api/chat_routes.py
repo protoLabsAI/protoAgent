@@ -379,10 +379,12 @@ async def _hidden_session(session_id: str, context) -> bool:
 
     if is_human_operator(context.state.get("principal_kind")):
         return False
+    from graph.private_sessions import is_marked
+
+    if is_marked(session_id):
+        return True
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
-        if private_steering_enabled():
-            raise HTTPException(status_code=503, detail="Session read unavailable.")
         return False
     try:
         async with engine.connect() as conn:
@@ -394,9 +396,11 @@ async def _hidden_session(session_id: str, context) -> bool:
 
 
 async def _hidden_session_ids(context) -> frozenset[str]:
-    """Every session :func:`_hidden_session` hides from this caller, in one read — for
-    listings that span sessions. Same verdicts: nothing for a human operator, 503 when the
-    answer cannot be known."""
+    """Durably private session ids in one read for listings that span sessions.
+
+    Listings also check session markers, which remain authoritative without an engine.
+    Nothing for a human operator; 503 when an existing store cannot be read.
+    """
     from a2a_impl.auth import is_human_operator
     from a2a_impl.stores import HUMAN_OPERATOR_OWNER
     from a2a.server.tasks.database_task_store import TaskModel
@@ -406,8 +410,6 @@ async def _hidden_session_ids(context) -> frozenset[str]:
         return frozenset()
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
-        if private_steering_enabled():
-            raise HTTPException(status_code=503, detail="Session read unavailable.")
         return frozenset()
     try:
         async with engine.connect() as conn:

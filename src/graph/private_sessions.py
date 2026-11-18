@@ -63,8 +63,9 @@ def _owned_private_turn(session_id: str) -> bool:
     Writers include synchronous middleware and timer threads, so use a short-lived
     SQLite connection to the runtime engine's database, not its async connection pool.
     Never cache a negative answer: another turn can change ownership at any time.
-    Raises :class:`OwnershipUnknown` when private steering is enabled and the answer cannot
-    be read — a caller must not take that for "private" (an ordinary conversation would lose its archive and harvest)
+    No engine means private intake is unavailable; only a marker or a running private
+    segment can establish privacy then. Raises :class:`OwnershipUnknown` when private
+    steering is enabled and an existing store cannot be read — a caller must not take that for "private" (an ordinary conversation would lose its archive and harvest)
     nor for "public". With the flag off, unavailable ownership preserves ordinary memory
     behavior; successfully read private ownership still protects existing private turns.
     """
@@ -78,9 +79,9 @@ def _owned_private_turn(session_id: str) -> bool:
 
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
-        if getattr(STATE.graph_config, "private_steering_enabled", False):
-            raise OwnershipUnknown("no task store")
-        return False
+        # Private intake requires a partition store. Without one, only local
+        # evidence can establish that this conversation has private turns.
+        return is_marked(session_id) or in_private_segment()
     try:
         if engine.url.get_backend_name() != "sqlite" or not engine.url.database:
             raise OwnershipUnknown("task store is not a readable SQLite file")
@@ -237,7 +238,7 @@ def hidden_from_caller():
         session_id = str(session_id or "")
         if session_id not in verdicts:
             try:
-                verdicts[session_id] = _owned_private_turn(session_id)
+                verdicts[session_id] = is_marked(session_id) or _owned_private_turn(session_id)
             except OwnershipUnknown:
                 verdicts[session_id] = True
         return verdicts[session_id]
