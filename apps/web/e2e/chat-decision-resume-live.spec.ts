@@ -93,6 +93,17 @@ test("a parked turn answered elsewhere continues live, without a reload", async 
   await expect(card.locator(".tool-waiting")).toContainText("waiting for you");
   await expect(page.locator(`${SLOT} .chat-paused-indicator`)).toBeVisible();
 
+  // The console's tapped bus stream must be open before the server says so: it connects on
+  // its own schedule (after the sse-token probe), often well after the parked card paints,
+  // and a frame published before then reaches nobody. An empty publish is a no-op that still
+  // reports the open stream count.
+  await expect
+    .poll(async () => {
+      const res = await page.request.post("/api/__test__/bus", { data: { tap: TAP, frames: [] } });
+      return (await res.json()).streams as number;
+    })
+    .toBeGreaterThan(0);
+
   // The decision is answered somewhere else; the server resumes the same task and says so.
   answered = true;
   const pushed = await page.request.post("/api/__test__/bus", {

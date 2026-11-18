@@ -1672,6 +1672,14 @@ async function handleLivePark(res, body, prompt, sessionId) {
     return true;
   }
   liveParks.set(taskId, { sessionId, question });
+  // "DROPNET" drops the socket only once its spec has SEEN the park (the form is up) and
+  // releases it (POST /api/__test__/turns/<session>/release). A drop on a timer can reach the
+  // browser before it has read the input-required frame, and Chromium then discards the
+  // unread bytes: from the console's side the stream failed BEFORE the park, which is a
+  // different case from the one the spec covers. Registered before the first frame is
+  // written, so a spec that releases the moment the form paints can never beat it.
+  const dropReleased =
+    park[1] === "DROPNET" ? new Promise((resolve) => releasableTurns.set(sessionId, resolve)) : null;
   recordDurableTurn(sessionId, {
     task_id: taskId,
     state: "TASK_STATE_INPUT_REQUIRED",
@@ -1697,7 +1705,11 @@ async function handleLivePark(res, body, prompt, sessionId) {
   }));
   // The stream fails AFTER the park (#3956 review): "DROPNET" drops the socket, "ERRFRAME"
   // sends a JSON-RPC error frame. The task is still parked server-side either way.
-  if (park[1] === "DROPNET") {
+  if (dropReleased) {
+    // Bounded, like PARK THE TOOL: a spec that fails before releasing must not leave this
+    // handler (and its timer) alive for the rest of the worker's run.
+    await Promise.race([dropReleased, new Promise((r) => res.once("close", r)), new Promise((r) => setTimeout(r, 15_000))]);
+    releasableTurns.delete(sessionId);
     res.destroy();
     return true;
   }
