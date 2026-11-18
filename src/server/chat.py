@@ -1118,7 +1118,7 @@ async def _enter_private_run(session_id: str, ref: str, store, context) -> int |
 
 async def _close_consumed_private_turn(session_id: str, ref: str, store, context) -> None:
     """Close a private turn that ended WITHOUT claiming the runner (a pre-turn command or the
-    ACP runtime answered it): its input was consumed, so it must not stay queued and be
+    ACP runtime answered it, or its binding was refused): it must not stay queued and be
     dispatched a second time after a restart or by a later steer."""
     from a2a_impl import segment_schedule as ss
 
@@ -2856,6 +2856,10 @@ async def _chat_langgraph_stream_impl(
                 if _unbound:
                     log.warning("[private] private turn for %s refused, not run: %s", session_id, _unbound)
                     _private_consumed = True
+                    # The executor publishes failure at this yield, before closing the
+                    # generator. Settle durable acceptance now, not only in finally.
+                    await _close_consumed_private_turn(session_id, _private_ref, _private_store, _private_ctx)
+                    _private_consumed = False
                     yield ("error", _PRIVATE_UNAVAILABLE)
                     return
             config = {
