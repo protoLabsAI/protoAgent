@@ -494,7 +494,38 @@ def _missing_binary_message(command: str) -> str:
     return msg
 
 
+# An ACP adapter can BUNDLE its own Claude Code (claude-agent-acp ships one inside its
+# claude-agent-sdk dependency), so a fine `claude` on PATH doesn't help when a new model
+# needs a newer CLI: the adapter's copy answers "Claude Code 2.1.179 does not support this
+# model; version 2.1.280 or newer is required" and every coder on that model fails before
+# doing any work (seen 2026-11-17 on claude-opus-5-5). The upstream text says "Run 'claude
+# update'", which updates the wrong binary. Say what actually fixes it.
+_BUNDLED_CLI_TOO_OLD = re.compile(
+    r"Claude Code (?P<have>[0-9][\w.-]*) does not support this model; version (?P<need>[0-9][\w.-]*) or newer is required"
+)
+
+
+def bundled_cli_too_old_hint(text: str) -> str:
+    """The remediation for an adapter whose bundled Claude Code is too old for the model,
+    or ``""`` when ``text`` isn't that failure."""
+    m = _BUNDLED_CLI_TOO_OLD.search(text or "")
+    if not m:
+        return ""
+    return (
+        f"Fix: the ACP adapter bundles its own Claude Code ({m['have']}); this model needs "
+        f"{m['need']} or newer, so `claude update` won't help. Update the adapter "
+        "(`npm i -g @agentclientprotocol/claude-agent-acp@latest`), or set "
+        "CLAUDE_CODE_EXECUTABLE in the delegate's env to a newer `claude`."
+    )
+
+
 def _format_rpc_error(err: dict) -> str:
+    line = _format_rpc_error_line(err)
+    hint = bundled_cli_too_old_hint(line)
+    return f"{line} {hint}" if hint else line
+
+
+def _format_rpc_error_line(err: dict) -> str:
     """Render a JSON-RPC error object as one operator-legible line.
 
     ``-32603 "Internal error"`` is the *generic* JSON-RPC code, so an agent that hits
