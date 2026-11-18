@@ -36,8 +36,7 @@ _TOOL_MAP = {"echo_tool": echo_tool, "boom_tool": boom_tool}
 async def _invoke_tool(ec, code, *, tool_call_id="ec-call", **args):
     """Invoke a built ``execute_code`` tool the production way — a full ToolCall, so
     its ``InjectedToolCallId`` (the owning call's id) is populated — and return the
-    text body. ``execute_code`` now declares an ``InjectedToolCallId``, and langchain
-    requires a ToolCall (not a plain ``{"code": ...}`` dict) whenever a tool does."""
+    text body. Direct dictionary calls are also supported, without a parent id."""
     msg = await ec.ainvoke(
         {"name": "execute_code", "args": {"code": code, **args}, "id": tool_call_id, "type": "tool_call"}
     )
@@ -678,7 +677,8 @@ async def test_script_row_keeps_full_script_and_caps_at_64kb(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_ainvoke_without_tool_call_id_records_rows_without_parent(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_state", [False, True])
+async def test_ainvoke_without_tool_call_id_records_rows_without_parent(tmp_path, monkeypatch, with_state):
     """A direct invoke with no tool-call id (empty) still runs and records ptc: rows —
     they just carry no ``parent_call_id`` link (the id is treated as empty)."""
     from observability.audit import AuditLogger
@@ -686,8 +686,13 @@ async def test_ainvoke_without_tool_call_id_records_rows_without_parent(tmp_path
     monkeypatch.setattr("observability.audit.audit_logger", AuditLogger(tmp_path / "audit.jsonl"))
     ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
     code = "print(tools.echo_tool(text='hi'))"
-    out = await _invoke_tool(ec, code, tool_call_id="", state={"session_id": "sess-noid"})
+    args = {"code": code}
+    if with_state:
+        args["state"] = {"session_id": "sess-noid"}
+    out = await ec.ainvoke(args)
+    assert isinstance(out, str)
     assert out.replace("\r\n", "\n") == "HI"
+    assert set(ec.tool_call_schema.model_json_schema()["properties"]) == {"code", "fresh"}
 
     rows = _audit_rows(tmp_path / "audit.jsonl")
     echo = next(r for r in rows if r["tool"] == "ptc:echo_tool")

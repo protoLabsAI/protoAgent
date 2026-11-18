@@ -58,7 +58,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
-from langchain_core.tools import InjectedToolCallId
+from langchain_core.tools import InjectedToolCallId, StructuredTool
 from langgraph.prebuilt import InjectedState
 
 from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree, untrack_when_reaped
@@ -808,6 +808,16 @@ def _build_enforcement_gate(graph_config):
     return _gate
 
 
+class _ExecuteCodeTool(StructuredTool):
+    """Keep direct calls usable alongside model tool-call id injection."""
+
+    def _parse_input(self, tool_input: str | dict[str, Any], tool_call_id: str | None) -> str | dict[str, Any]:
+        # LangChain rejects a missing InjectedToolCallId before the coroutine's
+        # default can apply. Supply the empty id only for argument validation;
+        # arun keeps its original None so direct calls still return plain text.
+        return super()._parse_input(tool_input, tool_call_id if tool_call_id is not None else "")
+
+
 def build_execute_code_tool(
     all_tools: list,
     *,
@@ -831,8 +841,6 @@ def build_execute_code_tool(
     kernel per session so variables carry across calls; with it off the tool is
     unchanged — a fresh subprocess each call, and ``fresh`` is a no-op.
     """
-    from langchain_core.tools import tool
-
     from graph.tool_renames import migrate_tool_names
 
     # ADR 0125: a caller-supplied list may still name the removed memory tools.
@@ -888,7 +896,6 @@ def build_execute_code_tool(
         "Exceptions and a non-zero exit are reported back to you."
     )
 
-    @tool("execute_code", description=description)
     async def execute_code(
         code: str,
         fresh: bool = False,
@@ -950,4 +957,4 @@ def build_execute_code_tool(
             log.exception("[execute_code] harness failure")
             return f"Error: execute_code harness failed: {type(exc).__name__}: {exc}"
 
-    return execute_code
+    return _ExecuteCodeTool.from_function(coroutine=execute_code, name="execute_code", description=description)
