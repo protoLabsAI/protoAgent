@@ -60,7 +60,9 @@ def resolve(project: str) -> ProjectScope:
     if not proj.write:
         raise DelegateError(
             f"project {name!r} is read-only (write: false) — a coding delegate can't be sent "
-            "into it. Ask the operator to make it read-write, or read it yourself with the fs tools."
+            "into it. Ask the operator to make it read-write (onboard_project / "
+            "register_local_project with write=true shows them an approval card, or they can "
+            "change it in Settings ▸ Projects), or read it yourself with the fs tools."
         )
     if getattr(proj, "no_delete", False):
         # Same reasoning as the read-only refusal: ``no_delete`` is enforced by the fs
