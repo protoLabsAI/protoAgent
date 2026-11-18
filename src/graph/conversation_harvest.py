@@ -143,22 +143,25 @@ def archive_payload(
     private messages to drop. A conversation WITH a private (human-operator) turn keeps its
     public archive: the whole private turn — input, replies and tool results — is dropped
     (:func:`graph.private_sessions.public_part`), the ordinary turns are archived as before.
-    When it cannot be read whether an unmarked conversation has a private turn, the whole
-    transcript is archived into the PRIVATE partition instead (the row's audience says so):
-    shared history reads never return it, and an ordinary conversation loses nothing.
+    When the private turns cannot be told apart — it cannot be read whether an unmarked
+    conversation has one, or it has one recorded before audience stamps and session markers,
+    which leaves no boundary to drop it by — the whole transcript is archived into the
+    PRIVATE partition instead (the row's audience says so): shared history reads never
+    return it, and the compaction that follows loses nothing.
 
     ``trailing_date`` defaults to today (see :func:`message_dates`)."""
-    from graph.private_sessions import OwnershipUnknown, public_part
+    from graph.private_sessions import OwnershipUnknown, UnlabelledPrivateTurns, public_part
 
     today = _today()
     audience = PUBLIC_AUDIENCE
     try:
         messages = public_part(messages, session_id, thread_id)
-    except OwnershipUnknown:
+    except (OwnershipUnknown, UnlabelledPrivateTurns) as exc:
         log.warning(
-            "[archive] cannot read whether session %s has private turns — archiving it into "
-            "the private partition (kept, not shared)",
+            "[archive] session %s cannot be split into public and private turns (%s) — "
+            "archiving it into the private partition (kept, not shared)",
             session_id,
+            type(exc).__name__,
         )
         messages, audience = list(messages or []), PRIVATE_AUDIENCE
     trailing = trailing_date if _DAY.match(trailing_date or "") else today

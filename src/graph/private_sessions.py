@@ -14,9 +14,10 @@ The mark is a content-free file under the session-memory dir, named by a digest 
 session id (any id is safe as a filename, and the listing walkers only read ``*.json``
 at the top level). A failed write falls back to an in-process mark and logs loudly.
 Durable task ownership also protects pre-marker conversations. Their unstamped
-transcripts cannot be safely partitioned, so archives are withheld too. A new marker
-records this condition when older private tasks exist; a later stamped turn cannot
-clear it. Conversations without private turns keep their existing writer behavior.
+transcripts cannot be safely partitioned (:class:`UnlabelledPrivateTurns`), so their
+compaction archive is kept whole in the private partition — never shared, never lost. A
+new marker records this condition when older private tasks exist; a later stamped turn
+cannot clear it. Conversations without private turns keep their existing writer behavior.
 
 When ownership cannot be READ (:class:`OwnershipUnknown`) nothing is exposed and nothing
 is thrown away: a per-turn writer (card, gist) skips this pass and the next one retries, a
@@ -43,6 +44,11 @@ _mark_lock = threading.Lock()
 class OwnershipUnknown(RuntimeError):
     """Durable task ownership could not be read, so whether a conversation has a private
     turn is unknown — neither "it has one" nor "it has none"."""
+
+
+class UnlabelledPrivateTurns(RuntimeError):
+    """The conversation has a private turn from before audience stamps and session markers,
+    so its transcript carries no trustworthy private-turn boundary to partition on."""
 
 
 def _marker(session_id: str) -> str:
@@ -134,12 +140,14 @@ def public_part(messages: list, *session_ids: str | None) -> list:
     fully labelled and the stamps alone decide, as they always did.)
 
     Raises :class:`OwnershipUnknown` when an unmarked conversation's ownership cannot be
-    read; the caller decides how to keep the transcript without sharing it."""
+    read, and :class:`UnlabelledPrivateTurns` when the conversation has a pre-marker private
+    turn (no boundary to drop it by); either way the caller decides how to keep the
+    transcript without sharing it."""
     messages = list(messages or [])
     from graph.conversation_audience import is_private_message, public_messages
 
     if any(_unlabelled_private_turns(s) for s in session_ids if s):
-        return []  # no trustworthy boundary for a pre-marker private turn
+        raise UnlabelledPrivateTurns("pre-marker private turn")  # no trustworthy boundary
     known = in_private_segment() or any(is_marked(s) for s in session_ids if s)
     if not known and not any(is_private_message(m) for m in messages):
         return public_messages(messages)

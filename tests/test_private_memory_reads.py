@@ -117,9 +117,18 @@ async def test_pre_marker_private_turn_withholds_shared_writers(box, monkeypatch
     scheduled = []
     monkeypatch.setattr(session_gist, "Timer", lambda *a, **kw: scheduled.append(a) or SimpleNamespace(start=bool, cancel=bool))
     state = {"session_id": SID, "messages": [HumanMessage(content=SECRET), AIMessage(content=REPLY)] + LATER_TURN[2:]}
-    _, harvested = await _run_writers(state)
-    assert SECRET not in _retained(box) and REPLY not in _retained(box)
+    compacted, harvested = await _run_writers(state)
+    shared = [p.read_text(encoding="utf-8") for p in Path(box.memory).rglob("*") if p.is_file()]
+    shared += [e.content for e in box.history.list_for_session(SID)] + [e.content for e in box.history.search("zq")]
+    shared += [e.content for e in box.history.search("ordinary")]
+    assert SECRET not in "\n".join(shared) and REPLY not in "\n".join(shared)
     assert harvested is None and scheduled == []
+    # No boundary to drop the unstamped private turn by, so both compaction archives
+    # (automatic, then manual) keep the WHOLE transcript in the private partition: the
+    # ordinary turns compacted away stay recoverable and no shared read returns them.
+    kept = box.history.list_for_session(SID, include_private=True)
+    assert not compacted["refused"] and len(kept) == 2
+    assert all(e.audience == "human-operator" and "ordinary" in e.content and "ok" in e.content for e in kept)
 
 
 @pytest.mark.parametrize("missing_engine", [True, False])
