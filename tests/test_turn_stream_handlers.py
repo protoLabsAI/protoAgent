@@ -184,3 +184,103 @@ async def test_a_foreground_delegate_to_consumes_its_latency_stamp(env):
     )
     frames = [f async for f in _stream() if f[0] == "tool_end"]
     assert [(p["id"], p["duration_ms"]) for _, p in frames] == [("tc9", 0)]
+
+
+# ── execute_code `ptc_call` → nested tool frames (card bd-d4uni, bridges bd-dr0i7) ──────
+#
+# The execute_code plugin emits a `ptc_call` custom event when a running script calls a
+# bridged host tool. ``_on_custom_ptc_call`` re-emits it as an ORDINARY tool frame whose
+# ``parentId`` is the execute_code call's id, so the console nests it under that card
+# (apps/web/src/chat/ToolCalls.tsx groups by ``parentId``). The ``ptc:`` name prefix is the
+# contract the console reads to tell a script's call from a model's or a subagent's.
+
+
+def _ptc_start(**over):
+    data = {"phase": "start", "id": "p1", "name": "read_file", "args": {"path": "x"}, "parent_call_id": "ec1"}
+    return custom("ptc_call", {**data, **over})
+
+
+def _ptc_end(**over):
+    data = {
+        "phase": "end",
+        "id": "p1",
+        "name": "read_file",
+        "output": "hello",
+        "output_chars": 5,
+        "error": False,
+        "duration_ms": 12,
+        "parent_call_id": "ec1",
+    }
+    return custom("ptc_call", {**data, **over})
+
+
+@pytest.mark.asyncio
+async def test_ptc_call_start_nests_under_its_execute_code_card(env):
+    env.install(_ptc_start())
+    frames = [f async for f in _stream() if f[0] == "tool_start"]
+    # One tool_start, `ptc:`-prefixed, the args JSON-coerced like a model's tool input, and
+    # parentId = the bridged call's parent so the console files it under the ec card.
+    assert frames == [
+        ("tool_start", {"id": "p1", "name": "ptc:read_file", "input": '{"path": "x"}', "parentId": "ec1"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ptc_call_end_carries_output_and_parent(env):
+    env.install(_ptc_end(error=True))
+    frames = [f async for f in _stream() if f[0] == "tool_end"]
+    assert frames == [
+        (
+            "tool_end",
+            {
+                "id": "p1",
+                "name": "ptc:read_file",
+                "output": "hello",
+                "output_chars": 5,
+                "error": True,
+                "duration_ms": 12,
+                "parentId": "ec1",
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ptc_call_malformed_payloads_yield_no_frames_and_do_not_raise(env):
+    env.install(
+        custom("ptc_call", "not-a-dict"),
+        custom("ptc_call", {"phase": "start", "name": "n", "parent_call_id": "ec1"}),  # missing id
+        custom("ptc_call", {"phase": "start", "id": "p", "parent_call_id": "ec1"}),  # missing name
+        custom("ptc_call", {"phase": "start", "id": "p", "name": "n"}),  # missing parent_call_id
+        _ptc_start(phase="running"),  # unknown phase
+        _ptc_end(phase=None),  # unknown phase
+    )
+    frames = [f async for f in _stream() if f[0] in ("tool_start", "tool_end")]
+    assert frames == []
+
+
+@pytest.mark.asyncio
+async def test_ptc_call_end_non_numeric_sizes_degrade_to_zero_and_do_not_raise(env):
+    # A malformed plugin payload can carry a non-numeric `output_chars`/`duration_ms`. The
+    # dispatch loop has no try/except, so coercing them must never raise (card never-raise
+    # rule): they floor to 0 and the frame is still emitted with its id/name/parent intact.
+    env.install(_ptc_end(output_chars="lots", duration_ms={"not": "a number"}))
+    frames = [f async for f in _stream() if f[0] == "tool_end"]
+    assert frames == [
+        (
+            "tool_end",
+            {
+                "id": "p1",
+                "name": "ptc:read_file",
+                "output": "hello",
+                "output_chars": 0,
+                "error": False,
+                "duration_ms": 0,
+                "parentId": "ec1",
+            },
+        ),
+    ]
+
+
+def test_ptc_call_is_registered():
+    assert turn_stream._handler_for("on_custom_event", "ptc_call") is turn_stream._on_custom_ptc_call
