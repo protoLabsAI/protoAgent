@@ -1337,3 +1337,32 @@ def test_order_and_groups_share_one_hub_roster_and_order_write_preserves_them(cl
     assert [g["id"] for g in roster["groups"]] == [gid]
     assert roster["agents"][ids[0]]["pinned"] is True
     assert roster["agents"][ids[1]]["group"] == gid
+
+
+@pytest.mark.parametrize("action", ["start", "stop"])
+def test_member_lifecycle_ops_preserve_error_mapping(client, monkeypatch, action):
+    from unittest.mock import AsyncMock
+
+    from graph.fleet import supervisor
+    from ops import fleet
+
+    operation = AsyncMock(side_effect=supervisor.FleetError("member is unavailable"))
+    monkeypatch.setattr(fleet, action, operation)
+    response = client.post(f"/api/fleet/member/{action}")
+    assert response.status_code == 400
+    assert response.json() == {"detail": "member is unavailable"}
+
+
+def test_member_start_and_unsuccessful_stop_results(client, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from ops import fleet
+
+    monkeypatch.setattr(fleet, "start", AsyncMock(return_value={"id": "member", "running": True}))
+    assert client.post("/api/fleet/member/start").json() == {
+        "ok": True, "agent": {"id": "member", "running": True},
+    }
+    monkeypatch.setattr(fleet, "stop", AsyncMock(return_value={"stopped": False, "reason": "still alive"}))
+    response = client.post("/api/fleet/member/stop", json={"when_idle": True})
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "stopped": False, "reason": "still alive"}
