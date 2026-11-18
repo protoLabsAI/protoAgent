@@ -11,7 +11,7 @@ from graph import steering, thread_ids
 from runtime.state import STATE
 from tests._a2a_app import poll_terminal
 from tests.test_private_steer_route import SECRET
-from tests.test_proof_missing_state import OP, _assert_never_public_and_never_peer_readable, _atlas, rig, world  # noqa: F401
+from tests.test_proof_missing_state import OP, _assert_never_public_and_never_peer_readable, _atlas, _raising, rig, world  # noqa: F401
 
 chat_mod = importlib.import_module("server.chat")
 pytestmark = [pytest.mark.platform_sensitive, pytest.mark.asyncio]
@@ -47,13 +47,14 @@ async def test_first_private_turn_of_a_new_session_is_recovered_and_run(world, m
     assert await ss.pending_turns(chat_mod._private_partition_store(), session, OP) == []
 
 
-async def test_live_stream_refuses_a_private_turn_off_its_bound_checkpoint(world, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("resolver", [None, _raising], ids=["unregistered", "raising"])
+async def test_live_stream_refuses_a_private_turn_off_its_bound_checkpoint(world, monkeypatch, resolver):  # noqa: F811
     session = "chat-moved"
     monkeypatch.setattr(STATE, "thread_id_resolver", _atlas, raising=False)
     chat_mod._resolve_turn_thread_id({"project": "atlas"}, session)  # the conversation's original turn
     ref, turn = await _accepted_but_never_started(world, monkeypatch, session)
     assert turn["checkpoint"] == f"proj:atlas:{session}"
-    monkeypatch.setattr(STATE, "thread_id_resolver", None, raising=False)  # now resolves a2a:<session>
+    monkeypatch.setattr(STATE, "thread_id_resolver", resolver, raising=False)  # would fall back to a2a:<session>
     retry = (await world.steer("shared-bearer", session, SECRET, "m1", private=True)).json()
     task = await poll_terminal(world.op, retry["started_turn"])
     assert task["status"]["state"] == "TASK_STATE_FAILED" and SECRET not in str(task)

@@ -1,6 +1,7 @@
 """Session memory respects private steering: the derived writers skip a conversation with
 private turns, and the memory inspector reads hide it from callers that are not human operators."""
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,7 @@ from graph.private_sessions import public_part
 from knowledge.history import HistoryStore
 from operator_api.memory_routes import register_memory_routes
 from graph import steering
+from runtime import turn_activity
 from runtime.state import STATE
 from tests._a2a_app import poll_terminal
 from tests import test_private_steer_route as private_routes
@@ -55,6 +57,12 @@ async def box(rig, tmp_path, monkeypatch):
 async def _steer(rig, text, mid, **extra):
     task_id = (await rig.steer("shared-bearer", SID, text, mid, **extra)).json()["started_turn"]
     await poll_terminal(rig.op, task_id)
+    # The terminal task is published before the stream's async cleanup releases
+    # the session. These tests need sequential turns: sending now can legitimately
+    # queue the next steer instead of returning started_turn (seen on Windows).
+    async with asyncio.timeout(5):
+        while turn_activity.is_active(SID):
+            await asyncio.sleep(0.01)
 
 
 def _retained(box) -> str:
