@@ -48,7 +48,7 @@ from events import ACTIVITY_CONTEXT
 from infra import keep_awake, job_sessions
 from infra.sqlite_locks import file_lock
 from scheduler.cron_validation import cron_ambiguity_problem
-from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
+from scheduler.interface import Job, is_cron, job_expires_at, parse_iso_to_utc, parse_ttl
 from observability.sqlite_migrate import add_missing_columns
 
 log = logging.getLogger(__name__)
@@ -382,6 +382,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- The creating turn's tool fence (JSON list; NULL/'[]' = unfenced) — the fire
     -- carries it so a job a fenced turn scheduled runs fenced.
     fence       TEXT,
+    expiry_notice_sent INTEGER NOT NULL DEFAULT 0,
     followup_backoff_until REAL
 );
 
@@ -677,6 +678,7 @@ class LocalScheduler:
             "jobs",
             (
                 ("followup_backoff_until", "REAL"),
+                ("expiry_notice_sent", "INTEGER NOT NULL DEFAULT 0"),
                 ("timezone", "TEXT"),  # per-job timezone
                 ("context_id", "TEXT"),  # ADR 0053 same-session resume
                 ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
@@ -764,7 +766,7 @@ class LocalScheduler:
             # a restored paused or fenced job, even briefly.
             for field in (
                 "fence", "enabled", "created_at", "next_fire", "last_fire",
-                "fire_count", "consecutive_failures", "last_error", "last_ok",
+                "fire_count", "consecutive_failures", "last_error", "last_ok", "expiry_notice_sent",
             ):
                 setattr(job, field, getattr(restore_state, field))
         if not self._schema_ready:
@@ -798,8 +800,8 @@ class LocalScheduler:
                 db.execute(
                     "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                     "last_fire, enabled, created_at, timezone, context_id, origin_session, "
-                    "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok, execution_hold) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok, execution_hold, expiry_notice_sent) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         job.id,
                         job.prompt,
@@ -820,6 +822,7 @@ class LocalScheduler:
                         job.last_error,
                         job.last_ok,
                         job.execution_hold,
+                        int(job.expiry_notice_sent),
                     ),
                 )
                 if enqueue_key is not None:
@@ -1342,6 +1345,20 @@ class LocalScheduler:
                 finally:
                     self._lock.release()
 
+    def mark_expiry_notice_sent(self, job_id: str, generation: str) -> None:
+        """Remember a published result notice for this generation across restart."""
+        with self._lock:
+            db = self._connect()
+            try:
+                with db:
+                    db.execute(
+                        "UPDATE jobs SET expiry_notice_sent = 1 "
+                        "WHERE id = ? AND created_at = ? AND agent_name = ?",
+                        (job_id, generation, self.agent_name),
+                    )
+            finally:
+                db.close()
+
     def _settle_cron_expiry(self, job: Job, *, db: sqlite3.Connection | None = None) -> bool:
         """Post-fire bookkeeping for a recurring job (#2992): increment its
         ``fire_count`` and auto-cancel it once it reaches ``max_fires`` or its
@@ -1366,10 +1383,7 @@ class LocalScheduler:
             reason = f"max_fires ({row['fire_count']}/{job.max_fires})" if expired else ""
             if job.ttl and not expired:
                 try:
-                    created = datetime.fromisoformat(job.created_at)
-                    if created.tzinfo is None:
-                        created = created.replace(tzinfo=UTC)
-                    expired = datetime.now(UTC) > created + parse_ttl(job.ttl)
+                    expired = datetime.now(UTC) > job_expires_at(job)
                     if expired:
                         reason = f"TTL ({job.ttl} from {job.created_at})"
                 except ValueError:
@@ -2650,6 +2664,7 @@ def _row_to_job(row: Any) -> Job:
         execution_hold=row["execution_hold"] if "execution_hold" in keys else None,
         origin_session=row["origin_session"] if "origin_session" in keys else None,
         ttl=row["ttl"] if "ttl" in keys else None,
+        expiry_notice_sent=bool(row["expiry_notice_sent"]) if "expiry_notice_sent" in keys else False,
         max_fires=row["max_fires"] if "max_fires" in keys else None,
         fire_count=int(row["fire_count"] or 0) if "fire_count" in keys else 0,
         consecutive_failures=(int(row["consecutive_failures"] or 0) if "consecutive_failures" in keys else 0),

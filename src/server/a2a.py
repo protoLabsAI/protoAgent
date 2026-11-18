@@ -1589,6 +1589,10 @@ def _remember_scheduled_card(fingerprint: dict | None) -> None:
     records nothing."""
     if fingerprint:
         _SCHEDULED_CARD_HASHES[fingerprint["job_id"]] = (fingerprint["generation"], fingerprint["digest"])
+        if fingerprint.get("expiry_notice"):
+            marker = getattr(STATE.scheduler, "mark_expiry_notice_sent", None)
+            if callable(marker):
+                marker(fingerprint["job_id"], fingerprint["generation"])
 
 
 def _job_origin_session(job_id: str) -> str:
@@ -1607,6 +1611,26 @@ def _job_origin_session(job_id: str) -> str:
     except Exception:  # noqa: BLE001 — attribution is best-effort, never breaks the hook
         return ""
     return (getattr(job, "origin_session", "") or "").strip() if job else ""
+
+
+def _schedule_expiry_notice(job) -> str:
+    """Warn within a day, or on the last run before a longer cron interval crosses TTL."""
+    from scheduler.interface import is_cron, job_expires_at, parse_iso_to_utc
+
+    if getattr(job, "expiry_notice_sent", False) or not is_cron(job.schedule):
+        return ""
+    try:
+        expiry = job_expires_at(job)
+        now = datetime.now(UTC)
+        next_fire = parse_iso_to_utc(job.next_fire) if getattr(job, "next_fire", None) else now
+        if expiry and expiry <= max(now + timedelta(days=1), next_fire):
+            return f"Schedule {job.id} expires at {expiry.isoformat()}. Renew it to keep this recurring work running."
+        limit = getattr(job, "max_fires", None)
+        if limit is not None and getattr(job, "fire_count", 0) + 2 >= limit:
+            return f"Schedule {job.id} will end after {limit} fires. Renew it to keep this recurring work running."
+    except ValueError:
+        log.warning("[scheduler] cannot read expiry for job %s", job.id)
+    return ""
 
 
 def _scheduled_delivery_payload(outcome) -> dict | None:
@@ -1661,7 +1685,11 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
     # stored hash, so a recovery run repeating the last good answer reads as news again.
     generation = _job_generation(job)
     digest = _scheduled_card_digest(summary)
-    if status == "completed":
+    notice = _schedule_expiry_notice(job)
+    if status == "completed" and notice:
+        if not summary or _is_no_update_reply(summary) or _SCHEDULED_CARD_HASHES.get(job_id) == (generation, digest):
+            summary = ""
+    if status == "completed" and not notice:
         if not summary or _is_no_update_reply(summary):
             # Nothing new to report: no empty card, no NO_UPDATE card. The occurrence
             # and the Activity entry still record the run.
@@ -1675,6 +1703,8 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
             return None
     if len(summary) > _SCHEDULED_SUMMARY_CAP:
         summary = summary[:_SCHEDULED_SUMMARY_CAP].rstrip() + "…"
+    if notice:
+        summary = f"{summary}\n\n{notice}".strip()
     # Recurring collapse (r4): the first card DELIVERED for this job generation renders
     # full; later ones collapse to a compact chip. Keyed off the repeat guard's
     # delivered-card memory, NOT ``fire_count`` (bd-x66jt): quiet or repeated runs fire
@@ -1694,7 +1724,9 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
         "task_id": getattr(outcome, "task_id", "") or "",
         # Delivery bookkeeping, not card content — popped before the event publishes,
         # then recorded so the NEXT fire's repeat guard sees this card as delivered.
-        "card_fingerprint": {"job_id": job_id, "generation": generation, "digest": digest},
+        "card_fingerprint": {
+            "job_id": job_id, "generation": generation, "digest": digest, "expiry_notice": notice,
+        },
     }
 
 
@@ -1971,17 +2003,24 @@ async def _deliver_scheduled(payload: dict) -> bool:
     """Publish a scheduled fire's result card unless the origin session is stale (#2990
     r3). Returns whether it published. Best-effort — never raises. A published card's
     fingerprint feeds the repeat guard (bd-x66jt); a skipped one records nothing, so the
-    same result still posts once the chat wakes."""
+    same result still posts once the chat wakes. Expiry notices also reach idle owner
+    chats: suppressing those would make a standing duty silently lapse."""
     origin = payload["origin_session"]
     fingerprint = payload.pop("card_fingerprint", None)
     try:
-        if not await _session_recently_active(origin):
+        if not await _session_recently_active(origin) and not (fingerprint and fingerprint.get("expiry_notice")):
             log.info(
                 "[scheduler] session %s idle > 24h — skipping result card for job %s (result stays in Activity)",
                 origin,
                 payload["job_id"],
             )
             return False
+        # Another queued delivery may have published while this one awaited liveness.
+        if fingerprint and fingerprint.get("expiry_notice"):
+            getter = getattr(STATE.scheduler, "get_job", None)
+            current = getter(payload["job_id"]) if callable(getter) else None
+            if current and _job_generation(current) == fingerprint["generation"] and current.expiry_notice_sent:
+                return False
         _event_bus.publish("scheduler.completed", payload)
         _remember_scheduled_card(fingerprint)
         log.info(

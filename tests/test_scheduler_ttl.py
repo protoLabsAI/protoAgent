@@ -368,3 +368,97 @@ class TestListSchedulesTool:
 
         out = await _tool(s, "list_schedules").ainvoke({})
         assert "fires=1" in out
+
+
+@pytest.mark.parametrize("ttl", [None, "none"])
+async def test_operator_schedule_lifetime_and_confirmation(tmp_path, monkeypatch, ttl):
+    s = _make_scheduler(tmp_path)
+    args = {"prompt": "standing duty", "when": "0 * * * *",
+            "state": {"session_id": "chat-owner", "operator_chat_turn": True}}
+    if ttl is not None:
+        args["ttl"] = ttl
+    result = await _tool(s, "schedule_task").ainvoke(args)
+    job = s.list_jobs()[0]
+    if ttl == "none":
+        assert job.ttl is None and "No time expiry" in result
+    else:
+        expiry = datetime.fromisoformat(job.created_at) + timedelta(days=7)
+        assert job.ttl == "7d" and expiry.isoformat() in result
+    _rewrite_created_at(s, job.id, (datetime.now(UTC) - timedelta(days=8)).isoformat())
+    # Reload from disk and fire beyond the old default deadline.
+    s = _make_scheduler(tmp_path)
+    _stub_fire(monkeypatch)
+    await s._fire_and_settle(s.get_job(job.id), cron=True)
+    assert bool(s.list_jobs()) is (ttl == "none")
+
+
+@pytest.mark.parametrize("state", [None, {}, {"operator_chat_turn": False},
+                                  {"operator_chat_turn": "true"},
+                                  {"operator_chat_turn": True, "subagent_fence": ["schedule_task"]}])
+async def test_unattended_turn_cannot_remove_schedule_expiry(tmp_path, state):
+    s = _make_scheduler(tmp_path)
+    result = await _tool(s, "schedule_task").ainvoke(
+        {"prompt": "standing duty", "when": "0 * * * *", "ttl": "none", "state": state})
+    assert result.startswith("Error:") and "operator chat turn" in result
+    assert s.list_jobs() == []
+
+
+@pytest.mark.parametrize("bound", ["ttl", "max_fires", "long_interval"])
+async def test_expiry_notice_delivered_once_even_after_restart(tmp_path, monkeypatch, bound):
+    from server import a2a
+    from tests.test_scheduled_delivery import _Outcome
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("standing duty", "0 * * * *", origin_session="chat-owner",
+                    ttl="7d" if bound != "max_fires" else None,
+                    max_fires=2 if bound == "max_fires" else None)
+    if bound == "ttl":
+        _rewrite_created_at(s, job.id, (datetime.now(UTC) - timedelta(days=6, hours=12)).isoformat())
+    elif bound == "long_interval":
+        with sqlite3.connect(s.path) as db:
+            db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?",
+                       ((datetime.now(UTC) + timedelta(days=8)).isoformat(), job.id))
+    monkeypatch.setattr(a2a.STATE, "scheduler", s)
+    monkeypatch.setattr(a2a, "_SCHEDULED_CARD_HASHES", {})
+    cards = []
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda _event, data: cards.append(data))
+    async def recently_active(_origin):
+        return False  # An impending expiry must reach even an idle owner chat.
+
+    monkeypatch.setattr(a2a, "_session_recently_active", recently_active)
+    outcome = _Outcome(trigger=job.id, text="NO_UPDATE")
+    payload = a2a._scheduled_delivery_payload(outcome)
+    assert payload and "Renew it" in payload["summary"]
+    def unavailable(_event, _data):
+        raise RuntimeError("delivery unavailable")
+
+    monkeypatch.setattr(a2a._event_bus, "publish", unavailable)
+    assert not await a2a._deliver_scheduled(payload)
+    assert not s.get_job(job.id).expiry_notice_sent
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda _event, data: cards.append(data))
+    queued = a2a._scheduled_delivery_payload(outcome)
+    assert await a2a._deliver_scheduled(a2a._scheduled_delivery_payload(outcome))
+    assert not await a2a._deliver_scheduled(queued)
+    assert len(cards) == 1 and cards[0]["origin_session"] == "chat-owner"
+    assert "NO_UPDATE" not in cards[0]["summary"]
+    monkeypatch.setattr(a2a.STATE, "scheduler", _make_scheduler(tmp_path))
+    monkeypatch.setattr(a2a, "_SCHEDULED_CARD_HASHES", {})
+    assert a2a._scheduled_delivery_payload(outcome) is None
+    # A normal changed result still posts without repeating the notice.
+    changed = a2a._scheduled_delivery_payload(_Outcome(trigger=job.id, text="New finding"))
+    assert changed["summary"] == "New finding"
+    # Cancel/recreate is a new generation and earns its own notice.
+    s.cancel_job(job.id)
+    s.add_job("new duty", "0 * * * *", job_id=job.id, ttl="1h", origin_session="chat-owner")
+    assert "Renew it" in a2a._scheduled_delivery_payload(outcome)["summary"]
+
+
+async def test_unbounded_or_distant_expiry_does_not_announce(tmp_path, monkeypatch):
+    from server import a2a
+    from tests.test_scheduled_delivery import _Outcome
+
+    s = _make_scheduler(tmp_path)
+    monkeypatch.setattr(a2a.STATE, "scheduler", s)
+    for ttl in (None, "7d"):
+        job = s.add_job("check", "0 * * * *", ttl=ttl, origin_session="chat-owner")
+        assert a2a._scheduled_delivery_payload(_Outcome(trigger=job.id, text="NO_UPDATE")) is None
