@@ -302,17 +302,22 @@ def test_finish_setup_explore_from_the_shipped_template_lands_declared_empty(mon
     # A faithful stand-in for the reload: load the just-written leaf into STATE.graph_config and
     # build a graph ONLY when a model is configured — the SAME gate agent_init uses (#4566), so
     # "graph built" == "model_is_configured" here too.
-    graph_sentinel = object()
-    monkeypatch.setattr(STATE, "graph", graph_sentinel, raising=False)
+    original_config = STATE.graph_config
+    with monkeypatch.context() as reload_state:
+        graph_sentinel = object()
+        monkeypatch.setattr(STATE, "graph", graph_sentinel, raising=False)
 
-    def _reload():
-        STATE.graph_config = LangGraphConfig.from_yaml(cio.config_yaml_path())
-        STATE.graph = graph_sentinel if model_is_configured(STATE.graph_config) else None
-        return True, "config reloaded"
+        def _reload():
+            reload_state.setattr(STATE, "graph_config", LangGraphConfig.from_yaml(cio.config_yaml_path()))
+            STATE.graph = graph_sentinel if model_is_configured(STATE.graph_config) else None
+            return True, "config reloaded"
 
-    monkeypatch.setattr(agent_init, "_reload_langgraph_agent", _reload)
+        reload_state.setattr(agent_init, "_reload_langgraph_agent", _reload)
 
-    ok, msg = settings_apply._build_settings_callbacks()["finish_setup"]({"model": {"name": ""}}, None)
+        ok, msg = settings_apply._build_settings_callbacks()["finish_setup"]({"model": {"name": ""}}, None)
+
+    # The setup reload must restore the runtime config for later tests in this worker.
+    assert STATE.graph_config is original_config
 
     assert ok is True
     # The persisted leaf no longer carries the template's placeholder gateway — it is a
