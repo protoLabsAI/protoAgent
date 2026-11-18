@@ -43,6 +43,7 @@ from .engine import (
     _MAX_PARALLEL_CALLS,
     _NO_RUNTIME_MESSAGE,
     _invoke_bridged,
+    _PtcEvents,
     _record_bridged_call,
     _record_script,
     _resolve_child_interpreter,
@@ -422,6 +423,7 @@ class Kernel:
                 ok, payload = await _invoke_bridged(
                     name, args, ctx["tool_map"], session_id=ctx["session_id"], gate=ctx["gate"], fence=ctx["fence"],
                     parent_call_id=ctx["parent_call_id"], script_sha256=ctx["script_sha256"],
+                    ptc_events=ctx["ptc_events"],
                 )
             reply = {"type": "tool_reply", "id": rid, "ok": ok, ("result" if ok else "error"): payload}
             with contextlib.suppress(Exception):
@@ -441,7 +443,7 @@ class Kernel:
 
     async def run(
         self, code: str, *, tool_map: dict, timeout: float, session_id: str, gate, fence,
-        parent_call_id: str = "", script_sha256: str = "",
+        parent_call_id: str = "", script_sha256: str = "", ptc_sink=None,
     ) -> str:
         """Run ``code`` in the kernel's persistent globals and return the body text
         (pre-truncation). Raises ``_KernelTimeout`` if the call overruns ``timeout``
@@ -457,6 +459,9 @@ class Kernel:
             self._active = {
                 "tool_map": tool_map, "session_id": session_id, "gate": gate, "fence": fence,
                 "parent_call_id": parent_call_id, "script_sha256": script_sha256,
+                # This call's ptc_call event stream (sink + per-run counter). It lives
+                # in the slot, so a leftover thread's refused call has none to emit on.
+                "ptc_events": _PtcEvents(ptc_sink, parent_call_id),
             }
             loop = asyncio.get_running_loop()
             self._exec_cid += 1
@@ -663,6 +668,7 @@ async def run_in_kernel(
     fresh: bool = False,
     parent_call_id: str = "",
     script_sha256: str = "",
+    ptc_sink=None,
 ) -> str:
     """Run ``code`` in ``session_id``'s kernel, starting it on first use.
 
@@ -684,7 +690,7 @@ async def run_in_kernel(
     try:
         body = await kernel.run(
             code, tool_map=tool_map, timeout=timeout, session_id=session_id, gate=gate, fence=fence,
-            parent_call_id=parent_call_id, script_sha256=script_sha256,
+            parent_call_id=parent_call_id, script_sha256=script_sha256, ptc_sink=ptc_sink,
         )
     except _KernelTimeout:
         await _pool.stop(session_id)

@@ -993,3 +993,108 @@ async def test_bridge_failure_releases_every_waiter(failure):
     assert out.count(message) == 4
     if failure == "null_id":
         assert out.endswith("RECOVERED")
+
+
+# ── ptc_call live events: one start + one end custom event per bridged call ──
+
+
+def _capturing_sink():
+    events: list[dict] = []
+
+    async def sink(payload):
+        events.append(payload)
+
+    return events, sink
+
+
+_TWO_CALLS = "print(tools.echo_tool(text='a'), tools.echo_tool(text='b'))"
+
+
+@pytest.mark.asyncio
+async def test_bridged_calls_emit_ptc_call_events_under_the_execute_code_run():
+    # The production lane: the tool body captures its run config, so each bridged
+    # call surfaces as a `ptc_call` custom event on the caller's callbacks.
+    from langchain_core.callbacks import AsyncCallbackHandler
+
+    events: list[dict] = []
+
+    class _Capture(AsyncCallbackHandler):
+        async def on_custom_event(self, name, data, **kwargs):
+            assert name == "ptc_call"
+            events.append(data)
+
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"])
+    msg = await ec.ainvoke(
+        {"name": "execute_code", "args": {"code": _TWO_CALLS}, "id": "call-live", "type": "tool_call"},
+        config={"callbacks": [_Capture()]},
+    )
+    assert "A B" in msg.content
+    assert [e["phase"] for e in events] == ["start", "end", "start", "end"]
+    assert all(e["parent_call_id"] == "call-live" and e["name"] == "echo_tool" for e in events)
+    assert [e["id"] for e in events] == ["call-live:ptc:1", "call-live:ptc:1", "call-live:ptc:2", "call-live:ptc:2"]
+    first_start, first_end, second_start, second_end = events
+    assert set(first_start) == {"phase", "id", "name", "args", "parent_call_id"}
+    assert (first_start["args"], second_start["args"]) == ({"text": "a"}, {"text": "b"})
+    assert set(first_end) == {"phase", "id", "name", "output", "output_chars", "error", "duration_ms", "parent_call_id"}
+    assert (first_end["output"], first_end["output_chars"], first_end["error"]) == ("A", 1, False)
+    assert second_end["output"] == "B" and isinstance(second_end["duration_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_ptc_call_end_caps_output_and_flags_a_failed_tool():
+    events, sink = _capturing_sink()
+    code = "tools.echo_tool(text='x' * 5000)\ntry:\n    tools.boom_tool()\nexcept RuntimeError:\n    pass\nprint('ok')"
+    assert "ok" in await run_code(code, _TOOL_MAP, parent_call_id="c1", ptc_sink=sink)
+    big, boom = [e for e in events if e["phase"] == "end"]
+    assert (len(big["output"]), big["output_chars"], big["error"]) == (2000, 5000, False)
+    assert boom["error"] is True and "kaboom" in boom["output"]
+
+
+@pytest.mark.asyncio
+async def test_policy_denied_bridged_call_emits_start_and_error_end():
+    events, sink = _capturing_sink()
+    gate = lambda name: f"Tool '{name}' is disabled by policy."  # noqa: E731
+    code = "try:\n    tools.echo_tool(text='x')\nexcept RuntimeError as e:\n    print('err:', e)"
+    out = await run_code(code, _TOOL_MAP, gate=gate, parent_call_id="call-deny", ptc_sink=sink)
+    assert "Blocked by policy" in out
+    start, end = events
+    assert (start["phase"], start["id"], start["args"]) == ("start", "call-deny:ptc:1", {"text": "x"})
+    assert (end["phase"], end["id"], end["error"]) == ("end", "call-deny:ptc:1", True)
+    assert end["output"].startswith("Blocked by policy:") and "disabled by policy" in end["output"]
+    assert end["parent_call_id"] == start["parent_call_id"] == "call-deny"
+
+
+@pytest.mark.asyncio
+async def test_no_sink_emits_nothing_and_a_raising_sink_keeps_the_result(monkeypatch):
+    from plugins.execute_code import engine
+
+    emitted: list[dict] = []
+
+    async def _spy(self, payload):
+        emitted.append(payload)
+
+    monkeypatch.setattr(engine._PtcEvents, "_emit", _spy)
+    baseline = await run_code(_TWO_CALLS, _TOOL_MAP, parent_call_id="c1")  # no sink
+    events, sink = _capturing_sink()
+    assert await run_code(_TWO_CALLS, _TOOL_MAP, ptc_sink=sink) == baseline  # a sink but no parent call id
+    assert baseline == "A B" and emitted == [] and events == []
+    monkeypatch.undo()
+
+    attempts: list[dict] = []
+
+    async def _raising(payload):
+        attempts.append(payload)
+        raise RuntimeError("stream is gone")
+
+    assert await run_code(_TWO_CALLS, _TOOL_MAP, parent_call_id="c1", ptc_sink=_raising) == baseline
+    assert len(attempts) == 4  # every emit was tried; none reached the bridged call
+
+
+@pytest.mark.asyncio
+async def test_ptc_call_events_stop_after_200_bridged_calls_but_calls_still_run():
+    events, sink = _capturing_sink()
+    code = "print(sum(len(tools.echo_tool(text='x')) for _ in range(205)))"
+    assert await run_code(code, _TOOL_MAP, parent_call_id="c1", ptc_sink=sink, timeout=60) == "205"
+    assert [e["phase"] for e in events].count("start") == 200
+    assert [e["phase"] for e in events].count("end") == 200
+    assert len({e["id"] for e in events}) == 200 and events[-1]["id"] == "c1:ptc:200"

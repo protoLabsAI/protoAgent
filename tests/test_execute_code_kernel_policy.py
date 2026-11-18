@@ -242,3 +242,47 @@ async def test_kernel_audit_links_each_run_to_its_full_script(audit_probe):
         assert rows[1]["success"] is True
     bridged = [r for r in _rows(audit_probe) if r["tool"] == "ptc:echo_tool"]
     assert [r["parent_call_id"] for r in bridged] == ["kernel-call-one", "kernel-call-two"]
+
+
+@pytest.mark.asyncio
+async def test_kernel_bridged_calls_emit_ptc_call_events_and_a_refusal_emits_none(audit_probe):
+    # The session-kernel path emits the same start/end payloads as the one-shot path,
+    # tagged with the run's parent_call_id; the event ids restart with each run.
+    sid = "ptc-events"
+    events: list[dict] = []
+
+    async def sink(payload):
+        events.append(payload)
+
+    gate = lambda name: "Tool 'boom' is disabled by policy." if name == "boom" else None  # noqa: E731
+    tmap = {**_TOOL_MAP, "boom": echo_tool}
+    code = "print(tools.echo_tool(text='a'))\ntry:\n    tools.boom(text='b')\nexcept Exception as e:\n    print('err:', e)"
+    for call_id in ("kernel-one", "kernel-two"):
+        events.clear()
+        out = await kernel.run_in_kernel(
+            code, tmap, timeout=30.0, truncate=6000, session_id=sid, gate=gate,
+            parent_call_id=call_id, ptc_sink=sink,
+        )
+        assert "A" in out and "Blocked by policy" in out
+        assert [(e["phase"], e["id"], e["name"]) for e in events] == [
+            ("start", f"{call_id}:ptc:1", "echo_tool"), ("end", f"{call_id}:ptc:1", "echo_tool"),
+            ("start", f"{call_id}:ptc:2", "boom"), ("end", f"{call_id}:ptc:2", "boom"),
+        ]
+        assert all(e["parent_call_id"] == call_id for e in events)
+        assert events[0]["args"] == {"text": "a"}
+        assert (events[1]["output"], events[1]["output_chars"], events[1]["error"]) == ("A", 1, False)
+        assert events[3]["error"] is True and events[3]["output"].startswith("Blocked by policy:")
+        assert set(events[1]) == set(events[3]) == {
+            "phase", "id", "name", "output", "output_chars", "error", "duration_ms", "parent_call_id",
+        }
+
+    # No call is active now: a bridged call from a leftover thread is refused (and
+    # audited), and emits nothing — the sink belonged to the call that has ended.
+    k = kernel._pool.kernels[sid]
+    assert k._active is None
+    events.clear()
+    await k._dispatch_tool({"id": 999, "tool": "echo_tool", "args": {"text": "late"}})
+    assert events == []
+    refusal = _rows(audit_probe)[-1]
+    assert refusal["tool"] == "ptc:echo_tool" and refusal["success"] is False
+    assert "no execute_code call is active" in refusal["result_summary"]

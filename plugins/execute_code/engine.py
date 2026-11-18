@@ -314,6 +314,92 @@ def _deny_reason(name: str, gate, fence) -> str | None:
     return None
 
 
+#: A run stops emitting ``ptc_call`` events after this many bridged calls, so a
+#: script that loops over thousands of calls cannot flood the chat stream. Later
+#: calls still run and are still audited; they just have no live card.
+_PTC_EVENT_MAX_CALLS = 200
+#: Chars of a bridged call's output carried on its ``end`` event (``output_chars``
+#: is the full length).
+_PTC_EVENT_OUTPUT_CAP = 2000
+
+
+def _ptc_event_sink():
+    """An async sink that emits each payload as a ``ptc_call`` custom event under
+    the CALLING ``execute_code`` run, or None outside one.
+
+    The run config is captured NOW, in the tool body: bridged calls are served on
+    the RPC reader's own tasks (and, for a session kernel, on a reader task that
+    outlives the call), whose context holds no LangChain run, so a bare
+    ``adispatch_custom_event`` there would have no parent run to attach to."""
+    try:
+        from langchain_core.callbacks import adispatch_custom_event
+        from langchain_core.runnables.config import ensure_config
+
+        config = ensure_config()
+    except Exception:  # noqa: BLE001 — no run context (a unit test, a CLI call): no live view
+        return None
+    if not config.get("callbacks"):
+        return None
+
+    async def _sink(payload: dict) -> None:
+        await adispatch_custom_event("ptc_call", payload, config=config)
+
+    return _sink
+
+
+class _PtcEvents:
+    """The ``ptc_call`` event stream of ONE ``execute_code`` run.
+
+    Holds the run's sink, its ``parent_call_id`` (the execute_code call's model
+    tool-call id — the same id the audit rows carry) and the per-run call counter
+    that makes each bridged call's event id unique. Emitting is best-effort: a
+    sink failure is logged at debug and never reaches the bridged call."""
+
+    def __init__(self, sink, parent_call_id: str):
+        self._sink = sink
+        self._parent_call_id = parent_call_id or ""
+        self._calls = 0
+
+    async def _emit(self, payload: dict) -> None:
+        try:
+            await self._sink(payload)
+        except Exception:  # noqa: BLE001 — the live view never changes a tool result
+            log.debug("[execute_code] ptc_call event emit failed", exc_info=True)
+
+    async def start(self, name: str, args: dict) -> str | None:
+        """Emit the ``start`` event; return the call's event id, or None when this
+        call emits nothing (no sink, no parent call id, or past the per-run cap)."""
+        if self._sink is None or not self._parent_call_id:
+            return None
+        self._calls += 1
+        if self._calls > _PTC_EVENT_MAX_CALLS:
+            return None
+        call_id = f"{self._parent_call_id}:ptc:{self._calls}"
+        await self._emit({
+            "phase": "start",
+            "id": call_id,
+            "name": name,
+            "args": args,
+            "parent_call_id": self._parent_call_id,
+        })
+        return call_id
+
+    async def end(self, call_id: str | None, name: str, output: str, *, error: bool, duration_ms: int) -> None:
+        """Emit the ``end`` event for a call whose ``start`` was emitted."""
+        if call_id is None:
+            return
+        await self._emit({
+            "phase": "end",
+            "id": call_id,
+            "name": name,
+            "output": output[:_PTC_EVENT_OUTPUT_CAP],
+            "output_chars": len(output),
+            "error": error,
+            "duration_ms": duration_ms,
+            "parent_call_id": self._parent_call_id,
+        })
+
+
 async def _invoke_bridged(
     name: str,
     args: dict,
@@ -324,6 +410,7 @@ async def _invoke_bridged(
     fence,
     parent_call_id: str = "",
     script_sha256: str = "",
+    ptc_events: "_PtcEvents | None" = None,
 ) -> tuple[bool, str]:
     """Run one bridged tool call under call-bound policy and record its audit row.
 
@@ -337,7 +424,11 @@ async def _invoke_bridged(
 
     ``parent_call_id``/``script_sha256`` (empty by default) attribute the row to the
     ``execute_code`` call and script that issued it; they thread straight onto the
-    audit row. The kernel passes neither yet, so its rows are unchanged."""
+    audit row. The kernel passes neither yet, so its rows are unchanged.
+
+    ``ptc_events`` (the owning run's :class:`_PtcEvents`, or None) gets a ``start``
+    event before the call — a policy denial included — and an ``end`` event after
+    it, so the console can show the call live. It never changes the result."""
     import time
 
     tool = tool_map.get(name)
@@ -352,34 +443,44 @@ async def _invoke_bridged(
         _record_bridged_call(
             session_id, name, args, err, 0, False, parent_call_id=parent_call_id, script_sha256=script_sha256
         )
+        if ptc_events is not None:
+            event_id = await ptc_events.start(name, args)
+            await ptc_events.end(event_id, name, err, error=True, duration_ms=0)
         return False, err
+    event_id = await ptc_events.start(name, args) if ptc_events is not None else None
     started = time.monotonic()
     try:
         result = await tool.ainvoke(args)
         text = result if isinstance(result, str) else str(result)
+        duration_ms = int((time.monotonic() - started) * 1000)
         _record_bridged_call(
             session_id,
             name,
             args,
             text,
-            int((time.monotonic() - started) * 1000),
+            duration_ms,
             True,
             parent_call_id=parent_call_id,
             script_sha256=script_sha256,
         )
+        if ptc_events is not None:
+            await ptc_events.end(event_id, name, text, error=False, duration_ms=duration_ms)
         return True, text
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
+        duration_ms = int((time.monotonic() - started) * 1000)
         _record_bridged_call(
             session_id,
             name,
             args,
             err,
-            int((time.monotonic() - started) * 1000),
+            duration_ms,
             False,
             parent_call_id=parent_call_id,
             script_sha256=script_sha256,
         )
+        if ptc_events is not None:
+            await ptc_events.end(event_id, name, err, error=True, duration_ms=duration_ms)
         return False, err
 
 
@@ -401,11 +502,15 @@ async def _service_rpc(
     fence=None,
     parent_call_id: str = "",
     script_sha256: str = "",
+    ptc_sink=None,
 ):
     """Read RPC requests from the child, invoke real tools, write back results.
 
     ``parent_call_id``/``script_sha256`` (empty by default) are attributed to every
-    bridged call this one-shot run records, so its ``ptc:`` rows name the script."""
+    bridged call this one-shot run records, so its ``ptc:`` rows name the script.
+    ``ptc_sink`` (an async ``payload -> None``, or None) receives this run's
+    ``ptc_call`` start/end events."""
+    ptc_events = _PtcEvents(ptc_sink, parent_call_id)
     semaphore = asyncio.Semaphore(_MAX_PARALLEL_CALLS)
     write_lock = asyncio.Lock()
     pending: set[asyncio.Task] = set()
@@ -431,6 +536,7 @@ async def _service_rpc(
                 fence=fence,
                 parent_call_id=parent_call_id,
                 script_sha256=script_sha256,
+                ptc_events=ptc_events,
             )
             resp = {"id": rid, "ok": ok, ("result" if ok else "error"): payload}
             await respond(resp)
@@ -589,6 +695,7 @@ async def run_code(
     fence=None,
     parent_call_id: str = "",
     script_sha256: str = "",
+    ptc_sink=None,
 ) -> str:
     """Run ``code`` with a tool-RPC bridge; return stdout and any JSON result.
 
@@ -601,6 +708,10 @@ async def run_code(
     ``parent_call_id`` (the owning ``execute_code`` call's model tool-call id) and
     ``script_sha256`` (the script's digest) attribute each bridged ``ptc:`` row to
     the script that made it; both empty by default so a direct call is unaffected.
+
+    ``ptc_sink`` (an async ``payload -> None``, or None) receives a ``ptc_call``
+    start and end event for each bridged call, tagged with ``parent_call_id``; with
+    no sink or no ``parent_call_id`` nothing is emitted.
     """
     interpreter = _resolve_child_interpreter()
     if interpreter is None:
@@ -675,6 +786,7 @@ async def run_code(
                     fence=fence,
                     parent_call_id=parent_call_id,
                     script_sha256=script_sha256,
+                    ptc_sink=ptc_sink,
                 )
             finally:
                 with contextlib.suppress(Exception):
@@ -936,6 +1048,10 @@ def build_execute_code_tool(
         # every bridged call. No fence on the turn → None → no check.
         raw_fence = state.get("subagent_fence") if isinstance(state, dict) else None
         fence = frozenset(raw_fence) if raw_fence else None
+        # Live view: each bridged call is re-emitted as a `ptc_call` custom event
+        # under THIS run. The run config must be captured here, in the tool body —
+        # the bridge serves calls on tasks that hold no LangChain run.
+        ptc_sink = _ptc_event_sink()
         try:
             # ADR 0134 D1: with session_state on and a real session, run in the
             # session's long-lived kernel so state carries across calls. An empty
@@ -955,6 +1071,7 @@ def build_execute_code_tool(
                     fresh=fresh,
                     parent_call_id=tool_call_id,
                     script_sha256=script_sha256,
+                    ptc_sink=ptc_sink,
                 )
             # One-shot run: keep the full script in its own ptc:script audit row
             # (once per run) so every bridged ptc: row this run writes can be traced
@@ -970,6 +1087,7 @@ def build_execute_code_tool(
                 fence=fence,
                 parent_call_id=tool_call_id,
                 script_sha256=script_sha256,
+                ptc_sink=ptc_sink,
             )
         except Exception as exc:
             log.exception("[execute_code] harness failure")
