@@ -2040,3 +2040,203 @@ def test_view_image_refuses_an_oversized_file_without_reading_it(workspace, monk
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
     out = t["view_image"].invoke({"project": "a", "path": "huge.png"})
     assert out.startswith("Error:") and "view_image limit" in out
+
+
+# ── edit_file list form (#5098) ────────────────────────────────────────────────
+
+
+def _rw(a):
+    return _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+
+def test_edit_file_applies_a_list_of_edits_in_one_call(workspace, monkeypatch):
+    """Three sites, one call: one write, one announcement — and the third pair matches text
+    that only exists because the second pair inserted it."""
+    from tools import fs_tools
+
+    _, a, _ = workspace
+    (a / "m.py").write_bytes(b"alpha = 1\nbravo = 2\ncharlie = 3\n")
+    t = _rw(a)
+    calls = {"write": 0, "announce": 0}
+    real_write = fs_tools._write_text_verbatim
+
+    def counting_write(path, text):
+        calls["write"] += 1
+        real_write(path, text)
+
+    monkeypatch.setattr(fs_tools, "_write_text_verbatim", counting_write)
+    monkeypatch.setattr(
+        fs_tools, "_announce_change", lambda *args: calls.__setitem__("announce", calls["announce"] + 1)
+    )
+
+    out = t["edit_file"].invoke(
+        {
+            "project": "a",
+            "path": "m.py",
+            "edits": [
+                {"old": "alpha = 1", "new": "alpha = 10"},
+                {"old": "bravo = 2", "new": "delta = 4"},
+                {"old": "delta = 4", "new": "delta = 40"},
+            ],
+        }
+    )
+
+    assert out == "Edited m.py (3 edits)."
+    assert (a / "m.py").read_bytes() == b"alpha = 10\ndelta = 40\ncharlie = 3\n"
+    assert calls == {"write": 1, "announce": 1}
+
+
+@pytest.mark.parametrize(
+    "edits, expected",
+    [
+        # Pair 1 creates a second "y = 1", so pair 2's needle is ambiguous at its turn.
+        (
+            [{"old": "x = 1", "new": "y = 1"}, {"old": "y = 1", "new": "z"}],
+            "Error: edit 2 of 2: old=y = 1… not unique (2 matches) — add context",
+        ),
+        # Pair 1 removes the text pair 2 was written against.
+        (
+            [{"old": "x = 1\n", "new": ""}, {"old": "x = 1\ny", "new": "q"}, {"old": "y = 1", "new": "w"}],
+            "Error: edit 2 of 3: old=x = 1⏎y… not found",
+        ),
+    ],
+)
+def test_edit_file_list_failure_names_the_pair_and_writes_nothing(workspace, monkeypatch, edits, expected):
+    from tools import fs_tools
+
+    _, a, _ = workspace
+    before = b"x = 1\ny = 1\n"
+    (a / "m.py").write_bytes(before)
+    t = _rw(a)
+    announced = []
+    monkeypatch.setattr(fs_tools, "_announce_change", lambda *args: announced.append(args))
+
+    out = t["edit_file"].invoke({"project": "a", "path": "m.py", "edits": edits})
+
+    assert out == expected
+    assert (a / "m.py").read_bytes() == before
+    assert announced == []
+
+
+def test_edit_file_list_error_truncates_the_needle_preview_to_60_chars(workspace):
+    _, a, _ = workspace
+    (a / "m.py").write_bytes(b"x\n")
+    needle = "n" * 80
+
+    out = _rw(a)["edit_file"].invoke({"project": "a", "path": "m.py", "edits": [{"old": needle, "new": "y"}]})
+
+    assert out == f"Error: edit 1 of 1: old={'n' * 60}… not found"
+
+
+def test_edit_file_list_keeps_crlf_endings(workspace):
+    """LF-written pairs apply to a CRLF file, including a later pair matching text an earlier
+    pair inserted, and every line ending stays CRLF."""
+    _, a, _ = workspace
+    (a / "win.txt").write_bytes(b"alpha\r\nbravo\r\ncharlie\r\ndelta\r\n")
+
+    out = _rw(a)["edit_file"].invoke(
+        {
+            "project": "a",
+            "path": "win.txt",
+            "edits": [
+                {"old": "alpha\nbravo", "new": "alpha\nxray\nbravo"},
+                {"old": "xray\nbravo", "new": "yankee\nbravo"},
+                {"old": "delta", "new": "echo"},
+            ],
+        }
+    )
+
+    assert out == "Edited win.txt (3 edits)."
+    assert (a / "win.txt").read_bytes() == b"alpha\r\nyankee\r\nbravo\r\ncharlie\r\necho\r\n"
+
+
+def test_edit_file_list_ambiguity_is_counted_in_the_crlf_needle(workspace):
+    _, a, _ = workspace
+    before = b"x\r\ny\r\nx\r\ny\r\n"
+    (a / "dup.txt").write_bytes(before)
+
+    out = _rw(a)["edit_file"].invoke({"project": "a", "path": "dup.txt", "edits": [{"old": "x\ny", "new": "z"}]})
+
+    assert out == "Error: edit 1 of 1: old=x⏎y… not unique (2 matches) — add context"
+    assert (a / "dup.txt").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "args, expected",
+    [
+        (
+            {"old": "one", "new": "uno", "edits": [{"old": "two", "new": "dos"}]},
+            "Error: pass either old/new or edits, not both.",
+        ),
+        ({"new": "uno", "edits": [{"old": "two", "new": "dos"}]}, "Error: pass either old/new or edits, not both."),
+        ({}, "Error: pass old/new or a non-empty edits list."),
+        ({"edits": []}, "Error: pass old/new or a non-empty edits list."),
+        ({"old": "", "new": "uno"}, "Error: pass old/new or a non-empty edits list."),
+        ({"old": "one", "new": "one"}, "Error: `old` and `new` are identical — nothing to change."),
+        (
+            {"edits": [{"old": "one", "new": "uno"}, {"old": "", "new": "dos"}]},
+            "Error: edit 2 of 2: `old` is empty.",
+        ),
+        (
+            {"edits": [{"old": "one", "new": "uno"}, {"old": "two", "new": "two"}, {"old": "x", "new": "y"}]},
+            "Error: edit 2 of 3: `old` and `new` are identical — nothing to change.",
+        ),
+        ({"edits": [{"old": "one"}]}, "Error: edit 1 of 1: needs string `old` and `new` keys."),
+    ],
+)
+def test_edit_file_rejects_malformed_arguments_without_touching_the_file(workspace, monkeypatch, args, expected):
+    from tools import fs_tools
+
+    _, a, _ = workspace
+    before = b"one\r\ntwo\n"
+    (a / "m.txt").write_bytes(before)
+    t = _rw(a)
+
+    def no_read(path):
+        raise AssertionError("argument errors must be reported before the file is read")
+
+    monkeypatch.setattr(fs_tools, "_read_text_verbatim", no_read)
+
+    out = t["edit_file"].invoke({"project": "a", "path": "m.txt", **args})
+
+    assert out == expected
+    assert (a / "m.txt").read_bytes() == before
+
+
+def test_edit_file_list_form_respects_the_read_only_fence(workspace):
+    _, _, b = workspace
+    (b / "ro.txt").write_bytes(b"one\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "b", "path": str(b), "write": False}]))
+
+    out = t["edit_file"].invoke({"project": "b", "path": "ro.txt", "edits": [{"old": "one", "new": "uno"}]})
+
+    assert out.startswith("Error:") and "read-only" in out
+    assert (b / "ro.txt").read_bytes() == b"one\n"
+
+
+def test_list_form_edit_invalidates_the_read_memo(workspace):
+    """The read memo keys on the tool NAME plus project/path, so an `edits` call (no `old`/`new`
+    args at all) must still invalidate an earlier read of that file."""
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from tools.fs_tools import _DEFAULT_READ_LINES, _memoized_read
+
+    read = {"name": "read_file", "args": {"project": "a", "path": "m.py"}, "id": "r1"}
+    edit = {
+        "name": "edit_file",
+        "args": {"project": "a", "path": "m.py", "edits": [{"old": "x", "new": "y"}]},
+        "id": "e1",
+    }
+    read_turn = [
+        HumanMessage(content="go"),
+        AIMessage(content="", tool_calls=[read]),
+        ToolMessage(content="x\n", tool_call_id="r1"),
+    ]
+    edited_turn = [
+        *read_turn,
+        AIMessage(content="", tool_calls=[edit]),
+        ToolMessage(content="Edited m.py (1 edits).", tool_call_id="e1"),
+    ]
+
+    assert _memoized_read({"messages": read_turn}, "a", "m.py", 1, _DEFAULT_READ_LINES, False) == "x\n"
+    assert _memoized_read({"messages": edited_turn}, "a", "m.py", 1, _DEFAULT_READ_LINES, False) is None
