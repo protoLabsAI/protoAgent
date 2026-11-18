@@ -1195,6 +1195,14 @@ def _snapshot(event):
     return copy
 
 
+# Upper bound on each wait in the private-segment exit test below. Every one of those waits is
+# on the event itself (the turn reaching its hold point, a frame, the turn ending), so this only
+# stops a real hang from blocking the suite. It is deliberately far above a healthy run: a Windows
+# CI runner was seen taking about 1.3 s per persisted step, which put a healthy turn past the old
+# 5 s bound while it was still visibly making progress (#5465).
+_HANG_GUARD_S = 60
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fault,terminal,delivers,outcome_state",
@@ -1293,7 +1301,7 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
         clock.install(mp)
         req = _msg("please proceed", mid="request", ctx=CTX)
         running = asyncio.create_task(collect(handler.on_message_send_stream(req, peer), frames))
-        await asyncio.wait_for(ready.wait(), 5)
+        await asyncio.wait_for(ready.wait(), _HANG_GUARD_S)
         task_id = projections[0].binding["task_id"]
 
         watching = None
@@ -1301,18 +1309,18 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
             # A live re-attach while the turn is still working: the snapshot is content-free and
             # every frame after it must stay that way too.
             subscribed = handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), peer)
-            sub_frames.append(_snapshot(await asyncio.wait_for(anext(subscribed), 5)))
+            sub_frames.append(_snapshot(await asyncio.wait_for(anext(subscribed), _HANG_GUARD_S)))
             watching = asyncio.create_task(collect(subscribed, sub_frames))
 
         if fault == "cancel":
-            cancelled = await asyncio.wait_for(handler.on_cancel_task(CancelTaskRequest(id=task_id), peer), 5)
+            cancelled = await asyncio.wait_for(handler.on_cancel_task(CancelTaskRequest(id=task_id), peer), _HANG_GUARD_S)
             assert cancelled.status.state == TaskState.TASK_STATE_CANCELED
         elif gated:
             proceed.set()
         # timeout: the stall guard ends it with no further prompting.
 
         await asyncio.wait_for(asyncio.gather(*( [running] + ([watching] if watching else []) ),
-                                              return_exceptions=True), 15)
+                                              return_exceptions=True), _HANG_GUARD_S)
         await router.drain()
 
     # Every peer-readable surface: poll, (content-free) resubscribe snapshot, reopened history.
