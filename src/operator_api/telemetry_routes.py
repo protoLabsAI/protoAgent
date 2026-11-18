@@ -182,61 +182,6 @@ def _local_insights_payload() -> dict:
     }
 
 
-async def _fetch_member_json(slug: str, path: str) -> dict | None:
-    """Pure-GET read of ``<member>/<path>`` via the ADR 0042 slug-proxy resolution.
-
-    Reuses the fleet proxy's per-slug target resolution: a LOCAL member gets the
-    fleet service token in place of the hub credential (ADR 0089 D3 — the same
-    swap ``/agents/{slug}/*`` does for an operator caller); a REMOTE member
-    carries its stored bearer. Any failure — not running, connect/timeout,
-    non-200, non-JSON — returns None: the caller REPORTS the member unreachable,
-    it never retries into it or restarts it.
-    """
-    # Every step is inside the boundary, resolution and token minting included
-    # (#3018). Both used to sit ABOVE the try, so a raise there escaped as a 500
-    # for the WHOLE rollup — the exact opposite of the contract this docstring
-    # states. Not hypothetical: ``_target_for_slug`` still subscripts registry
-    # records straight through (``rec["port"]`` on a local state entry the hub
-    # believes is running, ``remote["url"]`` on a remote record), so one field
-    # missing from one hand-edited record raises KeyError here rather than
-    # resolving to None. The loaders are tolerant of an unreadable FILE (they
-    # log and return {}), so what reaches this line is a bad RECORD — and the
-    # ROSTER read is total over those now (``supervisor.list_remotes``/
-    # ``status``, same fix), which is what lets such a member get this far at
-    # all instead of taking the roster down. Here is where it becomes the
-    # ``reachable: false`` row the caller reports.
-    try:
-        import httpx
-
-        from graph.fleet import proxy
-
-        target = proxy._target_for_slug(slug)
-        if target is None:
-            return None
-        base, extra = target
-        headers = dict(extra)
-        # The fleet token is for LOCAL members only — a remote the hub holds no token for
-        # reads anonymously (and 401s if it is secured) rather than receive the
-        # loopback-only fleet credential it could not verify anyway (ADR 0113 D4).
-        if slug not in proxy._remote_slugs and not any(k.lower() == "authorization" for k in headers):
-            from graph.fleet.service_token import resolve_service_token
-
-            headers["authorization"] = f"Bearer {resolve_service_token()}"
-        resp = await proxy._get_client().get(
-            f"{base}/{path}",
-            headers=headers,
-            # The shared proxy client reads forever (SSE-safe); a rollup read
-            # must not — a stalled member is just "unreachable" after the bound.
-            timeout=httpx.Timeout(10.0, connect=5.0),
-        )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) else None
-    except Exception:  # noqa: BLE001 — every failure mode is "unreachable", never a 500
-        return None
-
-
 def _rollup_of(summary: dict | None) -> dict | None:
     """The fleet-grid numbers from one member's summary; None = telemetry off."""
     if not isinstance(summary, dict):
@@ -602,11 +547,15 @@ def register_telemetry_routes(app) -> None:
 
         peers = [a for a in roster if not a.get("host")]
 
+        # The one bounded, authenticated member read (ADR 0135 D8), looked up on
+        # its module at call time so there is a single definition to patch.
+        from graph.fleet import member_read
+
         async def _read(rec: dict) -> tuple[str, dict]:
             slug = _slug_of(rec)
             s, i = await asyncio.gather(
-                _fetch_member_json(slug, "api/telemetry/summary"),
-                _fetch_member_json(slug, "api/telemetry/insights"),
+                member_read._fetch_member_json(slug, "api/telemetry/summary"),
+                member_read._fetch_member_json(slug, "api/telemetry/insights"),
             )
             return slug, _member_entry(rec, slug, s, i, template)
 

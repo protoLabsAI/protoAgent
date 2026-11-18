@@ -9,11 +9,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from a2a_impl import auth
-from graph.fleet import proxy, supervisor
+from graph.fleet import member_read, proxy, supervisor
 from graph.providers.usage import Account, Window
 from observability import usage_store
 from observability.usage_store import UsageStore
-from operator_api import telemetry_routes
 from operator_api.usage_routes import register_usage_routes
 from ops.usage import merge_fleet_usage, snapshot
 
@@ -80,7 +79,7 @@ def test_shared_account_one_poll_and_members(client, monkeypatch, tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://member") as member:
             return (await member.get("/" + path)).json()
 
-    monkeypatch.setattr(telemetry_routes, "_fetch_member_json", read)
+    monkeypatch.setattr(member_read, "_fetch_member_json", read)
     body = client.get("/api/usage/fleet").json()
     shared = next(row for row in body["accounts"] if row["account_key"] == "shared")
     assert shared["members"] == ["host", "worker"]
@@ -112,7 +111,7 @@ def test_unreachable_is_contained(client, monkeypatch, failure):
             raise failure
         return failure
 
-    monkeypatch.setattr(telemetry_routes, "_fetch_member_json", read)
+    monkeypatch.setattr(member_read, "_fetch_member_json", read)
     response = client.get("/api/usage/fleet")
     assert response.status_code == 200
     assert response.json()["members"]["bad"] == {"reachable": False, "error": "usage unavailable"}

@@ -214,8 +214,7 @@ def test_cli_uses_operator_route_and_labels_shares(monkeypatch, capsys, fleet):
 
 def test_fleet_includes_peer_only_accounts_and_operator_auth(store, monkeypatch):
     from a2a_impl import auth
-    from graph.fleet import supervisor
-    from operator_api import telemetry_routes
+    from graph.fleet import member_read, supervisor
     from urllib.parse import parse_qs, urlparse
 
     monkeypatch.setattr(usage, "snapshot", lambda *a, **kw: {"accounts": []})
@@ -231,7 +230,7 @@ def test_fleet_includes_peer_only_accounts_and_operator_auth(store, monkeypatch)
             return {**peer, "attribution": [{**w, "tokens": 40} for w in windows]}
         return peer
 
-    monkeypatch.setattr(telemetry_routes, "_fetch_member_json", fetch)
+    monkeypatch.setattr(member_read, "_fetch_member_json", fetch)
     monkeypatch.setattr(auth, "_BEARER", ["operator-secret"])
     monkeypatch.setattr(auth, "_FEDERATION", ["federation-secret"])
     monkeypatch.setattr(auth, "_FLEET", [None])
