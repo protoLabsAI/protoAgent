@@ -384,6 +384,27 @@ def _factory_tool(config, all_tools):
     return reg.late_tool_factories[0](all_tools, None)
 
 
+def test_a_changed_setting_applies_on_the_first_reload(monkeypatch):
+    # A reload builds the new graph before the host swaps in the new config, so the host's
+    # "live" plugin section is still the OLD one while the factory runs. The factory is
+    # handed the NEW graph config and must read its own section from that — otherwise
+    # turning session_state on took two reloads.
+    from types import SimpleNamespace
+
+    from runtime.state import STATE
+
+    old = SimpleNamespace(plugin_config={"execute_code": {"session_state": False}})
+    new = SimpleNamespace(plugin_config={"execute_code": {"session_state": True}})
+    monkeypatch.setattr(STATE, "graph_config", old)
+    reg = PluginRegistry("execute_code", Path("."), config={"session_state": False})
+    register(reg)
+    factory = reg.late_tool_factories[0]
+    assert "State PERSISTS across calls" in factory([echo_tool], new).description
+    # No section on the passed config (or no config at all): the live read still applies.
+    assert "no state persists between runs" in factory([echo_tool], None).description
+    assert "no state persists between runs" in factory([echo_tool], SimpleNamespace(plugin_config={})).description
+
+
 def test_extra_tools_adds_on_top_of_curated_default():
     # tools empty → curated default applies; extra_tools adds one plugin read
     # tool WITHOUT the operator re-listing every core tool.

@@ -153,6 +153,14 @@ def register(registry) -> None:
         # instead of waiting for a full plugin reload (ADR 0103 S4). `config` is
         # the full graph config the seam passes — the enforcement-parity source.
         cfg = registry.live_config() if hasattr(registry, "live_config") else registry.config
+        # During a config reload the host builds the new graph BEFORE it swaps in the new
+        # config, so live_config() still returns the previous values here: a changed setting
+        # (session_state, the tools allowlist, the kernel limits) took a second reload to
+        # apply. The graph config passed to this factory IS the new one, so read this
+        # plugin's section from it when it has one.
+        passed = (getattr(config, "plugin_config", None) or {}).get(getattr(registry, "config_section", "execute_code"))
+        if isinstance(passed, dict):
+            cfg = passed
         # ADR 0134 D2: push the operator's kernel limits into the process-wide pool on
         # each (re)build, so an edited idle TTL / cap takes effect without a restart.
         # Clamp to sane floors — a zero/negative TTL would sweep a just-used kernel and
