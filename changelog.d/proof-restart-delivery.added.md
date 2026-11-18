@@ -1,1 +1,0 @@
-- **Delivery restart proof.** Add process-kill evidence for sealed-result commit and external-send acknowledgment boundaries across all four requester kinds, including a strict expected failure for an unclosed dispatching record.

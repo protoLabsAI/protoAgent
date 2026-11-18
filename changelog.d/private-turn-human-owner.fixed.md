@@ -1,3 +1,0 @@
-- **Private turns belong to the human operator.** Isolate new private-turn tasks from fleet-service and agent-kind peers, and restrict guarded parked resumes to the human-owned partition while preserving ordinary task access and legacy owners.
-- **Keep private turns visible to internal readers.** Preserve human-owned turns in console history and session bookkeeping while retaining principal checks on caller-scoped task reads.
-- **Preserve parked-task settlement.** Settle superseded pauses within the saved turn's owner partition so ordinary conversations still advance without completing another partition's pause.

@@ -1,1 +1,0 @@
-- **Private steering opt-in.** Add the config-only `private_steering.enabled` flag, defaulting to false, and a shared server helper for future intake wiring. Existing steering and A2A behavior is unchanged.

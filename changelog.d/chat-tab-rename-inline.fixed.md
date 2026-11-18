@@ -1,1 +1,0 @@
-- **Chat tab renaming stays inside the tab.** Double-click and context-menu Rename use the inline editor in the expanded strip, with regression coverage for saving the title with Enter. The existing design-system 0.74.1 dependencies already include the ds-90l fix.

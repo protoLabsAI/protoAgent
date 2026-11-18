@@ -1,1 +1,0 @@
-- **Tasks retain durable request correlation and provenance.** Versioned metadata preserves unknown origins on existing rows, while opaque promotion keys make creation retries idempotent without duplicate tasks or creation events. Request lineage remains immutable through updates and survives delete/undo.

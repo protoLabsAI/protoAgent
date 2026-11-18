@@ -1,1 +1,0 @@
-- **Process restart proof.** Add SIGKILL recovery coverage across three kill points and four caller identities, including restoration of private resolver metadata.

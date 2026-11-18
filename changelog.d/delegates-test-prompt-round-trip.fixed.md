@@ -1,1 +1,0 @@
-- **Delegate Test checks the configured ACP model.** Settings now sends a short prompt in a fresh, unpersisted session so stale adapters fail Test with actionable errors before blocking board work. Unfinished or empty replies also fail Test. Periodic health probes remain handshake-only, and Test writes no run telemetry. Refs #5476.

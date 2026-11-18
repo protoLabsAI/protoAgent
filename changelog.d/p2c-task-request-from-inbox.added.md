@@ -1,1 +1,0 @@
-- **Tasks remember the inbox request that caused them.** Tasks created during inbox-fired turns retain the durable item, execution and message identifiers plus recorded requester metadata across retries and restarts. Multiple tasks may share the same request.
