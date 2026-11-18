@@ -395,6 +395,10 @@ _TRACKED: dict[int, int] = {}
 _TRACKED_LOCK = threading.RLock()
 _escalation: threading.Timer | None = None
 _atexit_armed = False
+# Set once THIS process starts signalling its own trees on the way out (#5267). An owner
+# whose child then exits can tell "we stopped it" from "it died on us": an adapter that
+# shuts down cleanly on our SIGTERM exits 0, which otherwise reads as a crash.
+_host_teardown = False
 
 #: How long a SIGTERMed tree gets before the SIGKILL, on the signal-receipt path.
 #: Deliberately inside the hub's 3s straggler window (`supervisor.shutdown_all`), so
@@ -563,6 +567,13 @@ def _signal_tracked(*, force: bool, only: set[int] | None = None) -> int:
     return signalled
 
 
+def host_teardown_started() -> bool:
+    """True once this process has begun tearing down its tracked trees
+    (``begin_tree_teardown`` / ``reap_tracked_trees``). Never reset: the process is
+    on its way out."""
+    return _host_teardown
+
+
 def begin_tree_teardown(*, grace: float = TEARDOWN_GRACE) -> None:
     """The signal-receipt half: SIGTERM every tracked tree NOW, then SIGKILL what's
     left after ``grace`` on a daemon timer. Non-blocking, idempotent, never raises —
@@ -571,7 +582,8 @@ def begin_tree_teardown(*, grace: float = TEARDOWN_GRACE) -> None:
     Runs before the uvicorn drain, so the trees no longer depend on the lifespan
     teardown finishing — or starting.
     """
-    global _escalation
+    global _escalation, _host_teardown
+    _host_teardown = True  # before the first signal, so no exit it causes is unlabelled
     try:
         if not _signal_tracked(force=False):
             return
@@ -594,6 +606,8 @@ def reap_tracked_trees(*, grace: float = 1.0) -> int:
     the end of lifespan shutdown, the parent-death watchdog before ``os._exit``,
     and ``atexit``. Returns at once when nothing is tracked. Never raises.
     """
+    global _host_teardown
+    _host_teardown = True
     try:
         # The trees THIS reap is responsible for. One tracked during the grace below got
         # no SIGTERM, so it must not get the SIGKILL either, nor be forgotten: it stays
@@ -824,6 +838,7 @@ __all__ = [
     "scrub_agent_env",
     "detached_kwargs",
     "group_kwargs",
+    "host_teardown_started",
     "kill_tree",
     "pid_alive",
     "reap_tracked_trees",

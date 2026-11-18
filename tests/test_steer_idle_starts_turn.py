@@ -496,6 +496,15 @@ async def test_private_parked_steer_rides_the_guarded_resume(tmp_path, monkeypat
     steering._reset()
 
 
+@pytest.fixture
+def private_intake_config(monkeypatch):
+    # These P1b intake tests count all private rows, before P1h scheduling adds a
+    # separate pending-turn row. Pin that mode rather than inherit another test's
+    # STATE config. Scheduling-on dedupe is covered by test_private_steering_parity.
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(private_steering_enabled=False))
+
+
+@pytest.mark.usefixtures("private_intake_config")
 @pytest.mark.asyncio
 async def test_private_steer_is_idempotent_across_a_retry(tmp_path, monkeypatch, delegation_env):
     # The dedupe key persisted in the partition — not only the in-memory start guard — keeps a
@@ -659,6 +668,7 @@ async def test_trusted_runner_resolves_the_reference_and_fails_closed(tmp_path, 
     steering._reset()
 
 
+@pytest.mark.usefixtures("private_intake_config")
 @pytest.mark.asyncio
 async def test_two_concurrent_private_steers_record_one_shell_and_start_one_turn(tmp_path, monkeypatch, delegation_env):
     # Two concurrent private POSTs of the SAME msg_id must record ONE private shell and start

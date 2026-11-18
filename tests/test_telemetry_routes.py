@@ -208,8 +208,7 @@ def _fleet_client(monkeypatch, store, roster, member_payloads):
     """Client with a fake roster + fake member fan-out. ``member_payloads`` is
     slug -> {"summary": body, "insights": body}; a missing slug means both GETs
     failed (the member is unreachable). Returns (client, fan-out call log)."""
-    import operator_api.telemetry_routes as tr
-    from graph.fleet import supervisor
+    from graph.fleet import member_read, supervisor
 
     monkeypatch.setattr(supervisor, "status", lambda: roster)
     calls = []
@@ -219,7 +218,7 @@ def _fleet_client(monkeypatch, store, roster, member_payloads):
         kind = "summary" if path.endswith("summary") else "insights"
         return (member_payloads.get(slug) or {}).get(kind)
 
-    monkeypatch.setattr(tr, "_fetch_member_json", _fake_fetch)
+    monkeypatch.setattr(member_read, "_fetch_member_json", _fake_fetch)
     return _client(monkeypatch, store), calls
 
 
@@ -693,8 +692,7 @@ async def test_member_read_never_sends_the_fleet_token_to_a_tokenless_remote(mon
     """ADR 0113 D4: the fleet token is loopback-only. A remote the hub holds no token for
     resolves with EMPTY extra headers — same as a local member — so the rollup read used to
     attach the fleet token to it. It reads anonymously now; a LOCAL member still gets it."""
-    from graph.fleet import proxy, service_token
-    from operator_api import telemetry_routes as tr
+    from graph.fleet import member_read, proxy, service_token
 
     monkeypatch.setattr(service_token, "resolve_service_token", lambda: "FLEET")
     monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
@@ -719,14 +717,38 @@ async def test_member_read_never_sends_the_fleet_token_to_a_tokenless_remote(mon
 
     monkeypatch.setattr(proxy, "_get_client", lambda: _Client())
     try:
-        assert await tr._fetch_member_json("r1", "api/telemetry/summary") == {"turns": 1}
+        assert await member_read._fetch_member_json("r1", "api/telemetry/summary") == {"turns": 1}
         assert sent[-1][0] == "http://h:1/api/telemetry/summary"
         assert not any(k.lower() == "authorization" for k in sent[-1][1])
 
         # A LOCAL member resolving the same way (empty extra) still gets the fleet token.
         monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
-        await tr._fetch_member_json("alice", "api/telemetry/summary")
+        await member_read._fetch_member_json("alice", "api/telemetry/summary")
         assert sent[-1][1] == {"authorization": "Bearer FLEET"}
     finally:
         proxy._slug_cache.clear()
         proxy._remote_slugs.clear()
+
+
+def test_member_read_has_exactly_one_definition():
+    """ADR 0135 D8 (#5534): the bounded member read lives once, under ``graph.fleet``
+    — where ``tools`` may import it too — and the operator routes call that one
+    helper rather than keeping a copy or an alias that a patch would miss."""
+    import ast
+    from pathlib import Path
+
+    import operator_api.telemetry_routes as tr
+    import operator_api.usage_routes as ur
+    from graph.fleet import member_read
+
+    assert member_read._fetch_member_json.__module__ == "graph.fleet.member_read"
+    for mod in (tr, ur):
+        assert not hasattr(mod, "_fetch_member_json")
+    src = Path(member_read.__file__).resolve().parents[2]
+    defined = [
+        path.relative_to(src).as_posix()
+        for path in src.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == "_fetch_member_json"
+    ]
+    assert defined == ["graph/fleet/member_read.py"]

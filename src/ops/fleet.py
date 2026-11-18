@@ -25,6 +25,53 @@ from typing import Any
 from ops import op
 
 
+class RestartNotReady(Exception):
+    """The member cannot safely enter the stop phase of an idle restart."""
+
+
+@op(name="fleet.start", mutates=True, summary="Start one fleet member as a background process.")
+async def start(name: str) -> dict:
+    from graph.fleet import supervisor
+
+    return await asyncio.to_thread(supervisor.start, name)
+
+
+@op(name="fleet.stop", mutates=True, summary="Stop one fleet member, optionally requiring idle restart readiness.")
+async def stop(name: str, *, when_idle: bool = False) -> dict:
+    """Stop a member; ``when_idle`` performs the console's restart readiness check.
+
+    An idle restart uses the member's slug and refuses unreachable or busy members.
+    This is the stop phase only: callers start again after a successful stop, using
+    ``start``. Supervisor errors and unsuccessful stop results propagate unchanged.
+    """
+    from graph.fleet import proxy, supervisor
+
+    if when_idle:
+        # Resolve afresh immediately before stopping; unreachable is never idle.
+        target = proxy._resolve_slug(name)
+        if target is None or target[0] != "local":
+            raise RestartNotReady("The agent is not reachable; no restart was attempted.")
+        from graph.fleet.service_token import resolve_service_token
+
+        _, base, _ = target
+        headers = {"authorization": f"Bearer {resolve_service_token()}"}
+        try:
+            response = await proxy._get_client().get(
+                f"{base}/api/restart/readiness",
+                headers=headers,
+                timeout=5,
+            )
+            response.raise_for_status()
+            readiness = response.json()
+        except Exception as exc:
+            raise RestartNotReady(
+                "Could not check whether the agent is idle; no restart was attempted."
+            ) from exc
+        if readiness.get("idle") is not True:
+            raise RestartNotReady("The agent became busy; choose Restart when idle again.")
+    return await asyncio.to_thread(supervisor.stop, name)
+
+
 @op(
     name="fleet.up",
     mutates=True,

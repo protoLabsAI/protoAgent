@@ -12,6 +12,7 @@ import json
 import socket
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -271,6 +272,9 @@ def test_health_sweep_tracks_remotes_through_the_probe_cache(tmp_path, monkeypat
     supervisor._health.clear()
     supervisor._probe_cache.clear()
     rec = supervisor.add_remote("ava", "http://h:9")
+    # Distinct probes can finish in the same Windows monotonic clock tick.
+    # Cache reuse must count once, but a new result at the same time must count again.
+    monkeypatch.setattr(supervisor, "time", SimpleNamespace(monotonic=lambda: 123.0))
     up = {"ok": False, "calls": 0}
 
     class Resp:

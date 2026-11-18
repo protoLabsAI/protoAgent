@@ -1324,11 +1324,13 @@ def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
             hit = _probe_cache.get(rid)
             if hit is None:
                 continue
-            reachable, probed_at = hit
+            reachable, _ = hit
             entry, fresh = _entry(rid, "remote", str(rec.get("name") or rid))
-            if entry.get("_probed_at") == probed_at:
+            # Each completed probe replaces the cache tuple. Timestamps alone are
+            # not unique: two probes can finish in the same Windows clock tick.
+            if entry.get("_probe_result") is hit:
                 continue  # the same cached probe as last sweep
-            entry["_probed_at"] = probed_at
+            entry["_probe_result"] = hit
             if reachable:
                 entry["failures"] = 0
                 _move(entry, "healthy", fresh)
