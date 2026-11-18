@@ -26,6 +26,13 @@ from a2a_impl import hitl_routing, private_intake, stores
 from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
 from a2a_impl.requester_delivery import RequesterProjection
 
+# Upper bound on every wait below. Each wait is on the event itself (a turn reaching its hold
+# point, a frame, a task ending), so this only stops a real hang from blocking the suite. It is
+# far above a healthy run on purpose: one scenario makes 20-25 SQLite commits, and on the Windows
+# CI runner a turn was seen taking 2-4 s per persisted step while still making progress, which
+# put a healthy run past the old 5 s bound (#5465).
+_HANG_GUARD_S = 60
+
 CTX = "chat-wrong-recipient"
 _HANDLERS: list = []
 # Private content the agent steers on and replies with — none of it may reach a peer surface.
@@ -169,17 +176,17 @@ async def test_wrong_recipient_and_overbroad_release(tmp_path, kind):
             target.append(_snapshot(event))
     running = asyncio.create_task(
         collect(handler.on_message_send_stream(_request("please proceed", mid="request", ctx=CTX), requester), frames))
-    await asyncio.wait_for(ready.wait(), 5)
+    await asyncio.wait_for(ready.wait(), _HANG_GUARD_S)
     task_id = projections[0].binding["task_id"]
     subscribed = handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), requester)
-    subscriptions.append(_snapshot(await asyncio.wait_for(anext(subscribed), 5)))
+    subscriptions.append(_snapshot(await asyncio.wait_for(anext(subscribed), _HANG_GUARD_S)))
     watching = asyncio.create_task(collect(subscribed, subscriptions))
     with pytest.raises(TaskNotFoundError):
         await handler.on_get_task(GetTaskRequest(id=task_id), second)
     with pytest.raises(TaskNotFoundError):
         await anext(handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), second))
     proceed.set()
-    await asyncio.wait_for(asyncio.gather(running, watching), 15)
+    await asyncio.wait_for(asyncio.gather(running, watching), _HANG_GUARD_S)
     await router.drain()
     # r5 / r2: the original requester receives exactly the sealed payload, once.
     got = await handler.on_get_task(GetTaskRequest(id=task_id), requester)

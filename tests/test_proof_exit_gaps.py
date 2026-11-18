@@ -26,6 +26,13 @@ from a2a_impl.requester_delivery import RequesterProjection
 from tests._virtual_clock import VirtualClock
 from graph.middleware.subagent_fence import SubagentFenceMiddleware
 
+# Upper bound on every wait below. Each wait is on the event itself (a turn reaching its hold
+# point, a frame, a task ending), so this only stops a real hang from blocking the suite. It is
+# far above a healthy run on purpose: one scenario makes 20-25 SQLite commits, and on the Windows
+# CI runner a turn was seen taking 2-4 s per persisted step while still making progress, which
+# put a healthy run past the old 5 s bound (#5465).
+_HANG_GUARD_S = 60
+
 CTX = "proof-g1"
 SECRET, REPLY, OUTPUT = "PRIVATE-INPUT-G1", "PRIVATE-REPLY-G1", "PRIVATE-TOOL-OUTPUT-G1"
 RESULT = "RESULT-VALUE-G1"
@@ -156,15 +163,15 @@ async def _scenario(tmp_path, monkeypatch, kind, exit_kind):
                                                 role=Role.ROLE_USER, parts=[Part(text="request")]))
     tasks = [asyncio.create_task(collect(handler.on_message_send_stream(request, peer), frames))]
     try:
-        await asyncio.wait_for(ready.wait(), 5)
+        await asyncio.wait_for(ready.wait(), _HANG_GUARD_S)
         projection = projections[0]
         task_id = projection.binding["task_id"]
         subscribed = handler.on_subscribe_to_task(SubscribeToTaskRequest(id=task_id), peer)
-        subscriptions.append(_snapshot(await asyncio.wait_for(anext(subscribed), 5)))
+        subscriptions.append(_snapshot(await asyncio.wait_for(anext(subscribed), _HANG_GUARD_S)))
         tasks.append(asyncio.create_task(collect(subscribed, subscriptions)))
         assert (await handler.on_get_task(GetTaskRequest(id=task_id), peer)).context_id == CTX
         proceed.set()
-        await asyncio.wait_for(private_ready.wait(), 5)
+        await asyncio.wait_for(private_ready.wait(), _HANG_GUARD_S)
         during = _snapshot(await handler.on_get_task(GetTaskRequest(id=task_id), peer))
         assert RESULT not in str(during)
         private_progress = list(progress)
@@ -174,12 +181,12 @@ async def _scenario(tmp_path, monkeypatch, kind, exit_kind):
             assert cancelled.status.state == TaskState.TASK_STATE_CANCELED
             # Releasing the blocked producer after Stop must not restart cancelled input.
         finish.set()
-        await asyncio.wait_for(asyncio.gather(*tasks), 5)
-        await asyncio.wait_for(stopped.wait(), 5)
+        await asyncio.wait_for(asyncio.gather(*tasks), _HANG_GUARD_S)
+        await asyncio.wait_for(stopped.wait(), _HANG_GUARD_S)
         await router.drain()
         cleanup = set(getattr(handler._active_task_registry, "_cleanup_tasks", ()) or ())
         if cleanup:
-            await asyncio.wait_for(asyncio.gather(*cleanup), 5)
+            await asyncio.wait_for(asyncio.gather(*cleanup), _HANG_GUARD_S)
         got = await handler.on_get_task(GetTaskRequest(id=task_id), peer)
         terminal = {"stall": TaskState.TASK_STATE_FAILED, "outbound_stop": TaskState.TASK_STATE_CANCELED,
                     "outbound_selected_stop": TaskState.TASK_STATE_CANCELED}
@@ -225,7 +232,7 @@ async def _scenario(tmp_path, monkeypatch, kind, exit_kind):
         await router.drain()
         cleanup = set(getattr(handler._active_task_registry, "_cleanup_tasks", ()) or ())
         if cleanup:
-            await asyncio.wait_for(asyncio.gather(*cleanup), 5)
+            await asyncio.wait_for(asyncio.gather(*cleanup), _HANG_GUARD_S)
         set_progress_hook(None)
         set_terminal_hook(None)
         hitl_routing._ROUTER[0] = None
