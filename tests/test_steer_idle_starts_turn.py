@@ -11,6 +11,7 @@ and per-thread turn lock are used throughout — only the loopback A2A transport
 (the turn-start helper, or httpx itself for the wire-shape test).
 """
 
+import asyncio
 import importlib
 from types import SimpleNamespace
 
@@ -51,13 +52,15 @@ def client(monkeypatch, tmp_path):
     steering._reset()
     # A runnable server: a compiled graph with no pending interrupt + an A2A stack.
     monkeypatch.setattr(STATE, "graph", _Graph(_idle_snapshot()), raising=False)
-    monkeypatch.setattr(STATE, "a2a_task_engine", object(), raising=False)
+    engine, _ = asyncio.run(_partition(tmp_path))
+    monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
     monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=False), raising=False)
     app = FastAPI()
     register_chat_routes(app, ui="none")
     with TestClient(app) as c:
         yield c
     steering._reset()
+    asyncio.run(engine.dispose())
 
 
 @pytest.fixture

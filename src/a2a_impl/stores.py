@@ -492,6 +492,8 @@ _PRIVATE_COLUMNS = {
 }
 PRIVATE_SCHEMA_VERSION = 1
 PRIVATE_AUDIENCE = "human-operator"
+#: SDK fields a private turn keeps only inside its partition record (``sdk_task``).
+_PARTITIONED_SDK_FIELDS = ("status", "artifacts", "history", "metadata")
 
 
 @dataclass(frozen=True)
@@ -511,7 +513,7 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
     Ordinary records retain the SDK's read behavior, including after chat deletion.
 
     With a request context, exclude human-owned tasks from non-human callers. Without
-    one, this is the internal SQL projection used by console history and bookkeeping,
+    one, this is an internal SQL projection for bookkeeping,
     not an authorization boundary: retain all owners. Store reads additionally enforce
     SDK owner scoping even when their context is absent.
     """
@@ -552,8 +554,81 @@ async def task_public_filter(conn, task_model=TaskModel, *, include_private=Fals
             ) if principal else false(),
         )
     if "owner" in columns and context is not None and not _human_operator(context):
-        predicate &= task_model.owner != HUMAN_OPERATOR_OWNER
+        predicate &= or_(task_model.owner.is_(None), task_model.owner != HUMAN_OPERATOR_OWNER)
     return predicate
+
+
+def _recovered_column(task_model, column):
+    """``column`` with a human-owned row's partitioned SDK field restored over the plain one."""
+    from sqlalchemy import case, func, literal_column, type_coerce
+
+    recovered = func.json_extract(
+        literal_column(f"{task_model.__tablename__}.private_payload"), f"$.sdk_task.{column.name}"
+    )
+    if column.name == "status":
+        # Recovery/cancellation may update the public lifecycle state directly.
+        recovered = func.json_patch(recovered, column)
+    value = case(
+        (task_model.owner == HUMAN_OPERATOR_OWNER, func.coalesce(recovered, column)),
+        else_=column,
+    )
+    return type_coerce(value, column.type).label(column.name)
+
+
+async def _has_partition(conn, task_model) -> bool:
+    from sqlalchemy import inspect
+
+    names = await conn.run_sync(lambda c: {x["name"] for x in inspect(c).get_columns(task_model.__tablename__)})
+    return _PRIVATE_COLUMNS.keys() <= names
+
+
+async def task_read_columns(conn, task_model=TaskModel, *, context=None):
+    """Recover private SDK fields only for a verified human, after row filtering."""
+    columns = list(task_model.__table__.columns)
+    if not _human_operator(context) or not await _has_partition(conn, task_model):
+        return columns
+    return [
+        _recovered_column(task_model, column) if column.name in _PARTITIONED_SDK_FIELDS else column
+        for column in columns
+    ]
+
+
+async def task_internal_columns(conn, *names, task_model=TaskModel):
+    """The named SDK columns with a private turn's partitioned fields restored.
+
+    INTERNAL readers only (model-context recovery, rewind bookkeeping): a private turn's
+    reply lives only in the partition, and these readers ran on the plain columns before it
+    moved there. Like a context-less ``task_public_filter`` this is not an authorization
+    boundary and must never back a caller-facing route — those use ``task_read_columns``
+    with the verified request context."""
+    by_name = {column.name: column for column in task_model.__table__.columns}
+    partitioned = await _has_partition(conn, task_model)
+    return [
+        _recovered_column(task_model, by_name[name])
+        if partitioned and name in _PARTITIONED_SDK_FIELDS else by_name[name]
+        for name in names
+    ]
+
+
+async def task_private_inputs(conn, task_ids, task_model=TaskModel) -> dict[str, str]:
+    """Private-input text by private-only task id, for the INTERNAL readers above.
+
+    A private turn's history carries only the opaque reference to its input record. Records
+    of an unknown format, a tombstoned chat or a missing partition resolve to nothing."""
+    from sqlalchemy import func, literal_column, select
+
+    ids = sorted({i for i in task_ids if i})
+    if not ids or not await _has_partition(conn, task_model):
+        return {}
+    text_input = func.json_extract(
+        literal_column(f"{task_model.__tablename__}.private_payload"), "$.input"
+    )
+    rows = await conn.execute(
+        select(task_model.id, text_input)
+        .where(task_model.id.in_(ids), task_model.owner == HUMAN_OPERATOR_OWNER)
+        .where(await task_public_filter(conn, task_model, include_private=True))
+    )
+    return {task_id: value for task_id, value in rows if isinstance(value, str)}
 
 
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):
@@ -632,6 +707,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         await self._ensure_initialized()
         async with self.engine.connect() as conn:
             visible = await task_public_filter(conn, self.task_model, context=context)
+            read_columns = await task_read_columns(conn, self.task_model, context=context)
         human = _human_operator(context)
         if human_only:
             visible &= self.task_model.owner == HUMAN_OPERATOR_OWNER if human else false()
@@ -645,7 +721,7 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         columns = [
             case((column == HUMAN_OPERATOR_OWNER, OPERATOR_OWNER), else_=column).label("owner")
             if column.name == "owner" and human else column
-            for column in self.task_model.__table__.columns
+            for column in read_columns
         ]
         reader = copy(self)
         reader.task_model = aliased(
@@ -963,7 +1039,35 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
                     raise PermissionError("Private task access requires a human operator")
                 existing = await session.get(self.task_model, task.id)
                 owner = existing.owner if existing is not None else HUMAN_OPERATOR_OWNER
-            await session.merge(self._to_orm(task, owner))
+            model = self._to_orm(task, owner)
+            if owner == HUMAN_OPERATOR_OWNER:
+                if not _human_operator(context):
+                    raise PermissionError("Private task access requires a human operator")
+                conn = await session.connection()
+                table = conn.dialect.identifier_preparer.quote(self.task_model.__tablename__)
+                raw = (await session.execute(
+                    text(f"SELECT private_payload FROM {table} WHERE id=:id"), {"id": task.id}
+                )).scalar_one_or_none()
+                payload = json.loads(raw) if raw else {}
+                payload["sdk_task"] = {
+                    name: getattr(model, "task_metadata" if name == "metadata" else name)
+                    for name in ("status", "artifacts", "history", "metadata")
+                }
+                model.status = {k: v for k, v in model.status.items() if k in ("state", "timestamp")}
+                model.artifacts = []
+                model.history = [
+                    m for m, message in zip(model.history or [], task.history) if private_input_ref(message)
+                ]
+                model.task_metadata = {}
+                await session.merge(model)
+                await session.flush()
+                await session.execute(text(
+                    f"UPDATE {table} SET private_version=:version, private_audience=:audience, "
+                    "private_payload=:payload, public_visible=1 WHERE id=:id"
+                ), {"version": PRIVATE_SCHEMA_VERSION, "audience": PRIVATE_AUDIENCE,
+                    "payload": json.dumps(payload), "id": task.id})
+            else:
+                await session.merge(model)
 
     # Owner scoping: the SDK filters every read by the caller's owner. An operator-tier
     # caller also reads federation-owned tasks, as it always could.
