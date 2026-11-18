@@ -491,6 +491,35 @@ def _build_task_tools(tasks_store) -> list:
         return "\n".join(lines)
 
     @tool
+    def task_get(issue_id: str) -> str:
+        """Read a task's full description, linked work, and origin by its issue id."""
+        from tasks.store import parse_links
+
+        issue_id = issue_id.strip()
+        if not issue_id:
+            return "Error: issue_id is required."
+        i = tasks_store.get(issue_id)
+        if i is None:
+            return f"Error: no task {issue_id}."
+        lines = [
+            f"Title: {i['title']}",
+            f"Id: {i['id']}",
+            f"Status: {i['status']}",
+            f"Priority: {i['priority']}",
+            f"Issue type: {i['issue_type']}",
+            f"Description: {i.get('description') or ''}",
+        ]
+        if i.get("ask"):
+            lines.append(f"Ask: {i['ask']}")
+        refs = [f"{e['ref']}✓" if e.get("state") == "done" else e["ref"] for e in parse_links(i)]
+        if refs:
+            lines.append(f"Links: {', '.join(refs)}")
+        for key, label in (("session_id", "Origin session id"), ("created_at", "Created"), ("updated_at", "Updated")):
+            if i.get(key):
+                lines.append(f"{label}: {i[key]}")
+        return "\n".join(lines)
+
+    @tool
     def task_update(
         issue_id: str,
         status: str = "",
@@ -562,7 +591,7 @@ def _build_task_tools(tasks_store) -> list:
         # event (``tasks.autoclose``), the one path every close takes.
         return f"Closed {i['id']}: {i['title']}"
 
-    return [task_create, task_list, task_update, task_close]
+    return [task_create, task_list, task_get, task_update, task_close]
 
 
 def _build_watch_tools():
