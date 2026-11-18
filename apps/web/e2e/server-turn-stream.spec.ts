@@ -8,8 +8,8 @@ import { expect, test } from "@playwright/test";
 // from a hang. The backend now republishes the turn's frames as `chat.progress`.
 //
 // When the turn SETTLES (`chat.resumed`) it is not an operator-initiated answer, so it no
-// longer lands as a full-size assistant bubble — it collapses into a muted, expandable
-// ServerResultCard (#3028): a summary line (trigger label · preview · time) that opens on click
+// longer lands as a full-size assistant bubble — it collapses into the same raised, expandable
+// card a scheduled result uses: a head (trigger label · preview · time) that opens on click
 // to the full markdown answer + the turn's tool work.
 //
 // Harness: seed an open chat session, then feed the bus a realistic server-turn sequence —
@@ -136,23 +136,23 @@ test("a server-fired turn streams its narration and tools, then settles into a c
 
   // Phase 2 — the terminal event settles the turn into a COMPACT, collapsed result card (#3028):
   // a scheduled/watch/autonomous result is visually secondary to an operator's own answer.
-  const card = page.locator(".chat-server-result");
+  const card = page.locator(".chat-scheduled-card");
   await expect(card).toBeVisible();
   await expect(card).toHaveCount(1); // the live preview BECAME the card — not joined by a second bubble
   // (a) Collapsed by default — the summary line carries the trigger label + a preview of the result.
-  await expect(card.locator(".chat-server-result-label")).toContainText(/scheduled/i);
-  await expect(card.locator(".chat-server-result-preview")).toContainText("ball is secured");
-  await expect(card).not.toHaveClass(/chat-server-result--open/);
+  await expect(card.locator(".chat-scheduled-title")).toContainText(/scheduled/i);
+  await expect(card.locator(".chat-scheduled-title")).toContainText("ball is secured");
+  await expect(card).not.toHaveClass(/chat-scheduled-card--open/);
   // The full body — and the tool card the live view rendered — stays folded away until expanded.
-  await expect(card.locator(".chat-server-result-body")).toHaveCount(0);
+  await expect(card.locator(".chat-scheduled-summary")).toHaveCount(0);
   await expect(page.locator(".pl-toolcard").filter({ hasText: "roll_block" })).toHaveCount(0);
   // The preview's streamed narration is superseded by the authoritative answer.
   await expect(page.getByText(NARRATION_A)).toHaveCount(0);
 
   // (b) Click to expand → the full markdown answer (no truncation) + the turn's tool work.
-  await card.locator(".chat-server-result-summary").click();
-  await expect(card).toHaveClass(/chat-server-result--open/);
-  await expect(card.locator(".chat-server-result-body")).toContainText(FINAL);
+  await card.locator(".chat-scheduled-head").click();
+  await expect(card).toHaveClass(/chat-scheduled-card--open/);
+  await expect(card.locator(".chat-scheduled-summary")).toContainText(FINAL);
   await expect(page.locator(".pl-toolcard").filter({ hasText: "roll_block" }).first()).toBeVisible();
 });
 
@@ -237,7 +237,7 @@ test("a turn answering background reports settles IN PLACE — no card, same lay
   await expect(page.locator(".pl-toast", { hasText: "Task resumed" })).toBeVisible();
   await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
   // …and it is still an ordinary chat message, not a collapsed result card.
-  await expect(page.locator(".chat-server-result")).toHaveCount(0);
+  await expect(page.locator(".chat-scheduled-card")).toHaveCount(0);
   await expect(narrationA).toBeVisible();
   await expect(page.getByText(NARRATION_B)).toBeVisible();
   await expect(tool).toBeVisible();

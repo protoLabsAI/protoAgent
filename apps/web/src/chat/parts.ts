@@ -319,7 +319,7 @@ export function rewindableTailId(messages: { id?: string; role: string }[]): str
 /** The id of the last OPERATOR-initiated assistant reply — the only message the Regenerate
  *  action is offered on. A server-initiated result (scheduled fire / watch / autonomous wake,
  *  #3028) also has role "assistant" but carries an `origin` tag and renders as a compact,
- *  action-less ServerResultCard — so it must NOT count here, else one landing after the
+ *  action-less raised result card — so it must NOT count here, else one landing after the
  *  operator's last answer would steal the slot and silently strip Regenerate off the real reply. */
 export function lastOperatorAssistantId(
   messages: { id?: string; role: string; origin?: string }[],

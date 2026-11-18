@@ -147,11 +147,12 @@ export function ChatMessageView({
   // Server-initiated RESULT (#3028): a SETTLED scheduled fire, watch reaction, or autonomous
   // wake carries an `origin` tag (set by ChatResumeWatch — the live streaming preview does NOT,
   // so an in-flight turn still renders full-size). These are visually secondary to the operator's
-  // own turns, so they collapse into a compact, expandable card instead of a full-size bubble.
+  // own turns, so they collapse into the same raised, expandable card a scheduled result uses
+  // instead of a full-size bubble.
   // Not a turn answering background reports or a delegate's result: that is the conversation
   // itself, and it settles in place as the message the reader was already reading.
   if (message.role === "assistant" && rendersAsResultCard(message.origin) && message.status !== "streaming") {
-    return <ServerResultCard message={message} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />;
+    return <ServerResultRaisedCard message={message} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />;
   }
   // The lead's OUTGOING delegation ask (#3042) → ONE compact row: who, whether it runs in
   // the background, the lead's one-line summary and its live status, with the full prompt
@@ -909,14 +910,16 @@ function ScheduledChip({
   );
 }
 
-// The server-initiated RESULT CARD (#3028) — a settled scheduled fire, watch reaction, or
-// autonomous wake, delivered back to the chat that set it up. These aren't operator-initiated
-// answers, so they render as a compact, COLLAPSED card (visually secondary to a normal bubble):
-// a summary line (trigger label · preview of the result · time) that expands on click to the
-// full markdown answer + the turn's tool work, with no truncation. Expand state is LOCAL, so it
-// is per-message — expanding one card leaves the others collapsed. The `origin` tag is persisted
-// on the message, so a reload re-renders the card rather than a full-size bubble.
-function ServerResultCard({
+// The server-initiated RESULT CARD — a settled scheduled fire, watch reaction, inbox/webhook
+// trigger, delegated task or self-improvement review, delivered back to the chat it ran in.
+// It wears the SAME raised card as a scheduled result (.chat-scheduled-card, #2990): the
+// calendar/clock head, titled by trigger, COLLAPSED by default. The head is the disclosure
+// toggle — click or Enter/Space, with aria-expanded, like the recurring chip — and opens in
+// place to the turn's tool work plus the full markdown answer, with no truncation. Expand state
+// is LOCAL, so it is per-message. The `origin` tag is persisted on the message, so a reload
+// re-renders the card rather than a full-size bubble. This is a real transcript message, not an
+// injected notification, so it carries no dismiss.
+function ServerResultRaisedCard({
   message,
   onCancelDelegation,
   onDismissToolCall,
@@ -928,29 +931,45 @@ function ServerResultCard({
   const [expanded, setExpanded] = useState(false);
   // `origin` is always set on this path (the render branch guards it) — fall back defensively.
   const label = serverResultLabel(message.origin ?? "") ?? "Autonomous run";
-  const preview = serverResultPreview(message.content) || "(no output)";
+  const line = `${label} — ${serverResultPreview(message.content) || "(no output)"}`;
   const time = fmtClock(message.createdAt);
   const failed = message.status === "error";
+  const toggle = () => setExpanded((v) => !v);
   return (
-    <Message role="assistant" className={`chat-server-result${expanded ? " chat-server-result--open" : ""}`}>
-      <div className={`chat-server-result-card${failed ? " chat-server-result-card--failed" : ""}`}>
-        <button
-          type="button"
-          className="chat-server-result-summary"
+    <Message role="assistant" className="chat-scheduled">
+      <div
+        className={`chat-scheduled-card${expanded ? " chat-scheduled-card--open" : ""}${
+          failed ? " chat-scheduled-card--failed" : ""
+        }`}
+        data-origin={message.origin}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          className="chat-scheduled-head chat-scheduled-chip-toggle"
           aria-expanded={expanded}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={toggle}
+          onKeyDown={(event) => {
+            // Only the head's own key presses toggle — not ones bubbling from a child.
+            if (event.target !== event.currentTarget) return;
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              toggle();
+            }
+          }}
         >
-          <Bot size={14} aria-hidden className="chat-server-result-icon" />
-          <span className="chat-server-result-label">{label}</span>
-          <span className="chat-server-result-preview">{preview}</span>
-          {time ? <span className="chat-server-result-time">{time}</span> : null}
-          <ChevronDown size={14} aria-hidden className="chat-server-result-chevron" />
-        </button>
+          <CalendarClock size={14} aria-hidden />
+          <span className="chat-scheduled-title" title={line}>
+            {line}
+          </span>
+          {time ? <span className="chat-scheduled-time">{time}</span> : null}
+          <ChevronDown size={14} aria-hidden className="chat-scheduled-chip-chevron" />
+        </div>
         {/* Expanded: the FULL result with no truncation — tool cards above the answer (the resume
             payload carries the final text only, so this mirrors the history-loaded grouped layout)
             and the same markdown a normal assistant answer renders. */}
         {expanded ? (
-          <div className="chat-server-result-body">
+          <div className="chat-scheduled-summary">
             {message.toolCalls && message.toolCalls.length > 0 ? (
               <ToolCalls calls={message.toolCalls} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />
             ) : null}

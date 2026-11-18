@@ -30,13 +30,22 @@ const GOAL_RUN_TRIGGER_PREFIX = "goal-run:";
 export const WAIT_RESUME_ORIGIN = "wait-resume";
 const WAIT_TRIGGER_PREFIX = "wait:";
 
+// The self-improvement review (graph/self_improvement.py). Also an ordinary `scheduler` fire
+// on the wire, queued into the chat whose work it reviews under a `self-improvement-<id>` job
+// id. It is NOT the conversation continuing — it still settles as a result card — but it is
+// not a schedule the operator set either, so it gets its own name instead of "Scheduled task".
+export const SELF_IMPROVEMENT_ORIGIN = "self-improvement";
+const SELF_IMPROVEMENT_TRIGGER_PREFIX = "self-improvement-";
+
 /** The origin the console renders a server turn under: `goal` for a goal drive turn (by its
- *  `goal-run:` trigger), `wait-resume` for a `wait` wake-up (by its `wait:` trigger), else the
- *  server's own origin token unchanged. */
+ *  `goal-run:` trigger), `wait-resume` for a `wait` wake-up (by its `wait:` trigger),
+ *  `self-improvement` for a self-improvement review (by its `self-improvement-` trigger), else
+ *  the server's own origin token unchanged. */
 export function effectiveOrigin(origin: unknown, trigger: unknown): string {
   const t = String(trigger ?? "");
   if (t.startsWith(GOAL_RUN_TRIGGER_PREFIX)) return GOAL_RUN_ORIGIN;
   if (t.startsWith(WAIT_TRIGGER_PREFIX)) return WAIT_RESUME_ORIGIN;
+  if (t.startsWith(SELF_IMPROVEMENT_TRIGGER_PREFIX)) return SELF_IMPROVEMENT_ORIGIN;
   return String(origin ?? "");
 }
 
@@ -48,6 +57,7 @@ export function labelForOrigin(origin: string): string {
   if (origin === GOAL_RUN_ORIGIN) return "driving the goal…";
   if (origin === WAIT_RESUME_ORIGIN) return "picking back up after a wait…";
   if (origin === "background-resume") return "responding to background reports…";
+  if (origin === SELF_IMPROVEMENT_ORIGIN) return "running a self-improvement review…";
   if (origin === "scheduler") return "running a scheduled task…";
   if (origin === "a2a") return "working on a task another agent delegated…";
   if (origin.startsWith("watch-") || origin === "watch") return "reacting to a triggered watch…";
@@ -120,6 +130,7 @@ export function serverResultLabel(origin: string): string | null {
   if (!o) return null;
   if (o === GOAL_RUN_ORIGIN) return "Goal run";
   if (o === WAIT_RESUME_ORIGIN) return "Wait resumed";
+  if (o === SELF_IMPROVEMENT_ORIGIN) return "Self-improvement review";
   if (o === "scheduler") return "Scheduled task";
   if (o === "background-resume") return "Background report";
   if (o === "background") return "Background task";

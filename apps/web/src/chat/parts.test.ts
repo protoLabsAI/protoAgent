@@ -579,7 +579,7 @@ describe("lastOperatorAssistantId (#3028 — Regenerate stays on the operator's 
 
   it("SKIPS a trailing server-initiated result — it must not steal Regenerate", () => {
     // A scheduled/watch/autonomous result (role assistant + origin) lands after the operator's
-    // last answer. It renders as an action-less ServerResultCard, so Regenerate stays on a1.
+    // last answer. It renders as an action-less raised result card, so Regenerate stays on a1.
     expect(
       lastOperatorAssistantId([
         m("user", "u1"),
