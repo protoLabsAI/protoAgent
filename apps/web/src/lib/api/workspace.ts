@@ -122,9 +122,10 @@ export const workspaceApi = {
   fsProjects() {
     return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
   },
-  // The ADR 0095 managed-projects registry. Read-only by design: the fs-projects POST
-  // above REPLACES `filesystem.projects`, so writing back a registry-derived list here
-  // would silently materialize the projection and sever the registry link.
+  // The ADR 0095 managed-projects registry. Never write it back through the fs-projects
+  // POST above: that REPLACES `filesystem.projects`, so posting a registry-derived list
+  // would silently materialize the projection and sever the registry link. The only
+  // console edit is one project's access, through setProjectWrite below.
   managedProjects() {
     return request<ManagedProjects>("/api/projects");
   },

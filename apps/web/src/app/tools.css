@@ -101,6 +101,12 @@
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-xs);
 }
+/* A failed access switch on one Managed-projects row — sits directly under that row. */
+.fs-projects-error {
+  margin: var(--pl-space-1) 0 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-status-error);
+}
 .fs-projects-actions {
   display: flex;
   gap: var(--pl-space-2);

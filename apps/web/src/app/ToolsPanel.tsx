@@ -13,7 +13,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, toolsQuery } from "../lib/queries";
 import { readKey, writeKey } from "../lib/storage";
-import type { FsProject } from "../lib/types";
+import type { FsProject, ManagedProject } from "../lib/types";
 import { PathPicker } from "../settings/PathPicker";
 import { QuickSetting } from "../settings/QuickSetting";
 import { useUI } from "../state/uiStore";
@@ -347,27 +347,23 @@ const isNo = (v: unknown): boolean => {
   return !v;
 };
 
-// The ADR 0095 managed-projects registry, READ-ONLY (D5 slice 1) — registration is still a
-// YAML edit. Renders nothing at all when nothing is registered, so the 99% who haven't opted
-// in see no new chrome.
+// The ADR 0095 managed-projects registry. Registration is still a YAML edit; the one thing
+// editable here is each project's read-only / read-write access (ManagedProjectRow,
+// projectBoard-plugin#783). Renders nothing at all when nothing is registered, so the 99% who
+// haven't opted in see no new chrome.
 //
 // It sits above the Work-folders editor because that's the pairing that matters: an explicit
 // `filesystem.projects` WINS over the registry (what makes ADR 0095 non-regressing), so a
 // fully-populated registry can be sitting there driving nothing. Declared-but-not-enforced is
 // exactly the drift 0095 exists to kill, so the one thing this must never do is show a tidy
 // list of projects that aren't in effect without saying so.
-function ManagedProjectsList() {
+export function ManagedProjectsList() {
   const query = useQuery({ queryKey: ["managed-projects"], queryFn: () => api.managedProjects() });
   const data = query.data;
   if (!data || data.projects.length === 0) return null;
 
   const shadowed = data.fence_source === "explicit";
   const unbound = data.fence_source === "unbound";
-  const access = (p: (typeof data.projects)[number]) => {
-    if (isNo(p.fs)) return "no fs";
-    if (isNo(p.write)) return "read-only";
-    return p.no_delete ? "no delete" : "read-write";
-  };
   // Duplicate names are dropped by the backend projection (first wins), so a second
   // row with the same name is real config the operator should see — keyed by index
   // so React doesn't collapse the two into one.
@@ -378,7 +374,8 @@ function ManagedProjectsList() {
       <p className="fleet-section-label">Managed projects</p>
       <p className="setup-hint">
         Declared in <code>projects:</code> — one entry per project, feeding the folder fence, the
-        GitHub repo picker, and the board. Edit them in your config file.
+        GitHub repo picker, and the board. Switch a project between read-only and read-write here;
+        edit everything else in your config file.
       </p>
       {shadowed ? (
         <p className="fs-projects-warning" role="alert">
@@ -415,17 +412,86 @@ function ManagedProjectsList() {
         </p>
       ) : null}
       {data.projects.map((p, i) => (
-        <div key={rowKey(p, i)} className="fs-projects-row">
-          <span>
-            {p.name}
-            {p.github ? ` · ${p.github}` : ""}
-          </span>
-          <Badge status={p.exists === false ? "error" : p.fenced ? "success" : "neutral"}>
-            {p.exists === false ? "missing" : access(p)}
-          </Badge>
-        </div>
+        <ManagedProjectRow key={rowKey(p, i)} project={p} index={i} shadowed={shadowed} />
       ))}
     </div>
+  );
+}
+
+type ProjectAccess = "no fs" | "read-only" | "no delete" | "read-write";
+const projectAccess = (p: ManagedProject): ProjectAccess => {
+  if (isNo(p.fs)) return "no fs";
+  if (isNo(p.write)) return "read-only";
+  return p.no_delete ? "no delete" : "read-write";
+};
+
+// One registry row, with the switch that moves the project between read-only and read-write
+// (projectBoard-plugin#783). Each row owns its mutation so "Saving…" and a failure belong to
+// that row alone. PATCH /api/projects/{name} edits only `write` in place — never route this
+// through the fs-projects POST below, which would materialize the registry into explicit Work
+// folders and sever the link. No optimistic flip: the switch reads the server's `write`, and
+// the mutation stays pending until the refetch lands, so it never shows a state that isn't saved.
+function ManagedProjectRow({ project: p, index, shadowed }: { project: ManagedProject; index: number; shadowed: boolean }) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const access = projectAccess(p);
+  const writable = !isNo(p.write);
+  const errorId = `mp-err-${index}`;
+  const setWrite = useMutation({
+    mutationFn: (write: boolean) => api.setProjectWrite(p.name, write),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["managed-projects"] }),
+  });
+
+  return (
+    <>
+      <div className="fs-projects-row">
+        <span>
+          {p.name}
+          {p.github ? ` · ${p.github}` : ""}
+        </span>
+        {access === "no fs" ? (
+          // No fence entry to switch — an empty cell keeps the badges in one column.
+          <span className="fs-projects-write" />
+        ) : (
+          <label className="fs-projects-write">
+            <Switch
+              checked={writable}
+              disabled={shadowed || setWrite.isPending}
+              aria-label={`Allow writes in ${p.name}`}
+              aria-busy={setWrite.isPending ? "true" : undefined}
+              aria-describedby={setWrite.isError ? errorId : undefined}
+              title={shadowed ? "Explicit Work folders override the registry" : undefined}
+              // Raising access asks first; lowering it is the safe direction and runs at once.
+              onCheckedChange={(v: boolean) => (v ? setConfirming(true) : setWrite.mutate(false))}
+            />
+            <span aria-hidden>{setWrite.isPending ? "Saving…" : "write"}</span>
+          </label>
+        )}
+        <Badge status={p.exists === false ? "error" : p.fenced ? "success" : "neutral"}>
+          {p.exists === false ? "missing" : access}
+        </Badge>
+      </div>
+      {setWrite.isError ? (
+        <p className="fs-projects-error" role="alert" id={errorId}>
+          Couldn't change access: {errMsg(setWrite.error)}
+        </p>
+      ) : null}
+      <ConfirmDialog
+        open={confirming}
+        title={`Let coders edit files in ${p.name}?`}
+        confirmLabel="Allow writes"
+        onClose={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          setWrite.mutate(true);
+        }}
+      >
+        <p>
+          The agent and its coding delegates will be able to create, change{p.no_delete ? "" : " and delete"} files
+          in this folder. You can switch it back to read-only here at any time.
+        </p>
+      </ConfirmDialog>
+    </>
   );
 }
 
