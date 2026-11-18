@@ -43,10 +43,7 @@ CALLERS = ("federation", "fleet-service", "paired-agent", "enrolled-console")
 HUMAN = "enrolled-console"
 
 class FailedOpen(AssertionError):
-    """The private turn ran where it must not: the one assertion a strict xfail may absorb."""
-
-def _proof_failure(what):
-    return pytest.mark.xfail(strict=True, raises=FailedOpen, reason=f"PROOF FAILURE: {what}")
+    """The private turn ran where it must not."""
 
 def _atlas(metadata, session_id):
     return f"proj:{metadata.get('project', 'none')}:{session_id}"
@@ -201,16 +198,12 @@ RESTARTS = {  # id: (resolver at acceptance, resolver after restart, checkpoint 
     "unregistered-resolver-resume": (True, None, False, True),
     "raising-resolver-resume": (True, _raising, False, True),
 }
-FAILURES = {  # the two parked-resume cases fail closed since #5504 (the claim refuses a non-matching resume)
-    "missing-checkpoint": "restart recovery dispatches a private pending turn whose bound checkpoint is gone onto a fresh thread",
-    "unregistered-resolver-recovery": "with the resolver unregistered, restart recovery runs the private turn on the default a2a:<session> thread",
-    "raising-resolver-recovery": "with a raising resolver, restart recovery runs the private turn on the default a2a:<session> thread",
-}
+# Every case fails closed: the two parked-resume cases since #5504 (the claim refuses a non-matching
+# resume), the three recovery cases because recovery verifies the bound checkpoint before it sends.
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGKILL semantics")
-@pytest.mark.parametrize("case", [pytest.param(case, id=case, marks=[_proof_failure(FAILURES[case])] if case in FAILURES else [])
-                                  for case in RESTARTS])
+@pytest.mark.parametrize("case", list(RESTARTS))
 async def test_private_turn_after_a_real_kill_fails_closed(world, monkeypatch, case):
     custom, resolver, delete_checkpoint, parked = RESTARTS[case]
     session = "chat-killed"

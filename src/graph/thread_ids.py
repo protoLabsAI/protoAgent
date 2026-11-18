@@ -31,6 +31,22 @@ def resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
     return f"a2a:{session_id}"
 
 
+def resolve_thread_id_strict(request_metadata: dict | None, session_id: str) -> str:
+    """:func:`resolve_thread_id`, except that a resolver error is RAISED, not defaulted.
+
+    For callers that must tell "this is the thread" from "the resolver failed, so the default
+    was substituted" — a private turn bound to a checkpoint (ADR 0131) fails closed on the
+    latter instead of running on the default thread. No resolver, or a falsy result, is still
+    the default thread: that is deterministically where the runtime would run the turn.
+    """
+    resolver = getattr(STATE, "thread_id_resolver", None)
+    if resolver is not None:
+        thread_id = resolver(request_metadata or {}, session_id)
+        if thread_id:
+            return str(thread_id)
+    return f"a2a:{session_id}"
+
+
 # Resolver inputs persisted per session so a turn that carries NO request metadata of its
 # own — an idle steer start or a parked resume (ADR 0131 P1b.2) — resolves the SAME
 # checkpointer thread as the original turn, instead of re-deriving it from empty metadata
