@@ -137,9 +137,11 @@ test("two sessions parked at once each reattach to their own task after a reload
   expect(first).not.toBe(second);
 
   // The reload reattaches through the SAVED transcript: wait until both parked bubbles are
-  // saved with their task ids. The console saves a task id as soon as it lands, but on
-  // IndexedDB that save is asynchronous, and a reload in the instant before it commits has
-  // nothing to reattach through.
+  // saved with their task ids. While a reply streams the console saves on a trailing ~2 s
+  // timer (and asynchronously on IndexedDB), so a reload before that save commits has
+  // nothing to reattach through. That gap is a known product limit; saving the task id
+  // at once closed it but made a second open tab reattach to a turn that was still live
+  // in the first (the double-render specs), so it was reverted.
   await expect
     .poll(async () => {
       const saved = (await persistedChat(page))?.sessions ?? [];

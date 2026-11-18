@@ -1912,12 +1912,11 @@ export const chatStore = {
     });
   },
 
-  updateMessages(sessionId: string, messages: ChatMessage[], persistMode: "immediate" | "debounced" = "debounced") {
+  updateMessages(sessionId: string, messages: ChatMessage[]) {
     // Fires per streamed SSE frame (~24 chars) and per reveal-queue tick
     // (~word-sized, #2993) — debounce the localStorage write. The stream-done
     // path flushes via setSessionStatus right after the final updateMessages,
-    // so the terminal state always lands immediately. A change a reload depends on
-    // mid-turn (the task id a reattach resubscribes through) passes "immediate".
+    // so the terminal state always lands immediately.
     const deduped = dedupeMessages(messages);
     setState(
       (current) => ({
@@ -1933,7 +1932,7 @@ export const chatStore = {
             : session,
         ),
       }),
-      persistMode,
+      "debounced",
     );
   },
 
