@@ -1565,3 +1565,24 @@ def test_rotate_log_never_raises_when_a_rename_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "replace", refuse)
     assert _rotate_log(log, max_bytes=10) is False
     assert log.read_text() == "x" * 50
+
+
+# ── exit capture (#5533): the record a later exit quotes its log tail from ────
+def test_start_stamps_the_log_offset_and_a_clean_stop_records_no_exit(fleet):
+    ws = manager.create("offs", port=_free_port())
+    log_path = Path(ws["path"]) / "agent.log"
+    log_path.write_text("an earlier run\n")
+    supervisor.start("offs")
+    rec = supervisor._load_state()[ws["id"]]
+    assert rec["log_offset"] == log_path.stat().st_size  # this run starts after the old lines
+
+    supervisor.stop("offs")
+    supervisor.status()
+    assert supervisor.collect_exits() == []
+
+    # Dying WITHOUT a stop is the exit: only this run's lines are quoted.
+    supervisor.start("offs")
+    log_path.write_text("an earlier run\nthis run died\n")
+    fleet.clear()
+    supervisor.status()
+    assert [x["log_tail"] for x in supervisor.collect_exits()] == ["this run died"]

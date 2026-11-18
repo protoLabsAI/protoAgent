@@ -231,6 +231,124 @@ def _log_tail_since(log_path: Path, offset: int, limit: int = 500) -> str:
         return ""
 
 
+# ── Exit capture (ADR 0135 D8, #5533) ─────────────────────────────────────────
+# stop(), warm-cap eviction and shutdown_all remove a member's record BEFORE its process
+# dies, so a record whose pid is dead is an exit nobody asked for. Every place that drops
+# such a record goes through ``_prune_dead_records``, which writes the evidence first.
+
+#: Exit records kept beside fleet.json (oldest dropped first), collected or not.
+_EXITS_KEEP = 50
+#: Chars of the member's own log kept on an exit record.
+_EXIT_LOG_TAIL_CHARS = 2000
+
+
+def _exits_path() -> Path:
+    return manager.workspaces_root() / "fleet-exits.json"
+
+
+def _load_exits() -> list[dict]:
+    """The recorded exits, oldest first. Tolerant like ``_load_state``: an unreadable
+    or wrong-shaped file reads as empty."""
+    f = _exits_path()
+    if not f.exists():
+        return []
+    try:
+        d = json.loads(f.read_text())
+    except (ValueError, OSError) as e:
+        log.warning("[fleet] %s unreadable (%s) — treating as empty", f, e)
+        return []
+    return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
+
+
+def _save_exits(exits: list[dict]) -> None:
+    from infra.paths import atomic_write
+
+    atomic_write(_exits_path(), json.dumps(exits[-_EXITS_KEEP:], indent=2) + "\n")
+
+
+def _exit_log_tail(rec: dict) -> str:
+    """The last lines the dead member wrote in its final run, credentials scrubbed.
+    Empty when there is no log, or when scrubbing fails (no text rather than raw text)."""
+    raw = rec.get("log")
+    if not raw:
+        return ""
+    log_path = Path(str(raw))
+    try:
+        offset = max(0, int(rec.get("log_offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        # Read only the end of a long run's log: a char is at most 4 bytes of UTF-8.
+        offset = max(offset, log_path.stat().st_size - 4 * _EXIT_LOG_TAIL_CHARS)
+    except OSError:
+        return ""
+    tail = _log_tail_since(log_path, offset, _EXIT_LOG_TAIL_CHARS)
+    if not tail:
+        return ""
+    try:
+        from graph.middleware.redaction import redact
+
+        return str(redact(tail))
+    except Exception:  # noqa: BLE001 — fail closed
+        return ""
+
+
+def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None = None) -> list[dict]:
+    """THE dead-record prune: for every record in ``state`` (or just ``keys``) whose pid
+    is dead, append an exit record to ``fleet-exits.json``, then drop the record and save
+    ``fleet.json``. Returns the exit records it wrote.
+
+    The caller MUST hold ``_state_lock()`` and pass the state it loaded under it, so one
+    dead member yields exactly one exit record however many readers race to notice it.
+    ``detected_by`` names the caller (``status``, ``start``, ``boot``, ...): a ``boot``
+    exit was already raised to whoever called ``start()``.
+    """
+    dead = [k for k in (list(state) if keys is None else keys) if k in state and not _alive(state[k].get("pid"))]
+    if not dead:
+        return []
+    now = datetime.now(timezone.utc).isoformat()
+    recorded = []
+    for key in dead:
+        rec = state[key]
+        recorded.append(
+            {
+                "id": key,
+                "pid": rec.get("pid"),
+                "at": now,
+                "started_at": rec.get("started_at", ""),
+                "detected_by": detected_by,
+                "log_tail": _exit_log_tail(rec),
+            }
+        )
+    try:
+        _save_exits([*_load_exits(), *recorded])
+    except OSError as e:
+        # Still prune: a record we could not write must not leave a dead member "running".
+        log.error("[fleet] could not record %d member exit(s): %s", len(recorded), e)
+    for key in dead:
+        state.pop(key, None)
+    _save_state(state)
+    for x in recorded:
+        log.warning("[fleet] member %s (pid %s) exited unexpectedly (seen by %s)", x["id"], x["pid"], detected_by)
+    return recorded
+
+
+def collect_exits() -> list[dict]:
+    """The unexpected member exits not yet collected, oldest first; each is returned
+    once. A record is ``{id, pid, at, started_at, detected_by, log_tail}``. Records
+    survive a hub restart until collected (``fleet-exits.json``, beside ``fleet.json``)."""
+    with _state_lock():
+        exits = _load_exits()
+        fresh = [x for x in exits if not x.get("collected")]
+        if fresh:
+            out = [dict(x) for x in fresh]
+            for x in fresh:
+                x["collected"] = True
+            _save_exits(exits)
+            return out
+    return []
+
+
 # How long start() watches a fresh spawn for insta-death before returning. It returns
 # EARLY on either signal (port bound → up, process exited → raise), so a healthy boot
 # pays only its own bind latency and only a hung-but-not-listening child waits it out.
@@ -316,6 +434,9 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
         rec = state.get(wid)
         if rec and _alive(rec.get("pid")):
             return {**rec, "name": name, "running": True, "already": True}
+        # A dead record is about to be replaced: record that exit first (before the log
+        # is rotated below), so a restart doesn't erase the evidence.
+        _prune_dead_records(state, detected_by="start", keys=[wid])
         if stop is not None and stop.is_set():
             return {"name": name, "running": False, "already": False, "cancelled": True}
 
@@ -422,6 +543,9 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
             "started_at": now,
             "last_active": now,
             "log": str(log_path),
+            # Where this run's output starts in the (append-only) log: an exit record
+            # quotes only this run's lines.
+            "log_offset": log_offset,
             # The spawner's app version (version-coherence P1/P2): a member is
             # this binary until restarted, so status()/version_skew_warning()
             # can surface a live member left behind by an app update.
@@ -439,6 +563,7 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
             with _state_lock():
                 state = _load_state()
                 if (state.get(wid) or {}).get("pid") == proc.pid:
+                    _prune_dead_records(state, detected_by="boot", keys=[wid])
                     state.pop(wid, None)
                     _save_state(state)
             tail = _log_tail_since(log_path, log_offset)
@@ -471,6 +596,7 @@ def stop(ident: str, *, timeout: float = 8.0) -> dict:
         state = _load_state()
         rec = state.get(name)
         if not rec or not _alive(rec.get("pid")):
+            _prune_dead_records(state, detected_by="stop", keys=[name])
             state.pop(name, None)
             _save_state(state)
             raise FleetError(f"{ident!r} is not running")
@@ -976,10 +1102,18 @@ def remote_auth(rec: dict) -> str:
     return _auth_cache.get(str(rec.get("id") or ""), ("unknown", 0.0))[0]
 
 
-def _probe_one(rec: dict, timeout: float) -> tuple[bool, str]:
+_CARD_PATH = "/.well-known/agent-card.json"
+#: The readiness probe (ADR 0010): 200 once the graph compiled, 503 before. Public.
+_HEALTH_PATH = "/healthz"
+
+
+def _probe_one(rec: dict, timeout: float, *, path: str = _CARD_PATH) -> tuple[bool, str]:
     """Probe ONE remote's A2A card: refresh its reachability cache + persist a changed
     version. Returns ``(reachable, version-from-card-or-blank)``. Network call — keep it
-    off the event loop."""
+    off the event loop.
+
+    ``path`` is what to GET (default: the card). ``health_sweep`` passes ``/healthz`` for
+    a local member; only the card probe reads and records a version."""
     import httpx
 
     version = ""
@@ -993,9 +1127,9 @@ def _probe_one(rec: dict, timeout: float) -> tuple[bool, str]:
         _probe_cache[rid] = (False, time.monotonic())
         return False, ""
     try:
-        r = httpx.get(f"{url}/.well-known/agent-card.json", timeout=timeout, follow_redirects=False)
+        r = httpx.get(f"{url}{path}", timeout=timeout, follow_redirects=False)
         alive = r.status_code == 200
-        if alive:
+        if alive and path == _CARD_PATH:
             try:
                 # The A2A card carries the remote's app version (pyproject
                 # [project].version) — same unauthenticated endpoint the
@@ -1064,6 +1198,144 @@ def _record_remote_version(rid: str, version: str) -> None:
         if rec is not None and rec.get("version") != version:
             rec["version"] = version
             _save_remotes(remotes)
+
+
+# ── Member health (ADR 0135 D8, #5533) ────────────────────────────────────────
+# One health record per member, kept in this process (like the probe caches) and fed by
+# the probes above. ``health_sweep`` is a single pass: whoever runs it owns the cadence
+# and the threshold, and acts on the changes it returns.
+_health: dict[str, dict] = {}
+_health_lock = threading.Lock()
+
+
+def _public_health(entry: dict) -> dict:
+    return {k: v for k, v in entry.items() if not k.startswith("_")}
+
+
+def member_health() -> list[dict]:
+    """The health record of every member seen by ``health_sweep``: ``{id, name, kind
+    (local | remote), state (healthy | down | wedged), failures (consecutive failed
+    checks), changed_at (when the state last changed), pid (a live local member's)}``.
+    Memory only — no probe, no file read. A member stopped on purpose has no record."""
+    with _health_lock:
+        return [_public_health(e) for e in _health.values()]
+
+
+def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
+    """Check every member once and return only the health-state CHANGES.
+
+    - A local member whose pid is dead is ``down``. Its record is pruned here through
+      ``_prune_dead_records`` (so the exit is recorded), or was already by another reader.
+    - A live local member is probed at ``/healthz`` with ``_probe_one``: 200 is
+      ``healthy``; ``failure_threshold`` consecutive failures with the pid still alive
+      is ``wedged``.
+    - A remote is read from ``refresh_remote_probes``: reachable is ``healthy``;
+      ``failure_threshold`` consecutive failed probes is ``down``. A probe still inside
+      its TTL is not counted twice.
+
+    A member first seen is taken as ``healthy`` and that baseline is not reported. A
+    member stopped on purpose (no record, no exit) is dropped without a change. Each
+    change is the member's health record plus ``previous`` (None when first seen), so
+    down, wedged and recovered (``healthy`` after either) are each reported once.
+
+    Blocking: one probe per member, each bounded by ``timeout``. Call it off the event loop.
+    """
+    threshold = max(1, int(failure_threshold))
+    with _state_lock():
+        state = _load_state()
+        crashed = {x["id"] for x in _prune_dead_records(state, detected_by="health_sweep")}
+        last_exit_pid = {x.get("id"): x.get("pid") for x in _load_exits()}
+    names = {ws["id"]: ws["name"] for ws in manager.list_workspaces()}
+    healthy_now: dict[str, bool] = {}
+    for wid, rec in state.items():  # every record left is alive
+        port = rec.get("port")
+        target = {"id": wid, "url": f"http://127.0.0.1:{port}" if port else ""}
+        healthy_now[wid] = _probe_one(target, timeout, path=_HEALTH_PATH)[0]
+    refresh_remote_probes(timeout)
+    remotes = list_remotes()
+
+    now = datetime.now(timezone.utc).isoformat()
+    changes: list[dict] = []
+
+    def _entry(mid: str, kind: str, name: str) -> tuple[dict, bool]:
+        entry = _health.get(mid)
+        fresh = entry is None or entry["kind"] != kind
+        if fresh:
+            entry = _health[mid] = {
+                "id": mid,
+                "name": name,
+                "kind": kind,
+                "state": "healthy",
+                "failures": 0,
+                "changed_at": now,
+                "pid": None,
+            }
+        entry["name"] = name
+        return entry, fresh
+
+    def _move(entry: dict, new_state: str, fresh: bool) -> None:
+        if entry["state"] == new_state:
+            return
+        previous = None if fresh else entry["state"]
+        entry["state"], entry["changed_at"] = new_state, now
+        changes.append({**_public_health(entry), "previous": previous})
+
+    with _health_lock:
+        known_local = {k for k, e in _health.items() if e["kind"] == "local"}
+        for wid in [*state, *sorted((crashed | known_local) - set(state))]:
+            name = names.get(wid, wid)
+            prior = _health.get(wid)
+            if prior is not None and prior["kind"] != "local":
+                prior = None
+            # The pid this record last saw alive died without being stopped.
+            exited = wid in crashed or (
+                prior is not None and prior["pid"] is not None and last_exit_pid.get(wid) == prior["pid"]
+            )
+            if wid in state:
+                entry, fresh = _entry(wid, "local", name)
+                pid = state[wid].get("pid")
+                if entry["pid"] != pid:
+                    if exited:  # crashed and was restarted between sweeps: still report it
+                        _move(entry, "down", fresh)
+                    entry["pid"], entry["failures"] = pid, 0
+                if healthy_now[wid]:
+                    entry["failures"] = 0
+                    _move(entry, "healthy", fresh)
+                else:
+                    entry["failures"] += 1
+                    if entry["failures"] >= threshold:
+                        _move(entry, "wedged", fresh)
+            elif exited:
+                entry, fresh = _entry(wid, "local", name)
+                entry["pid"] = None
+                _move(entry, "down", fresh)
+            elif prior is not None and prior["state"] == "down" and prior["pid"] is None and wid in names:
+                prior["name"] = name  # still down since its crash: nothing new to report
+            else:
+                _health.pop(wid, None)  # stopped on purpose, or its workspace is gone
+
+        remote_ids = set()
+        for rec in remotes:
+            rid = rec["id"]
+            remote_ids.add(rid)
+            hit = _probe_cache.get(rid)
+            if hit is None:
+                continue
+            reachable, probed_at = hit
+            entry, fresh = _entry(rid, "remote", str(rec.get("name") or rid))
+            if entry.get("_probed_at") == probed_at:
+                continue  # the same cached probe as last sweep
+            entry["_probed_at"] = probed_at
+            if reachable:
+                entry["failures"] = 0
+                _move(entry, "healthy", fresh)
+            else:
+                entry["failures"] += 1
+                if entry["failures"] >= threshold:
+                    _move(entry, "down", fresh)
+        for rid in [k for k, e in _health.items() if e["kind"] == "remote" and k not in remote_ids]:
+            _health.pop(rid, None)
+    return changes
 
 
 # ── pairing (ADR 0113 D1): the hub claims a code the remote's operator minted ──────
@@ -1776,13 +2048,8 @@ def status() -> list[dict]:
     (running/stopped; for remotes, the last cached reachability probe)."""
     with _state_lock():
         state = _load_state()
-        dirty = False
-        for name in list(state):  # prune dead entries under the lock (#12 — atomic cleanup)
-            if not _alive(state[name].get("pid")):
-                state.pop(name, None)
-                dirty = True
-        if dirty:
-            _save_state(state)
+        # Prune dead entries under the lock (#12 — atomic cleanup), recording each exit.
+        _prune_dead_records(state, detected_by="status")
     # Load the saved roster ONCE: its groups + per-agent pin/group metadata decorate every
     # entry below, and its order sorts the result at the end.
     roster = _load_roster()
@@ -2090,13 +2357,24 @@ def version_skew_warning() -> str | None:
             return None
         names = {ws["id"]: ws["name"] for ws in manager.list_workspaces()}
         stale: list[str] = []
+        dead = False
         for wid, rec in state.items():
             if not _alive(rec.get("pid")):
+                dead = True
                 continue
             v = str(rec.get("version", "") or "")
             if v != current:
                 label = names.get(wid, wid)
                 stale.append(f"{label} (v{v})" if v else f"{label} (version unknown)")
+        if dead:
+            # This scan read fleet.json unlocked; prune what it skipped through the one
+            # helper, on a fresh read under the lock. A busy lock leaves it for the next
+            # reader and never costs the warning.
+            try:
+                with _state_lock():
+                    _prune_dead_records(_load_state(), detected_by="version_skew")
+            except Exception:  # noqa: BLE001
+                log.debug("[fleet] version-skew scan could not prune dead records", exc_info=True)
         if not stale:
             return None
         return (
