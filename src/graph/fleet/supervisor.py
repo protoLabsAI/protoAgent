@@ -1244,7 +1244,7 @@ def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
     with _state_lock():
         state = _load_state()
         crashed = {x["id"] for x in _prune_dead_records(state, detected_by="health_sweep")}
-        last_exit_pid = {x.get("id"): x.get("pid") for x in _load_exits()}
+        exits = _load_exits()
     names = {ws["id"]: ws["name"] for ws in manager.list_workspaces()}
     healthy_now: dict[str, bool] = {}
     for wid, rec in state.items():  # every record left is alive
@@ -1288,8 +1288,11 @@ def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
             if prior is not None and prior["kind"] != "local":
                 prior = None
             # The pid this record last saw alive died without being stopped.
+            # A later failed restart must not hide that pid's exit between sweeps.
             exited = wid in crashed or (
-                prior is not None and prior["pid"] is not None and last_exit_pid.get(wid) == prior["pid"]
+                prior is not None
+                and prior["pid"] is not None
+                and any(x.get("id") == wid and x.get("pid") == prior["pid"] for x in exits)
             )
             if wid in state:
                 entry, fresh = _entry(wid, "local", name)

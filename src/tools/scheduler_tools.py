@@ -114,6 +114,16 @@ _ONESHOT_END_TURN_GUIDANCE = (
 _CRON_END_TURN_GUIDANCE = "\nBefore ending your turn, tell the user what was scheduled and when it will run."
 
 
+def _schedule_expiry_description(job) -> str:
+    from scheduler.interface import job_expires_at
+
+    expiry = job_expires_at(job)
+    description = f" Expires at {expiry.isoformat()}." if expiry else " No time expiry."
+    if getattr(job, "max_fires", None) is not None:
+        description += f" Auto-cancels after {job.max_fires} fires."
+    return description
+
+
 def _build_scheduler_tools(scheduler) -> list:
     """Bind scheduler tools to a ``SchedulerBackend``. Returns a list."""
 
@@ -144,7 +154,7 @@ def _build_scheduler_tools(scheduler) -> list:
             job_id: optional id (auto-generated); needed to cancel.
             timezone: IANA zone the cron is evaluated in (DST-aware); default UTC; ignored for ISO.
             ttl: recurring lifetime, e.g. ``"7d"``, ``"24h"``, ``"P7D"``. Cron jobs default to 7d —
-                set longer for genuinely long-lived work.
+                set longer for long-lived work, or ``"none"`` for no TTL only in an operator chat turn.
             max_fires: auto-cancel after this many fires.
 
         For "check back in N seconds" use ``wait``.
@@ -156,6 +166,15 @@ def _build_scheduler_tools(scheduler) -> list:
             return f"Error: {problem}"
         # Validate expiry knobs up front — a clean error string beats a
         # backend-specific failure surfacing later.
+        no_expiry = isinstance(ttl, str) and ttl.strip().lower() == "none"
+        if no_expiry and (
+            not isinstance(state, dict)
+            or state.get("operator_chat_turn") is not True
+            or state.get("subagent_fence")
+        ):
+            return 'Error: ttl="none" requires an operator chat turn without a subagent fence.'
+        if no_expiry:
+            ttl = None  # The existing nullable TTL column represents no expiry.
         if ttl is not None:
             try:
                 parse_ttl(ttl)
@@ -166,7 +185,7 @@ def _build_scheduler_tools(scheduler) -> list:
         # Auto-expiry default (#2992): a recurring schedule the caller didn't
         # bound gets 7 days, so forgotten crons don't run forever. One-shots
         # fire once and are removed, so they carry no TTL.
-        if ttl is None and is_cron(when):
+        if ttl is None and not no_expiry and is_cron(when):
             ttl = "7d"
         # Dedup guard: don't create a second job identical to an existing active
         # one (same prompt + schedule + timezone). This is the common cause of
@@ -184,6 +203,7 @@ def _build_scheduler_tools(scheduler) -> list:
                     return (
                         f"Already scheduled as {j.id} (next at "
                         f"{j.next_fire or 'managed remotely'}). Not creating a duplicate."
+                        + _schedule_expiry_description(j)
                     )
         except Exception:  # noqa: BLE001 — dedup is best-effort; never block scheduling
             pass
@@ -228,7 +248,8 @@ def _build_scheduler_tools(scheduler) -> list:
         # "I'll pick this back up". Cron gets the lighter wording. The guidance is model-only; a
         # silent turn's user-facing fallback strips it via ``schedule_turn_reply``.
         guidance = _CRON_END_TURN_GUIDANCE if is_cron(when) else _ONESHOT_END_TURN_GUIDANCE
-        return f"Scheduled job {job.id} next at {next_fire}.{guidance}"
+        expiry = _schedule_expiry_description(job) if is_cron(when) or ttl or max_fires else ""
+        return f"Scheduled job {job.id} next at {next_fire}.{expiry}{guidance}"
 
     @tool
     async def list_schedules() -> str:

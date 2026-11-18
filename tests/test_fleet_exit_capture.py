@@ -238,6 +238,32 @@ def test_health_sweep_sees_a_crash_another_reader_pruned_first(member):
     assert len(supervisor.collect_exits()) == 2
 
 
+def test_health_sweep_reports_crash_followed_by_failed_restart(member, monkeypatch):
+    ws, _flag, pids = member
+    wid = ws["id"]
+    assert _sweep() == []
+    _kill(pids[0])
+
+    # Both exits are pruned between sweeps; the boot exit must not hide the crash.
+    with monkeypatch.context() as patch:
+        argv = [sys.executable, "-c", "import sys; sys.exit(3)"]
+        patch.setattr(manager, "run_exec", lambda ident, passthrough: ({}, argv))
+        with pytest.raises(supervisor.FleetError):
+            supervisor.start("m")
+    exits = supervisor.collect_exits()
+    assert [(x["id"], x["detected_by"]) for x in exits] == [(wid, "start"), (wid, "boot")]
+    assert exits[0]["pid"] == pids[0] and exits[1]["pid"] != pids[0]
+    assert _sweep() == [(wid, "healthy", "down")]
+    assert _sweep() == []
+    assert supervisor.member_health()[0]["state"] == "down"
+    assert supervisor.member_health()[0]["pid"] is None
+
+    pids.append(supervisor.start("m")["pid"])
+    assert _sweep() == [(wid, "down", "healthy")]
+    assert _sweep() == []
+    assert supervisor.collect_exits() == []
+
+
 def test_health_sweep_tracks_remotes_through_the_probe_cache(tmp_path, monkeypatch):
     import httpx
 

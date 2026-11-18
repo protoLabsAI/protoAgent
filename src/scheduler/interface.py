@@ -49,6 +49,8 @@ class Job:
     ttl: str | None = None
     max_fires: int | None = None
     fire_count: int = 0
+    # Delivery receipt only; ttl/max_fires remain the sole expiry policy.
+    expiry_notice_sent: bool = False
     # Outcome tracking (#3376). `fire_count` counts deliveries; these say whether
     # the turns actually worked, so a job failing every run is visible instead of
     # looking healthy. `consecutive_failures` resets the moment one succeeds.
@@ -118,6 +120,10 @@ class SchedulerBackend(Protocol):
         ``created_at + ttl`` elapses, or after ``max_fires`` firings, the
         backend cancels it. ``ttl`` must satisfy ``parse_ttl`` — raises
         ``ValueError`` for an unparseable duration or ``max_fires < 1``."""
+        ...
+
+    def mark_expiry_notice_sent(self, job_id: str, generation: str) -> None:
+        """Persist a result-card notice receipt, conditional on the job's created_at."""
         ...
 
     def cancel_job(self, job_id: str) -> bool:
@@ -258,3 +264,11 @@ def parse_ttl(ttl: str) -> timedelta:
     if delta <= timedelta(0):
         raise ValueError(f"scheduler: ttl {ttl!r} must be a positive duration")
     return delta
+
+
+def job_expires_at(job) -> datetime | None:
+    """Derive the TTL deadline from existing fields without storing another clock."""
+    ttl = getattr(job, "ttl", None)
+    if not ttl:
+        return None
+    return parse_iso_to_utc(job.created_at) + parse_ttl(ttl)
