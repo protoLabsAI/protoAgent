@@ -458,12 +458,16 @@ async def test_private_parked_steer_rides_the_guarded_resume(tmp_path, monkeypat
     # resume path (not silently dropped, r1): a hitl_resume loopback carrying ONLY the opaque
     # reference bound to the single-use delegation — never the text.
     from a2a_impl import private_intake
+    from a2a.types import Message, Part, Task, TaskState, TaskStatus
 
     steering._reset()
     engine, store = await _partition(tmp_path)
     monkeypatch.setattr(STATE, "graph", _Graph(_parked_snapshot()), raising=False)
     monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
     op = _operator_ctx()
+    await store.save(Task(id="parked-private", context_id="chat-parked",
+                          history=[Message(parts=[Part(text="private-input:original")])],
+                          status=TaskStatus(state=TaskState.TASK_STATE_INPUT_REQUIRED)), op)
     captured: dict = {}
     at_start: dict = {}  # the private text — kept out of ``captured`` (the wire-field capture)
 
