@@ -750,7 +750,7 @@ def register_config_routes(app) -> None:
         }
 
     @app.patch("/api/projects/{name:path}")
-    async def _api_project_set_write(name: str, body: dict | None = None):
+    async def _api_project_set_write(name: str, body: dict | None = None, path: str | None = None):
         """Switch one managed project between read-only and read-write
         (projectBoard-plugin#783): body ``{"write": bool}``.
 
@@ -765,7 +765,9 @@ def register_config_routes(app) -> None:
         is never materialized into explicit fence entries.
 
         ``name`` is looked up in the live registry, falling back to a fence-only
-        ``filesystem.projects`` entry. 404 for an unknown name; 400 when ``write`` is
+        ``filesystem.projects`` entry. Optional query ``path`` selects the exact declared
+        path for duplicate names; stale paths never fall back to another folder.
+        Name-only callers retain first-match behavior. 404 for an unknown name/path; 400 when ``write`` is
         missing or not a JSON boolean (a truthy string is NOT coerced — widening a fence
         on ``"false"`` would be the wrong way to be lenient). Setting the mode the project
         already has is a 200 that writes nothing."""
@@ -779,7 +781,11 @@ def register_config_routes(app) -> None:
         entry = None
         for attr in ("projects", "filesystem_projects"):
             for e in list(getattr(cfg, attr, []) or []):
-                if isinstance(e, dict) and str(e.get("name") or "") == name:
+                if (
+                    isinstance(e, dict)
+                    and str(e.get("name") or "") == name
+                    and (path is None or str(e.get("path") or "") == path)
+                ):
                     entry = e
                     break
             if entry is not None:

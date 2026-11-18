@@ -827,7 +827,7 @@ describe("api soul version history (#1691)", () => {
     expect(seen[0].method).toBe("POST");
   });
 
-  it("setProjectWrite PATCHes only `write` to the URL-encoded project route", async () => {
+  it.each([undefined, "/dev/my app?#&"])("setProjectWrite encodes the optional row path (%s)", async (path) => {
     const seen: { path: string; method?: string; body?: unknown }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -836,9 +836,12 @@ describe("api soul version history (#1691)", () => {
         return json({ ok: true, name: "my app", path: "/dev/my app", write: true });
       }),
     );
-    const res = await api.setProjectWrite("my app", true);
+    const res = await api.setProjectWrite("my app", true, path);
     expect(res).toEqual({ ok: true, name: "my app", path: "/dev/my app", write: true });
-    expect(seen).toEqual([{ path: "/api/projects/my%20app", method: "PATCH", body: { write: true } }]);
+    expect(seen).toEqual([{
+      path: path === undefined ? "/api/projects/my%20app" : "/api/projects/my%20app?path=%2Fdev%2Fmy%20app%3F%23%26",
+      method: "PATCH", body: { write: true },
+    }]);
   });
 });
 

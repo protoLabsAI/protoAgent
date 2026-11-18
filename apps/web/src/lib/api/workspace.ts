@@ -122,9 +122,10 @@ export const workspaceApi = {
   fsProjects() {
     return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
   },
-  // The ADR 0095 managed-projects registry. Read-only by design: the fs-projects POST
-  // above REPLACES `filesystem.projects`, so writing back a registry-derived list here
-  // would silently materialize the projection and sever the registry link.
+  // The ADR 0095 managed-projects registry. Never write it back through the fs-projects
+  // POST above: that REPLACES `filesystem.projects`, so posting a registry-derived list
+  // would silently materialize the projection and sever the registry link. The only
+  // console edit is one project's access, through setProjectWrite below.
   managedProjects() {
     return request<ManagedProjects>("/api/projects");
   },
@@ -132,9 +133,10 @@ export const workspaceApi = {
   // PATCH edits only the `write` key in place — on the registry entry and on an explicit
   // fence entry that already mirrors it — so, unlike the fs-projects POST, it does not
   // materialize the registry. Setting the mode it already has is a 200 that writes nothing.
-  setProjectWrite(name: string, write: boolean) {
+  // The optional declared path distinguishes rows sharing a display name.
+  setProjectWrite(name: string, write: boolean, path?: string) {
     return request<{ ok: boolean; name: string; path: string; write: boolean }>(
-      `/api/projects/${encodeURIComponent(name)}`,
+      `/api/projects/${encodeURIComponent(name)}${path !== undefined ? `?path=${encodeURIComponent(path)}` : ""}`,
       { method: "PATCH", body: { write } },
     );
   },

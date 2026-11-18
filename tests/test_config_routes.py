@@ -999,6 +999,26 @@ def test_project_patch_finds_a_fence_only_entry_by_name(monkeypatch, tmp_path):
     assert applied == [{"filesystem": {"projects": [{"name": "legacy", "path": str(tmp_path), "write": True}]}}]
 
 
+@pytest.mark.parametrize("selected", ["second", "stale"])
+def test_project_patch_selects_duplicate_name_by_path_without_fallback(monkeypatch, tmp_path, selected):
+    projects = [
+        {"name": "app", "path": str(tmp_path / folder), "write": False}
+        for folder in ("first", "second")
+    ]
+    _projects_state(monkeypatch, projects=projects)
+    applied = _wire_project_apply(monkeypatch)
+    client = _client()
+    response = client.patch(
+        "/api/projects/app", params={"path": str(tmp_path / selected)}, json={"write": True}
+    )
+    assert response.status_code == (200 if selected == "second" else 404)
+    expected = [projects[0], {**projects[1], "write": selected == "second"}]
+    rows = client.get("/api/projects").json()["projects"]
+    assert rows[0]["write"] is False
+    assert rows[1]["write"] is (selected == "second")
+    assert applied == ([{"projects": expected}] if selected == "second" else [])
+
+
 def test_project_patch_unknown_name_is_a_404(monkeypatch, tmp_path):
     _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path)}])
     applied = _wire_project_apply(monkeypatch)
