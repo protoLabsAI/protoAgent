@@ -391,6 +391,12 @@ checkpoint:
 #   enabled: true
 #   host: https://cloud.langfuse.com   # blank → LANGFUSE_HOST, else http://host.docker.internal:3001 (compose only)
 
+# Private steering (P1h): operator opt-in, off by default. Reserved for the
+# private-partition intake; setting this alone does not change behavior yet.
+# Config-file only; not exposed in Settings.
+# private_steering:
+#   enabled: false
+
 # Background jobs (ADR 0050/0070) — delegations fired with run_in_background.
 # auto_resume: when a job finishes, immediately run a turn in the session that
 # spawned it so the agent reviews the report and briefs the operator; false

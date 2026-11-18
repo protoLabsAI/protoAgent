@@ -237,6 +237,11 @@ from server.turn_telemetry import (  # noqa: F401 — re-export under the histor
 log = logging.getLogger("protoagent.server")
 
 
+def private_steering_enabled() -> bool:
+    """Read the private-steering opt-in; absent config keeps it disabled."""
+    return bool(getattr(STATE.graph_config, "private_steering_enabled", False))
+
+
 # Chars of a background *report* injected into the spawning turn. Shrunk 6000 → 3000
 # (ADR 0070 D2): a substantial report is now ALSO indexed into the knowledge store at
 # completion, so the notification carries a summary-sized excerpt plus a pointer to
