@@ -68,9 +68,15 @@ async def run(base, point, caller, recover, sink):
             binding, record = await store.delivery_data(TASK)
             projection = RequesterProjection(store, None, queue, binding, operator)
             await projection.begin_private(pi.private_ref(record["private_turn_id"]))
+            # Recovery settles a stale claim first; a repeated pass must change nothing.
+            recovered = [await projection.recover()]
+            settled = (await store.delivery_data(TASK))[1]
+            recovered.append(await projection.recover())
+            assert (await store.delivery_data(TASK))[1] == settled
             outcomes = [await projection.deliver_to_requester(record["id"]) for _ in range(2)]
             final_binding, final_record = await store.delivery_data(TASK)
             (base / "report.json").write_text(json.dumps({"pid": os.getpid(), "before": record,
+                "recovered": recovered, "settled": settled,
                 "record": final_record, "binding": final_binding, "original_binding": binding,
                 "outcomes": outcomes, "kind": requester.state["principal_kind"]}))
     await engine.dispose()
