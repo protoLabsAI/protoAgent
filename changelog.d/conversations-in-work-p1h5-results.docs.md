@@ -7,6 +7,6 @@
   interrupted by an agent restart; its runner did not survive.") and restart
   recovery found nothing, because no live route writes a durable pending turn.
   Nothing leaked. The restart defect is being fixed under protoAgent#5504
-  (card bd-upbbz). Steps 2 and 3 are rerun on the dev instance after both fixes
-  merge (bd-v8szk). `private_steering.enabled` stays default off pending Josh's
+  (card bd-upbbz); it is not accepted v1 behaviour. Steps 2 and 3 are rerun on
+  the dev instance after both fixes merge (bd-v8szk). `private_steering.enabled` stays default off pending Josh's
   separate go.

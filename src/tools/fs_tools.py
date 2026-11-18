@@ -84,6 +84,9 @@ _REGEX_MATCH_TIMEOUT_S = 2.0
 # 200 matches at context_lines=20 would otherwise emit up to 200*41 lines (~40x the old
 # tool's ~200-line worst case), since _MAX_MATCHES bounds match COUNT, not output size.
 _MAX_SEARCH_OUTPUT_LINES = 400
+# search_files(queries=[…]) runs this many patterns per call at most (#5098); the combined
+# output shares the ONE _MAX_SEARCH_OUTPUT_LINES budget above, not one budget per query.
+_MAX_SEARCH_QUERIES = 8
 
 # What `search_files` walks past by default (#2541). Two different harms, one list:
 # a compiled artifact dumped into the transcript is several KB of marshalled bytecode
@@ -1391,34 +1394,17 @@ def build_fs_tools(config) -> list:
         more = f"\n… (+{len(matches) - _MAX_MATCHES} more)" if len(matches) > _MAX_MATCHES else ""
         return "\n".join(rels) + more if rels else "(no matches)"
 
-    @tool
-    def search_files(
-        project: str,
+    def _search_one(
         query: str,
-        path: str = ".",
-        regex: bool = False,
-        context_lines: int = 0,
-        include_generated: bool = False,
+        root: Path,
+        base: Path,
+        regex: bool,
+        context_lines: int,
+        include_generated: bool,
     ) -> str:
-        # Context blocks: ``-`` marks context, ``:`` the match; adjacent matches merge, ``--``
-        # separates blocks. The skipped-dir list stays in the docstring on purpose: the model
-        # must be told what it is not being shown (test_fs_tools acceptance criterion).
-        """Search text files under a project path; returns grep-style ``file:line`` matches (same addressing as ``read_file`` offsets).
-
-        ``query`` is a literal substring unless ``regex=true`` (Python regex; a timed-out pattern
-        errors — simplify and retry). ``context_lines`` works like grep -C. A literal search also
-        skips anything .gitignore/.ignore excludes. Skipped unless ``include_generated=true``:
-        binaries and __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .tox, .git, .venv,
-        venv, node_modules, dist, .next, coverage, .turbo, storybook-static.
-        """
-        registry = registry_ref.get()
-        try:
-            base = registry.resolve(project, path)
-        except ValueError as exc:
-            return f"Error: {exc}"
-        root = registry.resolve(project, ".")
-        context_lines = max(0, min(context_lines, _MAX_CONTEXT_LINES))
-
+        """One query's whole search — the ripgrep fast path, else the Python walk — rendered
+        with its own caps and notes. `search_files` calls this once per query (#5098), so the
+        single-`query` and `queries` forms can't drift apart."""
         # Fast path: a literal directory search goes through ripgrep when it's on PATH
         # (#5097). rg honours .gitignore/.ignore — so a gitignored build cache (the
         # report's 8.3 GB `.turbo/cache`) is pruned at the walk instead of read file by
@@ -1559,6 +1545,73 @@ def build_fs_tools(config) -> list:
         return "(no matches)" + note
 
     @tool
+    def search_files(
+        project: str,
+        query: str = "",
+        path: str = ".",
+        regex: bool = False,
+        context_lines: int = 0,
+        include_generated: bool = False,
+        queries: list[str] | None = None,
+    ) -> str:
+        # Context blocks: ``-`` marks context, ``:`` the match; adjacent matches merge, ``--``
+        # separates blocks. The skipped-dir list stays in the docstring on purpose: the model
+        # must be told what it is not being shown (test_fs_tools acceptance criterion).
+        """Search text files under a project path; returns grep-style ``file:line`` matches (same addressing as ``read_file`` offsets).
+
+        ``query`` is a literal substring unless ``regex=true`` (Python regex; a timed-out pattern
+        errors — simplify and retry). ``context_lines`` works like grep -C. A literal search also
+        skips anything .gitignore/.ignore excludes. Skipped unless ``include_generated=true``:
+        binaries and __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .tox, .git, .venv,
+        venv, node_modules, dist, .next, coverage, .turbo, storybook-static.
+        Several patterns at once: pass ``queries`` (up to 8) instead of ``query`` — one ``## <query>`` section each.
+        """
+        if query and queries:
+            return "Error: pass either query or queries, not both."
+        if not query and not queries:
+            return "Error: pass query or a non-empty queries list."
+        if queries:
+            if len(queries) > _MAX_SEARCH_QUERIES:
+                return f"Error: at most {_MAX_SEARCH_QUERIES} queries per call."
+            for n, q in enumerate(queries, 1):
+                if not q.strip():
+                    return f"Error: query {n} of {len(queries)} is empty."
+        registry = registry_ref.get()
+        try:
+            base = registry.resolve(project, path)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        root = registry.resolve(project, ".")
+        context_lines = max(0, min(context_lines, _MAX_CONTEXT_LINES))
+        if not queries:
+            return _search_one(query, root, base, regex, context_lines, include_generated)
+
+        # One section per query, in input order, each rendered by the same per-query path
+        # with its own caps and notes. `out` pairs every line with its query's 1-based
+        # position so the cut below can say which query it landed in.
+        out: list[tuple[int, str]] = []
+        for n, q in enumerate(queries, 1):
+            if len(out) > _MAX_SEARCH_OUTPUT_LINES:
+                break  # already over the total cap — don't pay for searches nobody will see
+            if out:
+                out.append((n, ""))
+            out.append((n, f"## {q}"))
+            result = _search_one(q, root, base, regex, context_lines, include_generated)
+            out.extend((n, line) for line in result.split("\n"))
+        if len(out) <= _MAX_SEARCH_OUTPUT_LINES:
+            return "\n".join(line for _, line in out)
+        kept = out[:_MAX_SEARCH_OUTPUT_LINES]
+        # Never end on a bare `## <query>` heading (or the blank line before it): that would
+        # read as a query that ran and found nothing.
+        while len(kept) > 1 and (kept[-1][1] == "" or kept[-1][1] == f"## {queries[kept[-1][0] - 1]}"):
+            kept.pop()
+        shown = kept[-1][0]
+        return (
+            "\n".join(line for _, line in kept)
+            + f"\n… (output cap reached after query {shown} of {len(queries)}; narrow the queries or split the call)"
+        )
+
+    @tool
     def write_file(project: str, path: str, content: str) -> str:
         """Write (create/overwrite) a text file in a read-write managed project."""
         registry = registry_ref.get()
@@ -1583,8 +1636,38 @@ def build_fs_tools(config) -> list:
         return f"{'Overwrote' if existed else 'Created'} {path} ({len(content)} chars)."
 
     @tool
-    def edit_file(project: str, path: str, old: str, new: str) -> str:
-        """Replace the first exact occurrence of `old` with `new` in a file (read-write project)."""
+    def edit_file(
+        project: str,
+        path: str,
+        old: str = "",
+        new: str = "",
+        edits: list[dict[str, str]] | None = None,
+    ) -> str:
+        """Edit a file in a read-write project: replace the one exact occurrence of `old` with `new`,
+        or pass `edits=[{"old": ..., "new": ...}, ...]` to change several places in ONE call —
+        applied in order, each `old` must match exactly once, and nothing is written if any fails."""
+        # Argument checks come first (#5098): a malformed call is refused before the file is
+        # resolved, read or locked.
+        if edits and (old or new):
+            return "Error: pass either old/new or edits, not both."
+        if not edits and not old:
+            return "Error: pass old/new or a non-empty edits list."
+        pairs: list[tuple[str, str]] | None = None
+        if edits:
+            total = len(edits)
+            pairs = []
+            for n, item in enumerate(edits, 1):
+                item_old = item.get("old") if isinstance(item, dict) else None
+                item_new = item.get("new") if isinstance(item, dict) else None
+                if not isinstance(item_old, str) or not isinstance(item_new, str):
+                    return f"Error: edit {n} of {total}: needs string `old` and `new` keys."
+                if not item_old:
+                    return f"Error: edit {n} of {total}: `old` is empty."
+                if item_old == item_new:
+                    return f"Error: edit {n} of {total}: `old` and `new` are identical — nothing to change."
+                pairs.append((item_old, item_new))
+        elif old == new:
+            return "Error: `old` and `new` are identical — nothing to change."
         registry = registry_ref.get()
         try:
             target = registry.resolve(project, path)
@@ -1600,21 +1683,42 @@ def build_fs_tools(config) -> list:
         # would report success.
         with _edit_lock(target):
             text = _read_text_verbatim(target)
-            needle, replacement = old, new
-            if needle not in text and "\r\n" in text:
-                # A CRLF file and an LF needle (what a model almost always sends). Match in the
-                # file's own convention rather than normalizing the file, so a one-line edit
-                # doesn't rewrite every line ending in it.
-                needle, replacement = _to_crlf(old), _to_crlf(new)
-            if needle not in text:
-                return f"Error: `old` not found in {path}."
-            if text.count(needle) > 1:
-                return f"Error: `old` is not unique in {path} ({text.count(needle)} matches) — add context."
-            try:
-                _write_text_verbatim(target, text.replace(needle, replacement, 1))
-            except OSError as exc:
-                return f"Error: cannot write {path}: {exc}"
+            if pairs is not None:
+                # List form (#5098): every pair is matched against the text as the earlier
+                # pairs left it, all in memory — the file is written once, only if all apply.
+                total = len(pairs)
+                for n, (pair_old, pair_new) in enumerate(pairs, 1):
+                    needle, replacement = pair_old, pair_new
+                    if needle not in text and "\r\n" in text:
+                        needle, replacement = _to_crlf(pair_old), _to_crlf(pair_new)
+                    matches = text.count(needle)
+                    if matches != 1:
+                        shown = pair_old[:60].replace("\r\n", "⏎").replace("\n", "⏎").replace("\r", "⏎")
+                        problem = "not found" if matches == 0 else f"not unique ({matches} matches) — add context"
+                        return f"Error: edit {n} of {total}: old={shown}… {problem}"
+                    text = text.replace(needle, replacement, 1)
+                try:
+                    _write_text_verbatim(target, text)
+                except OSError as exc:
+                    return f"Error: cannot write {path}: {exc}"
+            else:
+                needle, replacement = old, new
+                if needle not in text and "\r\n" in text:
+                    # A CRLF file and an LF needle (what a model almost always sends). Match in the
+                    # file's own convention rather than normalizing the file, so a one-line edit
+                    # doesn't rewrite every line ending in it.
+                    needle, replacement = _to_crlf(old), _to_crlf(new)
+                if needle not in text:
+                    return f"Error: `old` not found in {path}."
+                if text.count(needle) > 1:
+                    return f"Error: `old` is not unique in {path} ({text.count(needle)} matches) — add context."
+                try:
+                    _write_text_verbatim(target, text.replace(needle, replacement, 1))
+                except OSError as exc:
+                    return f"Error: cannot write {path}: {exc}"
         _announce_change(project, proj.root, target)
+        if pairs is not None:
+            return f"Edited {path} ({len(pairs)} edits)."
         return f"Edited {path}."
 
     @tool

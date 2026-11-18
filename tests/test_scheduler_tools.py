@@ -305,3 +305,97 @@ async def test_schedule_cron_ambiguity_guard(when):
         assert sched.last_context_id == "__unset__"
     else:
         assert out.startswith("Scheduled job ")
+
+
+# ── #5313: plugin-owned jobs are refused by cancel_schedule and flagged in list_schedules ──
+
+
+class _ListedJob:
+    def __init__(self, job_id: str):
+        self.id = job_id
+        self.next_fire = "2099-05-01T15:00:00+00:00"
+        self.schedule = "0 * * * *"
+        self.prompt = "sweep"
+
+
+class _CancelRecordingScheduler(_FakeScheduler):
+    def __init__(self, job_ids=()):
+        super().__init__()
+        self.canceled: list[str] = []
+        self._job_ids = list(job_ids)
+
+    def cancel_job(self, job_id):
+        self.canceled.append(job_id)
+        return True
+
+    def list_jobs(self):
+        return [_ListedJob(i) for i in self._job_ids]
+
+
+def _tool(sched, name):
+    return next(t for t in _build_scheduler_tools(sched) if t.name == name)
+
+
+@pytest.fixture
+def published(monkeypatch):
+    from graph.plugins.host import HOST
+
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(HOST, "publish", lambda topic, payload: events.append((topic, payload)))
+    return events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", ["plugin:frank:frank-hourly-sweep", "  plugin:frank:frank-hourly-sweep\n"])
+async def test_cancel_schedule_refuses_a_plugin_owned_job(published, job_id):
+    # The frank friction: the cancel said "Canceled", the plugin re-armed the job, and the
+    # agent told the operator the sweep was gone. Now the scheduler is never touched.
+    sched = _CancelRecordingScheduler()
+    out = await _tool(sched, "cancel_schedule").ainvoke({"job_id": job_id})
+    assert out.startswith("Error:")
+    assert "`frank` plugin" in out
+    assert "config section (Settings, plugin `frank`)" in out
+    assert "Canceled plugin:" not in out
+    assert sched.canceled == []
+    assert published == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_schedule_refuses_a_plugin_id_with_no_job_segment(published):
+    sched = _CancelRecordingScheduler()
+    out = await _tool(sched, "cancel_schedule").ainvoke({"job_id": "plugin:"})
+    assert out.startswith("Error:") and "owned by a plugin" in out
+    assert sched.canceled == []
+    assert published == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", ["job-1", "myplugin:frank:sweep", "daily-plugin:report"])
+async def test_cancel_schedule_still_cancels_an_agent_job(published, job_id):
+    sched = _CancelRecordingScheduler()
+    out = await _tool(sched, "cancel_schedule").ainvoke({"job_id": job_id})
+    assert out == f"Canceled {job_id}."
+    assert sched.canceled == [job_id]
+    assert published == [("scheduler.changed", {"job_id": job_id, "action": "canceled"})]
+
+
+@pytest.mark.asyncio
+async def test_list_schedules_marks_only_plugin_owned_rows():
+    sched = _CancelRecordingScheduler(["plugin:frank:frank-hourly-sweep", "job-1"])
+    out = await _tool(sched, "list_schedules").ainvoke({})
+    plugin_row, agent_row = out.splitlines()
+    expiry = "ttl=-  max_fires=-  fires=0"
+    assert agent_row == f"job-1  next=2099-05-01T15:00:00+00:00  schedule='0 * * * *'  {expiry}  sweep"
+    assert plugin_row == (
+        f"plugin:frank:frank-hourly-sweep  next=2099-05-01T15:00:00+00:00  schedule='0 * * * *'  {expiry}  sweep"
+        "  (plugin-owned: frank)"
+    )
+
+
+def test_plugin_job_owner_tracks_the_sdk_prefix():
+    # One format, not two: the tool's check must agree with what the SDK mints.
+    from graph.sdk import plugin_job_prefix
+    from tools.scheduler_tools import _plugin_job_owner
+
+    assert _plugin_job_owner(f"{plugin_job_prefix('frank')}frank-hourly-sweep") == "frank"
+    assert _plugin_job_owner("job-1") is None

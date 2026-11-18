@@ -688,7 +688,7 @@ The conditions on that CONTINUE, as Josh set them:
   a kill and restart, came back FAILED ("Task interrupted by an agent restart;
   its runner did not survive.") and restart recovery found nothing, because no
   live route writes a durable pending turn. Nothing leaked. It is being fixed
-  under **protoAgent#5504 (card bd-upbbz)**.
+  under **protoAgent#5504 (card bd-upbbz)**. This is **not accepted v1 behaviour**.
 - Steps 2 and 3 are rerun on the dev instance after both fixes merge
   (**bd-v8szk**).
 - Turning the default on remains a separate go from Josh;

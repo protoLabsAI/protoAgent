@@ -1227,6 +1227,55 @@ def _snapshot(event):
 _HANG_GUARD_S = 60
 
 
+async def _private_segment_ready(ready, running):
+    """Wait for the sealed candidate, or surface a send that ends before it (#5465)."""
+    ready_waiter = asyncio.create_task(ready.wait())
+    try:
+        async with asyncio.timeout(_HANG_GUARD_S):
+            await asyncio.wait({ready_waiter, running}, return_when=asyncio.FIRST_COMPLETED)
+            if running.done():
+                await running  # Preserve the send's exception, even if readiness also won.
+            assert ready.is_set(), "Send ended before the private segment was ready"
+    except BaseException:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        raise
+    finally:
+        ready_waiter.cancel()
+        await asyncio.gather(ready_waiter, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit", ["ready", "error", "early_end", "ready_error"])
+async def test_private_segment_readiness_surfaces_send_exit(exit):
+    ready, release = asyncio.Event(), asyncio.Event()
+    failure = RuntimeError("send failed before the privacy assertions")
+
+    async def send():
+        if exit in ("ready", "ready_error"):
+            ready.set()
+        if exit in ("error", "ready_error"):
+            raise failure
+        if exit == "ready":
+            await release.wait()
+
+    running = asyncio.create_task(send())
+    try:
+        if exit in ("error", "ready_error"):
+            with pytest.raises(RuntimeError) as caught:
+                await _private_segment_ready(ready, running)
+            assert caught.value is failure
+        elif exit == "early_end":
+            with pytest.raises(AssertionError, match="Send ended before"):
+                await _private_segment_ready(ready, running)
+        else:
+            await _private_segment_ready(ready, running)
+            assert not running.done()
+    finally:
+        release.set()
+        await asyncio.gather(running, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fault,terminal,delivers,outcome_state",
@@ -1325,7 +1374,7 @@ async def test_a_private_segment_exit_never_leaks_and_closes_the_delivery(
         clock.install(mp)
         req = _msg("please proceed", mid="request", ctx=CTX)
         running = asyncio.create_task(collect(handler.on_message_send_stream(req, peer), frames))
-        await asyncio.wait_for(ready.wait(), _HANG_GUARD_S)
+        await _private_segment_ready(ready, running)
         task_id = projections[0].binding["task_id"]
 
         watching = None

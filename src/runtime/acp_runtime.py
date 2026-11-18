@@ -157,7 +157,7 @@ def _tool_families_note(exposed: set[str] | None) -> tuple[str, str]:
     names = set(exposed)
     families: list[str] = []
     rules: list[str] = []
-    task_tools = sorted(n for n in ("task_create", "task_list", "task_update", "task_close") if n in names)
+    task_tools = sorted(n for n in ("task_create", "task_list", "task_get", "task_update", "task_close") if n in names)
     if task_tools:
         families.append("tasks (your task/issue board — " + ", ".join(f"`{n}`" for n in task_tools) + ")")
     if "task_create" in names:
