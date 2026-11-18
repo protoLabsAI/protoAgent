@@ -810,6 +810,222 @@ def test_projects_get_matches_a_tilde_row_against_its_expanded_fence_entry(monke
     assert body["projects"][0]["fenced"] is True
 
 
+# ── PATCH /api/projects/{name} — switch a project's access mode (projectBoard-plugin#783) ──
+
+
+def _wire_project_apply(monkeypatch, *, ok=True, messages=(), before_locked_read=lambda: None):
+    """Stand in for the server's ``HOST.apply_settings`` wiring: record each settings
+    patch and (on success) fold it into ``STATE.graph_config`` the way the real
+    apply + reload does, so a following GET reads the new state."""
+    from dataclasses import replace
+
+    from graph.plugins.host import HOST
+    import runtime.state as rs
+
+    applied: list[dict] = []
+
+    def _apply(updates):
+        if callable(updates):  # run under the config write lock, against the committed config
+            before_locked_read()
+            updates = updates(rs.STATE.graph_config)
+        if updates is None:  # another writer already made the change — nothing to write
+            return ok, list(messages)
+        applied.append(updates)
+        if ok:
+            changes = {}
+            if "projects" in updates:
+                changes["projects"] = updates["projects"]
+            if "projects" in (updates.get("filesystem") or {}):
+                changes["filesystem_projects"] = updates["filesystem"]["projects"]
+            rs.STATE.graph_config = replace(rs.STATE.graph_config, **changes)
+        return ok, list(messages)
+
+    monkeypatch.setattr(HOST, "config", lambda: rs.STATE.graph_config)
+    monkeypatch.setattr(HOST, "apply_settings", _apply)
+    return applied
+
+
+def test_project_patch_raises_a_read_only_registry_entry_to_read_write(monkeypatch, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "app", "path": str(tmp_path), "github": "o/app", "write": False},
+            {"name": "other", "path": str(other)},
+        ],
+    )
+    applied = _wire_project_apply(monkeypatch)
+    client = _client()
+
+    r = client.patch("/api/projects/app", json={"write": True})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "name": "app", "path": str(tmp_path), "write": True}
+    # ONE patch, touching only the registry, changing only `write` on the named entry.
+    assert applied == [
+        {
+            "projects": [
+                {"name": "app", "path": str(tmp_path), "github": "o/app", "write": True},
+                {"name": "other", "path": str(other)},
+            ]
+        }
+    ]
+    rows = {p["name"]: p for p in client.get("/api/projects").json()["projects"]}
+    assert rows["app"]["write"] is True
+    assert "write" not in rows["other"]
+
+
+def test_project_patch_lowers_back_and_a_same_mode_patch_writes_nothing(monkeypatch, tmp_path):
+    _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path), "write": True}])
+    applied = _wire_project_apply(monkeypatch)
+    client = _client()
+
+    r = client.patch("/api/projects/app", json={"write": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["write"] is False
+    assert applied == [{"projects": [{"name": "app", "path": str(tmp_path), "write": False}]}]
+    assert client.get("/api/projects").json()["projects"][0]["write"] is False
+
+    # Same mode again: 200, and nothing reaches the settings applier.
+    r = client.patch("/api/projects/app", json={"write": False})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "name": "app", "path": str(tmp_path), "write": False}
+    assert len(applied) == 1
+
+
+def test_project_patch_reads_a_registry_entrys_mode_the_way_the_fence_projects_it(monkeypatch, tmp_path):
+    """`fenced_projects()` reads a registry `write` with `_falsey`: a hand-edited string
+    "false" is read-only and a MISSING key is read-write. The same-mode check must agree,
+    or a PATCH answers 200 "already" while the enforced mode stays the opposite."""
+    import runtime.state as rs
+
+    other = tmp_path / "other"
+    other.mkdir()
+    rows = [{"name": "app", "path": str(tmp_path), "write": "false"}, {"name": "other", "path": str(other)}]
+    _projects_state(monkeypatch, projects=rows)
+    applied = _wire_project_apply(monkeypatch)
+    client = _client()
+    for name, same in (("app", False), ("other", True)):  # already that mode, as enforced
+        assert client.patch(f"/api/projects/{name}", json={"write": same}).status_code == 200
+    assert applied == []
+    for name, same in (("app", False), ("other", True)):
+        assert client.patch(f"/api/projects/{name}", json={"write": not same}).status_code == 200
+    assert applied[-1]["projects"] == [{**rows[0], "write": True}, {**rows[1], "write": False}]
+    assert [p["write"] for p in rs.STATE.graph_config.fenced_projects()] == [True, False]
+
+
+def test_project_patch_keeps_a_change_another_writer_committed_first(monkeypatch, tmp_path):
+    """The lists are re-read inside the apply (under the host's config write lock), not
+    written back from the read the request started with — so an overlapping PATCH or
+    an agent registration that committed in between is not reverted."""
+    from dataclasses import replace
+
+    import runtime.state as rs
+
+    app = {"name": "app", "path": str(tmp_path), "write": False}
+    other = {"name": "other", "path": str(tmp_path / "other"), "write": False}
+    new = {"name": "new", "path": str(tmp_path / "new"), "write": False}
+    _projects_state(monkeypatch, projects=[app, other])
+
+    def _other_writer():  # commits `other` → read-write and registers `new`
+        rs.STATE.graph_config = replace(rs.STATE.graph_config, projects=[app, {**other, "write": True}, new])
+
+    applied = _wire_project_apply(monkeypatch, before_locked_read=_other_writer)
+    assert _client().patch("/api/projects/app", json={"write": True}).status_code == 200
+    assert applied == [{"projects": [{**app, "write": True}, {**other, "write": True}, new]}]
+
+    # The identical change landing first leaves nothing of ours to write: still a 200.
+    _projects_state(monkeypatch, projects=[app, other])
+    applied.clear()
+    assert _client().patch("/api/projects/other", json={"write": True}).status_code == 200
+    assert applied == []
+
+
+def test_project_patch_flips_the_mirrored_explicit_fence_entry_and_nothing_else(monkeypatch, tmp_path):
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    _projects_state(
+        monkeypatch,
+        projects=[
+            {"name": "app", "path": str(tmp_path), "default_branch": "main", "write": False},
+            {"name": "legacy", "path": str(legacy), "write": True},
+        ],
+        filesystem_projects=[
+            {"name": "legacy", "path": str(legacy), "write": True},
+            {"name": "app", "path": str(tmp_path), "write": False, "github": "o/app"},
+        ],
+    )
+    applied = _wire_project_apply(monkeypatch)
+
+    r = _client().patch("/api/projects/app", json={"write": True})
+    assert r.status_code == 200, r.text
+    assert applied == [
+        {
+            "projects": [
+                {"name": "app", "path": str(tmp_path), "default_branch": "main", "write": True},
+                {"name": "legacy", "path": str(legacy), "write": True},
+            ],
+            # Only the list is sent — no `enabled`, no added entry, same order.
+            "filesystem": {
+                "projects": [
+                    {"name": "legacy", "path": str(legacy), "write": True},
+                    {"name": "app", "path": str(tmp_path), "write": True, "github": "o/app"},
+                ]
+            },
+        }
+    ]
+
+
+def test_project_patch_does_not_materialize_the_registry_into_the_fence(monkeypatch, tmp_path):
+    """An explicit fence that does NOT mirror the project is left alone: PATCH edits
+    `write` in place and never appends a fence entry."""
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    _projects_state(
+        monkeypatch,
+        projects=[{"name": "app", "path": str(tmp_path), "write": False}],
+        filesystem_projects=[{"name": "legacy", "path": str(legacy)}],
+    )
+    applied = _wire_project_apply(monkeypatch)
+    assert _client().patch("/api/projects/app", json={"write": True}).status_code == 200
+    assert applied == [{"projects": [{"name": "app", "path": str(tmp_path), "write": True}]}]
+
+
+def test_project_patch_finds_a_fence_only_entry_by_name(monkeypatch, tmp_path):
+    _projects_state(monkeypatch, filesystem_projects=[{"name": "legacy", "path": str(tmp_path), "write": False}])
+    applied = _wire_project_apply(monkeypatch)
+    r = _client().patch("/api/projects/legacy", json={"write": True})
+    assert r.status_code == 200, r.text
+    assert applied == [{"filesystem": {"projects": [{"name": "legacy", "path": str(tmp_path), "write": True}]}}]
+
+
+def test_project_patch_unknown_name_is_a_404(monkeypatch, tmp_path):
+    _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path)}])
+    applied = _wire_project_apply(monkeypatch)
+    r = _client().patch("/api/projects/nope", json={"write": True})
+    assert r.status_code == 404
+    assert "nope" in r.json()["detail"]
+    assert applied == []
+
+
+@pytest.mark.parametrize("body", [{}, {"write": "true"}, {"write": 1}, {"write": None}, {"other": True}])
+def test_project_patch_rejects_a_missing_or_non_bool_write(monkeypatch, tmp_path, body):
+    _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path)}])
+    applied = _wire_project_apply(monkeypatch)
+    r = _client().patch("/api/projects/app", json=body)
+    assert r.status_code == 400
+    assert applied == []
+
+
+def test_project_patch_surfaces_a_failed_apply_as_a_500(monkeypatch, tmp_path):
+    _projects_state(monkeypatch, projects=[{"name": "app", "path": str(tmp_path), "write": False}])
+    _wire_project_apply(monkeypatch, ok=False, messages=["config.yaml is not writable"])
+    r = _client().patch("/api/projects/app", json={"write": True})
+    assert r.status_code == 500
+    assert "config.yaml is not writable" in r.json()["detail"]
+    assert _client().get("/api/projects").json()["projects"][0].get("write") is not True
+
+
 def test_available_models_route_reports_every_lane(monkeypatch):
     """The picker's endpoint: one call, every lane, each option carrying the qualified
     name that selects it — so the console never composes that string itself."""

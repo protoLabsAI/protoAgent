@@ -128,6 +128,16 @@ export const workspaceApi = {
   managedProjects() {
     return request<ManagedProjects>("/api/projects");
   },
+  // Switch one managed project between read-only and read-write (projectBoard-plugin#783).
+  // PATCH edits only the `write` key in place — on the registry entry and on an explicit
+  // fence entry that already mirrors it — so, unlike the fs-projects POST, it does not
+  // materialize the registry. Setting the mode it already has is a 200 that writes nothing.
+  setProjectWrite(name: string, write: boolean) {
+    return request<{ ok: boolean; name: string; path: string; write: boolean }>(
+      `/api/projects/${encodeURIComponent(name)}`,
+      { method: "PATCH", body: { write } },
+    );
+  },
   // `replace: true` because this editor genuinely IS a replace-list editor — the form
   // holds every root and removing a row is how you delete one. The server refuses an
   // unacknowledged removal (409) precisely so that callers which DIDN'T mean to replace

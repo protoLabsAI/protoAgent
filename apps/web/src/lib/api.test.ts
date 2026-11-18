@@ -826,6 +826,20 @@ describe("api soul version history (#1691)", () => {
     expect(seen[0].path).toBe("/api/config/soul/history/20260101T000000.000000Z-abcd1234/restore");
     expect(seen[0].method).toBe("POST");
   });
+
+  it("setProjectWrite PATCHes only `write` to the URL-encoded project route", async () => {
+    const seen: { path: string; method?: string; body?: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ path: String(input), method: init?.method, body: JSON.parse(String(init?.body)) });
+        return json({ ok: true, name: "my app", path: "/dev/my app", write: true });
+      }),
+    );
+    const res = await api.setProjectWrite("my app", true);
+    expect(res).toEqual({ ok: true, name: "my app", path: "/dev/my app", write: true });
+    expect(seen).toEqual([{ path: "/api/projects/my%20app", method: "PATCH", body: { write: true } }]);
+  });
 });
 
 describe("parseErrorBody", () => {

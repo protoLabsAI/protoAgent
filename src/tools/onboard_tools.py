@@ -511,7 +511,27 @@ async def _register(
         return _Registration(
             "error", error="registration is unavailable — the host is not wired for config apply (no running server)"
         )
-    ok, messages = await asyncio.to_thread(HOST.apply_settings, updates)
+
+    def _merged(current) -> dict:
+        """``updates`` re-merged against the config the host holds under its config
+        write lock (#2743) — the lists above were read before the lock, so writing them
+        back as-is would undo any change (another registration, an access-mode switch)
+        that committed in between. Only this call's own entry is added."""
+        src = current if current is not None else source
+        out = dict(updates)
+        if "projects" in updates:
+            now = [e for e in (getattr(src, "projects", []) or []) if isinstance(e, dict)]
+            there = any(_same_path(e.get("path"), target) for e in now)
+            out["projects"] = now if there else now + [updates["projects"][-1]]
+        if "projects" in (updates.get("filesystem") or {}):
+            now = [e for e in (getattr(src, "filesystem_projects", []) or []) if isinstance(e, dict)]
+            there = any(_same_path(e.get("path"), target) for e in now)
+            mirror = now if there else now + [updates["filesystem"]["projects"][-1]]
+            # An override emptied meanwhile is no longer in force: don't recreate it.
+            out["filesystem"] = {"projects": mirror, "enabled": True} if now else {"enabled": True}
+        return out
+
+    ok, messages = await asyncio.to_thread(HOST.apply_settings, _merged)
     if not ok:
         return _Registration("error", error=f"registration failed: {'; '.join(messages) or 'unknown error'}")
     status = "promoted" if in_fence and not in_registry else "registered"
@@ -547,74 +567,109 @@ async def set_project_write(config, *, name: str, path: Path, write: bool) -> _R
     ``HOST.apply_settings``. A fence-only entry is changed in the fence alone. Entries
     are matched by path (``_same_path``); ``name`` only narrows the match when several
     entries share that path. Every other entry, every other key and the order of both
-    lists are written back exactly as read.
+    lists are written back exactly as read — "read" meaning read INSIDE the apply, under
+    the host's config write lock, so a concurrent writer's change is never put back.
 
     Carries NO approval logic: whoever calls it has already decided the change is
     allowed (the onboarding tools' operator card; an operator-authenticated endpoint).
     Never raises — an unknown path or a failed apply comes back as ``status="error"``.
     """
+    from graph.config_load import _falsey
     from graph.plugins.host import HOST
 
-    try:
-        source = _live_source(config)
-        registry = list(getattr(source, "projects", []) or [])
-        fence = list(getattr(source, "filesystem_projects", []) or [])
+    def _rewrite(entries: list, is_write) -> tuple[list, bool, bool]:
+        """``(new_list, matched, changed)`` — same length, same order."""
+        hits = [i for i, e in enumerate(entries) if isinstance(e, dict) and _same_path(e.get("path"), path)]
+        named = [i for i in hits if name and str(entries[i].get("name") or "") == name]
+        hits = named or hits
+        out = list(entries)
+        changed = False
+        for i in hits:
+            if is_write(entries[i]) != write:
+                out[i] = {**entries[i], "write": write}
+                changed = True
+        return out, bool(hits), changed
 
-        def _rewrite(entries: list) -> tuple[list, bool, bool]:
-            """``(new_list, matched, changed)`` — same length, same order."""
-            hits = [i for i, e in enumerate(entries) if isinstance(e, dict) and _same_path(e.get("path"), path)]
-            named = [i for i in hits if name and str(entries[i].get("name") or "") == name]
-            hits = named or hits
-            out = list(entries)
-            changed = False
-            for i in hits:
-                if bool(entries[i].get("write", False)) != write:
-                    out[i] = {**entries[i], "write": write}
-                    changed = True
-            return out, bool(hits), changed
-
-        new_registry, in_registry, registry_changed = _rewrite(registry)
-        new_fence, in_fence, fence_changed = _rewrite(fence)
-    except Exception as exc:  # noqa: BLE001 — a helper shared with an endpoint must not raise
-        log.warning("[onboard] could not read the project registry for an access change", exc_info=True)
-        return _Registration("error", error=f"the project registry could not be read: {_redact(str(exc))}")
-    if not in_registry and not in_fence:
-        return _Registration("error", error=f"no registered project matches {path}")
-    if not registry_changed and not fence_changed:
-        return _Registration("already")
-
-    updates: dict = {}
-    if registry_changed:
-        updates["projects"] = new_registry
-    if fence_changed:
-        updates["filesystem"] = {"projects": new_fence}
-
-    # Same superset invariant as ``_register``, tightened: an access change may alter
-    # ONE key, so each list must come back the same length with every entry equal to
-    # what was read once ``write`` is set aside.
     def _sans_write(e):
         return {k: v for k, v in e.items() if k != "write"} if isinstance(e, dict) else e
 
-    for label, before_list, after_list in (("projects", registry, new_registry), ("filesystem.projects", fence, new_fence)):
-        if [_sans_write(e) for e in before_list] != [_sans_write(e) for e in after_list]:
-            log.error("[onboard] refusing to apply: the access change would alter more than `write` in %s", label)
-            return _Registration(
-                "error",
-                error="the access change was aborted by an internal safety check — it would have altered another entry",
-            )
+    def _plan(source) -> dict:
+        """What changing ``write`` means against ``source``. Each list's CURRENT mode is
+        read the way its enforcer reads it: the registry through ``_falsey`` (as
+        ``LangGraphConfig.fenced_projects`` projects it — a hand-edited ``"false"`` is
+        read-only, an absent key read-write), the explicit fence with ``bool()`` (as
+        ``fs_tools`` enforces it). Reading both with ``bool()`` would call a ``"false"``
+        registry entry read-write and skip the write that makes it so."""
+        registry = list(getattr(source, "projects", []) or [])
+        fence = list(getattr(source, "filesystem_projects", []) or [])
+        new_registry, in_registry, registry_changed = _rewrite(
+            registry, lambda e: not _falsey(e.get("write"), default=False)
+        )
+        new_fence, in_fence, fence_changed = _rewrite(fence, lambda e: bool(e.get("write", False)))
+        updates: dict = {}
+        if registry_changed:
+            updates["projects"] = new_registry
+        if fence_changed:
+            updates["filesystem"] = {"projects": new_fence}
+        # Same superset invariant as ``_register``, tightened: an access change may alter
+        # ONE key, so each list must come back the same length with every entry equal to
+        # what was read once ``write`` is set aside.
+        safe = all(
+            [_sans_write(e) for e in before] == [_sans_write(e) for e in after]
+            for before, after in ((registry, new_registry), (fence, new_fence))
+        )
+        return {
+            "updates": updates,
+            "found": in_registry or in_fence,
+            "safe": safe,
+            "mirrored": in_registry and fence_changed,
+            "fence_only": not in_registry,
+        }
 
+    # Fast path, read WITHOUT the config write lock: an unknown project or a same-mode
+    # request answers here and writes nothing (no reload either).
+    try:
+        plan = _plan(_live_source(config))
+    except Exception as exc:  # noqa: BLE001 — a helper shared with an endpoint must not raise
+        log.warning("[onboard] could not read the project registry for an access change", exc_info=True)
+        return _Registration("error", error=f"the project registry could not be read: {_redact(str(exc))}")
+    if not plan["found"]:
+        return _Registration("error", error=f"no registered project matches {path}")
+    if not plan["updates"]:
+        return _Registration("already")
     if HOST.apply_settings is None:
         return _Registration(
             "error", error="the change is unavailable — the host is not wired for config apply (no running server)"
         )
+
+    # The write itself is a read-modify-write of two whole lists, so it is planned AGAIN
+    # inside the apply — the host runs a callable under its config write lock against the
+    # config every earlier writer committed (#2743). Applying the lists planned above
+    # instead would be a lost update: a second access change (or a registration) that
+    # landed between that read and this write would be put back to what was read here.
+    locked: dict = {}
+
+    def _under_lock(current):
+        fresh = _plan(current if current is not None else _live_source(config))
+        locked.update(fresh)
+        if not fresh["found"]:
+            raise LookupError(f"no registered project matches {path} (it was removed while the change was applied)")
+        if not fresh["safe"]:
+            log.error("[onboard] refusing to apply: the access change would alter more than `write`")
+            raise RuntimeError("aborted by an internal safety check — it would have altered another entry")
+        # Another writer already made this exact change: nothing of ours to write.
+        return fresh["updates"] or None
+
     try:
-        ok, messages = await asyncio.to_thread(HOST.apply_settings, updates)
+        ok, messages = await asyncio.to_thread(HOST.apply_settings, _under_lock)
     except Exception as exc:  # noqa: BLE001 — never raise into the turn / the endpoint
         log.error("[onboard] access change failed to apply: %s", _redact(str(exc)))
         return _Registration("error", error=f"the change failed to apply: {_redact(str(exc))}")
     if not ok:
         return _Registration("error", error=f"the change failed: {'; '.join(messages) or 'unknown error'}")
-    return _Registration("changed", mirrored=in_registry and fence_changed, fence_only=not in_registry)
+    if not locked.get("updates"):
+        return _Registration("already")
+    return _Registration("changed", mirrored=locked["mirrored"], fence_only=locked["fence_only"])
 
 
 _ROOT_UNSET = (

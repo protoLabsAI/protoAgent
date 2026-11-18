@@ -659,8 +659,12 @@ def register_config_routes(app) -> None:
 
         No POST: the work-folder editor's write path REPLACES ``filesystem.projects``,
         so a naive write-back here would silently materialize the projection into
-        explicit entries and sever the registry link. Editing stays YAML-only until
-        that has a real answer."""
+        explicit entries and sever the registry link. Registering and removing a
+        project stay YAML-only (or the onboarding tools) until that has a real answer.
+        The ACCESS MODE is the exception: ``PATCH /api/projects/{name}`` changes it,
+        and it edits only the ``write`` key in place — on the registry entry and on an
+        explicit fence entry that already mirrors it — so it never materializes the
+        registry into explicit fence entries."""
         from pathlib import Path
 
         cfg = STATE.graph_config
@@ -744,6 +748,56 @@ def register_config_routes(app) -> None:
             "fence_source": fence_source,
             "projects": projects,
         }
+
+    @app.patch("/api/projects/{name:path}")
+    async def _api_project_set_write(name: str, body: dict | None = None):
+        """Switch one managed project between read-only and read-write
+        (projectBoard-plugin#783): body ``{"write": bool}``.
+
+        The caller IS the operator (this is the operator API), so there is no approval
+        card here — that gate belongs to the agent-facing onboarding tools. The write
+        itself is the SAME helper those tools use (``tools.onboard_tools.set_project_write``):
+        it rewrites only the ``write`` key, on the ``projects:`` entry and on an explicit
+        ``filesystem.projects`` entry that already mirrors it (an explicit fence wins over
+        the registry, so flipping the registry alone would change nothing the fs tools
+        enforce), and applies through ``HOST.apply_settings`` — persisted and live. No
+        other entry or key is touched and nothing is added to either list, so the registry
+        is never materialized into explicit fence entries.
+
+        ``name`` is looked up in the live registry, falling back to a fence-only
+        ``filesystem.projects`` entry. 404 for an unknown name; 400 when ``write`` is
+        missing or not a JSON boolean (a truthy string is NOT coerced — widening a fence
+        on ``"false"`` would be the wrong way to be lenient). Setting the mode the project
+        already has is a 200 that writes nothing."""
+        from pathlib import Path
+
+        write = (body or {}).get("write")
+        if not isinstance(write, bool):
+            raise HTTPException(status_code=400, detail="write must be a boolean (true or false)")
+
+        cfg = STATE.graph_config
+        entry = None
+        for attr in ("projects", "filesystem_projects"):
+            for e in list(getattr(cfg, attr, []) or []):
+                if isinstance(e, dict) and str(e.get("name") or "") == name:
+                    entry = e
+                    break
+            if entry is not None:
+                break
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"no managed project named {name!r}")
+        raw = str(entry.get("path") or "").strip()
+        if not raw:
+            raise HTTPException(status_code=409, detail=f"project {name!r} has no path — fix its config entry first")
+
+        from tools.onboard_tools import set_project_write
+
+        result = await set_project_write(cfg, name=name, path=Path(raw).expanduser(), write=write)
+        if result.status == "error":
+            raise HTTPException(status_code=500, detail=result.error or "the access change failed")
+        if result.status == "changed":
+            log.info("[projects] %s (%s) set to %s by the operator", name, raw, "read-write" if write else "read-only")
+        return {"ok": True, "name": name, "path": raw, "write": write}
 
     @app.get("/api/settings/filesystem-projects")
     async def _api_fs_projects():

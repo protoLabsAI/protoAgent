@@ -24,6 +24,7 @@ async def test_registration_retains_workspace(tmp_path, monkeypatch, isolated_wo
     config = LangGraphConfig(onboarding_root=str(tmp_path))
 
     def apply(updates):
+        updates = updates(config) if callable(updates) else updates  # the host runs it under its lock
         config.projects = updates["projects"]
         return True, []
 
