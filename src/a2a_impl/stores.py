@@ -724,6 +724,34 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         )).all()
         return {key: json.loads(raw) for key, raw in rows}
 
+    async def scheduling_contexts(self, context, *, kind: str, states) -> list[str]:
+        """Context ids that hold a private-only scheduling record of ``kind`` in one of ``states``.
+
+        The restart recovery's one enumeration (ADR 0131 P1h.4): which conversations still have
+        durable work, without reading any payload out. Operator-only and owner-scoped exactly
+        like :meth:`scheduling_payloads`; raises on an unreadable partition (fail closed)."""
+        from sqlalchemy import func, literal_column
+
+        if not _human_operator(context):
+            raise PermissionError("Private task access requires a human operator")
+        await self._ensure_initialized()
+        owners = [self.owner_resolver(context), HUMAN_OPERATOR_OWNER]
+        if owners[0] == OPERATOR_OWNER:
+            owners.append(FEDERATION_OWNER)
+        payload = literal_column("private_payload")
+        async with self.async_session_maker() as session:
+            conn = await session.connection()
+            visible = await task_public_filter(conn, self.task_model, include_private=True, context=context)
+            rows = (await session.execute(
+                select(self.task_model.context_id).distinct()
+                .where(self.task_model.owner.in_(owners), visible, literal_column("public_visible") == 0,
+                       literal_column("private_version") == PRIVATE_SCHEMA_VERSION,
+                       func.json_extract(payload, "$.kind") == kind,
+                       func.json_extract(payload, "$.state").in_(list(states)))
+                .order_by(self.task_model.context_id)
+            )).all()
+        return [str(row[0]) for row in rows if row[0]]
+
     async def update_scheduling_payloads(self, context_id, context, mutate):
         """Commit a synchronous scheduling decision and all its task changes atomically.
 

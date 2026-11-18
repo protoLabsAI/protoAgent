@@ -1025,6 +1025,9 @@ async def _fold_private_reply_frames(frames, ref: str, store, context):
                     await private_intake.record_private_reply(store, ref, reply, context)
                 except Exception:  # noqa: BLE001 — recovery convenience, never breaks the turn it describes
                     log.warning("[private] could not fold a private turn's reply into its record", exc_info=True)
+                # A turn the restart recovery dispatched also releases its durable runner here
+                # (P1h.4); every other private turn is not in that registry and reads nothing.
+                await _settle_recovered_private_turn(ref, store, context)
             yield frame
 
 
@@ -1069,6 +1072,7 @@ async def _start_steer_turn(
     private_ref: str | None = None,
     delegation: str | None = None,
     hitl_resume: bool = False,
+    raise_transport: bool = False,
 ) -> str:
     """Run a steer as an ordinary operator turn; return its A2A task id ("" on failure).
 
@@ -1080,7 +1084,11 @@ async def _start_steer_turn(
     carries the id the console's bubbles reconcile on. ``settings`` are the sender's
     per-message turn settings (``model`` / ``reasoning_effort`` / ``bypass_permissions``)
     — stamped onto the message metadata exactly where a console send puts them, so the
-    fresh turn runs with the tab's chosen settings rather than the configured defaults."""
+    fresh turn runs with the tab's chosen settings rather than the configured defaults.
+
+    ``raise_transport`` re-raises a transport error instead of answering ``""``, for the one
+    caller (the restart recovery's durable dispatch) that must tell a PROVEN refusal — an HTTP
+    or JSON-RPC error, which still answers ``""`` — from an ambiguous delivery."""
     import uuid
 
     import httpx
@@ -1157,6 +1165,8 @@ async def _start_steer_turn(
         return task_id_from_response(payload)
     except Exception:  # noqa: BLE001 — a transport error must not 500 the steer route
         log.exception("[steer] turn start POST failed for %s", session_id)
+        if raise_transport:
+            raise
         return ""
 
 
@@ -1486,7 +1496,7 @@ async def recover_durable_steers(session_id: str, *, store=None, context=None) -
 
     Fail-closed: with no partition store/context there is nothing durable to recover, so it
     returns None rather than guessing — exactly as the private intake refuses without a store.
-    No live route calls this yet; only the P1c proof tests do."""
+    Called at server start by ``recover_private_pending_turns`` (P1h.4, flag on)."""
     if not session_id or store is None or context is None:
         return None
     from a2a_impl import segment_schedule
@@ -1497,6 +1507,166 @@ async def recover_durable_steers(session_id: str, *, store=None, context=None) -
         log.warning("[steer] durable segment recovery for %s failed — left for reconciliation", session_id,
                     exc_info=True)
         return None
+
+
+# ── restart recovery of private pending turns (ADR 0131 P1h.4) ───────────────────
+# With ``private_steering.enabled`` on, server start reloads every session that still has a
+# non-terminal pending turn in the private partition BEFORE the scheduler (or anything else)
+# claims a runner, then sends the queued private ones through the private path. Flag off: no
+# store is built and nothing is read. The principal kind the recovery reads the partition
+# under: the instance's own operator credential (what ``auth.is_human_operator`` accepts).
+_RECOVERY_PRINCIPAL_KIND = "shared-operator-bearer"
+# reference → session of each private turn this process's recovery dispatched: its ``done``
+# fold releases the durable runner (``_settle_recovered_private_turn``).
+_RECOVERED_PRIVATE_TURNS: dict[str, str] = {}
+
+
+async def _settle_recovered_private_turn(ref: str, store, context) -> None:
+    """Release the durable runner when a recovery-dispatched private turn finishes.
+
+    Only a ``done`` reaches this (``_fold_private_reply_frames``). A turn that parks, fails or
+    is cut down keeps its segment reserved, so the next restart reports it suspended instead
+    of running it twice. Best-effort: a failed release is logged and leaves it reserved too."""
+    session_id = _RECOVERED_PRIVATE_TURNS.pop(ref, None)
+    if session_id is None:
+        return
+    from a2a_impl import segment_schedule as _ss
+
+    try:
+        seg = await _ss.read_segment(store, session_id, context)
+        running = await _ss.pending_turns(store, session_id, context, states=(_ss.STATE_RUNNING,))
+        if any(t["seq"] == seg.get("seq") and t.get("input_ref") == ref for t in running):
+            await _ss.complete_segment(store, session_id, generation=int(seg["generation"]), context=context)
+    except Exception:  # noqa: BLE001 — never breaks the turn it describes
+        log.warning("[steer] could not release the recovered private segment for %s", session_id, exc_info=True)
+
+
+async def _dispatch_recovered_private_turn(session_id: str, store, context) -> str | None:
+    """Send ``session_id``'s head queued PRIVATE turn through the private path; its task id.
+
+    The loopback carries only the turn's opaque ``input_ref`` bound to a fresh single-use
+    delegation — exactly what the steer route sends — so the text is resolved inside the
+    trusted runner and never becomes a public part. Nothing is sent, and the turn goes back
+    to the queue untouched, when the head is not private, its record is gone, or the turn
+    cannot be started (a PROVEN refusal). An ambiguous delivery raises and leaves the runner
+    reserved for reconciliation, never retried. A turn whose record already holds a reply ran
+    before the crash: it is closed without a second run, and the next queued turn is tried."""
+    import httpx
+
+    from a2a_impl import private_intake
+    from a2a_impl import segment_schedule as _ss
+
+    while True:
+        replied: list[str] = []
+
+        async def send(turn: dict):
+            ref = str(turn.get("input_ref") or "")
+            if turn.get("audience") != _ss.AUDIENCE_PRIVATE or not private_intake.is_private_ref(ref):
+                return None
+            try:
+                record = await store.get_record(private_intake.ref_task_id(ref), context)
+                payload = getattr(record, "private_payload", None)
+                if not isinstance(payload, dict) or "input" not in payload:
+                    log.warning("[steer] recovered private turn for %s has no input record — left queued", session_id)
+                    return None
+                if payload.get("reply") is not None:
+                    replied.append(ref)
+                    return ""
+                resume = not await _session_turn_idle(session_id)
+                token = _mint_loopback_delegation(context=session_id, operation=ref)
+            except Exception:  # noqa: BLE001 — nothing was sent: a proven refusal, back on the queue
+                log.warning("[steer] could not prepare a recovered private turn for %s", session_id, exc_info=True)
+                return None
+            _RECOVERED_PRIVATE_TURNS[ref] = session_id
+            try:
+                task_id = await _start_steer_turn(
+                    session_id, "", str(turn.get("dedupe") or "") or None,
+                    private_ref=ref, delegation=token, hitl_resume=resume, raise_transport=True,
+                )
+            except httpx.ConnectError:  # never connected, so never delivered
+                task_id = ""
+            if not task_id:
+                _RECOVERED_PRIVATE_TURNS.pop(ref, None)
+                return None
+            return task_id
+
+        head = await _ss.next_dispatch(store, session_id, context)
+        if not head or head.get("audience") != _ss.AUDIENCE_PRIVATE:
+            return None
+        task_id = await _ss.dispatch_pending_turn(store, session_id, context, send)
+        if not replied:
+            return task_id or None
+        seg = await _ss.read_segment(store, session_id, context)
+        if not await _ss.complete_segment(store, session_id, generation=int(seg["generation"]), context=context):
+            return None
+
+
+async def recover_private_pending_turns() -> dict | None:
+    """Server-start recovery of private pending turns (ADR 0131 P1h.4).
+
+    Runs once, after the A2A task engine is ready and before the scheduler starts. With
+    ``private_steering.enabled`` off it returns at once: no partition store is built, nothing
+    is read or written, and startup is exactly what it was. With it on, every session holding
+    a non-terminal pending turn is reloaded through ``recover_durable_steers``:
+
+    - a turn the crash left ``running`` is reported suspended and never sent again;
+    - a parked segment stays reserved for its matching guarded resume;
+    - otherwise a queued private head is sent through the private path. That send is a
+      loopback POST the server only answers once startup has finished, so it runs as a
+      detached task, created here so it is issued ahead of the scheduler's own fires.
+
+    Returns ``{"recovered": {session: view}, "dispatch": task | None}``, or None when there
+    was nothing to do. Any failure is logged and leaves the records untouched; nothing here
+    raises, so it can never block startup."""
+    if not private_steering_enabled():
+        return None
+    from a2a.server.context import ServerCallContext
+
+    from a2a_impl import segment_schedule as _ss
+
+    try:
+        store = _private_partition_store()
+        if store is None:
+            return None
+        context = ServerCallContext(state={"principal_kind": _RECOVERY_PRINCIPAL_KIND})
+        sessions = await _ss.sessions_with_pending_turns(store, context)
+    except Exception:  # noqa: BLE001 — an unreadable partition must not stop the server starting
+        log.warning("[steer] private pending-turn recovery could not read the partition — skipped", exc_info=True)
+        return None
+    recovered: dict[str, dict] = {}
+    ready: list[str] = []
+    for sid in sessions:
+        view = await recover_durable_steers(sid, store=store, context=context)
+        if view is None:
+            continue
+        recovered[sid] = view
+        if view["reserved"] or view["suspended"] or view["parked"]:
+            log.warning(
+                "[steer] session %s after restart: %d suspended and %d parked turn(s) left reserved, not re-run",
+                sid, len(view["suspended"]), len(view["parked"]),
+            )
+        elif view["queued"] and view["queued"][0].get("audience") == _ss.AUDIENCE_PRIVATE:
+            ready.append(sid)
+    if not recovered:
+        return None
+
+    async def _dispatch() -> None:
+        for sid in ready:
+            try:
+                task_id = await _dispatch_recovered_private_turn(sid, store, context)
+            except Exception:  # noqa: BLE001 — ambiguous delivery: left reserved, the next session still runs
+                log.warning("[steer] recovered private turn for %s left reserved for reconciliation", sid,
+                            exc_info=True)
+                continue
+            if task_id:
+                log.info("[steer] restarted a queued private turn for session %s as turn %s", sid, task_id)
+
+    task = None
+    if ready:
+        task = asyncio.get_running_loop().create_task(_dispatch())
+        _STEER_RESTARTS.add(task)
+        task.add_done_callback(_STEER_RESTARTS.discard)
+    return {"recovered": recovered, "dispatch": task}
 
 
 # The streaming event loop (``_run_turn_stream``) and its lead-speaker filter moved to
