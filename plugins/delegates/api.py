@@ -14,7 +14,7 @@ import logging
 from functools import partial
 
 from . import store
-from .adapters import ADAPTERS, DelegateError, delegate_types, is_secretish
+from .adapters import ADAPTERS, AcpAdapter, DelegateError, delegate_types, is_secretish
 
 log = logging.getLogger("protoagent.plugins.delegates")
 
@@ -187,6 +187,8 @@ def build_router():
             d = adapter.parse(merged)
         except DelegateError as e:
             raise HTTPException(400, str(e))
+        if isinstance(adapter, AcpAdapter):
+            return await adapter.deep_probe(d)
         return await adapter.probe(d)
 
     @router.post("/api/delegates")

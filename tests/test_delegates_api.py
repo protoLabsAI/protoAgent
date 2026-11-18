@@ -125,26 +125,86 @@ def test_create_invalid_returns_400(client):
     )  # no model
 
 
-def test_test_endpoint_acp_probe(client, monkeypatch, tmp_path):
+@pytest.mark.parametrize("outcome", ["model", "no_model", "rpc_error", "timeout", "handshake_error"])
+def test_test_endpoint_acp_prompt_round_trip(client, monkeypatch, tmp_path, outcome):
+    import asyncio
     import sys
+    from unittest.mock import AsyncMock
+
+    from plugins.coding_agent.acp_client import AcpClient, AcpError
+
+    calls = []
+
+    async def handshake(self):
+        calls.append("handshake")
+        if outcome == "handshake_error":
+            raise AcpError("agent exited")
+        self._protocol_version = 1
+
+    async def prompt(self, text, *, timeout, fresh_session):
+        calls.append("prompt")
+        assert text == "Reply with OK."
+        assert timeout == 60 and fresh_session is True
+        assert self.session_id_path is None and self.record_runs is False
+        assert self.env == {"ANTHROPIC_MODEL": "claude-opus-5-5"}
+        assert self.env_remove == ["HOST_SECRET"]
+        assert self.env_passthrough == ["CUSTOM_AUTH"]
+        if outcome == "timeout":
+            raise asyncio.TimeoutError
+        if outcome == "rpc_error":
+            # Use the real wire-error handler, including its remediation formatter.
+            future = asyncio.get_running_loop().create_future()
+            self._pending[1] = future
+            await self._handle({"id": 1, "error": {
+                "code": -32603, "message": "Internal error",
+                "data": "Claude Code 2.1.179 does not support this model; version 2.1.280 or newer is required.",
+            }})
+            await future
+        self._model_id = "claude-opus-5-5" if outcome == "model" else None
+        return "OK"
+
+    close = AsyncMock()
+    monkeypatch.setattr(AcpClient, "handshake", handshake)
+    monkeypatch.setattr(AcpClient, "prompt", prompt)
+    monkeypatch.setattr(AcpClient, "close", close)
+    r = client.post("/api/delegates/test", json={
+        "name": "t", "type": "acp", "command": sys.executable, "workdir": str(tmp_path),
+        "env": {"ANTHROPIC_MODEL": "claude-opus-5-5"},
+        "env_remove": ["HOST_SECRET"], "env_passthrough": ["CUSTOM_AUTH"],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert calls == (["handshake"] if outcome == "handshake_error" else ["handshake", "prompt"])
+    close.assert_awaited_once()
+    if outcome in {"model", "no_model"}:
+        assert body["ok"] is True and "prompt round-trip passed" in body["detail"]
+        assert ("claude-opus-5-5" in body["detail"]) == (outcome == "model")
+    else:
+        assert body["ok"] is False
+        if outcome == "rpc_error":
+            assert "does not support this model" in body["error"]
+            assert "claude update` won't help" in body["error"]
+            assert "CLAUDE_CODE_EXECUTABLE" in body["error"]
+        elif outcome == "timeout":
+            assert body["error"] == "ACP prompt round-trip timed out after 60 seconds."
+        else:
+            assert "handshake failed" in body["error"]
+
+
+async def test_acp_health_probe_never_prompts(monkeypatch, tmp_path):
+    import sys
+    from unittest.mock import AsyncMock
 
     from plugins.coding_agent.acp_client import AcpClient
 
-    # The acp probe does a real ACP `initialize`-only handshake (#1116/#1300), so mock
-    # it — the python exe is on PATH + /tmp exists, but it doesn't speak ACP for real.
-    async def _ok(self):
-        self._protocol_version = 1
-
-    async def _noop(self):
-        pass
-
-    monkeypatch.setattr(AcpClient, "handshake", _ok)
-    monkeypatch.setattr(AcpClient, "close", _noop)
-    r = client.post(
-        "/api/delegates/test",
-        json={"name": "t", "type": "acp", "command": sys.executable, "workdir": str(tmp_path)},
-    )
-    assert r.status_code == 200 and r.json()["ok"] is True
+    prompt = AsyncMock()
+    monkeypatch.setattr(AcpClient, "handshake", AsyncMock())
+    monkeypatch.setattr(AcpClient, "prompt", prompt)
+    monkeypatch.setattr(AcpClient, "close", AsyncMock())
+    adapter = api.ADAPTERS["acp"]
+    d = adapter.parse({"name": "t", "type": "acp", "command": sys.executable, "workdir": str(tmp_path)})
+    assert (await adapter.probe(d))["ok"] is True
+    prompt.assert_not_awaited()
 
 
 def test_test_endpoint_unknown_type_400(client):
@@ -164,6 +224,7 @@ def test_test_endpoint_probes_saved_delegate_by_name(client, monkeypatch, tmp_pa
     # The per-row Test button sends only {name, type}; the endpoint must probe the
     # STORED config (command/workdir), not fail on the missing fields.
     import sys
+    from unittest.mock import AsyncMock
 
     from plugins.coding_agent.acp_client import AcpClient
 
@@ -175,6 +236,7 @@ def test_test_endpoint_probes_saved_delegate_by_name(client, monkeypatch, tmp_pa
 
     monkeypatch.setattr(AcpClient, "handshake", _ok)
     monkeypatch.setattr(AcpClient, "close", _noop)
+    monkeypatch.setattr(AcpClient, "prompt", AsyncMock(return_value="OK"))
     client.post(
         "/api/delegates",
         json={"name": "proto", "type": "acp", "command": sys.executable, "workdir": str(tmp_path)},
