@@ -55,6 +55,7 @@ async def rig(tmp_path, monkeypatch, delegation_env):
     for name, value in (("graph", graph), ("a2a_task_engine", engine), ("graph_config", config), ("active_port", 7999)):
         monkeypatch.setattr(STATE, name, value, raising=False)
     steering._reset()
+    chat_mod._PRIVATE_RUNS.clear()
     r = SimpleNamespace(config=config, seen=[], folded=[], running=asyncio.Event(), release=asyncio.Event())
 
     async def _native(message, session_id, config, *, resume=False, **_kwargs):
@@ -132,6 +133,7 @@ async def rig(tmp_path, monkeypatch, delegation_env):
         app.router.routes.extend(create_a2a_jsonrpc_routes(handler, rpc_url="/a2a"))
         steering._reset()
         chat_mod._RECOVERED_PRIVATE_TURNS.clear()
+        chat_mod._PRIVATE_RUNS.clear()
 
     r.restart = restart
     r.steer, r.rpc, r.rows, r.clients, r.op = steer, rpc, rows, clients, clients["shared-bearer"]

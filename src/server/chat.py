@@ -1002,8 +1002,134 @@ async def _resolve_private_turn_input(message: str, session_id: str, request_met
     return (True, text, store, context) if text is not None else (False, "", None, None)
 
 
+# ── in-process order of one session's private executions (ADR 0131 P1c; #5504) ───
+# The thread lock is released between a failed pass and its retry, and before the durable
+# segment is settled on exit, so it cannot by itself keep a second private turn from finding
+# the segment still ``running``. This registry does: per session, ONE private execution is
+# ``active`` from before its claim until after its settlement, and the others enter in
+# acceptance (``seq``) order. ``expected`` holds turns the route accepted whose loopback has
+# not reached the runner yet (seq → the monotonic time to stop waiting for it); ``arrived``
+# holds the runners waiting or running (seq → reference). Process-local by design: a
+# restart empties it and the durable queue is recovered instead.
+_PRIVATE_ARRIVAL_WAIT = 35.0  # a little past the loopback send's own 30s timeout
+_PRIVATE_RUNS: dict[str, dict] = {}
+
+
+def _private_runs(session_id: str) -> dict:
+    return _PRIVATE_RUNS.setdefault(session_id, {"active": None, "arrived": {}, "expected": {}})
+
+
+def _expect_private_run(session_id: str, seq: int) -> None:
+    """The route accepted ``seq`` and is about to send it: later turns wait for it to arrive."""
+    order = _private_runs(session_id)
+    if seq not in order["arrived"]:
+        order["expected"][seq] = time.monotonic() + _PRIVATE_ARRIVAL_WAIT
+
+
+def _forget_private_run(session_id: str, seq: int | None, *, runner: bool = False) -> None:
+    """Drop ``seq``'s expectation (a send that failed, a turn that ended before the gate) and,
+    for its ``runner``, its place in the order. Lapsed expectations are swept on the way."""
+    order = _PRIVATE_RUNS.get(session_id)
+    if order is None:
+        return
+    now = time.monotonic()
+    order["expected"] = {s: due for s, due in order["expected"].items() if s != seq and due > now}
+    if runner:
+        order["arrived"].pop(seq, None)
+        if order["active"] == seq:
+            order["active"] = None
+    if order["active"] is None and not order["arrived"] and not order["expected"]:
+        _PRIVATE_RUNS.pop(session_id, None)
+
+
+def _private_run_is_live(session_id: str, seq: int) -> bool:
+    """True while a runner in THIS process owns ``seq``: arrived, or still expected to."""
+    order = _PRIVATE_RUNS.get(session_id) or {"arrived": {}, "expected": {}}
+    return seq in order["arrived"] or order["expected"].get(seq, 0) > time.monotonic()
+
+
+async def _enter_private_run(session_id: str, ref: str, store, context) -> int | None:
+    """Wait for this private turn's place in the session's queue order; return its ``seq``.
+
+    Called BEFORE the thread lock. Returns once no other private execution of the session is
+    active (so the previous one has settled its durable segment, on every exit path) and no
+    older accepted private turn is still to run:
+
+    - an older turn whose runner has arrived goes first, however long it takes;
+    - an older turn the route accepted but whose loopback is still in flight is waited for,
+      bounded by ``_PRIVATE_ARRIVAL_WAIT``;
+    - an older QUEUED turn with no runner in this process (its send was refused, or an earlier
+      claim was) is dispatched through the private path first, exactly as restart recovery
+      would, so a later steer never runs ahead of it and it is not stranded until a restart.
+
+    A turn the recovery dispatched already owns the durable segment, so it waits only for the
+    active execution. ``None`` (no gating) for a legacy input with no pending turn. The caller
+    MUST pair a non-None result with ``_forget_private_run(..., runner=True)``."""
+    from a2a_impl import segment_schedule as ss
+
+    turns = await ss.pending_turns(store, session_id, context)
+    turn = next((t for t in turns if t.get("input_ref") == ref), None)
+    if turn is None:
+        return None
+    seq = int(turn["seq"])
+    order = _private_runs(session_id)
+    order["expected"].pop(seq, None)
+    order["arrived"][seq] = ref
+    deadline = time.monotonic() + _PRIVATE_ARRIVAL_WAIT
+    drained = False
+    try:
+        while True:
+            now = time.monotonic()
+            recovered = ref in _RECOVERED_PRIVATE_TURNS
+            blocked = order["active"] is not None
+            if not blocked and not recovered:
+                blocked = (
+                    any(s < seq for s in order["arrived"])
+                    or any(s < seq and due > now for s, due in order["expected"].items())
+                    # A turn the recovery (or the drain below) dispatched holds the segment.
+                    or any(sid == session_id and (r in order["arrived"].values() or now < deadline)
+                           for r, sid in _RECOVERED_PRIVATE_TURNS.items())
+                )
+            if blocked:
+                drained = False
+                await asyncio.sleep(0.05)
+                continue
+            if drained or recovered:
+                order["active"] = seq  # no await since the checks above
+                return seq
+            drained = True  # re-check the in-memory order once more after the awaits below
+            head = await ss.next_dispatch(store, session_id, context)
+            if head and int(head["seq"]) < seq:
+                try:
+                    if await _dispatch_recovered_private_turn(session_id, store, context):
+                        deadline = time.monotonic() + _PRIVATE_ARRIVAL_WAIT
+                except Exception:  # noqa: BLE001 — ambiguous delivery: reserved; the claim decides
+                    log.warning("[private] an older queued private turn for %s could not be started first",
+                                session_id, exc_info=True)
+    except BaseException:
+        _forget_private_run(session_id, seq, runner=True)
+        raise
+
+
+async def _close_consumed_private_turn(session_id: str, ref: str, store, context) -> None:
+    """Close a private turn that ended WITHOUT claiming the runner (a pre-turn command or the
+    ACP runtime answered it): its input was consumed, so it must not stay queued and be
+    dispatched a second time after a restart or by a later steer."""
+    from a2a_impl import segment_schedule as ss
+
+    if ref in _RECOVERED_PRIVATE_TURNS:  # recovery claimed it before sending: release that claim
+        await _settle_recovered_private_turn(ref, store, context)
+        return
+    for turn in await ss.pending_turns(store, session_id, context, states=(ss.STATE_QUEUED,)):
+        if turn.get("input_ref") == ref:
+            await ss.set_turn_state(store, session_id, turn["seq"], ss.STATE_TERMINAL, context)
+            _forget_private_run(session_id, int(turn["seq"]))
+
+
 async def _claim_private_pending_turn(session_id, ref, store, context) -> bool:
-    """Claim durable acceptance only after acquiring the original thread's runner lock."""
+    """Claim durable acceptance only after acquiring the original thread's runner lock.
+
+    Queue order and one-at-a-time execution are settled before this by ``_enter_private_run``."""
     from a2a_impl import segment_schedule as ss
 
     turns = await ss.pending_turns(store, session_id, context)
@@ -1326,6 +1452,7 @@ async def _private_steer_or_start(
     # concurrent duplicate observes ``starting`` and joins it, never racing the partition
     # read/write below to a second shell. Cleared on every refusal path so the mark never lingers.
     steering.note_starting(session_id, [mid])
+    accepted_seq: int | None = None
     try:
         ref, replied = await private_intake.find_private_steer(
             store, session_id=session_id, msg_id=mid, context=context
@@ -1364,6 +1491,9 @@ async def _private_steer_or_start(
                 steering.clear_starting(session_id, [mid])
                 return {"ok": True, "id": mid, "private_ref": ref, "private": True,
                         "pending": steering.pending(session_id)}
+            # Hold this turn's place in the queue order while its loopback is in flight.
+            accepted_seq = int(turn["seq"])
+            _expect_private_run(session_id, accepted_seq)
     except HTTPException:
         steering.clear_starting(session_id, [mid])
         raise
@@ -1392,6 +1522,8 @@ async def _private_steer_or_start(
         return {"ok": True, "id": mid, "started_turn": task_id, "private_ref": ref, "private": True,
                 "pending": steering.pending(session_id)}
     steering.clear_starting(session_id, [mid])
+    # No runner is coming for it: later private turns must not wait on this one.
+    _forget_private_run(session_id, accepted_seq)
     log.warning("[steer] a private turn could not be started for %s — refusing (fail-closed)", session_id)
     return {"ok": False, "id": mid, "private_ref": ref, "private": True, "pending": steering.pending(session_id)}
 
@@ -1685,6 +1817,8 @@ async def _dispatch_recovered_private_turn(session_id: str, store, context) -> s
         head = await _ss.next_dispatch(store, session_id, context)
         if not head or head.get("audience") != _ss.AUDIENCE_PRIVATE:
             return None
+        if _private_run_is_live(session_id, int(head["seq"])):
+            return None  # a runner in this process already carries it: never send it twice
         task_id = await _ss.dispatch_pending_turn(store, session_id, context, send)
         if not replied:
             return task_id or None
@@ -2546,6 +2680,8 @@ async def _chat_langgraph_stream_impl(
         # from the pre-turn chain or the ACP runtime (which never used it).
         _tid: str | None = None
         _private_claimed = False
+        _private_consumed = False  # answered before the runner (pre-turn command / ACP)
+        _private_seq: int | None = None  # this turn's place in the in-process private order
         try:
             # The pre-turn dispatch chain (@-mention, /goal, /lifecycle, plugin command,
             # workflow, subagent, skill, unknown /command, ACP switch) is SHARED with
@@ -2570,7 +2706,10 @@ async def _chat_langgraph_stream_impl(
                 _chat_dispatch._pre_turn_dispatch(pre, session_id, request_metadata)
             ) as _pre_frames:
                 async for frame in _pre_frames:
+                    # The executor closes this stream AT a terminal frame, so note it first.
+                    _private_consumed = _private_consumed or (isinstance(frame, tuple) and frame[:1] == ("done",))
                     yield frame
+            _private_consumed = bool(_private_consumed or pre.handled or pre.acp)
             if pre.handled:
                 return
             message = pre.message
@@ -2619,6 +2758,13 @@ async def _chat_langgraph_stream_impl(
             # per-thread async lock runs them one-at-a-time (mirrors the console steering
             # queue; different contexts never block each other). The turn body lives in
             # _run_native_turn so the lock wraps it without a deep in-line reindent.
+            #
+            # A private turn first takes its place in the session's private order (#5504): the
+            # previous private execution has then settled its durable segment — which happens
+            # AFTER this lock is released, on the error/closed-stream paths — and every older
+            # accepted private turn has run, so the claim below is made in queue order.
+            if _private_ref and private_steering_enabled():
+                _private_seq = await _enter_private_run(session_id, _private_ref, _private_store, _private_ctx)
             async with (
                 _turn_control._thread_lock(_tid),
                 # Which task is RUNNING, not merely created (#3963): a turn queued behind
@@ -2795,6 +2941,15 @@ async def _chat_langgraph_stream_impl(
                     await _settle_recovered_private_turn(_private_ref, _private_store, _private_ctx)
                 except Exception:
                     log.warning("[private] could not settle durable private turn on exit", exc_info=True)
+            elif _private_consumed and _private_ref and private_steering_enabled():
+                try:
+                    await _close_consumed_private_turn(session_id, _private_ref, _private_store, _private_ctx)
+                except Exception:
+                    log.warning("[private] could not close an answered private turn", exc_info=True)
+            if _private_seq is not None:
+                # Only now — the segment is settled — may the next private turn of this
+                # session take the thread lock and claim.
+                _forget_private_run(session_id, _private_seq, runner=True)
             tracing.flush()
 
 

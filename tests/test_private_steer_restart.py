@@ -42,6 +42,7 @@ async def _crashed(session, head_state="queued", *, replied=False):
         await ss.set_turn_state(store, session, 1, ss.STATE_PARKED, OP, interrupt_id="i1")
     steering._reset()
     chat_mod._RECOVERED_PRIVATE_TURNS.clear()
+    chat_mod._PRIVATE_RUNS.clear()
     return store, refs[0]
 
 
@@ -247,6 +248,7 @@ async def test_abnormal_private_turn_releases_runner(rig, monkeypatch, ending, r
     assert response.status_code == 200
     if recovered:
         steering._reset()
+        chat_mod._PRIVATE_RUNS.clear()  # a restart forgets the in-process order too
         out = await chat_mod.recover_private_pending_turns()
         await out["dispatch"]
 
@@ -296,3 +298,74 @@ async def test_abnormal_private_turn_releases_runner(rig, monkeypatch, ending, r
     monkeypatch.setattr(chat_mod, "_run_native_turn", native)
     follow = (await rig.steer("shared-bearer", session, SECRET, "m2", private=True)).json()
     assert (await poll_terminal(rig.op, follow["started_turn"]))["status"]["state"] == "TASK_STATE_COMPLETED"
+
+
+async def _drained(session):
+    store = chat_mod._private_partition_store()
+    for _ in range(100):  # the task is terminal at ``done``; the stream's own exit follows it
+        if not chat_mod._PRIVATE_RUNS:
+            break
+        await asyncio.sleep(0.02)
+    assert await ss.pending_turns(store, session, OP) == []
+    assert (await ss.read_segment(store, session, OP))["state"] == ss.SEGMENT_IDLE
+    assert not chat_mod._PRIVATE_RUNS and not chat_mod._RECOVERED_PRIVATE_TURNS
+
+
+async def test_a_failed_private_turn_settles_before_the_next_private_steer_claims(rig, monkeypatch):  # noqa: F811
+    # The thread lock is released before the failed turn's segment is settled: the private
+    # steer queued behind it must wait for that settlement, not be refused in the window.
+    session = "chat-settle"
+    native, finish = chat_mod._run_native_turn, chat_mod._finish_private_pending_turn
+
+    async def failing(message, *args, **kwargs):
+        if "hold" in message:
+            rig.running.set()
+            await rig.release.wait()
+            raise ValueError("native failed")
+        async for frame in native(message, *args, **kwargs):
+            yield frame
+
+    async def slow_finish(*args, **kwargs):
+        await asyncio.sleep(0.2)  # the window after the lock is released
+        return await finish(*args, **kwargs)
+
+    monkeypatch.setattr(chat_mod, "_run_native_turn", failing)
+    monkeypatch.setattr(chat_mod, "_finish_private_pending_turn", slow_finish)
+    first = (await rig.steer("shared-bearer", session, f"{SECRET} hold", "m1", private=True)).json()
+    await rig.running.wait()
+    second = (await rig.steer("shared-bearer", session, f"{SECRET} next", "m2", private=True)).json()
+    rig.release.set()
+    assert (await poll_terminal(rig.op, first["started_turn"]))["status"]["state"] == "TASK_STATE_FAILED"
+    assert (await poll_terminal(rig.op, second["started_turn"]))["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert rig.seen == [(f"{SECRET} next", False)]
+    await _drained(session)
+
+
+async def test_an_older_queued_private_turn_runs_before_a_later_steer(rig, monkeypatch):  # noqa: F811
+    # A steer whose delivery was refused stays queued with no runner: the next private steer
+    # starts it first, in acceptance order, instead of running ahead and stranding it.
+    session, start = "chat-order", chat_mod._start_steer_turn
+
+    async def refused(*args, **kwargs):
+        return ""
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", refused)
+    assert (await rig.steer("shared-bearer", session, f"{SECRET} one", "m1", private=True)).status_code == 503
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", start)
+    body = (await rig.steer("shared-bearer", session, f"{SECRET} two", "m2", private=True)).json()
+    assert (await poll_terminal(rig.op, body["started_turn"]))["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert rig.seen == [(f"{SECRET} one", False), (f"{SECRET} two", False)]
+    await _drained(session)
+    await _assert_private_only(rig, session, body["started_turn"])
+
+
+async def test_a_private_steer_answered_before_the_runner_is_not_left_queued(rig, monkeypatch):  # noqa: F811
+    async def handled(pre, session_id, request_metadata):
+        pre.handled = True
+        yield ("done", "handled")
+
+    monkeypatch.setattr(chat_mod._chat_dispatch, "_pre_turn_dispatch", handled)
+    body = (await rig.steer("shared-bearer", "chat-pre", SECRET, "m1", private=True)).json()
+    assert (await poll_terminal(rig.op, body["started_turn"]))["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert rig.seen == []
+    await _drained("chat-pre")
