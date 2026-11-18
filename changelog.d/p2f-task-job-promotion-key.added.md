@@ -1,1 +1,0 @@
-- **Inbox jobs can be retried without duplicating tasks.** `task_create` accepts a stable `job_key` scoped to the inbox request and reuses the existing task across restarts. Distinct jobs remain separate tasks; their parent request stays lineage only. Calls without a request or job key retain their existing behavior.

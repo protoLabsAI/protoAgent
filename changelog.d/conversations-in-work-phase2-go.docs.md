@@ -1,1 +1,0 @@
-- **Conversations in Work proposal records Josh's Phase 2 go (2026-11-17).** The Proposed small phases table and the Phase 1 section now mark Phase 2 (durable work relationships) as authorized — store/API only, with no interactive UI and no later phase implied — quoting Josh's approval verbatim and naming what stays unauthorized.

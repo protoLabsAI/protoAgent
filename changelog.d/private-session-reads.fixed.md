@@ -1,1 +1,0 @@
-- **Keep private session turns private.** Console session reads now enforce the verified human-operator audience, hide private turn identities from peers, and refuse exports and unpartitioned reads of private sessions. Private task replies are stored in the private partition and recovered for operator reads instead of remaining in plain artifact or status columns.

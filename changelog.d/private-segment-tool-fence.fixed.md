@@ -1,1 +1,0 @@
-- **Fence private segment tools.** Private segments now permit only local read tools through the existing per-turn fence, preventing outbound effects while preserving ordinary and public turns.

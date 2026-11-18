@@ -15,6 +15,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.248.0] - 2026-11-18
+
+### Added
+- **`execute_code` audit rows now name the script behind each bridged call (#5463).** Every `ptc:` tool-call row from a one-shot `execute_code` run carries the owning call's model tool-call id (`parent_call_id`) and the script's `script_sha256`, so two runs in one session are no longer indistinguishable, and a new `ptc:script` row keeps the full script (not clipped at 500 chars, capped at 64 KB with `code_truncated`) so a `ptc:` row is never an orphan and a long script is never cut off. `AuditLogger.log` gained an optional `extra` for merging keys into a row verbatim. The one-shot path never passes the graph audit middleware, so it now runs each bridged call's args/result and the kept script through the same `redact()` the model-path rows use — a credential in a script or handed to a bridged tool is no longer persisted in plaintext. The session-kernel path is unchanged (a follow-up card).
+
+- **Session kernel audit rows link back to their scripts (#5474).** Bridged execute_code calls now carry the owning tool-call ID and script SHA-256, with one script row per kernel run retaining the code under the existing redaction and size limits.
+
+- **Script tool calls appear inside execute_code cards (#5466).** The console shows nested calls in script syntax, running and failure counts in the collapsed header, policy denials, and stopped calls. Large runs fold successful calls into a summary while keeping failures and active calls visible.
+
+- **`execute_code` reports each tool call its script makes as a live `ptc_call` event (#5479).**
+  A script run by `execute_code` calls tools through a bridge, and until now none of
+  those calls reached the chat stream: the console showed one `execute_code` card and
+  nothing inside it until the script finished. The plugin now emits a LangChain custom
+  event named `ptc_call` when a bridged call starts and again when it ends, on both the
+  one-shot path and the session-kernel path. Each event carries a unique call id, the
+  tool name and the `parent_call_id` of the owning `execute_code` call; the end event
+  adds the output (first 2000 characters, with the full length in `output_chars`),
+  an `error` flag and `duration_ms`. A call blocked by policy emits both events, with
+  `error: true` and the "Blocked by policy:" text. A run emits events for its first 200
+  bridged calls only; later calls still run and are still audited. Emitting never
+  changes a tool result. This is the first of three parts: the events are not yet
+  turned into chat frames or drawn in the console.
+
+- **A script's bridged tool calls now nest under their execute_code card (#5464).** The turn
+  stream turns the execute_code plugin's `ptc_call` custom event into an ordinary tool
+  frame carrying `parentId`, so the console files each call the running script makes under
+  its execute_code card (name-prefixed `ptc:` to tell it from a model's or subagent's
+  call) instead of floating it at the turn's top level.
+
+- **Caller-kind proof for derived readers (#5460).** Exercises public-only derived readers for federation, fleet-service, paired-agent and enrolled-console identities resolved through production authentication, including federation prior-session withholding. Steering-queue caller coverage is deferred to P1h.3 (bd-o4z6e), which supplies the caller-to-scheduler path. Tests only; no product behavior changes. Refs #5403.
+
+- **Tasks retain durable request correlation and provenance (#5446).** Versioned metadata preserves unknown origins on existing rows, while opaque promotion keys make creation retries idempotent without duplicate tasks or creation events. Request lineage remains immutable through updates and survives delete/undo.
+
+- **Tasks can record the conversations behind them (#5448).** The tasks store now accepts
+  related-conversation links — `{ref: "conv:<owner>/<context_id>", kind: "conversation",
+  role, owner, context_id, state, reason}` — in the existing `links` JSON, so a later
+  phase can open the right original transcript with its role (requester/coder/reviewer/
+  related) and owner-agent identity. One original carries several roles as a single
+  deduped `roles` entry, two owners sharing a context are two distinct links, and an
+  unknown role or a missing owner/context_id is rejected. Like plain URLs, these links
+  are provenance only: they never block, drive or get resolved for task completion.
+  Store-only, no API/tool/UI change. Part of the Conversations in Work work (ADR 0131).
+
+- **Tasks remember the inbox request that caused them (#5447).** Tasks created during inbox-fired turns retain the durable item, execution and message identifiers plus recorded requester metadata across retries and restarts. Multiple tasks may share the same request.
+
+- **Tasks API exposes request correlation and related conversations (#5454).** `GET /api/tasks/issues` rows now carry `rel_version` and decoded `request` / `requester` objects (`{}` when unknown), and `POST`/`PATCH /api/tasks/issues` accept related-conversation link objects (`{kind:"conversation", role, owner, context_id}`) alongside plain reference strings. A conversation link is accepted only when its `owner` is this agent and its `context_id` is one of this agent's own, non-server conversations; a forged owner, unknown context, server context, or another agent's context is rejected with 403 and nothing is written. `request`, `requester`, and `promotion_key` stay server-derived and cannot be set over the API. Part of Conversations in Work (ADR 0131, Phase 2 slice P2d).
+
+- **Legacy tasks adopt versioned relationships safely (#5450).** Opening the task store atomically upgrades unversioned rows without inventing requester or request metadata, changing existing links, origin sessions or timestamps, or publishing events. Reopening is idempotent, and failed upgrades roll back for retry.
+
+- **Inbox jobs can be retried without duplicating tasks (#5455).** `task_create` accepts a stable `job_key` scoped to the inbox request and reuses the existing task across restarts. Distinct jobs remain separate tasks; their parent request stays lineage only. Calls without a request or job key retain their existing behavior.
+
+- **A restart picks private pending turns back up through the private path (#5492).** With `private_steering.enabled` on, server start now reloads every conversation that still has a queued, running or parked turn in its private partition, before the scheduler or any steer restart can claim a runner. Queued private turns drain in acceptance order as each recovered turn finishes, carrying only their opaque references, so its text never becomes a peer-readable message. A turn the crash interrupted mid-run is reported as suspended and is not run a second time, and a parked turn stays reserved for its matching resume. A recovery failure is logged, leaves the records as they were and never blocks startup. With the setting off (the default), startup reads and writes nothing for this and behaves as before. Nothing writes private pending turns in normal use yet, so today this only affects records made by tests. Refs ADR 0131.
+
+- **Conversations in Work: the steer route can send a private steer (#5491).** `POST /api/chat/sessions/{id}/steer` accepts an optional `private: true`. With `private_steering.enabled` on and a human-operator credential (the shared bearer or a paired `device`), the text is stored only in the private partition, the turn carries an opaque reference, and the reply is folded back into the same private record. The request is refused with a fixed 4xx when the flag is off, when the caller is the fleet service token, an `agent` device, a federation peer, a legacy API key or an open instance, or when it carries images or `incognito`; a steer asked to be private is never sent as an ordinary one. An ordinary steer that arrives while a private turn runs now waits for its own turn instead of folding into the private one. The reply fold now runs before the turn's final frame, so it also happens under the A2A executor, which stops reading at that frame. Without `private: true`, and with the flag off (the default), steering is unchanged. No console UI. Refs F12 of the residual-risk review, ADR 0131.
+
+- **Private steering opt-in (#5486).** Add the config-only `private_steering.enabled` flag, defaulting to false, and a shared server helper for future intake wiring. Existing steering and A2A behavior is unchanged.
+
+- **The operator API can switch a managed project between read-only and read-write (#5473).**
+  `PATCH /api/projects/{name}` with `{"write": true|false}` changes the access mode of a registered project in
+  one call, persisted and applied live, with no hand-edit of the agent's config. It goes through the same shared
+  helper as the onboarding tools (`tools.onboard_tools.set_project_write`), so it rewrites only the `write` key —
+  on the `projects:` entry and on an explicit `filesystem.projects` entry that already mirrors it — and never
+  materializes the registry into explicit fence entries. A fence-only entry is found by name too. The caller is
+  the operator, so there is no approval card; setting the mode a project already has writes nothing. Unknown name
+  is a 404, a missing or non-boolean `write` a 400. The console client gains `api.setProjectWrite(name, write)`
+  for the upcoming Settings ▸ Projects toggle. The change is merged under the config write lock, so two
+  overlapping switches — or a switch overlapping an agent registering a project, whose own write now merges the
+  same way — cannot undo each other. A registry entry's current mode is read the way the fence enforces it (a
+  hand-edited `write: "false"` is read-only, a missing `write` is read-write), so a switch is never skipped as
+  "already set" when the enforced mode differs. Refs protoLabsAI/projectBoard-plugin#783.
+
+- **Switch a registered project between read-only and read-write from the console (#5475).** Tools ▸ Filesystem ▸ Work folders now shows a "write" switch on each managed project, so you no longer hand-edit `projects:` to let coders build in a project or to lock it back down. Turning writes on asks you to confirm first; turning them off applies at once. Rows sharing a display name target their own folder path. The change is saved to your config and takes effect live. A failure shows under that project's row. The switches are disabled while explicit Work folders override the registry, and projects with `fs: false` have none. Refs protoLabsAI/projectBoard-plugin#783.
+
+- **Conversations in Work: the A2A privacy proofs run for every caller kind, not one identity (#5459).** Adds `tests/test_proof_caller_kinds_a2a.py`, which re-runs the parked/private HITL scenarios (preexisting handles, the idle/parked output-gate proof, the private steer into a peer thread, the guarded private resume, the sealed final envelope and the private-segment exits) with the PEER authenticated as each of the four caller kinds the proposal's proof matrix requires — `federation`, `fleet-service`, `paired-agent` (`agent`-device) and `enrolled-console` (a paired human `device`) — all straight through the real `A2AAuthMiddleware`, with the private-content operator reached via a verified fleet-proxy delegation instead of a hand-set operator tier. The original privacy assertions are kept verbatim; no product code changes. It surfaces the real proof failures as strict `xfail`s (scoped so only the source test's bare-assert privacy check counts, never the harness's own setup — setup preconditions raise a `RuntimeError`, not `AssertionError`): every operator-tier peer shares the operator's `OPERATOR_OWNER` ("") partition — `resolve_task_owner` keys the owner on trust tier, not principal identity — so in the private-steer and guarded-resume scenarios all three operator-tier peers (`fleet-service`, `paired-agent` and `enrolled-console`) leak, leaving only the `federation` peer isolated; in the preexisting-handles, output-gate and private-segment-exit scenarios only the `enrolled-console` peer leaks — being `is_human_operator`, it additionally reads the operator's `private_payload` through the server/console reads, while `federation`, `fleet-service` and `paired-agent` stay isolated there; and the sealed final envelope stays isolated for all four kinds. Refs #5400, #5401.
+
+- **Conversation privacy proof coverage (#5456).** Exercise retained console hooks, stalls, implicit stream endings and outbound tool effects for four requester kinds; record unresolved proof failures as strict expected failures without changing product code.
+
+- **Process restart proof (#5452).** Add SIGKILL recovery coverage across three kill points and four caller identities, including restoration of private resolver metadata.
+
+- **Delivery restart proof (#5458).** Add process-kill evidence for sealed-result commit and external-send acknowledgment boundaries across all four requester kinds, including a strict expected failure for an unclosed dispatching record.
+
+- **Conversations in Work proof gate: the wrong-recipient / overbroad-release row now has executed evidence (#5457).** A new tests-only proof drives the real a2a-sdk handler, executor, persisted SQLite task store and the production push sender through a private steer and auto delivery, then proves a sealed result reaches only the original requester: forged requester/context/task ids, a push destination substituted after binding, and a second peer in the context each receive nothing, a wrong audience label and a raw delivery event never release, and the private input and private replies are absent from stream, subscription, poll, push, reopened history and tool output. It runs for federation, fleet-service, paired-agent and enrolled-console requesters. No product code changes.
+
+### Changed
+- **Server-initiated results in chat use the raised scheduled card (#5485).** A settled scheduled fire, watch reaction, inbox or webhook trigger, delegated task or background task now renders in the same raised card other scheduled results use (calendar/clock head, collapsed by default, expanding in place to the full markdown and the turn's tool calls) instead of the older dark result card, which is removed along with its CSS. A self-improvement review (a fire whose job id starts `self-improvement-`) is titled "Self-improvement review" rather than "Scheduled task". Goal runs, wait resumes, background-report replies and delegate results still render full-size. Refs #3028, #2990.
+
+### Fixed
+- **A coder that fails because its ACP adapter's bundled Claude Code is too old for the model now says how to fix it (#5468).** `claude-agent-acp` ships its own Claude Code, so when a new model needs a newer one, every coder on that model fails before doing any work with "Claude Code 2.1.179 does not support this model … Run 'claude update'". That advice updates the wrong binary. The error now keeps the upstream text and adds the real fix: update the adapter (`npm i -g @agentclientprotocol/claude-agent-acp@latest`), or set `CLAUDE_CODE_EXECUTABLE` in the delegate's env to a newer `claude`. The board's block reason and operator notification carry it.
+
+- **Chat tab renaming stays inside the tab (#5490).** Double-click and context-menu Rename use the inline editor in the expanded strip, with regression coverage for saving the title with Enter. The existing design-system 0.74.1 dependencies already include the ds-90l fix.
+
+- **Delegate Test checks the configured ACP model (#5478).** Settings now sends a short prompt in a fresh, unpersisted session so stale adapters fail Test with actionable errors before blocking board work. Unfinished or empty replies also fail Test. Periodic health probes remain handshake-only, and Test writes no run telemetry. Refs #5476.
+
+- **A turn that parks on a question right after you send it comes back after a reload (#5472).**
+  The console saved a turn's task id on the same two-second delay it uses for streamed text, so
+  a reload, or a closed tab, in those first two seconds found a reply still running with no task
+  to reattach to. The question's form never came back. The task id is now saved the moment it
+  arrives. Three end-to-end tests that failed at random on CI also wait for the real condition
+  now: the saved task ids before a reload, the open event stream before an answer arrives from
+  elsewhere, and the form being on screen before the test server drops the connection. The PDF
+  Worker timing check now measures only parsing and drawing, so it no longer counts the file
+  transfer, which costs the same on both paths.
+
+- **Seven tests that failed at random in CI now pass reliably (#5471).** Some timed things on the real clock, which a slow CI machine can stretch. Others counted calls that other threads made. The private-turn stall test and the duplicate-message test now use a clock the test steps by hand. The delegate collection test now waits for the delegate's run to finish. The recurring-job restart test no longer fires an extra run when it crosses a minute boundary. The goal-store retry test and the subagent client test now count only their own calls, not calls from threads that earlier tests left running. The digest test no longer tries to create a file name with a colon, which Windows forbids. The duplicate-message tracker now accepts a clock from its caller. It still behaves the same.
+
+- **Opening a history entry by its id no longer returns a private archive (#5488).** History lists, search and counts already hide archive spans kept in a conversation's private partition, but opening one by id did not check. The memory inspector's open-an-entry request and `recall_session(entry=…)` now treat such an entry as not found. Nothing writes private archive spans yet, so no existing data was exposed.
+
+- **A message you send while a decision or form is open now keeps its images (#5484).** The agent holds such a message until you answer, then folds it in. The hold kept only the text, so a screenshot sent while a decision was pending never reached the agent, which then asked you to send it again. Held messages now carry their images the same way a steer does, saved as attachments except in incognito.
+
+- **A private delivery always reaches a terminal state (#5483).** A private segment whose turn completes without selecting a result now closes its delivery record (payload and digest cleared) instead of leaving it `private`, and recovery after a kill that followed the external send settles the stale `dispatching` record as `closed` without replaying the send; a repeated recovery changes nothing. Nothing private reaches a peer surface in either case, and ordinary tasks are unaffected.
+
+- **Private recovery preserves thread routing (#5481).** Persist resolver inputs with private work so recovery after a killed process restores the original checkpoint thread, including queued private turns dispatched after peer work and new steers arriving before recovery, while ordinary turns remain memory-only.
+
+- **Fence private segment tools (#5480).** Private segments now permit only local read tools through the existing per-turn fence, preventing outbound effects while preserving ordinary and public turns.
+
+- **Keep private session turns private (#5493).** Console session reads now enforce the verified human-operator audience, hide private turn identities from peers, and refuse exports and unpartitioned reads of private sessions. Private task replies are stored in the private partition and recovered for operator reads instead of remaining in plain artifact or status columns.
+
+- **Private turns belong to the human operator (#5461).** Isolate new private-turn tasks from fleet-service and agent-kind peers, and restrict guarded parked resumes to the human-owned partition while preserving ordinary task access and legacy owners.
+- **Keep private turns visible to internal readers (#5461).** Preserve human-owned turns in console history and session bookkeeping while retaining principal checks on caller-scoped task reads.
+- **Preserve parked-task settlement (#5461).** Settle superseded pauses within the saved turn's owner partition so ordinary conversations still advance without completing another partition's pause.
+
+- **`write=true` on an already-registered read-only project now asks the operator instead of being ignored (#5470).**
+  `onboard_project` and `register_local_project` used to answer "already registered … (read-only) — nothing
+  changed" and drop the `write` argument, so an agent that needed a coder to build in a read-only project had no
+  way to ask, and the operator had to hand-edit config. They now park on an approval card ("Make this project
+  read-write?" — Allow read-write / Keep read-only) composed from the folder's realpath and bound to it; only that
+  allow answer writes, and a denial, dismissal, plain or automatic approve, stale answer or a caller that can't
+  approve changes nothing. `/bypass` and "allow for this session" do not skip it. `write=false` on a read-write
+  project lowers it at once (narrowing needs no approval). The change goes through one shared helper
+  (`tools.onboard_tools.set_project_write`) that rewrites only the `write` key on the `projects:` entry and its
+  mirrored explicit `filesystem.projects` entry. The coding-delegate read-only refusal now names this path.
+  Refs protoLabsAI/projectBoard-plugin#783.
+
+- **Folded tool chip: only the "· N failed" suffix is red (#5487).** A chip such as "17 tools · 1 failed" used to colour its whole label red, which read as the entire block having failed. The count now stays muted and only the failed suffix (plus the ✕ status glyph) takes the error colour, on both the tool fold and the background-jobs chip. Adopts the design-system fix by bumping `@protolabsai/ui` and `@protolabsai/ui-css` to 0.74.1.
+
+### Docs
+- **Conversations in Work proposal records Josh's decision on one request producing several jobs (2026-11-17) (#5449).** The decision map and the Work list, requests and promotion section now mark the multi-job count rule as decided, quoting Josh verbatim ("only the jobs count, request is lineage"): only the child jobs count in Work, both in group counts and as items, while the parent request is a lineage record, not a counted item. No other decision-map row, quote, date, or the phase table changes.
+
+- **Conversations in Work proposal records Josh's conditional CONTINUE for P1h (#5462).** The
+  "Phase 1 as revised" section now carries Josh's 2026-11-17 words verbatim —
+  "CONTINUE if its valuable and not breaking our entire system" — as a conditional
+  CONTINUE for P1h only, with the gate, flag-default-off, dev-instance-run and
+  separate-default-on conditions written out, and the P1h row marked authorized,
+  conditional. Keeps P1h cards built and judged against Josh's exact go, so no one
+  infers a wider one.
+
+- **Conversations in Work proposal records Josh's Phase 2 go (2026-11-17) (#5445).** The Proposed small phases table and the Phase 1 section now mark Phase 2 (durable work relationships) as authorized — store/API only, with no interactive UI and no later phase implied — quoting Josh's approval verbatim and naming what stays unauthorized.
+
+- **Conversations in Work: residual-risk review of unsupported tools, deployments and residual risks (#5453).** Adds the written review the proposal's proof gate requires before CONTINUE — grounded in `main` with file:line evidence. It inventories which effectful tools (`run_command`, file writes, `fetch_url`/`web_search`, MCP calls, `execute_code`, `schedule_task`, delegated `task`) can carry a human-operator-private value outside a delivered result; maps single-agent, fleet, remote-member, open/loopback and federation deployments to where credential and tool isolation cannot be established (recording, not reopening, Josh's accepted Q2 risk); and lists residual risks — including the dormant partition and the deferred retention / `×`-delete behavior — in a findings table with test coverage or "not covered". The review records findings only; it does not decide CONTINUE.
+
+- **Conversations in Work: routine threads get a home (#5444).** Records Josh's 2026-11-17 decision 7: threads someone else started that ask for nothing are listed in Chat's own list under a **Started by others** group, unopened ones included, with no pinned tab or badge, and never in Work. This settles the precondition for removing the From others tab. It authorizes no implementation.
+
 ## [0.247.0] - 2026-11-17
 
 ### Added
