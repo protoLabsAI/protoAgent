@@ -78,6 +78,45 @@ RUN = {"configurable": {"thread_id": "privacy-test"}}
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error", [None, private_sessions.OwnershipUnknown, private_sessions.UnlabelledPrivateTurns])
+async def test_mid_turn_steer_preserves_peer_request_after_private_history(build, monkeypatch, error):
+    from graph import steering
+
+    graph, model = build()
+
+    async def invoke(value):
+        return await graph.ainvoke(value, RUN)
+
+    with private_segment_scope(lambda: True):
+        await invoke(turn(X, private=True))
+    if error:
+
+        def unavailable(*args):
+            raise error("unreadable")
+
+        monkeypatch.setattr(private_sessions, "public_part", unavailable)
+    peer = turn(ASK, audience="peer")
+    peer["messages"][0].additional_kwargs["lc_source"] = "fleet-peer"
+    steering.enqueue("privacy-test", "Keep the answer brief")
+    result = await invoke(peer)
+    captured = model.captured[-1]
+    assert [m.content for m in captured[:3]] == [
+        "system instruction",
+        "[an earlier private exchange was omitted]",
+        ASK,
+    ]
+    assert "Keep the answer brief" in captured[-1].content
+    assert X not in str(captured) and Y not in str(captured)
+    assert ASK in result["messages"][-1].content
+    checkpoint = graph.get_state(RUN).values["messages"]
+    assert X in str(checkpoint) and Y in str(checkpoint)
+    # A fresh turn must replace the saved boundary, including after read failure.
+    if error:
+        await invoke(turn("next request"))
+        assert ASK not in str(model.captured[-1])
+
+
+@pytest.mark.asyncio
 async def test_shared_input_omits_private_exchange_but_checkpoint_and_private_turn_keep_it(build):
     graph, model = build()
 
@@ -167,7 +206,7 @@ def test_sync_projection_preserves_current_tool_round_and_collapses_each_omissio
     with private_segment_scope(lambda: True):
         stamps = private_sessions.private_kwargs()
     current = [
-        HumanMessage(content=ASK),
+        HumanMessage(content=ASK, id="peer-ask", additional_kwargs={"lc_source": "fleet-peer"}),
         AIMessage(content="", tool_calls=[{"name": "public_tool", "args": {}, "id": "current"}]),
         ToolMessage(content="public result", tool_call_id="current"),
     ]
@@ -180,9 +219,13 @@ def test_sync_projection_preserves_current_tool_round_and_collapses_each_omissio
         AIMessage(content=Y),
         *current,
     ]
-    request = ModelRequest(model=model, messages=messages, state={"session_id": "privacy-test"}, tools=[], runtime=None)
-    projected = PrivateProjectionMiddleware().wrap_model_call(request, lambda r: r)
-    assert projected.messages[-3:] == current
+    middleware = PrivateProjectionMiddleware()
+    state = {"session_id": "privacy-test", **middleware.before_agent({"messages": messages}, None)}
+    steer = HumanMessage(content="Keep the answer brief")
+    messages.append(steer)
+    request = ModelRequest(model=model, messages=messages, state=state, tools=[], runtime=None)
+    projected = middleware.wrap_model_call(request, lambda r: r)
+    assert projected.messages[-4:] == [*current, steer]
     assert X not in str(projected.messages) and Y not in str(projected.messages)
     assert sum(m.content == "[an earlier private exchange was omitted]" for m in projected.messages) == 2
     assert request.messages == messages

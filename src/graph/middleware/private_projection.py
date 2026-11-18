@@ -1,6 +1,9 @@
 """View-only private-history boundary for every shared-audience model call."""
 
-from langchain.agents.middleware import AgentMiddleware
+from typing import Annotated, NotRequired
+
+from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from graph import private_sessions
@@ -16,8 +19,25 @@ def _placeholder():
     )
 
 
+class PrivateProjectionState(AgentState):
+    # Checkpoint the ID so an interrupted turn resumes with the same boundary.
+    # PrivateStateAttr prevents callers from supplying it as graph input.
+    protoagent_private_projection_start: NotRequired[Annotated[str | None, PrivateStateAttr]]
+
+
 class PrivateProjectionMiddleware(AgentMiddleware):
     """Private turns see the checkpoint; all other turns see only its public view."""
+
+    state_schema = PrivateProjectionState
+
+    def before_agent(self, state, runtime):  # type: ignore[override]
+        # Capture before SteeringMiddleware.before_model appends interjections.
+        # Reset on every new invocation, including turns with the flag disabled.
+        start = next((m.id for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), None)
+        return {"protoagent_private_projection_start": start}
+
+    async def abefore_agent(self, state, runtime):  # type: ignore[override]
+        return self.before_agent(state, runtime)
 
     @staticmethod
     def _project(request):
@@ -30,6 +50,11 @@ class PrivateProjectionMiddleware(AgentMiddleware):
         latest = next(
             (i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage)), len(messages)
         )
+        start = request.state.get("protoagent_private_projection_start")
+        if start is not None:
+            # Resolve by ID, not position: compaction can replace earlier history.
+            # Old checkpoints/direct wrapper callers may have no saved boundary.
+            latest = next((i for i, message in enumerate(messages) if message.id == start), latest)
         try:
             public = {id(m) for m in private_sessions.public_part(messages, request.state.get("session_id"))}
         except (private_sessions.OwnershipUnknown, private_sessions.UnlabelledPrivateTurns):
