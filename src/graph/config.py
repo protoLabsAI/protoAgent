@@ -1787,8 +1787,10 @@ class LangGraphConfig:
     # immediately and the agent briefs the operator — instead of the report waiting
     # for that session's next manual turn. False restores pull-only delivery.
     background_auto_resume: bool = True
-    # Operator opt-in for private steering (P1h); dormant until intake is wired.
-    private_steering_enabled: bool = False
+    # Private steering (ADR 0131, P1h): the human operator's steer into a peer's thread stays
+    # private. On by default since 2026-11-18 (Josh), after the P1 proof gate and the P1h.5
+    # dev-instance check passed. Set `private_steering.enabled: false` to turn it off.
+    private_steering_enabled: bool = True
     # Background-job retention (#4726): a finished job whose result was already delivered
     # is deleted once it is older than this. Matches `telemetry_retention_days`, so a job
     # ages out with its turn rows. 0 = keep forever.

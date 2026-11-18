@@ -691,8 +691,9 @@ The conditions on that CONTINUE, as Josh set them:
   under **protoAgent#5504 (card bd-upbbz)**. This is **not accepted v1 behaviour**.
 - Steps 2 and 3 are rerun on the dev instance after both fixes merge
   (**bd-v8szk**).
-- Turning the default on remains a separate go from Josh;
-  `private_steering.enabled` stays **default off**.
+- **Default turned on, decided by Josh 2026-11-18:** "turn it on and test it to
+  ensure it works". `private_steering.enabled` is now **default on**; set it to
+  `false` to turn it off.
 
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
