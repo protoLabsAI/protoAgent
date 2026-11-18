@@ -1,0 +1,1 @@
+- **Record accepted private-turn restart behaviour in the Conversations in Work proposal.** Document the P1h.5 dev-instance results, the accepted fail-closed v1 restart behaviour, and the parked-resume fix in bd-kaztd; enabling the default still requires Josh's separate go.
