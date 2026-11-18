@@ -35,8 +35,9 @@ def resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
 # own — an idle steer start or a parked resume (ADR 0131 P1b.2) — resolves the SAME
 # checkpointer thread as the original turn, instead of re-deriving it from empty metadata
 # under a custom resolver (#571). The template default ignores metadata, so this is inert
-# unless a fork registered a resolver. Bounded + in-memory (a restart just falls back to the
-# default thread), like the other per-session caches this runtime keeps.
+# unless a fork registered a resolver. Ordinary turns keep this bounded cache in memory.
+# Private intake/acceptance snapshots it in the existing private partition; authorized
+# recovery restores it before resolving the continuation (without a graph -> store import).
 _RESOLVER_METADATA: dict[str, dict] = {}
 _RESOLVER_METADATA_MAX = 1024
 

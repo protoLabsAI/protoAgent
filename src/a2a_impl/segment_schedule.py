@@ -36,7 +36,9 @@ is resumed through the private path and never falls back to a public input.
 
 from __future__ import annotations
 
+from a2a_impl.private_intake import ref_task_id
 from a2a_impl.stores import PRIVATE_SCHEMA_VERSION
+from graph import thread_ids
 
 KIND_PENDING_TURN = "pending-turn"
 KIND_SEGMENT = "active-segment"
@@ -123,11 +125,19 @@ async def accept_pending_turn(
         "state": STATE_QUEUED,
     }
 
+    if audience == AUDIENCE_PRIVATE:
+        payload["resolver_metadata"] = thread_ids.resolver_metadata(session_id)
+
     def accept(records):
         turns = [p for p in records.values() if p.get("kind") == KIND_PENDING_TURN]
         for turn in turns:
             if dedupe and turn.get("dedupe") == dedupe:
                 return dict(turn)
+        # Intake may precede a restart or a later ordinary turn. Prefer the
+        # referenced input's snapshot over the current process cache.
+        original = records.get(ref_task_id(input_ref), {})
+        if audience == AUDIENCE_PRIVATE and isinstance(original.get("resolver_metadata"), dict):
+            payload["resolver_metadata"] = dict(original["resolver_metadata"])
         payload["seq"] = max((int(p["seq"]) for p in turns), default=0) + 1
         records[pending_task_id(session_id, payload["seq"])] = payload
         return dict(payload)
@@ -328,6 +338,16 @@ async def recover_undrained_segments(task_store, session_id: str, context) -> di
         audience = queued[0]["audience"]
     else:
         audience = ""
+    # Restore only the turn that owns (or is next to claim) the runner. Metadata
+    # lives in the same private JSON as acceptance, so retries keep the original
+    # snapshot and a crash cannot leave an accepted turn without its resolver inputs.
+    active = next((t for t in turns if t["seq"] == segment.get("seq")), None) if reserved else (
+        queued[0] if queued else None
+    )
+    if active and active["audience"] == AUDIENCE_PRIVATE:
+        metadata = active.get("resolver_metadata")
+        if isinstance(metadata, dict):
+            thread_ids.remember_resolver_metadata(session_id, metadata)
     return {
         "segment": segment,
         "queued": queued,

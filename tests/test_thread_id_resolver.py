@@ -8,6 +8,8 @@ server/chat.py. Unset ⇒ the template default `a2a:<session_id>`."""
 # would resolve to the function. The symbol itself is unambiguous.
 from types import SimpleNamespace
 
+import pytest
+
 from server.chat import _goal_continuation_config, _resolve_thread_id
 from runtime.state import STATE
 
@@ -147,3 +149,60 @@ async def test_nonstreaming_chat_holds_the_thread_lock(monkeypatch):
 
     await chat("hello", "s-lock")
     assert locked_during_invoke == [True]
+
+
+@pytest.mark.platform_sensitive
+async def test_ordinary_turn_keeps_resolver_metadata_memory_only(tmp_path, monkeypatch):
+    from a2a.server.context import ServerCallContext
+    from a2a_impl import stores
+    from graph import thread_ids
+    from server.chat import _resolve_turn_thread_id
+    from sqlalchemy import func, select
+
+    engine = stores.make_sqlite_engine(str(tmp_path / "tasks.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    try:
+        await store.initialize()
+        monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
+        monkeypatch.setattr(STATE, "thread_id_resolver", lambda md, sid: f"proj:{md.get('project')}:{sid}")
+        assert _resolve_turn_thread_id({"project": "atlas"}, "ordinary") == "proj:atlas:ordinary"
+        assert thread_ids.resolver_metadata("ordinary") == {"project": "atlas"}
+        assert _resolve_turn_thread_id(None, "ordinary") == "proj:None:ordinary"
+        assert thread_ids.resolver_metadata("ordinary") == {}
+        human = ServerCallContext(state={"principal_kind": "device"})
+        assert await store.scheduling_payloads("ordinary", human) == {}
+        async with engine.connect() as conn:
+            assert await conn.scalar(select(func.count()).select_from(store.task_model)) == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.platform_sensitive
+async def test_private_input_restores_its_snapshot_before_acceptance(tmp_path, monkeypatch):
+    from a2a.server.context import ServerCallContext
+    from a2a_impl import private_intake as pi, segment_schedule as ss, stores
+    from graph import thread_ids
+    from server.chat import _resolve_turn_thread_id
+
+    engine = stores.make_sqlite_engine(str(tmp_path / "tasks.db"))
+    store = stores.ReasoningCoalescingTaskStore(engine, owner_resolver=stores.resolve_task_owner)
+    human = ServerCallContext(state={"principal_kind": "device"})
+    monkeypatch.setattr(STATE, "thread_id_resolver", lambda md, sid: f"proj:{md.get('project')}:{sid}")
+    try:
+        await store.initialize()
+        _resolve_turn_thread_id({"project": "atlas"}, "private")
+        ref = await pi.record_private_steer(store, session_id="private", text="secret", msg_id="m", context=human)
+        _resolve_turn_thread_id({"project": "later"}, "private")
+        turn = await ss.accept_pending_turn(store, session_id="private", audience="private",
+            principal="device", dedupe="m", input_ref=ref, context=human)
+        assert turn["resolver_metadata"] == {"project": "atlas"}
+        assert await ss.accept_pending_turn(store, session_id="private", audience="private",
+            principal="device", dedupe="m", context=human) == turn
+        thread_ids.forget_resolver_metadata("private")
+        assert await pi.find_private_steer(store, session_id="private", msg_id="m", context=human) == (ref, False)
+        assert _resolve_turn_thread_id({"private_input": True}, "private") == "proj:atlas:private"
+        thread_ids.forget_resolver_metadata("private")
+        assert await pi.resolve_private_input(store, ref, delegation=SimpleNamespace(operation=ref), context=human) == "secret"
+        assert _resolve_turn_thread_id({"private_input": True}, "private") == "proj:atlas:private"
+    finally:
+        await engine.dispose()

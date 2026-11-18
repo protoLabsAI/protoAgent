@@ -78,7 +78,6 @@ def test_killed_process_preserves_partition_and_reservation(proof):
         assert report["wrong_resume"] is None
         assert report["matching_resume"] == rec["segment"]["generation"] + 1
 
-@pytest.mark.xfail(strict=True, reason="PROOF FAILURE: resolver metadata is memory-only and lost on SIGKILL restart")
 def test_original_resolver_metadata_survives_process_restart(proof):
     report = proof[3]
     assert (report["metadata"], report["resolved"]) == ({"project": "atlas"}, "proj:atlas:restart-proof")
