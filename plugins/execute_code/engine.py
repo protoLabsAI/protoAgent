@@ -953,6 +953,8 @@ def build_execute_code_tool(
                     gate=enforcement_gate,
                     fence=fence,
                     fresh=fresh,
+                    parent_call_id=tool_call_id,
+                    script_sha256=script_sha256,
                 )
             # One-shot run: keep the full script in its own ptc:script audit row
             # (once per run) so every bridged ptc: row this run writes can be traced

@@ -44,6 +44,7 @@ from .engine import (
     _NO_RUNTIME_MESSAGE,
     _invoke_bridged,
     _record_bridged_call,
+    _record_script,
     _resolve_child_interpreter,
     _truncate_or_spill,
     _tool_help,
@@ -419,7 +420,8 @@ class Kernel:
                 _record_bridged_call(self.session_id, name, args, payload, 0, False)
             else:
                 ok, payload = await _invoke_bridged(
-                    name, args, ctx["tool_map"], session_id=ctx["session_id"], gate=ctx["gate"], fence=ctx["fence"]
+                    name, args, ctx["tool_map"], session_id=ctx["session_id"], gate=ctx["gate"], fence=ctx["fence"],
+                    parent_call_id=ctx["parent_call_id"], script_sha256=ctx["script_sha256"],
                 )
             reply = {"type": "tool_reply", "id": rid, "ok": ok, ("result" if ok else "error"): payload}
             with contextlib.suppress(Exception):
@@ -437,7 +439,10 @@ class Kernel:
             except Exception as exc:  # noqa: BLE001 — a lost pipe is a dead kernel
                 raise _KernelDied(f"kernel connection lost: {exc}") from exc
 
-    async def run(self, code: str, *, tool_map: dict, timeout: float, session_id: str, gate, fence) -> str:
+    async def run(
+        self, code: str, *, tool_map: dict, timeout: float, session_id: str, gate, fence,
+        parent_call_id: str = "", script_sha256: str = "",
+    ) -> str:
         """Run ``code`` in the kernel's persistent globals and return the body text
         (pre-truncation). Raises ``_KernelTimeout`` if the call overruns ``timeout``
         and ``_KernelDied`` if the kernel is gone."""
@@ -448,7 +453,11 @@ class Kernel:
             # and close it in the finally — so on a clean return, a timeout, a script
             # exception or a cancel, a thread this script leaves behind finds no active
             # call and is refused. Bridged calls from THIS call bind to THIS context.
-            self._active = {"tool_map": tool_map, "session_id": session_id, "gate": gate, "fence": fence}
+            _record_script(session_id, parent_call_id, script_sha256, code)
+            self._active = {
+                "tool_map": tool_map, "session_id": session_id, "gate": gate, "fence": fence,
+                "parent_call_id": parent_call_id, "script_sha256": script_sha256,
+            }
             loop = asyncio.get_running_loop()
             self._exec_cid += 1
             cid = self._exec_cid
@@ -652,6 +661,8 @@ async def run_in_kernel(
     gate=None,
     fence=None,
     fresh: bool = False,
+    parent_call_id: str = "",
+    script_sha256: str = "",
 ) -> str:
     """Run ``code`` in ``session_id``'s kernel, starting it on first use.
 
@@ -671,7 +682,10 @@ async def run_in_kernel(
         return f"Error: execute_code could not start a session kernel: {exc}"
     notice = "new kernel: no earlier state" if is_new else ""
     try:
-        body = await kernel.run(code, tool_map=tool_map, timeout=timeout, session_id=session_id, gate=gate, fence=fence)
+        body = await kernel.run(
+            code, tool_map=tool_map, timeout=timeout, session_id=session_id, gate=gate, fence=fence,
+            parent_call_id=parent_call_id, script_sha256=script_sha256,
+        )
     except _KernelTimeout:
         await _pool.stop(session_id)
         return (

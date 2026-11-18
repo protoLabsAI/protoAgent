@@ -10,6 +10,7 @@ the timeout kills (≥60s, so the policy gate reads it as a stub, not a real wai
 """
 
 import asyncio
+import hashlib
 import json
 
 import pytest
@@ -18,6 +19,7 @@ from langchain_core.tools import tool
 
 from infra import paths
 from plugins.execute_code import kernel
+from plugins.execute_code.engine import build_execute_code_tool
 
 pytestmark = pytest.mark.platform_sensitive
 
@@ -134,6 +136,7 @@ async def test_leftover_thread_between_calls_is_refused(audit_probe, monkeypatch
 
     row = {r["tool"]: r for r in _rows(audit_probe)}["ptc:late_echo"]
     assert row["success"] is False
+    assert "parent_call_id" not in row
     assert row["session_id"] == sid  # the refusal row carries the kernel's session
     assert "no execute_code call is active" in row["result_summary"]
 
@@ -217,3 +220,25 @@ async def test_active_slot_cleared_after_cancel():
         await task
     assert k._active is None  # cancel runs run()'s finally, which clears the slot
     release.set()  # let the parked dispatch unwind before teardown
+
+
+@pytest.mark.asyncio
+async def test_kernel_audit_links_each_run_to_its_full_script(audit_probe):
+    ec = build_execute_code_tool([echo_tool], tools=["echo_tool"], session_state=True)
+    sid = "audit-linked"
+    for index, call_id in enumerate(("kernel-call-one", "kernel-call-two")):
+        # Longer than the audit argument summary limit; retain the script's tail too.
+        code = "# script context λ\n" * 100 + f"print(tools.echo_tool(text='run-{index}'))\n"
+        result = await ec.ainvoke({
+            "name": "execute_code", "type": "tool_call", "id": call_id,
+            "args": {"code": code, "state": {"session_id": sid}},
+        })
+        assert f"RUN-{index}" in result.content
+        rows = [r for r in _rows(audit_probe) if r.get("parent_call_id") == call_id]
+        assert [r["tool"] for r in rows] == ["ptc:script", "ptc:echo_tool"]
+        assert all(r["session_id"] == sid for r in rows)
+        assert all(r["script_sha256"] == hashlib.sha256(code.encode("utf-8")).hexdigest() for r in rows)
+        assert rows[0]["code"] == code
+        assert rows[1]["success"] is True
+    bridged = [r for r in _rows(audit_probe) if r["tool"] == "ptc:echo_tool"]
+    assert [r["parent_call_id"] for r in bridged] == ["kernel-call-one", "kernel-call-two"]
