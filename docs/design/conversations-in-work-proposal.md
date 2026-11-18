@@ -678,6 +678,20 @@ The conditions on that CONTINUE, as Josh set them:
 - **Still not authorized:** release UI, a Work composer, Phases 3–6, Started by
   others.
 
+**P1h.5 dev-instance results (2026-11-18).** The rerun at commit `10f042a83`
+gave steps 1, 4 and 5 **PASS**, with no canary leak.
+
+- **Step 3 (restart): accepted as v1 behaviour** (ruling relayed by Claude Code
+  for Josh, 2026-11-18). A private turn killed mid-run recovers as **FAILED**:
+  "Task interrupted by an agent restart; its runner did not survive." This
+  matches ordinary interrupted turns ([ADR 0129](../adr/0129-work-consolidation.md), D7),
+  fails closed, and nothing leaks or replays. A queued private steer is not
+  separately recovered by the steer route in v1; no card follows.
+- **Step 2 (parked resume): failed and is fixed by bd-kaztd.** A private steer
+  into a session parked on a decision it may not answer is refused, not started
+  beside it.
+- **The default stays off.** Turning it on remains a separate go from Josh.
+
 | Slice | Concrete scope and dependency | Status |
 | --- | --- | --- |
 | P1a identity proof | Propagate a verified principal kind from `_classify_token`/the device record, separate from the operator tier: the shared bearer and `device`-kind devices read as the human operator; the fleet service token, `agent`-kind devices and federation read as peers. Scoped loopback; reuse existing device pairing/rotation/revoke, **no new console credential**, no private UI. Prove fleet-token and `agent`-device rejection and `device`-kind acceptance before private reads. | authorized: proof slice (Josh, 2026-11-16) |
