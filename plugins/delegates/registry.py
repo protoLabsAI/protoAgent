@@ -217,7 +217,13 @@ class DelegateRegistry:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                status.record_failure(d.name, str(exc) or type(exc).__name__)
+                reason = str(exc) or type(exc).__name__
+                status.record_failure(d.name, reason)
+                # The same health record the probe writes, so the badge and
+                # `list_agents` agree with `last_dispatch` (#5535).
+                from .health import record_dispatch_failure
+
+                record_dispatch_failure(d.name, reason)
                 raise
             status.record_success(d.name)
             from .health import record_dispatch_success

@@ -96,6 +96,30 @@ def record_dispatch_success(name: str) -> None:
     _NEXT_DUE[name] = now + _INTERVAL_S
 
 
+def record_dispatch_failure(name: str, error: str) -> None:
+    """A dispatch that raised degrades the SAME health record the probe writes (#5535).
+
+    The failure twin of ``record_dispatch_success``. A probe stops at the handshake, so
+    a delegate whose card answers while every real send times out used to stay green:
+    the failure reached only ``status`` (the ``last_dispatch`` row), never the badge.
+    There is still one health record per delegate — this overwrites it with source
+    ``"dispatch"`` and feeds the probe's own ``_record_result`` backoff, so the next
+    probe is deferred exactly as after a failed probe and the usual staleness window
+    applies. Any later success (probe or dispatch) overwrites it again.
+
+    The reason is under ``detail`` (the dispatch-sourced reason field, as on success)
+    and under ``error``, the key every failed probe result carries and the console
+    badge reads. Callers must not report a cancellation here: an operator stopping a
+    turn says nothing about the delegate (see ``status.py``)."""
+    previous = _HEALTH.get(name)
+    if previous and previous.get("source") != "dispatch":
+        _PROBES[name] = dict(previous)
+    now = time.time()
+    reason = status.clean_error(error) or "dispatch failed"
+    _HEALTH[name] = {"ok": False, "checked_at": now, "source": "dispatch", "detail": reason, "error": reason}
+    _record_result(name, False, now)
+
+
 def _observed() -> bool:
     """Has anything read the health snapshot recently?
 
