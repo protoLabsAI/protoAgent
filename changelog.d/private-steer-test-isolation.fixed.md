@@ -1,1 +1,1 @@
-- **Isolate setup-wizard test configuration.** Restore the reload stub's runtime config so private-steering scheduling does not leak into later idempotency tests.
+- **Isolate private-steering tests.** Drain detached restart tasks and clear private-run ownership between tests. Pin the legacy intake tests to their intended scheduling mode so an enabled runtime config does not add scheduling rows to their shell counts.

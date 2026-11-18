@@ -7,6 +7,7 @@ that pytest inserts during collection.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import site
 import sys
@@ -177,16 +178,39 @@ def _cancel_pending_session_gists():
 
 
 @pytest.fixture(autouse=True)
-def _reset_recovered_private_turns():
-    """Recovery dispatch ownership must not leak between tests in the same worker."""
-    def _reset():
-        mod = sys.modules.get("server.chat")
-        if mod is not None:
-            mod._RECOVERED_PRIVATE_TURNS.clear()
+async def _reset_recovered_private_turns(monkeypatch):
+    """Drain detached steers before their loop closes and STATE patches are undone.
 
-    _reset()
+    A fake successful loopback (e.g. private_retry_and_concurrent_delivery) leaves
+    an expected runner in _PRIVATE_RUNS. Startup recovery can also leave a dispatch
+    in _STEER_RESTARTS. Clearing ownership alone does not stop that dispatch from
+    using the next test's STATE. Keep monkeypatch alive until cancellation finishes.
+    Lazy via sys.modules so this fixture does not import the server.
+    """
+    mod = sys.modules.get("server.chat")
+    if mod is not None:
+        mod._RECOVERED_PRIVATE_TURNS.clear()
     yield
-    _reset()
+    mod = sys.modules.get("server.chat")
+    if mod is None:
+        return
+    # Cancellation cleanup can schedule another restart, so drain to quiescence.
+    while mod._STEER_RESTARTS:
+        tasks = tuple(mod._STEER_RESTARTS)
+        pending = [task for task in tasks if not task.done()]
+        for task in pending:
+            assert task.get_loop() is asyncio.get_running_loop(), (
+                "A private-steering task outlived its owning test loop"
+            )
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for task in tasks:
+            if not task.cancelled():
+                task.exception()  # retrieve failures, including already-finished tasks
+        mod._STEER_RESTARTS.difference_update(tasks)
+    mod._PRIVATE_RUNS.clear()
+    mod._RECOVERED_PRIVATE_TURNS.clear()
 
 
 @pytest.fixture(autouse=True)

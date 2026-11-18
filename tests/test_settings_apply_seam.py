@@ -316,7 +316,7 @@ def test_finish_setup_explore_from_the_shipped_template_lands_declared_empty(mon
 
         ok, msg = settings_apply._build_settings_callbacks()["finish_setup"]({"model": {"name": ""}}, None)
 
-    # The reload must not enable private scheduling in a later test in this worker.
+    # The setup reload must restore the runtime config for later tests in this worker.
     assert STATE.graph_config is original_config
 
     assert ok is True
