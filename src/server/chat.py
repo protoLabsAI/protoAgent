@@ -1213,6 +1213,45 @@ async def _fold_private_reply_frames(frames, ref: str, store, context):
             yield frame
 
 
+async def _checkpoint_exists(thread_id: str) -> bool:
+    """True when the checkpointer holds a checkpoint for ``thread_id``. Raises when unreadable."""
+    snapshot = await STATE.graph.aget_state({"configurable": {"thread_id": thread_id}})
+    return bool(getattr(snapshot, "created_at", None))
+
+
+def _private_binding_failure(session_id: str, turn: dict, metadata: dict | None) -> str:
+    """Why a durable private ``turn`` may NOT run on the thread the runtime resolves now, or "".
+
+    The turn was bound to ``turn["checkpoint"]`` at acceptance. The thread is re-resolved from
+    the persisted resolver inputs with the CURRENT resolver, strictly: a resolver that raises,
+    or one that is gone or changed so the thread differs, is a failure — the ordinary resolver
+    would silently answer the default ``a2a:<session>`` thread and the private text would run
+    there. A turn with no recorded binding (a writer that predates it) has nothing to verify."""
+    from graph import thread_ids as _thread_ids
+
+    bound = str(turn.get("checkpoint") or "")
+    if not bound:
+        return ""
+    try:
+        now = _thread_ids.resolve_thread_id_strict(metadata or None, session_id)
+    except Exception:  # noqa: BLE001 — a failing resolver must not fall back to the default thread
+        return "its thread-id resolver raised"
+    return "" if now == bound else "its thread no longer resolves to the bound checkpoint"
+
+
+async def _private_stream_binding_failure(session_id: str, ref: str, tid: str, store, context) -> str:
+    """The live runner's own check (defense in depth): "" when the private turn carrying
+    ``ref`` may run on ``tid``, else the reason. No durable turn (a legacy input) passes."""
+    from a2a_impl import segment_schedule as ss
+    from graph import thread_ids as _thread_ids
+
+    turn = next((t for t in await ss.pending_turns(store, session_id, context) if t.get("input_ref") == ref), None)
+    if turn is None or not turn.get("checkpoint"):
+        return ""
+    reason = _private_binding_failure(session_id, turn, _thread_ids.resolver_metadata(session_id))
+    return reason or ("" if tid == turn["checkpoint"] else "its thread no longer resolves to the bound checkpoint")
+
+
 def _resolve_turn_thread_id(request_metadata: dict | None, session_id: str) -> str:
     """Resolve this turn's checkpointer ``thread_id`` and persist its resolver inputs (#571).
 
@@ -1491,11 +1530,17 @@ async def _private_steer_or_start(
         if not replied and private_steering_enabled():
             checkpoint = _turn_control._resolve_thread_id(thread_ids.resolver_metadata(session_id) or None, session_id)
             interrupt = await _pending_interrupt({"configurable": {"thread_id": checkpoint}})
+            # Whether the bound thread has history yet: restart recovery refuses a turn whose
+            # checkpoint has since vanished, but must still run a new conversation's first turn.
+            try:
+                existed: bool | None = await _checkpoint_exists(checkpoint)
+            except Exception:  # noqa: BLE001 — unknown: recorded as nothing, which recovery reads as "existed"
+                existed = None
             turn = await _ss.accept_pending_turn(
                 store, session_id=session_id, audience=_ss.AUDIENCE_PRIVATE,
                 principal=context.state.get("principal_kind", ""), dedupe=mid,
                 checkpoint=checkpoint, interrupt_id=str(interrupt[0] or "") if interrupt else "",
-                input_ref=ref, context=context,
+                input_ref=ref, checkpoint_existed=existed, context=context,
             )
             if turn["state"] != _ss.STATE_QUEUED:
                 steering.clear_starting(session_id, [mid])
@@ -1784,14 +1829,22 @@ async def _dispatch_recovered_private_turn(session_id: str, store, context) -> s
     to the queue untouched, when the head is not private, its record is gone, or the turn
     cannot be started (a PROVEN refusal). An ambiguous delivery raises and leaves the runner
     reserved for reconciliation, never retried. A turn whose record already holds a reply ran
-    before the crash: it is closed without a second run, and the next queued turn is tried."""
+    before the crash: it is closed without a second run, and the next queued turn is tried.
+
+    A turn that can no longer run on the checkpoint it was bound to at acceptance FAILS CLOSED:
+    its resolver is gone, changed or raising, or the checkpoint itself has been deleted (unless
+    the turn was accepted on a thread that had none yet). It is never started — not on a fresh
+    thread, not on the default one — it is closed terminal with its private record kept, the
+    runner is released, and the next queued turn is tried."""
     import httpx
 
     from a2a_impl import private_intake
     from a2a_impl import segment_schedule as _ss
+    from graph import thread_ids
 
     while True:
         replied: list[str] = []
+        refused: list[int] = []
 
         async def send(turn: dict):
             ref = str(turn.get("input_ref") or "")
@@ -1805,6 +1858,19 @@ async def _dispatch_recovered_private_turn(session_id: str, store, context) -> s
                     return None
                 if payload.get("reply") is not None:
                     replied.append(ref)
+                    return ""
+                metadata = turn.get("resolver_metadata")
+                reason = _private_binding_failure(
+                    session_id, turn, metadata if isinstance(metadata, dict) else thread_ids.resolver_metadata(session_id)
+                )
+                # No ``checkpoint_existed`` (a legacy turn) reads as "existed": fail closed.
+                if not reason and turn.get("checkpoint") and turn.get("checkpoint_existed", True) is not False:
+                    if not await _checkpoint_exists(turn["checkpoint"]):
+                        reason = "its bound checkpoint is gone"
+                if reason:
+                    # Names the session and the reason only — never the private text.
+                    log.warning("[steer] recovered private turn for %s failed closed, not run: %s", session_id, reason)
+                    refused.append(int(turn["seq"]))
                     return ""
                 resume = not await _session_turn_idle(session_id)
                 token = _mint_loopback_delegation(context=session_id, operation=ref)
@@ -1830,8 +1896,10 @@ async def _dispatch_recovered_private_turn(session_id: str, store, context) -> s
         if _private_run_is_live(session_id, int(head["seq"])):
             return None  # a runner in this process already carries it: never send it twice
         task_id = await _ss.dispatch_pending_turn(store, session_id, context, send)
-        if not replied:
+        if not replied and not refused:
             return task_id or None
+        for seq in refused:  # terminal first: whatever the release below does, it never runs
+            await _ss.set_turn_state(store, session_id, seq, _ss.STATE_TERMINAL, context)
         seg = await _ss.read_segment(store, session_id, context)
         if not await _ss.complete_segment(store, session_id, generation=int(seg["generation"]), context=context):
             return None
@@ -2763,6 +2831,18 @@ async def _chat_langgraph_stream_impl(
             # those inputs in place, so this resume lands on the parked interrupt rather than a
             # fresh thread; every ordinary turn resolves from, and persists, its own metadata.
             _tid = _resolve_turn_thread_id(request_metadata, session_id)
+            if _private_ref and private_steering_enabled():
+                # Defense in depth: a private turn runs only on the checkpoint it was bound to
+                # at acceptance. A resolver that raises, or is gone or changed, would put it on
+                # the default thread — refuse instead, and close the turn so it is not retried.
+                _unbound = await _private_stream_binding_failure(
+                    session_id, _private_ref, _tid, _private_store, _private_ctx
+                )
+                if _unbound:
+                    log.warning("[private] private turn for %s refused, not run: %s", session_id, _unbound)
+                    _private_consumed = True
+                    yield ("error", _PRIVATE_UNAVAILABLE)
+                    return
             config = {
                 "configurable": {"thread_id": _tid},
                 "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200),

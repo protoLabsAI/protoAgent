@@ -113,6 +113,7 @@ async def accept_pending_turn(
     checkpoint: str = "",
     interrupt_id: str = "",
     input_ref: str = "",
+    checkpoint_existed: bool | None = None,
     context,
 ) -> dict:
     """Persist an accepted input as the next ordered pending turn, and return its record.
@@ -122,7 +123,13 @@ async def accept_pending_turn(
     acceptance ``seq`` is monotonic; sequence allocation and dedupe run in one database
     transaction. The record is a ``public_visible=False`` shell — its
     audience, principal, checkpoint and interrupt binding live only in the private payload, so no
-    peer-readable projection is ever exposed. Raises on a write failure; the caller fails closed."""
+    peer-readable projection is ever exposed. Raises on a write failure; the caller fails closed.
+
+    ``checkpoint_existed`` records whether the bound ``checkpoint`` thread already had a
+    checkpoint at acceptance, when the caller knows. Restart recovery reads it: a turn bound to
+    a thread that had history is not run once that history is gone, while the first turn of a
+    brand-new conversation (``False``) still is. Omitted (``None``) it is not written, and
+    recovery treats the checkpoint as having existed."""
     payload = {
         "version": PRIVATE_SCHEMA_VERSION,
         "kind": KIND_PENDING_TURN,
@@ -135,6 +142,8 @@ async def accept_pending_turn(
         "state": STATE_QUEUED,
     }
 
+    if checkpoint_existed is not None:
+        payload["checkpoint_existed"] = bool(checkpoint_existed)
     if audience == AUDIENCE_PRIVATE:
         payload["resolver_metadata"] = thread_ids.resolver_metadata(session_id)
 
