@@ -491,15 +491,23 @@ self_improvement:
   skills: propose           # off | propose | auto
   distillation: propose     # off | propose | auto
 
-# Programmatic tool calling — let the model write ONE Python script that
-# composes several tools in a single turn (collapses long tool-call chains).
-# SECURITY: runs model-authored code in a subprocess (scrubbed env + hard
-# timeout). OFF by default — only enable for trusted models or inside a
-# hardened container. `tools: []` exposes all tools except execute_code itself.
+# execute_code — a Python interpreter the agent runs scripts in, mainly to call
+# several tools from one script and read only the result (docs/guides/execute-code.md).
+# ON by default with the Cowork pack; turn it off with `plugins.disabled: [execute_code]`
+# (there is no `execute_code.enabled` key).
+# SECURITY: runs model-authored code in a subprocess (scrubbed env + hard timeout).
+# That is isolation, not a sandbox.
+# `tools: []` means the curated READ set (read_file, list_dir, find_files, search_files,
+# fetch_url, web_search, memory_search, knowledge_search, memory_list, current_time);
+# a non-empty list REPLACES it. `extra_tools` adds on top (also `mcp:<server>/*`).
 execute_code:
-  enabled: false
   timeout: 30
   tools: []
+  # extra_tools:
+  #   - github_search_issues
+  # session_state: false     # experimental: variables carry across calls in one chat
+  # kernel_idle_ttl: 600
+  # max_kernels: 4
 
 # Tools — fork customization without editing tools/lg_tools.py.
 #   disabled: drop named core tools from the agent (a fork "keeps what it wants"

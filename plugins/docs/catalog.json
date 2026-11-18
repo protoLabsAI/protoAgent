@@ -45,6 +45,7 @@
           "pages": [
             "guides/documents-and-files.md",
             "guides/python-runtime.md",
+            "guides/execute-code.md",
             "guides/manage-memory.md",
             "guides/ingestion.md",
             "guides/knowledge.md"
@@ -335,6 +336,10 @@
     },
     "guides/python-runtime.md": {
       "title": "Enable document creation (desktop)",
+      "status": "current"
+    },
+    "guides/execute-code.md": {
+      "title": "Let the agent run code and call tools from scripts",
       "status": "current"
     },
     "guides/what-is-kept.md": {

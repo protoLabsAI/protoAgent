@@ -19,6 +19,7 @@ Start with [Use the app](/guides/react-tauri-ui) for chat and controls. Choose [
 
 - [Create and work with files and documents](/guides/documents-and-files)
 - [Enable document creation (desktop)](/guides/python-runtime)
+- [Let the agent run code and call tools from scripts](/guides/execute-code)
 - [Inspect and manage memory](/guides/manage-memory)
 - [Ingest documents & media](/guides/ingestion)
 - [Tune knowledge recall](/guides/knowledge)
