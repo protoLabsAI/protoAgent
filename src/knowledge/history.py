@@ -210,10 +210,21 @@ class HistoryStore:
             )
             return int(cur.lastrowid)
 
-    def get(self, id: int) -> HistoryEntry | None:
-        """Return a visible entry, or None if absent or invalidated."""
+    def get(self, id: int, *, include_private: bool = False) -> HistoryEntry | None:
+        """Return a visible entry, or None if absent or invalidated.
+
+        An entry retained in the private partition (``audience='human-operator'``, ADR 0131
+        §5) reads as absent unless ``include_private`` is passed, the same default as
+        :meth:`list_for_session`, :meth:`search`, :meth:`sessions` and :meth:`stats`. Ids are
+        small sequential integers, so without this the open-an-entry read (the memory
+        inspector route, ``recall_session(entry=…)``) handed out a row every listing hides."""
+        where = "id = ? AND invalidated_at IS NULL"
+        params: list = [id]
+        if not include_private:
+            where += f" AND {_AUDIENCE_PUBLIC_WHERE}"
+            params.append(_PRIVATE_AUDIENCE)
         with closing(self._connect()) as db:
-            row = db.execute("SELECT * FROM history WHERE id = ? AND invalidated_at IS NULL", (id,)).fetchone()
+            row = db.execute(f"SELECT * FROM history WHERE {where}", params).fetchone()
             return HistoryEntry(**dict(row)) if row else None
 
     def list_for_session(

@@ -788,6 +788,20 @@ def test_history_open_entry_in_full(tmp_path, monkeypatch):
     assert c.get("/api/memory/history/entries/999999").status_code == 404
 
 
+def test_history_open_entry_hides_a_private_archive(tmp_path, monkeypatch):
+    # A span retained in the private partition (ADR 0131 §5) is hidden by every listing, so
+    # opening it by id must hide it too: ids are small integers, a caller can simply count.
+    hs = _history(tmp_path)
+    public = hs.add("public palette notes", kind="archive", session_id="chat-1", audience="public")
+    private = hs.add("PRIVATE-ARCHIVE-CANARY", kind="archive", session_id="chat-1", audience="human-operator")
+    c = _client(monkeypatch, tmp_path, history=hs)
+    assert c.get(f"/api/memory/history/entries/{public}").json()["entry"]["content"] == "public palette notes"
+    hidden = c.get(f"/api/memory/history/entries/{private}")
+    assert hidden.status_code == 404 and "PRIVATE-ARCHIVE-CANARY" not in hidden.text
+    assert hs.get(private) is None
+    assert hs.get(private, include_private=True).content == "PRIVATE-ARCHIVE-CANARY"
+
+
 def test_history_delete_one_entry_hard_deletes_that_row(tmp_path, monkeypatch):
     # r3: a single-entry delete is explicit curation — a hard delete of exactly that
     # row, any kind (a report too), 404 once it is gone.
