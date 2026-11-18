@@ -17,6 +17,7 @@ from sqlalchemy import text as sql
 
 import protolabs_a2a as pa
 from a2a_impl import auth, hitl_routing
+from a2a_impl import segment_schedule as ss
 from a2a_impl.executor import ProtoAgentExecutor
 from a2a_impl.v03_compat import create_a2a_jsonrpc_routes
 from graph import steering
@@ -106,6 +107,24 @@ async def rig(tmp_path, monkeypatch, delegation_env):
         query = "SELECT id, owner, history, artifacts, metadata, status, private_payload, public_visible FROM tasks"
         async with engine.connect() as conn:
             return (await conn.execute(sql(query))).all()
+    async def restart():
+        nonlocal handler, router, engine, store
+        await handler._active_task_registry.aclose()
+        await router.drain()
+        await engine.dispose()
+        engine, store = await _partition(tmp_path)
+        monkeypatch.setattr(STATE, "a2a_task_engine", engine)
+        handler = DefaultRequestHandler(
+            agent_executor=ProtoAgentExecutor(chat_mod._chat_langgraph_stream), task_store=store,
+            agent_card=card, push_config_store=InMemoryPushNotificationConfigStore(),
+        )
+        router = hitl_routing.install_parked_task_routing(handler)
+        app.router.routes[:] = [route for route in app.router.routes if route.path != "/a2a"]
+        app.router.routes.extend(create_a2a_jsonrpc_routes(handler, rpc_url="/a2a"))
+        steering._reset()
+        chat_mod._RECOVERED_PRIVATE_TURNS.clear()
+
+    r.restart = restart
     r.steer, r.rpc, r.rows, r.clients, r.op = steer, rpc, rows, clients, clients["shared-bearer"]
     yield r
     r.release.set()  # let a held turn finish before the store closes under it
@@ -164,10 +183,15 @@ async def test_private_steer_into_an_idle_session(rig, kind):
 async def test_private_steer_into_a_parked_session_resumes_the_original_task(rig, kind):
     first = (await rig.steer(kind, "chat-park", f"{SECRET} park", "m1", private=True)).json()
     assert (await poll_terminal(rig.op, first["started_turn"]))["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    from tests.test_steer_idle_starts_turn import _operator_ctx
+    store, context = chat_mod._private_partition_store(), _operator_ctx()
+    (parked,) = await ss.pending_turns(store, "chat-park", context)
+    assert parked["state"] == ss.STATE_PARKED and parked["interrupt_id"]
     answer = (await rig.steer(kind, "chat-park", f"{SECRET} answer", "m2", private=True)).json()
     assert answer["started_turn"] == first["started_turn"]  # the guarded resume, on the parked task
     assert (await poll_terminal(rig.op, answer["started_turn"]))["status"]["state"] == "TASK_STATE_COMPLETED"
     assert rig.seen == [(f"{SECRET} park", False), (f"{SECRET} answer", True)]
+    assert await ss.pending_turns(store, "chat-park", context) == []
     await _assert_private_only(rig, "chat-park", first["started_turn"])
 
 

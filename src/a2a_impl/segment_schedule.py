@@ -1,4 +1,4 @@
-"""Durable one-audience-per-segment scheduling over the P1b.1 partition (ADR 0131 P1c; dormant).
+"""Durable one-audience-per-segment scheduling over the P1b.1 partition (ADR 0131 P1c).
 
 A conversation's original thread runs ONE serialized runner. Every accepted input is persisted
 as a *pending turn* on the existing task records (a
@@ -30,7 +30,7 @@ the crash is reported suspended for reconciliation, never re-dispatched — its 
 be replayed. A parked segment stays reserved. A private turn keeps its opaque ``input_ref``, so it
 is resumed through the private path and never falls back to a public input.
 
-**Mostly dormant.** No live route writes a pending turn yet; the one live reader is the
+**Live private writer.** The private steer route persists pending turns when enabled; the live reader is the
 server-start recovery (``server.chat.recover_private_pending_turns``, P1h.4, behind the
 private-steering flag). It depends only on
 the private partition/intake and ``graph.thread_ids`` — never ``server`` — so the import layering holds.
@@ -206,24 +206,24 @@ async def claim_segment(
 
     A transactional compare-and-set on the segment generation: an idle segment becomes
     ``running`` under this audience, fixing the audience for the whole segment. A segment already
-    running or parked (reserved) returns None — the caller's input stays queued."""
+    running or parked (reserved) returns None — the caller's input stays queued.
+    The pending turn becomes running in the same transaction as the claim."""
     seg = await _ensure_segment(task_store, session_id, context)
     if seg["state"] != SEGMENT_IDLE:
         return None
     generation = int(seg["generation"])
-    won = await task_store.cas_private_payload(
-        segment_task_id(session_id),
-        guard={"generation": generation},
-        updates={
-            "generation": generation + 1,
-            "state": STATE_RUNNING,
-            "audience": audience,
-            "seq": int(seq),
-            "interrupt_id": str(interrupt_id or ""),
-        },
-        context=context,
-    )
-    return generation + 1 if won else None
+
+    def claim(records):
+        current = records[segment_task_id(session_id)]
+        turn = records.get(pending_task_id(session_id, seq), {})
+        if current.get("generation") != generation or turn.get("state") != STATE_QUEUED:
+            return None
+        current.update(generation=generation + 1, state=STATE_RUNNING, audience=audience,
+                       seq=int(seq), interrupt_id=str(interrupt_id or ""))
+        turn["state"] = STATE_RUNNING
+        return generation + 1
+
+    return await task_store.update_scheduling_payloads(session_id, context, claim)
 
 
 async def try_fold(task_store, session_id: str, *, generation: int, audience: str, seq: int, context) -> int | None:
@@ -279,12 +279,19 @@ async def complete_segment(task_store, session_id: str, *, generation: int, cont
 async def park_segment(task_store, session_id: str, *, generation: int, interrupt_id: str, context) -> bool:
     """Park the running segment at an interrupt — it RESERVES the runner (not idle) until its
     matching guarded resume. CAS on the generation; audience and seq are preserved."""
-    return await task_store.cas_private_payload(
-        segment_task_id(session_id),
-        guard={"generation": generation},
-        updates={"generation": generation + 1, "state": STATE_PARKED, "interrupt_id": str(interrupt_id)},
-        context=context,
-    )
+    def park(records):
+        seg = records.get(segment_task_id(session_id), {})
+        if seg.get("generation") != generation:
+            return False
+        for turn in records.values():
+            if turn.get("kind") == KIND_PENDING_TURN and (
+                turn.get("seq") == seg.get("seq") or turn.get("segment_seq") == seg.get("seq")
+            ):
+                turn.update(state=STATE_PARKED, interrupt_id=str(interrupt_id))
+        seg.update(generation=generation + 1, state=STATE_PARKED, interrupt_id=str(interrupt_id))
+        return True
+
+    return await task_store.update_scheduling_payloads(session_id, context, park)
 
 
 async def resume_segment(task_store, session_id: str, *, generation: int, interrupt_id: str, context) -> int | None:
@@ -295,16 +302,20 @@ async def resume_segment(task_store, session_id: str, *, generation: int, interr
     (or a resume for a different interrupt) can never continue the segment: it is a continuation
     of that segment, not a later queue item. The resume may then pass queued fresh inputs of the
     SAME audience to unblock the interrupt (:func:`pending_turns`)."""
-    seg = await read_segment(task_store, session_id, context)
-    if seg["state"] != STATE_PARKED or str(seg.get("interrupt_id")) != str(interrupt_id):
-        return None
-    won = await task_store.cas_private_payload(
-        segment_task_id(session_id),
-        guard={"generation": generation, "interrupt_id": str(interrupt_id)},
-        updates={"generation": generation + 1, "state": STATE_RUNNING},
-        context=context,
-    )
-    return generation + 1 if won else None
+    def resume(records):
+        seg = records.get(segment_task_id(session_id), {})
+        if (seg.get("state") != STATE_PARKED or seg.get("generation") != generation
+                or str(seg.get("interrupt_id")) != str(interrupt_id)):
+            return None
+        for turn in records.values():
+            if turn.get("kind") == KIND_PENDING_TURN and (
+                turn.get("seq") == seg.get("seq") or turn.get("segment_seq") == seg.get("seq")
+            ):
+                turn["state"] = STATE_RUNNING
+        seg.update(generation=generation + 1, state=STATE_RUNNING)
+        return generation + 1
+
+    return await task_store.update_scheduling_payloads(session_id, context, resume)
 
 
 # ── scheduling + recovery ───────────────────────────────────────────────────────
@@ -369,7 +380,7 @@ async def recover_undrained_segments(task_store, session_id: str, context) -> di
 
 
 async def dispatch_pending_turn(task_store, session_id: str, context, send) -> str | None:
-    """Dormant runner seam. ``send`` returns a task id or None for a PROVEN refusal.
+    """Recovery runner seam. ``send`` returns a task id or None for a PROVEN refusal.
 
     Exceptions/ambiguous delivery leave the execution reserved for reconciliation, never
     retry automatically. The caller must not translate a timeout into a proven refusal.

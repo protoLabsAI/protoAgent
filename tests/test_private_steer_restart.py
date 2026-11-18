@@ -2,6 +2,7 @@
 auth middleware, loopback ``SendMessage``, SDK handler, executor, stream runner and SQLite
 partition. "Restart" is the durable records alone — every in-memory guard is reset."""
 
+import asyncio
 import importlib
 import logging
 
@@ -155,3 +156,72 @@ async def test_a_recovery_failure_is_logged_and_never_raises(rig, monkeypatch, c
     else:  # the records are exactly what the crash left
         assert turns == before
         assert broken == "refused" or "recovery" in caplog.text
+
+
+@pytest.mark.parametrize("running", [False, True])
+async def test_route_private_steer_survives_restart(rig, monkeypatch, running):  # noqa: F811
+    # #5504: acceptance comes from the live route, never a hand-seeded queue.
+    session = "chat-route-restart"
+    await rig.steer("shared-bearer", session, "hold public", "public")
+    await rig.running.wait()
+    body = (await rig.steer("shared-bearer", session, SECRET + " hold", "private", private=True)).json()
+    retry = (await rig.steer("shared-bearer", session, SECRET + " hold", "private", private=True)).json()
+    assert retry["started_turn"] == body["started_turn"]
+    if running:
+        rig.running.clear()
+        original = chat_mod._run_native_turn
+
+        async def held(*args, **kwargs):
+            rig.release.clear()
+            async for frame in original(*args, **kwargs):
+                yield frame
+
+        monkeypatch.setattr(chat_mod, "_run_native_turn", held)
+        rig.release.set()
+        await asyncio.wait_for(rig.running.wait(), 5)
+        monkeypatch.setattr(chat_mod, "_run_native_turn", original)
+    await rig.restart()
+    out = await chat_mod.recover_private_pending_turns()
+    assert out is not None
+    view = out["recovered"][session]
+    (turn,) = view["suspended" if running else "queued"]
+    assert turn["principal"] == "shared-operator-bearer" and turn["checkpoint"] == f"a2a:{session}"
+    assert [t["dedupe"] for t in view["suspended" if running else "queued"]] == ["private"]
+    if running:
+        assert out["dispatch"] is None
+    else:
+        rig.release.set()
+        await out["dispatch"]
+        task_id = next(row.id for row in await rig.rows()
+                       if "private-input:" in str(row.history) and row.id != body["started_turn"])
+        await poll_terminal(rig.op, task_id)
+    await _assert_private_only(rig, session, body["started_turn"])
+    for peer in ("fleet-service", "paired-agent"):
+        assert SECRET not in (await rig.clients[peer].get(f"/api/chat/sessions/{session}/turns")).text
+    assert sum(SECRET in message for message, _ in rig.seen) == 1
+
+
+async def test_pending_write_failure_refuses_before_send(rig, monkeypatch):  # noqa: F811
+    async def fail(*args, **kwargs):
+        raise RuntimeError("write unavailable")
+
+    monkeypatch.setattr(ss, "accept_pending_turn", fail)
+    response = await rig.steer("shared-bearer", "chat-write", SECRET, "m1", private=True)
+    assert response.status_code == 503 and rig.seen == []
+    assert not steering.starting("chat-write", "m1")
+    assert not steering.pending_items("chat-write")
+    assert not any("private-input:" in str(row.history) for row in await rig.rows())
+
+
+async def test_retry_after_refused_delivery_reuses_durable_acceptance(rig, monkeypatch):  # noqa: F811
+    async def refused(*args, **kwargs):
+        return ""
+
+    monkeypatch.setattr(chat_mod, "_start_steer_turn", refused)
+    for _ in range(2):
+        response = await rig.steer("shared-bearer", "chat-retry", SECRET, "m1", private=True)
+        assert response.status_code == 503
+        steering._reset()
+    (turn,) = await ss.pending_turns(chat_mod._private_partition_store(), "chat-retry", OP)
+    assert turn["dedupe"] == "m1" and turn["seq"] == 1 and turn["state"] == ss.STATE_QUEUED
+    assert sum(SECRET in (row.private_payload or "") for row in await rig.rows()) == 1

@@ -1,0 +1,1 @@
+- **Recover private steers after restart.** Private steering now durably records accepted turns before sending, tracks running and parked segments, and completes them with private replies. Queued private steers recover through the private path; interrupted running turns remain suspended without replay. The default-off setting and ordinary steering are unchanged. Refs #5504.
