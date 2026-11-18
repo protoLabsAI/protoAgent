@@ -1,1 +1,0 @@
-- **A changed execute_code setting applies on the first save.** Turning on "Keep state across a session's runs", or editing the bridged tools or kernel limits, did nothing until the config was reloaded a second time, because the tool was rebuilt from the previous values. It now reads the new ones.
