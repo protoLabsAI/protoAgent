@@ -601,6 +601,22 @@ def set_push_binding(
     return status
 
 
+def invalidate_push_binding(device_id: str, generation: int) -> bool:
+    """Internal sender seam: retire only the generation rejected by the service.
+
+    A late 404/410 must never clear a replacement subscription. No device token
+    is needed by the trusted transport; enrollment routes use clear_push_binding.
+    """
+    with _LOCK:
+        devices = _load()
+        device = next((d for d in devices if d.id == device_id), None)
+        if device is None or device.push is None or device.push.generation != generation:
+            return False
+        device.push = None
+        _save(devices)
+    return True
+
+
 def clear_push_binding(device_id: str | None, presented_token: str) -> bool | None:
     """Delete the push binding of the caller's OWN device. True when one was removed, False
     when it had none, None when the caller may not (the same rule as `set_push_binding`)."""
