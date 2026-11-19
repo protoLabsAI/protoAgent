@@ -21,6 +21,11 @@
     POST   /api/devices/self/rotate → a new token for the caller's device, returned once
     POST   /api/devices/self/handoff → a 60 s code that moves the caller's device to another
                                   of this instance's origins (ADR 0121 D1, #4336 S7.5)
+    GET    /api/devices/self/push → this instance's active VAPID public key + version, and
+                                  the safe status of the caller's own push binding
+                                  (ADR 0135 W2; paired phones/browsers only)
+    PUT    /api/devices/self/push → store or renew the caller's own push binding
+    DELETE /api/devices/self/push → delete it
 
 The claim response and ``GET /api/devices/self`` carry ``addresses`` — this instance's own
 origins in ADR 0121 D1 order (`_address_set`) — which a phone keeps for its offline notice and
@@ -588,6 +593,45 @@ def _presented_bearer(request) -> str:
     return header[len("Bearer ") :] if header.startswith("Bearer ") else ""
 
 
+NOT_A_PUSH_DEVICE = (
+    "push notifications are enrolled per paired phone or browser — this credential isn't one, so pair this device first"
+)
+
+
+# The keyring error itself names a path on the host: that goes to the log, not to a phone.
+PUSH_KEYRING_UNAVAILABLE = (
+    "this agent's push keys can't be read, so notifications can't be enabled — the agent's log says how to restore them"
+)
+
+
+def _push_refusal(status: int, error: str, detail: str):  # noqa: ANN202
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        {"ok": False, "error": error, "detail": detail}, status_code=status, headers={"Cache-Control": "no-store"}
+    )
+
+
+def _push_caller(request) -> tuple[str, str] | None:
+    """``(device id, presented token)`` when the caller is a paired ``device``-kind pairing
+    presenting its own bearer, else None (ADR 0135 W2).
+
+    The id is the one the auth middleware resolved FROM that token (``a2a_impl.auth``'s
+    device classification), never anything the caller sent — so there is no way to name
+    another device. The shared operator token, ``X-API-Key``, the fleet token and open mode
+    carry no device id; an agent pairing (a hub) has one but no browser to notify."""
+    from security.devices import KIND_DEVICE, get_device
+
+    device_id = getattr(request.state, "device_id", None)
+    presented = _presented_bearer(request)
+    if not device_id or not presented:
+        return None
+    device = get_device(device_id)
+    if device is None or device.kind != KIND_DEVICE:
+        return None
+    return device_id, presented
+
+
 def register_pairing_routes(app, agent_name=None) -> None:
     """Mount the pairing + devices routes.
 
@@ -984,6 +1028,102 @@ def register_pairing_routes(app, agent_name=None) -> None:
             return JSONResponse({"ok": False, "error": "not_rotatable", "detail": msg}, status_code=409)
         device, token = result
         return JSONResponse({"ok": True, "device": device, "token": token}, headers={"Cache-Control": "no-store"})
+
+    @router.get("/api/devices/self/push")
+    async def _push_get(request: Request):  # noqa: ANN202
+        """This instance's active VAPID public key and its version — what the caller's
+        browser passes to ``PushManager.subscribe`` — plus the safe status of the caller's
+        OWN push binding (``binding``: version, generation and times, or null).
+
+        Self-only (ADR 0135 W2): the device is the one the caller's token resolves to. Any
+        other credential is ``403 not_a_device``. Never returns an endpoint or client key."""
+        from security import devices, push_keys
+
+        caller = _push_caller(request)
+        if caller is None:
+            return _push_refusal(403, "not_a_device", NOT_A_PUSH_DEVICE)
+        try:
+            # Blocking (a file lock, and key generation on first use) — off the event loop.
+            key = await asyncio.to_thread(push_keys.active_public_key, bindings_exist=devices.push_bindings_exist())
+        except push_keys.PushKeyringError as exc:
+            log.error("[pairing] push keyring unusable: %s", exc)
+            return _push_refusal(503, "push_keyring_unavailable", PUSH_KEYRING_UNAVAILABLE)
+        return JSONResponse(
+            {
+                "ok": True,
+                "public_key": key.public_key,
+                "version": key.version,
+                "binding": devices.push_status(caller[0]),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @router.put("/api/devices/self/push")
+    async def _push_put(request: Request):  # noqa: ANN202
+        """Store or renew the caller's OWN push binding (ADR 0135 W2).
+
+        ``{"endpoint": …, "keys": {"p256dh": …, "auth": …}, "vapid_version": N}`` — a
+        browser ``PushSubscription``'s JSON plus the key version it subscribed under (from
+        the GET). Replaces any binding the device had; ``{ok, binding}`` carries safe status
+        only, never the endpoint or keys back.
+
+        SECURITY: the endpoint is an outbound URL the hub will later POST to, so it must
+        pass ``validate_push_endpoint`` (https, a supported push service, no private
+        address) before anything is stored; ``vapid_version`` must be the active key or one
+        still inside its migration window; and a token the device has already replaced (in
+        its rotation or handoff grace) can't write."""
+        from security import devices, push_keys
+
+        caller = _push_caller(request)
+        if caller is None:
+            return _push_refusal(403, "not_a_device", NOT_A_PUSH_DEVICE)
+        body = await _json_object(request)
+        if body is None:
+            return _bad_body()
+        keys = body.get("keys")
+        version = body.get("vapid_version")
+        try:
+            if not isinstance(keys, dict):
+                raise push_keys.PushSubscriptionError("keys must be an object with p256dh and auth")
+            p256dh, auth = push_keys.validate_subscription_keys(keys.get("p256dh"), keys.get("auth"))
+            if not await asyncio.to_thread(push_keys.enrollable_version, version):
+                msg = "vapid_version isn't a key this agent still signs with — fetch the key and subscribe again"
+                return _push_refusal(409, "stale_vapid_version", msg)
+            # Resolves DNS — in a worker thread, and before the registry lock is taken.
+            endpoint = await asyncio.to_thread(push_keys.validate_push_endpoint, body.get("endpoint"))
+        except push_keys.PushKeyringError as exc:
+            log.error("[pairing] push keyring unusable: %s", exc)
+            return _push_refusal(503, "push_keyring_unavailable", PUSH_KEYRING_UNAVAILABLE)
+        except push_keys.PushEndpointError as exc:
+            return _push_refusal(400, "invalid_endpoint", str(exc))
+        except push_keys.PushSubscriptionError as exc:
+            return _push_refusal(400, "invalid_keys", str(exc))
+        try:
+            binding = devices.set_push_binding(
+                caller[0], caller[1], endpoint=endpoint, p256dh=p256dh, auth=auth, vapid_version=version
+            )
+        except devices.PushBindingConflict:
+            msg = "that push subscription already belongs to another paired device"
+            return _push_refusal(409, "endpoint_in_use", msg)
+        if binding is None:
+            msg = "this device can't change its push binding right now — reload the console and try again"
+            return _push_refusal(409, "not_enrollable", msg)
+        return JSONResponse({"ok": True, "binding": binding}, headers={"Cache-Control": "no-store"})
+
+    @router.delete("/api/devices/self/push")
+    async def _push_delete(request: Request):  # noqa: ANN202
+        """Delete the caller's OWN push binding (ADR 0135 W2). Idempotent: ``removed`` says
+        whether there was one. Same caller rule as the PUT."""
+        from security import devices
+
+        caller = _push_caller(request)
+        if caller is None:
+            return _push_refusal(403, "not_a_device", NOT_A_PUSH_DEVICE)
+        removed = devices.clear_push_binding(*caller)
+        if removed is None:
+            msg = "this device can't change its push binding right now — reload the console and try again"
+            return _push_refusal(409, "not_enrollable", msg)
+        return JSONResponse({"ok": True, "removed": removed}, headers={"Cache-Control": "no-store"})
 
     @router.patch("/api/devices/{device_id}")
     async def _update(device_id: str, request: Request):  # noqa: ANN202

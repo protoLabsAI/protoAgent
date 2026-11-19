@@ -523,3 +523,58 @@ def validate_push_endpoint(url: object) -> str:
         raise PushEndpointError("push endpoint host resolves to a private, loopback or link-local address")
     query = f"?{parts.query}" if parts.query else ""
     return f"https://{host}{parts.path}{query}"
+
+
+# ── Enrollment checks ────────────────────────────────────────────────────────────────────
+
+_AUTH_SECRET_BYTES = 16
+_B64URL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+class PushSubscriptionError(ValueError):
+    """A subscription's client keys or key version were refused. The message says why and
+    never echoes what was sent — the ``auth`` secret must not reach logs through an error."""
+
+
+def _decode_client_key(value: object, name: str, size: int) -> tuple[str, bytes]:
+    if not isinstance(value, str) or not value:
+        raise PushSubscriptionError(f"keys.{name} must be a non-empty string")
+    text = value.rstrip("=")  # browsers send it unpadded; tolerate a padded copy
+    # Bounded before decoding, and one alphabet only: `urlsafe_b64decode` silently skips
+    # characters outside it, which would let two different strings name one key.
+    if len(text) > 2 * size or not set(text) <= _B64URL_CHARS:
+        raise PushSubscriptionError(f"keys.{name} is not base64url")
+    try:
+        raw = _unb64url(text)
+    except ValueError:
+        raise PushSubscriptionError(f"keys.{name} is not base64url") from None
+    if len(raw) != size:
+        raise PushSubscriptionError(f"keys.{name} has the wrong length")
+    return _b64url(raw), raw
+
+
+def validate_subscription_keys(p256dh: object, auth: object) -> tuple[str, str]:
+    """Return a browser subscription's client keys in canonical (unpadded base64url) form,
+    or raise `PushSubscriptionError`.
+
+    ``p256dh`` must be an uncompressed P-256 point that is actually on the curve — the key
+    the payload is encrypted to (RFC 8291) — and ``auth`` the 16-byte authentication secret.
+    Checked at enrollment so a binding that could never be encrypted to is not stored.
+    """
+    point_text, point = _decode_client_key(p256dh, "p256dh", _P256_POINT_BYTES)
+    auth_text, _secret = _decode_client_key(auth, "auth", _AUTH_SECRET_BYTES)
+    try:
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)
+    except ValueError:
+        raise PushSubscriptionError("keys.p256dh is not a valid P-256 public key") from None
+    return point_text, auth_text
+
+
+def enrollable_version(version: object) -> bool:
+    """Whether a binding may be stored against keyring ``version``: it is the active key, or
+    a rotated-out one still inside its migration window. Never creates a keyring; a corrupt
+    one raises `PushKeyringError`."""
+    if not _is_int(version):
+        return False
+    now = _now()
+    return any(k.version == version and (k.retire_after is None or now < k.retire_after) for k in public_keys())

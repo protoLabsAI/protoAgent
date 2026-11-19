@@ -345,6 +345,11 @@ _ALLOWED_WRITES = {
     # code it mints rebinds the same row (same id, name and scope) — it adds nobody — and the
     # route refuses every origin this instance doesn't offer.
     ("POST", "/api/devices/self/handoff"),
+    # A device storing or deleting its OWN push subscription (ADR 0135 W2): it lives on the
+    # caller's own row, adds nobody, and dies with that row on revoke. A ceiling here would
+    # stop every phone from ever enabling notifications.
+    ("PUT", "/api/devices/self/push"),
+    ("DELETE", "/api/devices/self/push"),
 }
 
 

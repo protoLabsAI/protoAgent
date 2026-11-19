@@ -47,7 +47,7 @@ import secrets
 import threading
 import time
 import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from infra.paths import instance_paths
@@ -120,6 +120,39 @@ _AGENT_CODE_STRIP = str.maketrans({"-": None, " ": None, "_": None, "O": "0", "I
 
 
 @dataclass
+class PushBinding:
+    """A device's Web Push subscription (ADR 0135 W2), held ON its `Device` row.
+
+    ``endpoint`` is a capability URL and ``p256dh`` / ``auth`` are the browser's client keys:
+    all three are secrets. They are excluded from the repr and from every public shape
+    (`public`), and live only in ``devices.json`` (0600) for the sender to read.
+
+    ``vapid_version`` is the keyring version (``security.push_keys``) the browser subscribed
+    under — the only key this subscription can be sent with. ``generation`` rises every time
+    the device's subscription is replaced, so a late result for an old endpoint can be told
+    from its replacement. ``created_at`` is when the device enrolled; ``renewed_at`` is when
+    the current subscription was last stored.
+    """
+
+    endpoint: str = field(repr=False)
+    p256dh: str = field(repr=False)
+    auth: str = field(repr=False)
+    vapid_version: int
+    generation: int
+    created_at: float
+    renewed_at: float
+
+    def public(self) -> dict:
+        """Safe status and times only — never the endpoint or the client keys."""
+        return {
+            "vapid_version": self.vapid_version,
+            "generation": self.generation,
+            "created_at": self.created_at,
+            "renewed_at": self.renewed_at,
+        }
+
+
+@dataclass
 class Device:
     """A paired device. ``token_sha256`` is the only trace of the credential."""
 
@@ -149,6 +182,12 @@ class Device:
     # Presented after its grace it is refused WITHOUT revoking the device — the old origin is
     # the expected late presenter, not a second party. Cleared by the next rotation.
     prev_handed_off: bool = False
+    # Web Push (ADR 0135 W2): this device's own subscription, or None. It lives on the row so
+    # it is keyed by the stable device id, survives a token rotation, and is deleted by the
+    # same write that revokes the device. ``push_generation`` is the last generation issued
+    # to this device; it outlives a cleared binding so generations are never reused.
+    push: PushBinding | None = None
+    push_generation: int = 0
 
     def effective_scope(self) -> str:
         """The scope this device's token earns. An agent (another protoAgent's hub, ADR 0113)
@@ -324,6 +363,9 @@ def _load() -> list[Device]:
                     rotated_at=_opt_float(item.get("rotated_at")),
                     prev_retired_at=_opt_float(item.get("prev_retired_at")),
                     prev_handed_off=item.get("prev_handed_off") is True,
+                    # ADR 0135 W2. Absent on every row written before it: not enrolled.
+                    push=_parse_push(item.get("push")),
+                    push_generation=_opt_generation(item.get("push_generation")),
                 )
             )
         except (AttributeError, KeyError, TypeError, ValueError):  # AttributeError: a non-dict entry
@@ -341,10 +383,36 @@ def _opt_float(value: object) -> float | None:
     return float(value)
 
 
+def _opt_generation(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _parse_push(raw: object) -> PushBinding | None:
+    """A stored push binding, or None for an absent or unusable one. An unusable binding
+    reads as "not enrolled" rather than failing the row: the device keeps its pairing and
+    enrolls again."""
+    if not isinstance(raw, dict):
+        return None
+    endpoint, p256dh, auth = (_opt_str(raw.get(k)) for k in ("endpoint", "p256dh", "auth"))
+    version, generation = _opt_generation(raw.get("vapid_version")), _opt_generation(raw.get("generation"))
+    created_at, renewed_at = _opt_float(raw.get("created_at")), _opt_float(raw.get("renewed_at"))
+    if not (endpoint and p256dh and auth and version and generation and created_at):
+        return None
+    return PushBinding(
+        endpoint=endpoint,
+        p256dh=p256dh,
+        auth=auth,
+        vapid_version=version,
+        generation=generation,
+        created_at=created_at,
+        renewed_at=renewed_at or created_at,
+    )
+
+
 def _save(devices: list[Device]) -> None:
     """Replace the registry. Every caller holds ``_LOCK`` across the `_load` it modified and
-    this write — rename, scope, revoke, register, rotate, rebind and `verify_token`'s
-    transitions alike — so no two read-modify-writes interleave and lose one of them."""
+    this write — rename, scope, revoke, register, rotate, rebind, a push binding change and
+    `verify_token`'s transitions alike — so no two read-modify-writes interleave and lose one of them."""
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
@@ -417,7 +485,8 @@ def set_device_scope(device_id: str, scope: object) -> dict | None:
 
 def revoke_device(device_id: str) -> bool:
     """Drop a device. Its token stops authenticating on the next request, and any stream it
-    holds open closes within one keepalive (``is_live``, ADR 0121 D5)."""
+    holds open closes within one keepalive (``is_live``, ADR 0121 D5). Its push binding
+    (ADR 0135 W2) is part of the row, so the same write deletes it."""
     with _LOCK:
         devices = _load()
         remaining = [d for d in devices if d.id != device_id]
@@ -426,6 +495,125 @@ def revoke_device(device_id: str) -> bool:
         _save(remaining)
         _drop_handoffs(device_id)
     logger.info("[devices] revoked %s", device_id)
+    return True
+
+
+# ── Push enrollment (ADR 0135 W2) ───────────────────────────────────────────────────────
+# A device's Web Push subscription is a field of its own row — there is no second store. So
+# the binding is keyed by the stable device id, an ordinary token rotation leaves it alone,
+# and every way a row is removed (unpair, reuse revocation) removes the binding in the same
+# atomic write. What a token rotation, a handoff and idle expiry do to a binding beyond
+# that is a later card (W2a3).
+
+
+class PushBindingConflict(Exception):
+    """The endpoint already belongs to another device's binding (see `set_push_binding`)."""
+
+
+def _holds_live_credential(device: Device, digest: str) -> bool:
+    """Is ``digest`` a credential ``device`` still treats as its own: the current token, or
+    the previous one while the new token has never been presented (a rotation or handoff
+    whose response the browser failed to store)? A previous token inside its grace is on its
+    way out — after a handoff it belongs to the origin the phone moved AWAY from, which must
+    not overwrite or delete the new origin's subscription. Same rule as `start_handoff`."""
+    if hmac.compare_digest(device.token_sha256, digest):
+        return True
+    return bool(
+        device.prev_token_sha256
+        and device.prev_retired_at is None
+        and hmac.compare_digest(device.prev_token_sha256, digest)
+    )
+
+
+def _push_owner(devices: list[Device], device_id: str | None, presented_token: str, now: float) -> Device | None:
+    """The row whose push binding ``presented_token`` may change, or None: it must be a live
+    ``device``-kind pairing (an agent hub has no browser to notify) and the token must be
+    its own. Caller holds ``_LOCK``."""
+    if not device_id or not presented_token:
+        return None
+    device = next((d for d in devices if d.id == device_id), None)
+    if device is None or device.kind != KIND_DEVICE or device.is_expired(now):
+        return None
+    return device if _holds_live_credential(device, _hash(presented_token)) else None
+
+
+def push_status(device_id: str | None) -> dict | None:
+    """The safe view of ``device_id``'s push binding (`PushBinding.public`), or None when it
+    has none (or there is no such device). Never the endpoint or the client keys."""
+    device = get_device(device_id)
+    return device.push.public() if device is not None and device.push is not None else None
+
+
+def push_bindings_exist() -> bool:
+    """Does any device hold a push binding? What ``security.push_keys`` needs to know before
+    it would mint a keyring: with bindings present, a missing keyring is a LOST one."""
+    return any(d.push is not None for d in _load())
+
+
+def set_push_binding(
+    device_id: str | None, presented_token: str, *, endpoint: str, p256dh: str, auth: str, vapid_version: int
+) -> dict | None:
+    """Store (or replace) the push binding of the caller's OWN device; returns its safe
+    status, or None when the caller may not: no such device, an agent pairing, an expired
+    device, or a token the device no longer treats as its own (`_holds_live_credential`).
+
+    The device is named by ``device_id`` AND proved by ``presented_token`` — there is no way
+    to address another device's binding. The caller has already validated the inputs:
+    ``endpoint`` through ``security.push_keys.validate_push_endpoint`` (it resolves DNS, so
+    it must not run under this lock), the keys through ``validate_subscription_keys`` and
+    ``vapid_version`` through ``enrollable_version``.
+
+    Storing the subscription the device already holds is a renewal: same generation, a new
+    ``renewed_at``. Anything else replaces it under the next generation. ``created_at`` is
+    kept while the device stays enrolled. Raises `PushBindingConflict` when another device
+    already holds ``endpoint`` — it is never silently moved between devices.
+    """
+    now = _now()
+    with _LOCK:
+        devices = _load()
+        device = _push_owner(devices, device_id, presented_token, now)
+        if device is None:
+            return None
+        if any(d.id != device.id and d.push is not None and d.push.endpoint == endpoint for d in devices):
+            raise PushBindingConflict()
+        old = device.push
+        same = (
+            old is not None
+            and old.endpoint == endpoint
+            and old.p256dh == p256dh
+            and old.auth == auth
+            and old.vapid_version == vapid_version
+        )
+        if not same:
+            device.push_generation = max(device.push_generation, old.generation if old else 0) + 1
+        device.push = PushBinding(
+            endpoint=endpoint,
+            p256dh=p256dh,
+            auth=auth,
+            vapid_version=vapid_version,
+            generation=device.push_generation,
+            created_at=old.created_at if old is not None else now,
+            renewed_at=now,
+        )
+        _save(devices)
+        status = device.push.public()
+    logger.info("[devices] %s %s its push binding", device.id, "renewed" if same else "set")
+    return status
+
+
+def clear_push_binding(device_id: str | None, presented_token: str) -> bool | None:
+    """Delete the push binding of the caller's OWN device. True when one was removed, False
+    when it had none, None when the caller may not (the same rule as `set_push_binding`)."""
+    with _LOCK:
+        devices = _load()
+        device = _push_owner(devices, device_id, presented_token, _now())
+        if device is None:
+            return None
+        if device.push is None:
+            return False
+        device.push = None
+        _save(devices)
+    logger.info("[devices] %s cleared its push binding", device_id)
     return True
 
 
