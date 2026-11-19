@@ -21,6 +21,7 @@ import {
 } from "../lib/deviceReach";
 import { DeviceList, MAX_DEVICE_NAME } from "./DeviceList";
 import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
+import { PushToggle } from "./PushToggle";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
@@ -864,6 +865,9 @@ export function DevicesPanel() {
           </div>
         </section>
       )}
+
+      {/* This device's own closed-console notifications (ADR 0135 W2e, first control). */}
+      <PushToggle />
 
       {/* The paired-devices list — rename, "This device", revoke (DeviceList.tsx). */}
       <DeviceList devices={devices} loading={loading} onChanged={refresh} callerLimited={limited} callerDeviceId={callerDeviceId} />
