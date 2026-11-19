@@ -229,9 +229,15 @@ class PushTransport:
                     outcome = "retries_exhausted"
                 else:
                     outcome = result.error or ("service_retry" if result.status == "retry" else "rejected")
-                await asyncio.to_thread(
-                    devices.record_push_result, device.id, row["generation"], outcome, self.clock(),
-                )
+                try:
+                    await asyncio.to_thread(
+                        devices.record_push_result, device.id, row["generation"], outcome, self.clock(),
+                    )
+                except Exception:
+                    # Status is best-effort: a registry failure must not strand a
+                    # completed send inflight or prevent its scheduled retry.
+                    # Omit exception text, which could contain binding secrets.
+                    logger.warning("[push] delivery status could not be persisted")
             with self._db() as db:
                 db.execute(f"UPDATE attempts SET state = ?, next_at = ? WHERE {where}", (state, next_at, *key))
 

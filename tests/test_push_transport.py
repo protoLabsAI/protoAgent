@@ -305,6 +305,41 @@ async def test_delivery_status_survives_failure_then_acceptance(setup, monkeypat
     assert renewed == {**accepted, "renewed_at": 1100}  # same generation retains history
 
 
+@pytest.mark.parametrize("operation", ["_load", "_save"])
+@pytest.mark.parametrize("status, state", [("accepted", "accepted"), ("retry", "pending"), ("failed", "failed")])
+async def test_status_storage_failure_preserves_delivery_progress(setup, monkeypatch, caplog, operation, status, state):
+    now, provider, transport, enroll = setup
+    device_id, _ = enroll()
+    sender = transport()
+    private = "private registry error with endpoint and client keys"
+
+    def unavailable(*args):
+        raise OSError(private)
+
+    with monkeypatch.context() as patch:
+        async def send(binding, payload):
+            # Fail only after the pre-send device read and the provider result.
+            patch.setattr(devices, operation, unavailable)
+            return PushResult(status)
+
+        provider.hook = send
+        await sender.deliver(notice())
+
+    with sqlite3.connect(sender.path) as db:
+        assert db.execute("SELECT state, attempts, next_at FROM attempts").fetchone() == (
+            state, 1, 1030 if status == "retry" else 1000,
+        )
+    assert devices.push_status(device_id)["last_attempt_at"] is None
+    assert "delivery status could not be persisted" in caplog.text
+    assert private not in caplog.text
+    provider.hook = None
+    now[0] = 1030
+    await transport().deliver(notice())
+    assert len(provider.calls) == (2 if status == "retry" else 1)
+    if status == "retry":
+        assert devices.push_status(device_id)["last_accepted_at"] == 1030
+
+
 async def test_accepted_delivery_is_visible_in_device_route(setup, monkeypatch):
     from fastapi import FastAPI
     from a2a_impl import auth

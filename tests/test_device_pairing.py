@@ -934,6 +934,8 @@ def test_device_list_reports_only_safe_push_status(client, devices, clock, endpo
     assert row["push"] == {
         "vapid_version": 1, "generation": 2,
         "created_at": clock["t"], "renewed_at": clock["t"], "provider": provider,
+        "last_attempt_at": None, "last_accepted_at": None,
+        "last_error": None, "last_error_at": None,
     }
     assert row["push_renew"] is None
     try:
