@@ -161,3 +161,68 @@ async def test_a_stale_read_runs_the_supervisors_sweep_and_a_fresh_one_does_not(
     monkeypatch.setattr(supervisor, "_last_sweep", supervisor.time.monotonic() - 16)
     await _check(member="ws-1")
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_health_read_is_not_met_and_can_recover(monkeypatch):
+    def fail(threshold, timeout):
+        raise OSError("unavailable")
+
+    monkeypatch.setattr(supervisor, "_sweep_once", fail)
+    assert (await _check(member="ws-1")).met is False
+    monkeypatch.setattr(supervisor, "_sweep_once", lambda threshold, timeout: [])
+    _health(monkeypatch, _rec("down"))
+    assert (await _check(member="ws-1")).met is True
+
+
+def test_failed_background_sweep_retains_watch_discovered_changes(monkeypatch):
+    change = {"id": "ws-1", "previous": "healthy", "state": "down"}
+    monkeypatch.setattr(supervisor, "_sweep_once", lambda threshold, timeout: [change])
+    _health(monkeypatch, _rec("down"))
+    supervisor.fresh_member_health(15, 3)
+
+    def fail(threshold, timeout):
+        raise OSError("unavailable")
+
+    monkeypatch.setattr(supervisor, "_sweep_once", fail)
+    with pytest.raises(OSError):
+        supervisor.health_sweep(3)
+    monkeypatch.setattr(supervisor, "_sweep_once", lambda threshold, timeout: [])
+    assert supervisor.health_sweep(3) == [change]
+    assert supervisor.health_sweep(3) == []
+
+
+def test_background_sweep_waits_for_watch_sweep_and_claims_its_changes(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    started, release, background_started, overlapping = Event(), Event(), Event(), Event()
+    change = {"id": "ws-1", "previous": "healthy", "state": "down"}
+
+    def sweep(threshold, timeout):
+        if not started.is_set():
+            started.set()
+            assert release.wait(5)
+            return [change]
+        if not release.is_set():
+            overlapping.set()
+        return []
+
+    def background():
+        background_started.set()
+        return supervisor.health_sweep(3)
+
+    monkeypatch.setattr(supervisor, "_sweep_once", sweep)
+    _health(monkeypatch, _rec("down"))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        watch = pool.submit(supervisor.fresh_member_health, 15, 3)
+        try:
+            assert started.wait(5)
+            loop = pool.submit(background)
+            assert background_started.wait(5)
+            assert not overlapping.wait(0.1)
+        finally:
+            release.set()
+        assert watch.result(timeout=5)[0]["state"] == "down"
+        assert loop.result(timeout=5) == [change]
+    assert supervisor.health_sweep(3) == []

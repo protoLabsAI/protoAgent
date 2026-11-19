@@ -73,7 +73,10 @@ TURN_PROJECTION_KEY = "protoagent_turn_projection"
 # VERIFIED trust tier is the federation peer gets no prior-session digest and does not
 # have these two tools bound — both read the operator's OWN prior conversations, which
 # the federation principal's memory delivery is scoped away from.
-_FEDERATION_DENIED_TOOLS = frozenset({"recall_session", "session_search"})
+# ``fleet_status`` / ``fleet_pending`` (ADR 0135 D8, #5534) ride the same fence: they report
+# the operator's own fleet and what is waiting on the operator, which a federation peer or an
+# unclassified remote caller has no business reading.
+_FEDERATION_DENIED_TOOLS = frozenset({"recall_session", "session_search", "fleet_status", "fleet_pending"})
 
 
 def _restrict_prior_session_memory() -> bool:
@@ -744,11 +747,12 @@ class KnowledgeMiddleware(AgentMiddleware):
 
     @staticmethod
     def _scrub_federation_tools(request):
-        """Drop ``recall_session``/``session_search`` from a federation peer's model
-        request (ADR 0066 / ADR 0131).
+        """Drop ``recall_session``/``session_search`` and the fleet read tools
+        (``fleet_status``/``fleet_pending``) from a federation peer's model request
+        (ADR 0066 / ADR 0131 / ADR 0135 D8).
 
-        Both tools read the operator's OWN prior conversations, so a federation-token
-        turn must not have them bound. Decided per turn from the server-verified tier
+        The session tools read the operator's OWN prior conversations and the fleet tools
+        the operator's own fleet, so a federation-token turn must not have them bound. Decided per turn from the server-verified tier
         (:func:`_restrict_prior_session_memory`), never by mutating this shared-across-turns
         instance, and a no-op for every other caller and whenever neither tool is bound
         (so a provider never sees a history with tool calls but an emptied ``tools``)."""
@@ -760,7 +764,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         kept = [t for t in tools if _bound_tool_name(t) not in _FEDERATION_DENIED_TOOLS]
         if len(kept) == len(tools):
             return request
-        log.debug("[knowledge] federation turn — unbinding %d session-recall tool(s)", len(tools) - len(kept))
+        log.debug("[knowledge] federation turn — unbinding %d operator-only tool(s)", len(tools) - len(kept))
         return request.override(tools=kept)
 
     def wrap_model_call(self, request, handler):

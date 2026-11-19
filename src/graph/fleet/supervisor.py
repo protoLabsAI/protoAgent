@@ -1208,7 +1208,7 @@ def _record_remote_version(rid: str, version: str) -> None:
 # the changes it found for the next ``health_sweep`` caller.
 _health: dict[str, dict] = {}
 _health_lock = threading.Lock()
-_sweep_lock = threading.Lock()  # one on-demand sweep at a time
+_sweep_lock = threading.Lock()  # serialize background and on-demand sweeps
 _last_sweep: float | None = None  # monotonic time the last pass finished
 _UNCLAIMED_KEEP = 200
 _unclaimed_changes: list[dict] = []  # found by an on-demand sweep; guarded by _health_lock
@@ -1267,10 +1267,14 @@ def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
 
     Blocking: one probe per member, each bounded by ``timeout``. Call it off the event loop.
     """
-    with _health_lock:
-        earlier = list(_unclaimed_changes)
-        _unclaimed_changes.clear()
-    return [*earlier, *_sweep_once(failure_threshold, timeout)]
+    with _sweep_lock:
+        # Keep draining and probing in the same critical section as on-demand reads:
+        # otherwise concurrent passes can apply stale probe results out of order.
+        changes = _sweep_once(failure_threshold, timeout)
+        with _health_lock:
+            earlier = list(_unclaimed_changes)
+            _unclaimed_changes.clear()
+        return [*earlier, *changes]
 
 
 def _sweep_once(failure_threshold: int, timeout: float) -> list[dict]:

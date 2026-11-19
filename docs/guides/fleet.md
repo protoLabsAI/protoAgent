@@ -409,6 +409,28 @@ gate above remains the sole authority on whether the tool is bound at all. With 
 the tool is absent from every surface — the local model's toolset, the resolver, the
 `/api/mcp/exposed` discovery route, and the ACP sidecar — regardless of the selected profile.
 
+### Fleet-wide reads for the hub agent
+
+*(ADR 0135 D8 · #5534.)* The same `tools.fleet_diagnostics.enabled` gate also binds two
+argument-free, read-only tools on the **hub** (they are not bound inside a workspace member):
+
+- **`fleet_status`** — one row per roster member: `running`, `healthy` / `health` and
+  `health_changed_at` (the supervisor's own health record, refreshed on each status read;
+  `unknown` when it has none or the refresh fails),
+  `version`, `model`, and counts of pending decisions and waiting tasks.
+- **`fleet_pending`** — each member's pending decisions and its tasks in the `waiting` state.
+
+Status uses the supervisor's existing health sweep off the event loop, with one failed probe
+reporting unhealthy for that observation. The timestamp stays unchanged until the health state
+changes. This read does not restart members or send alerts. The host itself and intentionally
+stopped members have no supervisor health record.
+
+Members are listed by their unique `id`, so two members with the same display name stay two
+rows. A member that cannot be read is reported (`reachable: false` / `status: "unreachable"`)
+and the call still answers for the rest; a count that could not be read is `null`, never `0`.
+Member text is redacted and bounded like `fleet_diagnostics` output (`tool_truncated` marks a
+trim). Neither tool is bound for a federation peer or an unclassified remote caller.
+
 ## See also
 
 - ADRs: [0040 bundles](../adr/0040-plugin-bundles.md) ·

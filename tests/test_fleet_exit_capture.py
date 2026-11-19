@@ -22,6 +22,12 @@ from infra.proc import kill_tree
 
 pytestmark = pytest.mark.platform_sensitive
 
+
+@pytest.fixture(autouse=True)
+def isolate_health_sweeps(monkeypatch):
+    monkeypatch.setattr(supervisor, "_last_sweep", None)
+    monkeypatch.setattr(supervisor, "_unclaimed_changes", [])
+
 # A stand-in member: binds its port, answers /healthz 200 (503 while the flag file
 # exists), and writes one line to its log.
 _MEMBER = """
