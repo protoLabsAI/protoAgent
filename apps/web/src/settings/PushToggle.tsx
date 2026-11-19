@@ -3,12 +3,16 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Bell, BellOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { isDesktopWebview } from "../lib/api/desktop";
 import { deviceToken } from "../lib/credentials";
 import { enrollPush, pushState, unenrollPush, type PushState } from "../lib/push";
 
 /** Why this console can't be asked yet, in the operator's words — or null when it can. */
 export function pushBlocker(): string | null {
   if (typeof window === "undefined") return null;
+  // The desktop app is not a paired device and needs no enrollment: its shell shows every
+  // notice natively while it runs (ADR 0135 W2d). Asking it to pair would be wrong advice.
+  if (isDesktopWebview()) return DESKTOP_APP;
   if (!deviceToken()) return "Notifications are set up per paired phone or browser. Pair this one with Add a device first.";
   if (window.isSecureContext !== true) return "Notifications need this console's https address. Open it there, then turn them on.";
   const apple = /iPhone|iPad|iPod/.test(navigator.userAgent ?? "") ||
@@ -21,6 +25,7 @@ export function pushBlocker(): string | null {
   return null;
 }
 
+const DESKTOP_APP = "The desktop app shows notifications itself whenever it's running, so there's nothing to turn on here. To get them on a phone or in a browser, open the console there and turn them on.";
 const UNSUPPORTED = "This browser can't receive notifications while the console is closed.";
 const UNKNOWN = "Couldn't check whether notifications are on for this device. The agent didn't answer.";
 const DENIED = "Notifications are blocked for this console. Allow them in your browser or system settings, then come back here.";
