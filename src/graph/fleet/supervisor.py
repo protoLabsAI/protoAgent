@@ -201,8 +201,14 @@ def _rotate_log(log_path: Path, *, max_bytes: int = LOG_ROTATE_BYTES, keep: int 
 
 
 def is_running(ident: str) -> bool:
-    rec = _load_state().get(_resolve_key(ident))
-    return bool(rec) and _alive(rec.get("pid"))
+    with _state_lock():
+        key = _resolve_key(ident)
+        rec = _load_state().get(key)
+        if rec and _alive(rec.get("pid")):
+            # Autostart skips live survivors here without calling start().
+            _seen_alive.add((key, rec.get("pid")))
+            return True
+        return False
 
 
 def _port_listening(port: int | None, timeout: float = 0.25) -> bool:
@@ -666,6 +672,8 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
         state = _load_state()
         rec = state.get(wid)
         if rec and _alive(rec.get("pid")):
+            # Adopt survivors even when no full-state reader has run yet.
+            _seen_alive.add((wid, rec.get("pid")))
             return {**rec, "name": name, "running": True, "already": True}
         # A dead record is about to be replaced: record that exit first (before the log
         # is rotated below), so a restart doesn't erase the evidence.
@@ -2691,21 +2699,25 @@ def version_skew_warning() -> str | None:
         names = {ws["id"]: ws["name"] for ws in manager.list_workspaces()}
         stale: list[str] = []
         dead = False
+        seen_alive = set()
         for wid, rec in state.items():
             if not _alive(rec.get("pid")):
                 dead = True
                 continue
+            seen_alive.add((wid, rec.get("pid")))
             v = str(rec.get("version", "") or "")
             if v != current:
                 label = names.get(wid, wid)
                 stale.append(f"{label} (v{v})" if v else f"{label} (version unknown)")
-        if dead:
-            # This scan read fleet.json unlocked; prune what it skipped through the one
-            # helper, on a fresh read under the lock. A busy lock leaves it for the next
-            # reader and never costs the warning.
+        if dead or seen_alive:
+            # Adopt the live snapshot even if nobody was dead. Preserve that observation
+            # if a survivor dies before the fresh, locked prune reads its record.
+            # A busy lock leaves pruning for the next reader and never costs the warning.
             try:
                 with _state_lock():
-                    _prune_dead_records(_load_state(), detected_by="version_skew")
+                    _seen_alive.update(seen_alive)
+                    if dead:
+                        _prune_dead_records(_load_state(), detected_by="version_skew")
             except Exception:  # noqa: BLE001
                 log.debug("[fleet] version-skew scan could not prune dead records", exc_info=True)
         if not stale:

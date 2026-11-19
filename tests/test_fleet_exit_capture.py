@@ -373,12 +373,23 @@ def test_previous_hub_runs_dead_member_is_not_an_exit(member, monkeypatch, caplo
     assert [(x["pid"], x["detected_by"]) for x in supervisor.collect_exits()] == [(pids[-1], "health_sweep")]
 
 
-def test_member_that_outlived_the_previous_hub_is_still_watched(member, monkeypatch):
+@pytest.mark.parametrize("observer", ["status", "start", "autostart", "is_running", "version_skew"])
+def test_member_that_outlived_the_previous_hub_is_still_watched(member, monkeypatch, observer):
     # PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT: the new hub adopts the live member, so its
     # later death is this run's exit even though it started before this hub did.
     ws, _flag, pids = member
     _relaunch_hub(monkeypatch)
-    assert next(s for s in supervisor.status() if s["id"] == ws["id"])["running"]
+    if observer == "status":
+        assert next(s for s in supervisor.status() if s["id"] == ws["id"])["running"]
+    elif observer == "start":
+        assert supervisor.start("m")["already"]
+    elif observer == "autostart":
+        monkeypatch.setattr(supervisor, "autostart_members", lambda: ["m"])
+        assert supervisor.start_autostart_members() == []
+    elif observer == "is_running":
+        assert supervisor.is_running("m")
+    else:
+        supervisor.version_skew_warning()
     _kill(pids[0])
     supervisor.version_skew_warning()
     assert [(x["pid"], x["detected_by"]) for x in supervisor.collect_exits()] == [(pids[0], "version_skew")]
