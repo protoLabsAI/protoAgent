@@ -23,6 +23,7 @@ import importlib
 import json
 import os
 import socket
+from urllib.parse import urlsplit
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -133,7 +134,7 @@ def _subscription(api, token, endpoint=ENDPOINT, keys=None) -> dict:
 
 def _assert_no_secrets(response, body: dict) -> None:
     text = response.text
-    for secret in (body["endpoint"], body["keys"]["p256dh"], body["keys"]["auth"]):
+    for secret in (body["endpoint"], urlsplit(body["endpoint"]).hostname, body["keys"]["p256dh"], body["keys"]["auth"]):
         assert secret not in text
     assert '"endpoint"' not in text and '"p256dh"' not in text and '"auth"' not in text and '"keys"' not in text
 
@@ -196,6 +197,7 @@ def test_a_device_stores_its_own_binding_on_its_own_row(devices, clock_free_now,
             "generation": 1,
             "created_at": clock_free_now.t,
             "renewed_at": clock_free_now.t,
+            "provider": "google",
         },
     }
     _assert_no_secrets(r, body)
@@ -228,6 +230,7 @@ def test_storing_the_same_subscription_again_renews_it(devices, clock_free_now, 
         "generation": 1,
         "created_at": enrolled,
         "renewed_at": enrolled + 3600,
+        "provider": "google",
     }
 
 
@@ -544,14 +547,14 @@ def test_no_device_listing_or_repr_carries_the_binding_secrets(devices, api):
     dev, token = _phone(devices)
     body = _subscription(api, token)
     api.put(URL, headers=_hdr(token), json=body)
-    secrets = (ENDPOINT, body["keys"]["p256dh"], body["keys"]["auth"])
+    secrets = (ENDPOINT, "fcm.googleapis.com", body["keys"]["p256dh"], body["keys"]["auth"])
     listing = api.get("/api/devices", headers=_hdr(_SECRET)).text
     me = api.get("/api/devices/self", headers=_hdr(token)).text
     device = devices.get_device(dev["id"])
     for secret in secrets:
         assert secret not in listing and secret not in me
         assert secret not in repr(device) and secret not in repr(device.push)
-    assert set(device.push.public()) == {"vapid_version", "generation", "created_at", "renewed_at"}
+    assert set(device.push.public()) == {"vapid_version", "generation", "created_at", "renewed_at", "provider"}
     assert set(devices.push_status(dev["id"])) == set(device.push.public())
 
 
