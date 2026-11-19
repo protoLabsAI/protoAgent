@@ -12,6 +12,7 @@ let root: Root;
 let node: HTMLDivElement;
 
 beforeEach(() => {
+  toast.mockClear();
   localStorage.clear();
   localStorage.setItem("protoagent.deviceToken", "own-token");
   vi.stubGlobal("isSecureContext", true);
@@ -121,4 +122,29 @@ it("re-reads the state when turning off fails", async () => {
   await act(async () => button()!.click());
   expect(toast).toHaveBeenCalledWith(expect.objectContaining({ tone: "error" }));
   expect(button()?.textContent).toContain("Turn on notifications");
+});
+
+it("the permission prompt closing (a focus event) can't discard the enrollment in flight", async () => {
+  const read = vi.spyOn(push, "pushState").mockResolvedValue("not enrolled");
+  let granted!: (state: push.PushState) => void;
+  vi.spyOn(push, "enrollPush").mockReturnValue(new Promise((resolve) => { granted = resolve; }));
+  await render();
+  await act(async () => button()!.click());
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(read).toHaveBeenCalledOnce(); // no read started mid-action
+  await act(async () => granted("enrolled"));
+  expect(note()).toContain("On for this device");
+  expect(toast).toHaveBeenCalledWith(expect.objectContaining({ tone: "success" }));
+});
+
+it("a read that started before the tap can't overwrite what the tap decided", async () => {
+  let late!: (state: push.PushState) => void;
+  vi.spyOn(push, "pushState").mockResolvedValueOnce("not enrolled")
+    .mockReturnValueOnce(new Promise((resolve) => { late = resolve; }));
+  vi.spyOn(push, "enrollPush").mockResolvedValue("enrolled");
+  await render();
+  await act(async () => { window.dispatchEvent(new Event("focus")); }); // slow read begins
+  await act(async () => button()!.click());
+  await act(async () => late("not enrolled"));
+  expect(note()).toContain("On for this device");
 });

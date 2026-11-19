@@ -35,11 +35,15 @@ export function PushToggle() {
   const [state, setState] = useState<PushState | "unknown" | null>(null);
   const [busy, setBusy] = useState(false);
   const blocker = pushBlocker();
-  // Every read and every action takes a ticket; only the newest may set the state, so a
-  // read that started before a tap can't overwrite what the tap decided.
+  // An action always wins over a read. Starting one bumps the ticket, which retires any
+  // read already in flight, and no read starts while one runs: the permission prompt
+  // closing fires `focus` in the middle of enrolling, and that read must not discard it.
   const ticket = useRef(0);
+  const acting = useRef(false);
+  const act = (running: boolean) => { acting.current = running; setBusy(running); if (running) ticket.current++; };
 
   const refresh = useCallback(() => {
+    if (acting.current) return;
     const mine = ++ticket.current;
     pushState().then(
       (s) => { if (ticket.current === mine) setState(s); },
@@ -61,28 +65,26 @@ export function PushToggle() {
   }, [refresh]);
 
   const turnOn = () => {
-    setBusy(true);
-    const mine = ++ticket.current;
+    act(true);
     enrollPush().then(
       (next) => {
-        if (ticket.current !== mine) return;
         setState(next);
         if (next === "enrolled") toast({ tone: "success", title: "Notifications are on", message: "This device gets decisions and urgent notices, even with the console closed." });
       },
       () => toast({ tone: "error", title: "Couldn't turn on notifications", message: "The agent didn't answer. Check the connection and try again." }),
-    ).finally(() => setBusy(false));
+    ).finally(() => act(false));
   };
   const turnOff = () => {
-    setBusy(true);
-    const mine = ++ticket.current;
+    act(true);
     unenrollPush().then(
-      () => { if (ticket.current === mine) setState("not enrolled"); },
+      () => { act(false); setState("not enrolled"); },
       () => {
+        act(false);
         toast({ tone: "error", title: "Couldn't turn off notifications", message: "The agent didn't answer. Check the connection and try again." });
         // The browser's own subscription may be gone even though the agent wasn't told.
-        if (ticket.current === mine) refresh();
+        refresh();
       },
-    ).finally(() => setBusy(false));
+    );
   };
 
   const on = state === "enrolled";
