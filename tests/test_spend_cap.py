@@ -175,30 +175,91 @@ async def test_agent_cannot_withdraw_instance_pause(cap):
 
 
 @pytest.mark.asyncio
-async def test_refused_scheduled_fire_is_canceled_not_a_job_failure(cap):
+@pytest.mark.parametrize("cron", [False, True])
+@pytest.mark.parametrize("reconcile", [False, True])
+async def test_refused_scheduled_fire_preserves_job_until_answer(cap, tmp_path, monkeypatch, cron, reconcile):
+    import httpx
     from a2a.server.agent_execution import RequestContext
     from a2a.server.context import ServerCallContext
     from a2a.server.events.event_queue import EventQueueLegacy
-    from a2a.types import Message, Part, Role, SendMessageRequest, TaskState
+    from a2a.types import Message, Part, Role, SendMessageRequest
+    from google.protobuf.json_format import MessageToDict
 
     from a2a_impl.executor import ProtoAgentExecutor
-    from scheduler.local import _a2a_turn_canceled, _a2a_turn_failure
 
     record(cap[1], tokens=100)
-    states = []
+    scheduler = LocalScheduler(agent_name="test", invoke_url="http://unused", api_key="", bearer_token="",
+                               db_dir=tmp_path / "scheduler")
+    due = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    job = scheduler.add_job("work", "* * * * *" if cron else due, max_fires=1 if cron else None,
+                            ttl="1s" if cron else None)
+    with scheduler._connect() as db:
+        db.execute("UPDATE jobs SET next_fire = ?, created_at = ? WHERE id = ?", (due, due, job.id))
+    messages, snapshots, ran = [], {}, []
+
+    async def stream_impl(message, session_id, **kwargs):
+        ran.append(session_id)
+        yield ("text", "ran")
+
+    monkeypatch.setattr(chat, "_chat_langgraph_stream_impl", stream_impl)
+    monkeypatch.setattr(chat, "_note_agent_active", lambda sid: None)
 
     class Queue(EventQueueLegacy):
         async def enqueue_event(self, event):
-            states.append((event.status.state, " ".join(p.text for p in event.status.message.parts)))
+            if hasattr(event, "status"):
+                snapshots["status"] = MessageToDict(event.status)
 
-    request = SendMessageRequest(message=Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="go")],
-                                                 metadata={"origin": "scheduler"}))
-    context = RequestContext(call_context=ServerCallContext(), request=request, task_id="t", context_id="job")
-    await ProtoAgentExecutor(chat._chat_langgraph_stream,
-                             server_fired_origin=turn_control.is_autonomous_origin).execute(context, Queue())
-    assert states[-1][0] == TaskState.TASK_STATE_CANCELED and "spend cap" in states[-1][1]
-    assert TaskState.TASK_STATE_FAILED not in [state for state, _ in states]
-    # What the scheduler reads back: no failure (no streak, no backoff), a canceled fire.
-    payload = {"result": {"task": {"id": "t", "status": {"state": TaskState.Name(states[-1][0])}}}}
-    assert _a2a_turn_failure(payload) == "" and _a2a_turn_canceled(payload)
-    assert len(cap[2].list(state="pending")) == 1
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, json, **kwargs):
+            if json["method"] == "GetTask":
+                payload = snapshots[json["params"]["id"]]
+            else:
+                wire = json["params"]["message"]
+                messages.append(wire["messageId"])
+                task_id = f"task-{len(messages)}"
+                request = SendMessageRequest(message=Message(
+                    message_id=wire["messageId"], role=Role.ROLE_USER, parts=[Part(text="go")],
+                    metadata=wire["metadata"]))
+                context = RequestContext(call_context=ServerCallContext(), request=request,
+                                         task_id=task_id, context_id=wire["contextId"])
+                await ProtoAgentExecutor(chat._chat_langgraph_stream,
+                                         server_fired_origin=turn_control.is_autonomous_origin).execute(context, Queue())
+                payload = {"result": {"task": {"id": task_id, "status": snapshots["status"]}}}
+                snapshots[task_id] = payload
+                if reconcile:
+                    payload = {"result": {"task": {"id": task_id, "status": {"state": "TASK_STATE_WORKING"}}}}
+            return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: Client())
+    if reconcile:
+        # An accepted task outlives the bounded wait; a later GetTask must apply
+        # the same refusal disposition as an immediate terminal response.
+        scheduler._fire_timeout_s = 0
+
+    async def tick():
+        await scheduler._tick()
+        await asyncio.gather(*scheduler._fire_tasks)
+        if reconcile:
+            await scheduler._reconcile_occurrences()
+
+    for _ in range(2):
+        await tick()
+        stored = scheduler.get_job(job.id)
+        assert stored is not None and stored.enabled and stored.next_fire == due
+        assert stored.fire_count == 0 and stored.consecutive_failures == 0
+        assert stored.last_error is None and stored.last_ok is None
+        scheduler._recover_missed_fires()  # A long pause must survive startup recovery.
+        assert scheduler.get_job(job.id) is not None
+    assert not ran and len(cap[2].list(state="pending")) == 1
+    assert len(set(messages)) == 2  # Do not replay a terminal refused task on retry.
+    decision = cap[2].list(state="pending")[0]
+    assert cap[3].post(f"/api/decisions/{decision.id}/answer", json={"option_id": "resume"}).status_code == 200
+    await tick()
+    assert len(ran) == 1
+    assert scheduler.get_job(job.id) is None  # Now the one-shot/max_fires is consumed.

@@ -129,6 +129,7 @@ def test_rolled_back_settlement_does_not_send_notice(notices):
         db.execute("UPDATE jobs SET consecutive_failures = ?", (FAILURE_NOTICE_AFTER - 1,))
     job = scheduler.get_job("daily")
     scheduler._claim_occurrence(job, advance_at=datetime.fromisoformat(job.next_fire))
+    scheduler._remember_task(job, "task")
     with sqlite3.connect(scheduler.path) as db:
         db.execute("""CREATE TRIGGER fail_settlement BEFORE UPDATE OF task_state ON occurrences
                       BEGIN SELECT RAISE(ABORT, 'settlement failed'); END""")

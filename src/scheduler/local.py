@@ -1633,7 +1633,10 @@ class LocalScheduler:
                 expected = _compute_next_fire(job.schedule, after=advance_at, tz=job.timezone)
                 db.execute("UPDATE jobs SET next_fire = ?, last_fire = ? WHERE id = ?",
                            (expected, advance_at.isoformat(), job.id))
-            message_id = old["message_id"] if old else str(uuid.uuid4())
+            # A refused task is terminal: a fresh message must re-enter admission,
+            # rather than replay that task through transport deduplication.
+            message_id = (old["message_id"] if old and old["task_state"] != "admission_refused"
+                          else str(uuid.uuid4()))
             db.execute(
                 "INSERT OR REPLACE INTO occurrences "
                 "(job_id, next_fire, message_id, state, created_at, expected_next, previous_error) "
@@ -1668,10 +1671,10 @@ class LocalScheduler:
             try:
                 db.execute("BEGIN IMMEDIATE")
                 claim = db.execute(
-                    "SELECT state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                    "SELECT state, task_state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                     (job.id, job.next_fire, job.created_at),
                 ).fetchone()
-                if claim and claim["state"] == "settled":
+                if claim and (claim["state"] == "settled" or claim["task_state"] == "admission_refused"):
                     return
                 if state == "running" and self._owns_occurrence(db, job):
                     # A turn that outlived the bounded fire wait has no outcome yet, and
@@ -1816,7 +1819,8 @@ class LocalScheduler:
                 # version alive past the recovery window (it would then run late).
                 "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND execution_hold IS NULL AND next_fire <= ? "
                 "AND NOT EXISTS (SELECT 1 FROM occurrences o WHERE o.job_id = jobs.id "
-                f"AND o.created_at = jobs.created_at AND o.state IN ({_UNRESOLVED_STATES_SQL}))",
+                f"AND o.created_at = jobs.created_at AND (o.state IN ({_UNRESOLVED_STATES_SQL}) "
+                "OR (o.state = 'retryable' AND o.task_state = 'admission_refused' AND o.next_fire = jobs.next_fire)))",
                 (self.agent_name, cutoff_recent.isoformat()),
             ).fetchall()
             for row in rows:
@@ -1996,6 +2000,9 @@ class LocalScheduler:
                       f"task {task_id} missing or unavailable; not automatically resent")
         failure = _a2a_turn_failure(payload) if terminal else ""
         canceled = state in {"canceled", "cancelled"}
+        refused = terminal and canceled and (
+            ((task.get("status") or {}).get("message") or {}).get("metadata", {}).get("admission_refused") is True
+        )
         notice_due = False
         settled_action = ""  # the job ROW was removed — published only after the commit below
         # Shared per-file write lock (#5122) around the whole transaction; the inner
@@ -2004,13 +2011,14 @@ class LocalScheduler:
         with self._lock, closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             claim = db.execute(
-                "SELECT state, previous_error FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                "SELECT state, task_id, previous_error FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                 (job.id, job.next_fire, job.created_at),
             ).fetchone()
             # A restart-disposed occurrence (ADR 0129 D7) is the operator's to resolve:
             # a racing reconciliation pass that read the claim list before the
             # disposition must not settle it into ordinary terminal bookkeeping.
-            if claim is None or claim["state"] in ("settled", *_D7_DISPOSED_STATES):
+            if (claim is None or claim["state"] in ("settled", "retryable", *_D7_DISPOSED_STATES)
+                    or claim["task_id"] != task_id):
                 return True
             # A 'running' occurrence is already known to be fine — the turn simply
             # outlived the bounded fire wait. While GetTask keeps answering with a
@@ -2024,7 +2032,12 @@ class LocalScheduler:
                     db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (claim["previous_error"], job.id))
                 else:
                     notice_due = self._record_fire_outcome(job, failure=failure, db=db)
-                if is_cron(job.schedule):
+                if refused:
+                    # Undo claim-time advancement; the same slot is still owed. No
+                    # outcome, fire count, max_fires or TTL is consumed by admission.
+                    db.execute("UPDATE jobs SET next_fire = ?, last_fire = ? WHERE id = ?",
+                               (job.next_fire, job.last_fire, job.id))
+                elif is_cron(job.schedule):
                     if self._settle_cron_expiry(job, db=db):
                         settled_action = "expired"
                 else:
@@ -2035,8 +2048,8 @@ class LocalScheduler:
             db.execute(
                 "UPDATE occurrences SET state = ?, task_state = ?, diagnostic = ? "
                 "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                ("settled" if terminal else ("running" if still_running else "unknown"),
-                 state if valid else "missing",
+                ("retryable" if refused else "settled" if terminal else ("running" if still_running else "unknown"),
+                 "admission_refused" if refused else state if valid else "missing",
                  (failure or None) if terminal else diagnostic, job.id, job.next_fire, job.created_at),
             )
         if notice_due:
@@ -2629,6 +2642,16 @@ class LocalScheduler:
                                 self._fire_timeout_s,
                                 task_id,
                             )
+                            return None
+                        # Settlement owns retry disposition too; the outer legacy
+                        # bookkeeping must not consume a refused occurrence.
+                        with closing(self._connect()) as db:
+                            claim = db.execute(
+                                "SELECT state FROM occurrences WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                                (job.id, job.next_fire, job.created_at),
+                            ).fetchone()
+                        if claim and claim["state"] == "retryable":
+                            dispatch_state = "retryable"
                             return None
                         dispatch_state = "settled"
                         return True

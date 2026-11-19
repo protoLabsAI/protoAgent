@@ -1662,15 +1662,14 @@ class ProtoAgentExecutor(AgentExecutor):
                     return
 
                 elif event_type == "refused":
-                    # An admission refusal (ADR 0135 D12 spend cap): the turn never ran.
-                    # CANCELED, not FAILED — a failed task counts toward a scheduled job's
-                    # failure streak and backs it off, but a paused instance is not a
-                    # broken job; the scheduler records no outcome for a canceled fire.
+                    # Persist the refusal on the status message so GetTask replay can
+                    # distinguish a turn that never ran from an operator cancellation.
                     if _private():
                         _discard_private_buffers()
-                        await updater.cancel()
-                    else:
-                        await updater.cancel(message=updater.new_agent_message([_text_part(str(payload))]))
+                    await updater.cancel(message=updater.new_agent_message(
+                        [] if _private() else [_text_part(str(payload))],
+                        metadata={"admission_refused": True},
+                    ))
                     _notify_terminal(_outcome("canceled", accumulated))
                     return
 
