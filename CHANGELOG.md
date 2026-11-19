@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.252.0] - 2026-11-19
+
+### Added
+- **Dismiss stale fleet items from operator chat (#5606).** The hub can cancel a member’s pending decision or close a waiting task as dismissed through existing operator routes, with a required reason and an audit entry for every attempt. Task dismissal requires a waiting state, checked again atomically when closing so resumed work is preserved. Conditional closes notify the member only after the close succeeds, avoiding false dismissal notices when work resumes. Unattended and subagent turns are refused. Refs #5602.
+
+- **Turn on notifications for a paired phone or browser from Settings → Devices (#5608).** A new "Notifications on this device" row asks for permission from the tap and enrolls the device for decisions and urgent notices with the console closed, and turns them off again. It says what to do when the console isn't paired, isn't on its https address, is blocked, or is an iPhone/iPad browser tab that must be added to the Home Screen first. Refs #5539.
+
 ## [0.251.0] - 2026-11-19
 
 ### Added
