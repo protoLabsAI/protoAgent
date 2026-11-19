@@ -25,26 +25,46 @@ import inspect
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Protocol, runtime_checkable
+from typing import Awaitable, Callable, Literal, Protocol, runtime_checkable
 
 log = logging.getLogger("protoagent.plugins.chat_surface")
 
+NoticeKind = Literal["notify", "question", "review"]
+NoticeImportance = Literal["low", "normal", "high"]
+
+
+@dataclass(frozen=True)
+class ChatNotice:
+    """Owner-only proactive output; importance is chosen by the raising code path."""
+
+    kind: NoticeKind
+    importance: NoticeImportance
+    text: str
+    link: str
+
+
 # Only live, configured surfaces participate; stop/reload removes their dispatcher.
-_notifiers: dict[object, Callable[[str, str], None]] = {}
+_notifiers: dict[object, Callable[[ChatNotice], None]] = {}
 _notify_lock = threading.Lock()
 
 
-def notify_chat_surfaces(text: str, link: str) -> None:
+def notify_chat_surfaces(
+    text: str, link: str, *, kind: NoticeKind = "notify", importance: NoticeImportance = "normal"
+) -> None:
     """Queue optional adapter notifications without waiting for network delivery.
 
     Safe from a store's worker thread as well as the server loop. An adapter with
-    no ``notify(text, link)`` hook does nothing by default.
+    no ``notify`` hook does nothing by default. Calling server code fixes importance
+    for its notice type; never expose it as a model-selected tool argument.
+    Adapters deliver only to configured owner destinations, never inbound chats.
+    The two-argument calling form remains supported for existing plugins.
     """
+    notice = ChatNotice(kind=kind, importance=importance, text=text, link=link)
     with _notify_lock:
         dispatchers = list(_notifiers.values())
     for dispatch in dispatchers:
         try:
-            dispatch(text, link)
+            dispatch(notice)
         except Exception:  # noqa: BLE001 — one stopped loop cannot block another surface
             log.exception("Could not queue chat surface notification")
 
@@ -80,9 +100,14 @@ class ChatAdapter(Protocol):
         cancelled. ``host`` exposes ``publish``/``subscribe`` for extras."""
 
     # Optional: ``outbound_tools(self) -> list`` to also give the agent send tools.
-    # Optional: ``async notify(self, text: str, link: str) -> None`` sends an
-    # unsolicited message to the adapter's configured destination(s). Omission
-    # is a no-op; synchronous hooks are also supported, in a worker thread.
+    # Optional: ``async notify(self, text, link, *, kind: NoticeKind,
+    # importance: NoticeImportance) -> None`` sends to the instance owner's
+    # explicitly configured private destination(s) ONLY. With no owner destination,
+    # do nothing; never fall back to a last-seen user, channel, or group, or treat
+    # the inbound admin allowlist as notification recipients. Destination resolution
+    # belongs to the transport adapter, which alone knows platform identities.
+    # Legacy ``notify(text, link)`` hooks retain the same owner-only contract.
+    # Omission is a no-op; synchronous hooks run in a worker thread.
 
 
 def _chunk(text: str, limit: int) -> list[str]:
@@ -117,25 +142,32 @@ def register_chat_surface(registry, adapter: ChatAdapter) -> None:
     notify_key = object()
     notifications: set[asyncio.Task] = set()
 
-    async def _notify(text: str, link: str) -> None:
+    async def _notify(notice: ChatNotice) -> None:
         try:
             hook = getattr(adapter, "notify", None)
             if not callable(hook):
                 return
+            metadata = {"kind": notice.kind, "importance": notice.importance}
+            try:
+                inspect.signature(hook).bind(notice.text, notice.link, **metadata)
+            except (TypeError, ValueError):
+                # Adapt before invoking: a TypeError *inside* a hook must never
+                # trigger a second send through the legacy shape.
+                metadata = {}
             if inspect.iscoroutinefunction(hook):
-                await hook(text, link)
+                await hook(notice.text, notice.link, **metadata)
             else:
-                result = await asyncio.to_thread(hook, text, link)
+                result = await asyncio.to_thread(hook, notice.text, notice.link, **metadata)
                 if inspect.isawaitable(result):
                     await result
         except Exception:  # noqa: BLE001 — notification failure never affects a decision
-            log.exception("[%s] decision notification failed", adapter.id)
+            log.exception("[%s] proactive notification failed", adapter.id)
 
-    def _queue_notify(text: str, link: str) -> None:
+    def _queue_notify(notice: ChatNotice) -> None:
         with _notify_lock:
             if notify_key not in _notifiers:
                 return
-        task = asyncio.create_task(_notify(text, link))
+        task = asyncio.create_task(_notify(notice))
         notifications.add(task)
         task.add_done_callback(notifications.discard)
 
@@ -171,7 +203,7 @@ def register_chat_surface(registry, adapter: ChatAdapter) -> None:
         if callable(getattr(adapter, "notify", None)):
             loop = asyncio.get_running_loop()
             with _notify_lock:
-                _notifiers[notify_key] = lambda text, link: loop.call_soon_threadsafe(_queue_notify, text, link)
+                _notifiers[notify_key] = lambda notice: loop.call_soon_threadsafe(_queue_notify, notice)
         return state["task"]
 
     async def _stop():

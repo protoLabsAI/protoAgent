@@ -228,7 +228,10 @@ def _notify_created(rec: Decision) -> None:
         if rec.expires_at:
             action = rec.default_action or "carry on without this step"
             lines.append(f"If nobody answers by {rec.expires_at}, {agent} will {action}")
-        notify_chat_surfaces("\n".join(lines), _console_link(rec.session_id))
+        lines.append("Open this decision in the console to answer.")
+        notify_chat_surfaces(
+            "\n".join(lines), _console_link(rec.session_id), kind="question", importance="high"
+        )
     except Exception:  # noqa: BLE001 — delivery must never fail a committed insert
         log.exception("Could not queue notification for decision %s", rec.id)
 

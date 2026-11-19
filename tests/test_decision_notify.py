@@ -80,7 +80,7 @@ async def test_creation_notifies_every_surface_once_with_content_and_link(wire, 
     await asyncio.sleep(0)
     expected = (
         "Ada needs a decision: Ship it?\n- Ship (suggested)\n- Wait\n"
-        "If nobody answers by 2099-01-01T12:00:00+00:00, Ada will wait for review",
+        "If nobody answers by 2099-01-01T12:00:00+00:00, Ada will wait for review\nOpen this decision in the console to answer.",
         "https://console.example/app/?session=slack%3Aroom+%26+topic",
     )
     assert all(adapter.messages == [expected] for adapter in adapters)
@@ -103,7 +103,7 @@ async def test_optional_hook_disabled_unconfigured_and_stopped_are_skipped(wire)
     assert DecisionStore(":memory:").create("session", "Continue?", ["Yes"]).pending
     await asyncio.wait_for(good.delivered.wait(), 2)
     assert all(not a.messages for a in (legacy, disabled, unconfigured, stopped))
-    assert good.messages == [("Agent needs a decision: Continue?\n- Yes", "https://console.example/app/?session=session")]
+    assert good.messages == [("Agent needs a decision: Continue?\n- Yes\nOpen this decision in the console to answer.", "https://console.example/app/?session=session")]
 
 
 @pytest.mark.asyncio
@@ -118,7 +118,7 @@ async def test_link_lookup_failure_still_notifies_with_empty_link(wire, monkeypa
     rec = DecisionStore(":memory:").create("session", "Continue?", ["Yes"])
     assert rec.pending  # a link lookup that raises never breaks the insert
     await asyncio.wait_for(adapter.delivered.wait(), 2)
-    assert adapter.messages == [("Agent needs a decision: Continue?\n- Yes", "")]
+    assert adapter.messages == [("Agent needs a decision: Continue?\n- Yes\nOpen this decision in the console to answer.", "")]
     assert "Could not build console link" in caplog.text
 
 
@@ -143,7 +143,7 @@ async def test_failure_is_logged_and_slow_surface_does_not_block_creation_or_pee
     await asyncio.wait_for(good.delivered.wait(), 2)
     release.set()
     await asyncio.sleep(0)
-    assert "[broken] decision notification failed" in caplog.text
+    assert "[broken] proactive notification failed" in caplog.text
     assert "transport unavailable" in caplog.text
     assert store.get(rec.id).pending
 
