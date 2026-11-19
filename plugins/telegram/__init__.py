@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from graph.plugins.chat_surface import InboundMessage, register_chat_surface
+from graph.plugins.chat_surface import InboundMessage, NoticeImportance, NoticeKind, register_chat_surface
 
 log = logging.getLogger("protoagent.plugins.telegram")
 
@@ -24,6 +24,29 @@ class TelegramAdapter:
 
     id = "telegram"
     chunk_limit = 4096  # Telegram's per-message character cap
+
+    def __init__(self):
+        self._connection = None
+
+    async def notify(self, text: str, link: str, *, kind: NoticeKind, importance: NoticeImportance) -> None:
+        """Deliver proactive notices only to the explicitly configured private owner chat."""
+        if self._connection is None:
+            return
+        client, token, owner_chat_id = self._connection
+        # Telegram private chat IDs are positive; groups/channels use negative IDs.
+        if not owner_chat_id.isascii() or not owner_chat_id.isdecimal() or not owner_chat_id.strip("0"):
+            return
+        try:
+            response = await client.post(
+                _API.format(token=token, method="sendMessage"),
+                json={"chat_id": owner_chat_id, "text": f"{text}\n\n{link}"},
+            )
+            response.raise_for_status()
+            if not response.json().get("ok"):
+                log.warning("[telegram] proactive notification rejected by Telegram")
+        except Exception:  # noqa: BLE001 — delivery must never affect the caller
+            # HTTP exception messages may contain the bot token in the request URL.
+            log.warning("[telegram] proactive notification failed")
 
     def _token(self, cfg: dict) -> str:
         return (cfg.get("bot_token") or "").strip()
@@ -60,40 +83,44 @@ class TelegramAdapter:
                     _API.format(token=token, method="sendMessage"), json={"chat_id": chat_id, "text": text}
                 )
 
-            log.info("[telegram] gateway started (long-poll)")
-            while True:
-                try:
-                    resp = await client.get(
-                        _API.format(token=token, method="getUpdates"),
-                        params={"offset": offset, "timeout": 30},
-                    )
-                    updates = (resp.json() or {}).get("result") or []
-                except asyncio.CancelledError:
-                    raise
-                except Exception:  # noqa: BLE001 — transient network/API error; back off + retry
-                    log.exception("[telegram] getUpdates failed; backing off 5s")
-                    await asyncio.sleep(5)
-                    continue
-                for upd in updates:
-                    offset = upd["update_id"] + 1
-                    message = upd.get("message") or {}
-                    text = message.get("text")
-                    if not text:
-                        continue
-                    chat_id = (message.get("chat") or {}).get("id")
-                    user_id = str((message.get("from") or {}).get("id") or "")
-
-                    async def reply(out: str, _cid=chat_id) -> None:
-                        await _send(_cid, out)
-
-                    await handle(
-                        InboundMessage(
-                            text=text,
-                            user_id=user_id,
-                            channel_id=str(chat_id),
-                            reply=reply,
+            self._connection = (client, token, str(cfg.get("owner_chat_id") or "").strip())
+            try:
+                log.info("[telegram] gateway started (long-poll)")
+                while True:
+                    try:
+                        resp = await client.get(
+                            _API.format(token=token, method="getUpdates"),
+                            params={"offset": offset, "timeout": 30},
                         )
-                    )
+                        updates = (resp.json() or {}).get("result") or []
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 — transient network/API error; back off + retry
+                        log.exception("[telegram] getUpdates failed; backing off 5s")
+                        await asyncio.sleep(5)
+                        continue
+                    for upd in updates:
+                        offset = upd["update_id"] + 1
+                        message = upd.get("message") or {}
+                        text = message.get("text")
+                        if not text:
+                            continue
+                        chat_id = (message.get("chat") or {}).get("id")
+                        user_id = str((message.get("from") or {}).get("id") or "")
+
+                        async def reply(out: str, _cid=chat_id) -> None:
+                            await _send(_cid, out)
+
+                        await handle(
+                            InboundMessage(
+                                text=text,
+                                user_id=user_id,
+                                channel_id=str(chat_id),
+                                reply=reply,
+                            )
+                        )
+            finally:
+                self._connection = None
 
 
 def register(registry) -> None:
