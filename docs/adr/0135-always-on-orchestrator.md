@@ -99,11 +99,12 @@ The phase numbers stay as issue groupings. The build order is by what each wave 
 
 The hub is switched on after wave A is in a release: the health loop and restart are enabled, its SOUL gains the standing duties, and the morning brief is created.
 
-## W2 — Push transport design (2026-11-18, proposed; Refs #5539)
+## W2 — Push transport design (accepted 2026-11-18; Refs #5539)
 
-This section builds on D9–D13 from PR #5563. **The transport design is proposed
-for Josh's read; it does not change D10's accepted status or claim push has
-shipped.** The console currently has no service worker or web manifest.
+This section builds on D9–D13 from PR #5563. **Josh accepted this transport
+design on 2026-11-18 ("push design and board the cards"). It does not claim push
+has shipped.** When this was written the console had no service worker or web
+manifest.
 
 ### One notice seam, every operator device
 
@@ -314,10 +315,11 @@ Hub downtime prevents new sends; only previously accepted, unexpired pushes may
 remain at providers. OS Focus, denied permission and offline devices remain
 honest delivery limits.
 
-### Proposed build cards — not boarded
+### Build cards
 
-**These are proposals only, not boarded. They need Josh's read of this design
-before scheduling.** "New" paths are proposed, not shipped APIs. Each card
+**W2a–W2d were boarded on 2026-11-18 after Josh's read. W2e is settings UI and
+waits for the design-system spec and its approval.** "New" paths are proposed,
+not shipped APIs. Each card
 includes focused tests and operator documentation. Wave B settings work also
 requires the design-system spec and preview approval already required above.
 
