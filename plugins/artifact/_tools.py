@@ -285,11 +285,9 @@ def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
     return None, f"No file at {raw!r}{looked}. Write the file first, then pass its path."
 
 
-def _open_link_expiry() -> str:
-    """How long an open link lives, in the model/operator-facing sentence — derived from
-    ``_media.TTL_S``, the TTL that actually stamps the link's ``exp`` (``_open_artifact_path``),
-    so the text can never drift from the real lifetime if that constant changes."""
-    minutes = max(1, _media.TTL_S // 60)
+def _open_link_expiry(ttl_s: int = _media.TTL_S) -> str:
+    """Report the same lifetime used to stamp the open link's ``exp``."""
+    minutes = max(1, ttl_s // 60)
     return f"This link expires in {minutes} minute{'s' if minutes != 1 else ''}."
 
 
@@ -298,12 +296,13 @@ def open_artifact(
     artifact_id: str,
     version: int = 0,
     state: Annotated[Any, InjectedState] = None,
+    expires_in_minutes: int = 30,
 ) -> str:
     """Open a saved artifact in a new browser tab of the attached console, and return a
     short-lived link to it you can hand the operator. A rendered artifact (html, react,
     markdown, mermaid, svg, vega-lite) opens as a full page; a file artifact opens its file.
     version=0 opens the latest version; positive versions are 1-based. Only artifacts in the
-    store, never arbitrary URLs.
+    store, never arbitrary URLs. expires_in_minutes defaults to 30 and is clamped to 1–1440.
     """
     from fastapi import HTTPException
     from infra.media import public_base_url
@@ -311,12 +310,18 @@ def open_artifact(
 
     art = _store._find(_store._read_store(), artifact_id)
     opener = _open_artifact_path if art is None or _store._is_file(art) else _open_page_path
+    minutes = max(1, min(1440, expires_in_minutes))
+    ttl_s = minutes * 60
     try:
-        path = opener(artifact_id, version)
+        path = opener(artifact_id, version, ttl_s=ttl_s)
     except HTTPException as exc:
         return f"Cannot open artifact: {exc.detail}."
     url = public_base_url() + path
-    expires = _open_link_expiry()
+    expires = _open_link_expiry(ttl_s)
+    if expires_in_minutes > minutes:
+        expires += f" Requested {expires_in_minutes} minutes; capped at {minutes}."
+    elif expires_in_minutes < minutes:
+        expires += f" Requested {expires_in_minutes} minutes; raised to {minutes}."
     session = _chat_session(state)
     if session and _renders_ui(state):
         # Carry the artifact `id` so the console's `onTopic("artifact.#")` chip handler refreshes
