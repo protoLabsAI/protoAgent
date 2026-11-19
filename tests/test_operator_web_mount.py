@@ -125,3 +125,39 @@ def test_mount_react_app_no_longer_serves_the_kit(tmp_path) -> None:
     client = TestClient(app)
     assert client.get("/app").status_code == 200
     assert client.get("/_ds/plugin-kit.css").status_code == 404  # NOT served by the SPA mount
+
+
+def test_install_assets_are_public_typed_and_never_cached(tmp_path) -> None:
+    # ADR 0135 W2: the shipped manifest and push worker, served as non-secret static files.
+    import json
+    import shutil
+    from pathlib import Path
+
+    from a2a_impl.auth import _is_public
+
+    public = Path(__file__).resolve().parents[1] / "apps" / "web" / "public"
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<div id='root'></div>", encoding="utf-8")
+    app = FastAPI()
+    assert mount_react_app(app, dist)
+    client = TestClient(app)
+    for name in ("manifest.webmanifest", "sw.js"):  # a build without them: a 404, not the page
+        assert _is_public(f"/app/{name}") and client.get(f"/app/{name}").status_code == 404
+        shutil.copy(public / name, dist / name)
+
+    manifest = client.get("/app/manifest.webmanifest")
+    assert manifest.headers["content-type"] == "application/manifest+json"
+    assert manifest.headers["cache-control"] == "no-cache"
+    doc = json.loads(manifest.text)
+    assert (doc["id"], doc["start_url"], doc["scope"], doc["display"]) == ("/app/", "/app/", "/app/", "standalone")
+    assert {i["sizes"] for i in doc["icons"]} == {"192x192", "512x512"}
+    assert all((public / i["src"]).is_file() and i["type"] == "image/png" for i in doc["icons"])
+
+    worker = client.get("/app/sw.js")
+    assert worker.headers["content-type"].startswith("text/javascript")
+    assert worker.headers["cache-control"] == "no-cache"
+    # The worker's own policy: its notification icon and nothing else — no hub calls.
+    assert worker.headers["content-security-policy"] == "default-src 'none'; img-src 'self'"
+    assert "set-cookie" not in worker.headers and "addEventListener(\"fetch\"" not in worker.text
+    assert client.get("/app/runtime").text == "<div id='root'></div>"  # the SPA fallback still answers
