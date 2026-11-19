@@ -9,8 +9,11 @@ the dev box was at 99% disk and 42 finished worktrees held about 19 GB.
 A worktree is **finished** when all of these hold:
 - its tracked files are unchanged (`git status --porcelain --untracked-files=no` is empty);
 - it is not locked (`git worktree lock`);
-- its branch is merged into the default branch, OR no longer exists on origin (repos that
-  auto-delete merged branches squash-merge, so "gone upstream" is the merged signal there).
+- its branch is merged into the default branch, OR it tracked an upstream branch that has
+  since been deleted (git's ``[gone]`` tracking state; repos that auto-delete merged branches
+  squash-merge, so that is the merged signal there). A branch that was never pushed has no
+  upstream and is never "gone". A detached worktree counts only when its commit is merged.
+  Any git error counts against removal: unknown is never finished.
 
 Removing a worktree never deletes its branch, so local commits stay reachable. Untracked
 files (a `.venv`, scratch output) block a plain `git worktree remove`; with `--apply` those
@@ -80,8 +83,13 @@ def audit(root: pathlib.Path) -> list[dict]:
             branch = str(w.get("branch", "")).replace("refs/heads/", "")
             ref = branch or w.get("HEAD", "HEAD")
             merged = _git(main, "merge-base", "--is-ancestor", ref, base)[0] == 0
-            gone = (not branch) or not _git(main, "ls-remote", "--heads", "origin", branch)[1]
-            dirty = bool(_git(path, "status", "--porcelain", "--untracked-files=no")[1])
+            gone = False
+            if branch:  # a detached worktree is never "gone": only its merged commit counts
+                rc_up, track, _ = _git(main, "for-each-ref", "--format=%(upstream) %(upstream:track)", f"refs/heads/{branch}")
+                upstream, _, state = track.partition(" ")
+                gone = rc_up == 0 and bool(upstream) and state.strip() == "[gone]"
+            rc_st, status, _ = _git(path, "status", "--porcelain", "--untracked-files=no")
+            dirty = rc_st != 0 or bool(status)  # a status that fails is treated as dirty
             locked = "locked" in w
             finished = not dirty and not locked and (merged or gone)
             state = " ".join(s for s, on in (("dirty", dirty), ("locked", locked), ("merged", merged), ("gone-upstream", gone)) if on)
