@@ -485,6 +485,43 @@ def _fleet_health_restarts(cfg, restart_pending: dict[str, dict], notices: list[
             })
 
 
+# Importance is fixed per state here, never chosen by a model (ADR 0135 D11).
+_FLEET_HEALTH_NOTICE = {
+    "down": ("high", "has stopped and is not running. Open the console to check it and start it again."),
+    "wedged": ("high", "is running but not responding. Open the console to check it and restart it."),
+    "gave_up": (
+        "high",
+        "keeps stopping and automatic restarts have given up. "
+        "Open the console to check its logs and start it by hand.",
+    ),
+    "recovered": ("normal", "is responding again. Nothing to do."),
+    "restarted": ("normal", "stopped unexpectedly and was restarted automatically. Nothing to do."),
+}
+
+
+def _fleet_health_notify(notice: dict) -> None:
+    """Send the transition the loop just paged through the single notice seam (ADR 0135 D8).
+
+    Best-effort: the inbox item is the durable record, so a failure here never
+    blocks or repeats the page. No log tails, pids or credentials in the text.
+    """
+    try:
+        from graph.plugins.chat_surface import notify_chat_surfaces
+        from graph.sdk import console_url
+        from security.public_console import public_origin
+
+        importance, effect = _FLEET_HEALTH_NOTICE.get(
+            notice["state"], ("high", "changed health state. Open the console to check it.")
+        )
+        base = (public_origin() or console_url() or "").rstrip("/")
+        notify_chat_surfaces(
+            f"Fleet member {notice['name']} {effect}", f"{base}/app/" if base else "",
+            kind="notify", importance=importance,
+        )
+    except Exception:
+        log.exception("[fleet-health] could not queue chat notice for %s", notice.get("id"))
+
+
 async def _fleet_health_loop() -> None:
     """Hub-only, opt-in supervision. Reload config each tick; recovery is separately opt-in.
 
@@ -537,6 +574,10 @@ async def _fleet_health_loop() -> None:
                             needs_human=state not in ("recovered", "restarted"),
                         )
                         notice["_inbox_written"] = True
+                    if not notice.get("_notice_sent"):
+                        # Same transition, same dedup: once per inbox item, never on a retry.
+                        notice["_notice_sent"] = True
+                        _fleet_health_notify(notice)
                     _event_bus.publish(
                         f"fleet.health.{state}", {k: v for k, v in notice.items() if not k.startswith("_")}
                     )
