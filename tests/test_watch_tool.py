@@ -270,7 +270,7 @@ async def test_a_member_health_watch_fires_when_the_member_goes_down(monkeypatch
 
     ctrl, create = _stock_tools(monkeypatch, tmp_path)
     health = {"id": "ws-1", "name": "scout", "kind": "local", "state": "healthy", "failures": 0, "changed_at": "t0"}
-    monkeypatch.setattr(supervisor, "member_health", lambda: [dict(health)])
+    monkeypatch.setattr(supervisor, "fresh_member_health", lambda max_age, threshold: [dict(health)])
     create.invoke({"condition": "scout is down", "check": "fleet:member_health", "check_args": {"member": "scout"}})
     w = _only(ctrl)
     assert await ctrl.evaluate(w.id) is None  # healthy: the tripwire holds

@@ -1203,9 +1203,15 @@ def _record_remote_version(rid: str, version: str) -> None:
 # ── Member health (ADR 0135 D8, #5533) ────────────────────────────────────────
 # One health record per member, kept in this process (like the probe caches) and fed by
 # the probes above. ``health_sweep`` is a single pass: whoever runs it owns the cadence
-# and the threshold, and acts on the changes it returns.
+# and the threshold, and acts on the changes it returns. ``fresh_member_health`` is the
+# reader's side of that: it runs the same pass only when nobody has lately, and leaves
+# the changes it found for the next ``health_sweep`` caller.
 _health: dict[str, dict] = {}
 _health_lock = threading.Lock()
+_sweep_lock = threading.Lock()  # one on-demand sweep at a time
+_last_sweep: float | None = None  # monotonic time the last pass finished
+_UNCLAIMED_KEEP = 200
+_unclaimed_changes: list[dict] = []  # found by an on-demand sweep; guarded by _health_lock
 
 
 def _public_health(entry: dict) -> dict:
@@ -1219,6 +1225,25 @@ def member_health() -> list[dict]:
     Memory only — no probe, no file read. A member stopped on purpose has no record."""
     with _health_lock:
         return [_public_health(e) for e in _health.values()]
+
+
+def fresh_member_health(max_age: float, failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
+    """``member_health()``, after one sweep when no pass finished in the last ``max_age``
+    seconds. This is what keeps the records current for a reader (the built-in
+    ``fleet:member_health`` watch check, #5534) when nothing else is sweeping; while a
+    loop sweeps more often than ``max_age`` it is a plain read.
+
+    The changes an on-demand pass finds are not dropped: the next ``health_sweep`` call
+    returns them first, so a loop acting on changes still sees each one once.
+
+    Blocking like ``health_sweep``. Call it off the event loop."""
+    with _sweep_lock:
+        if _last_sweep is None or time.monotonic() - _last_sweep >= max(0.0, float(max_age)):
+            changes = _sweep_once(failure_threshold, timeout)
+            with _health_lock:
+                _unclaimed_changes.extend(changes)
+                del _unclaimed_changes[:-_UNCLAIMED_KEEP]
+    return member_health()
 
 
 def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
@@ -1238,8 +1263,19 @@ def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
     change is the member's health record plus ``previous`` (None when first seen), so
     down, wedged and recovered (``healthy`` after either) are each reported once.
 
+    Changes found by ``fresh_member_health`` since the last call come first, in order.
+
     Blocking: one probe per member, each bounded by ``timeout``. Call it off the event loop.
     """
+    with _health_lock:
+        earlier = list(_unclaimed_changes)
+        _unclaimed_changes.clear()
+    return [*earlier, *_sweep_once(failure_threshold, timeout)]
+
+
+def _sweep_once(failure_threshold: int, timeout: float) -> list[dict]:
+    """One pass of ``health_sweep``: probe, update the records, return this pass's changes."""
+    global _last_sweep
     threshold = max(1, int(failure_threshold))
     with _state_lock():
         state = _load_state()
@@ -1340,6 +1376,7 @@ def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
                     _move(entry, "down", fresh)
         for rid in [k for k, e in _health.items() if e["kind"] == "remote" and k not in remote_ids]:
             _health.pop(rid, None)
+    _last_sweep = time.monotonic()
     return changes
 
 

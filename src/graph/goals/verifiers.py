@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 
 import ast
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -366,16 +367,24 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
 
 FLEET_MEMBER_HEALTH_CHECK = "fleet:member_health"
 _MEMBER_HEALTH_STATES = ("healthy", "down", "wedged")
+# The check keeps the supervisor's records current itself: a read older than this runs one
+# supervisor sweep first (its existing probes, off the event loop). Several watches ticking
+# together share one sweep, and a sweep loop running more often than this makes it a plain read.
+_MEMBER_HEALTH_MAX_AGE = 15.0
+# Consecutive failed checks before a live member counts as wedged, or a remote as down.
+_MEMBER_HEALTH_FAILURE_THRESHOLD = 3
 
 
 async def _verify_fleet_member_health(spec: dict, ctx: VerifyContext) -> VerifyResult:
     """Met when a fleet member is in the requested health state.
 
     ``args``: ``member`` (its id or name) and ``state`` (``healthy`` | ``down`` | ``wedged``,
-    or a list of them; default ``down``). Reads the supervisor's health records
-    (``supervisor.member_health``): memory only, no probe. The supervisor's sweep owns the
-    probing and its cadence. A member with no record (stopped on purpose, not in this fleet,
-    or not checked yet) is in no state, so the check is not met.
+    or a list of them; default ``down``). Reads the supervisor's health records through
+    ``supervisor.fresh_member_health``, which runs the supervisor's own sweep first when no
+    sweep ran in the last ``_MEMBER_HEALTH_MAX_AGE`` seconds, so the records are written
+    whether or not anything else is sweeping. No second prober: the probes, the states and
+    the records are the supervisor's. A member with no record (stopped on purpose, not in
+    this fleet, or already down when first checked) is in no state, so the check is not met.
 
     ``reason`` and ``evidence`` change only when the member's state does, so an
     ``on_change`` watch fires once per transition (down, wedged, recovered)."""
@@ -397,7 +406,9 @@ async def _verify_fleet_member_health(spec: dict, ctx: VerifyContext) -> VerifyR
         )
     from graph.fleet import supervisor
 
-    records = supervisor.member_health()
+    records = await asyncio.to_thread(
+        supervisor.fresh_member_health, _MEMBER_HEALTH_MAX_AGE, _MEMBER_HEALTH_FAILURE_THRESHOLD
+    )
     folded = member.casefold()
     rec = (
         next((r for r in records if r.get("id") == member), None)
@@ -407,7 +418,7 @@ async def _verify_fleet_member_health(spec: dict, ctx: VerifyContext) -> VerifyR
     if rec is None:
         return VerifyResult(
             False,
-            f"no health record for member {member!r} (stopped on purpose, not in this fleet, or not checked yet)",
+            f"no health record for member {member!r} (stopped on purpose, not in this fleet, or already down when first checked)",
             "",
         )
     state = str(rec.get("state") or "")

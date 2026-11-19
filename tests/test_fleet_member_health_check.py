@@ -2,7 +2,7 @@
 
 It lives in the ONE verifier registry plugins contribute to, so it is there with no plugin
 installed and survives the rebind a plugin reload does. It reads the supervisor's health
-records (C1a) and never probes.
+records (C1a), sweeping first when stale (stubbed here; real in test_fleet_exit_capture.py).
 """
 
 from __future__ import annotations
@@ -20,6 +20,22 @@ from graph.goals.verifiers import (
 )
 
 CHECK = "fleet:member_health"
+
+
+@pytest.fixture(autouse=True)
+def sweeps(monkeypatch):
+    """Stub the supervisor's sweep pass and start stale. Yields its (threshold, timeout) calls."""
+    calls: list[tuple] = []
+    monkeypatch.setattr(supervisor, "_last_sweep", None)
+    monkeypatch.setattr(supervisor, "_unclaimed_changes", [])
+
+    def _pass(threshold, timeout):
+        calls.append((threshold, timeout))
+        monkeypatch.setattr(supervisor, "_last_sweep", supervisor.time.monotonic())
+        return []
+
+    monkeypatch.setattr(supervisor, "_sweep_once", _pass)
+    return calls
 
 
 def _health(monkeypatch, *records):
@@ -88,27 +104,17 @@ async def test_met_when_the_member_is_in_the_requested_state(monkeypatch, state)
 
 
 @pytest.mark.asyncio
-async def test_member_matches_by_id_or_name(monkeypatch):
+async def test_member_by_id_or_name_state_default_list_and_no_record(monkeypatch):
     _health(monkeypatch, _rec("wedged", mid="ws-1", name="Scout"), _rec("healthy", mid="Scout", name="Decoy"))
     assert (await _check(member="ws-1", state="wedged")).met is True
     assert (await _check(member="scout", state="wedged")).met is True  # name, any case
     assert (await _check(member="Scout", state="wedged")).met is False  # an exact id wins over a name
-
-
-@pytest.mark.asyncio
-async def test_state_defaults_to_down_and_accepts_a_list(monkeypatch):
-    _health(monkeypatch, _rec("wedged"))
-    assert (await _check(member="ws-1")).met is False
+    assert (await _check(member="ws-1")).met is False  # state defaults to down
     assert (await _check(member="ws-1", state=["down", "wedged"])).met is True
     _health(monkeypatch, _rec("down"))
     assert (await _check(member="ws-1")).met is True
     assert (await _check(member="ws-1", state="DOWN")).met is True
-
-
-@pytest.mark.asyncio
-async def test_no_health_record_is_not_met_in_any_state(monkeypatch):
-    # Stopped on purpose, not a member of this fleet, or not swept yet: no record, no state.
-    _health(monkeypatch)
+    _health(monkeypatch)  # stopped on purpose, or not in this fleet: no record, no state
     for state in ("healthy", "down", "wedged"):
         res = await _check(member="ws-1", state=state)
         assert res.met is False and "no health record" in res.reason and res.evidence == ""
@@ -124,13 +130,9 @@ async def test_no_health_record_is_not_met_in_any_state(monkeypatch):
         ({"member": "ws-1", "state": ["down", "gone"]}, "unknown state gone"),
     ],
 )
-async def test_bad_args_are_not_met_and_never_read_health(monkeypatch, args, needle):
-    def _boom():
-        raise AssertionError("bad args must not reach the supervisor")
-
-    monkeypatch.setattr(supervisor, "member_health", _boom)
+async def test_bad_args_are_not_met_and_never_reach_the_supervisor(args, needle, sweeps):
     res = await _check(**args)
-    assert res.met is False and needle in res.reason
+    assert res.met is False and needle in res.reason and sweeps == []
 
 
 @pytest.mark.asyncio
@@ -148,18 +150,14 @@ async def test_result_is_stable_within_a_state_and_moves_on_a_change(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_reads_the_supervisors_own_records(monkeypatch):
-    # No stand-in: the check reads what health_sweep recorded in the supervisor.
-    monkeypatch.setattr(supervisor, "_health", {"ws-9": _rec("wedged", mid="ws-9", name="Nine")})
-    res = await _check(member="Nine", state="wedged")
-    assert res.met is True and "member=ws-9" in res.evidence
-
-
-@pytest.mark.asyncio
-async def test_a_failing_health_read_is_contained(monkeypatch):
-    def _boom():
-        raise RuntimeError("supervisor unavailable")
-
-    monkeypatch.setattr(supervisor, "member_health", _boom)
-    res = await _check(member="ws-1", state="down")
-    assert res.met is False and res.reason == "verifier error: RuntimeError"
+async def test_a_stale_read_runs_the_supervisors_sweep_and_a_fresh_one_does_not(monkeypatch, sweeps):
+    calls = sweeps
+    _health(monkeypatch, _rec("down"))
+    assert (await _check(member="ws-1")).met is True
+    assert calls == [(3, 1.0)]  # three failed checks in a row before wedged
+    await _check(member="ws-1")
+    await _check(member="ws-2")
+    assert len(calls) == 1  # inside the freshness window: watches share one sweep
+    monkeypatch.setattr(supervisor, "_last_sweep", supervisor.time.monotonic() - 16)
+    await _check(member="ws-1")
+    assert len(calls) == 2

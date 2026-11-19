@@ -166,8 +166,8 @@ An independent axis from goals — a watch is verifier-only and moved by an exte
 Defaults to **true**, same verifier requirement. The built-in `fleet:member_health` check
 needs no plugin: `check_args={"member": "<id or name>", "state": "down"}` is met when that
 fleet member is in the requested state (`healthy`, `down` or `wedged`, or a list; default
-`down`). It reads the hub supervisor's health records and never probes; a member with no
-record is not met. See [Watches](/guides/watches) and
+`down`). It reads the hub supervisor's health records, running the supervisor's own sweep first
+when none ran in the last 15 seconds; a member with no record is not met. See [Watches](/guides/watches) and
 [ADR 0067](/adr/0067-standalone-watch-primitive). Defined in `tools/scheduler_tools.py`
 (`_build_watch_tools`).
 

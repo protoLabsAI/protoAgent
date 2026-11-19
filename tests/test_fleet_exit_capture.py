@@ -305,3 +305,19 @@ def test_health_sweep_tracks_remotes_through_the_probe_cache(tmp_path, monkeypat
     finally:
         supervisor._health.clear()
         supervisor._probe_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_member_health_watch_check_sweeps_for_itself(member, monkeypatch):
+    # No sweep loop runs: the check sweeps for itself, and a later sweep is handed its change.
+    from graph.goals import verifiers
+
+    ws, _flag, pids = member
+    monkeypatch.setattr(supervisor, "_last_sweep", None)
+    monkeypatch.setattr(verifiers, "_MEMBER_HEALTH_MAX_AGE", 0.0)
+    spec = {"type": "plugin", "check": "fleet:member_health", "args": {"member": "m"}}
+    first = await verifiers.run_verifier(spec, verifiers.VerifyContext())
+    assert (first.met, first.reason) == (False, "member m is healthy")
+    _kill(pids[0])
+    assert (await verifiers.run_verifier(spec, verifiers.VerifyContext())).reason == "member m is down"
+    assert _sweep() == [(ws["id"], "healthy", "down")]
