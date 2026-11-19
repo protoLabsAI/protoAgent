@@ -346,6 +346,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "spend_cap_enabled": False,
     "spend_cap_daily_cost_hard_limit": 10.0,
     "spend_cap_daily_token_hard_limit": 1_000_000,
+    "spend_cap_daily_cost_soft_limit": 0.0,
+    "spend_cap_daily_token_soft_limit": 0,
     "security_callback_allowlist": [],
     "security_redact_tool_output": True,
     "skills_db_path": "/sandbox/skills.db",

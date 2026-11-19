@@ -156,7 +156,8 @@ def test_unavailable_meter_never_admits_unattended_turn(cap, monkeypatch, unavai
 
 
 def test_spend_cap_config_round_trip():
-    block = {"enabled": True, "daily_cost_hard_limit": 0.25, "daily_token_hard_limit": 500}
+    block = {"enabled": True, "daily_cost_hard_limit": 0.25, "daily_token_hard_limit": 500,
+             "daily_cost_soft_limit": 0.1, "daily_token_soft_limit": 200}
     config = LangGraphConfig.from_dict({"spend_cap": block}, _plugin_config={})
     assert config_to_dict(config)["spend_cap"] == block
 
