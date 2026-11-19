@@ -1,6 +1,6 @@
 """A scheduled result that posts a card also sends ONE typed notice (ADR 0135 D8/D11,
 #5537): the notice rides the card's own post point, so a run that posts no card (empty,
-``NO_UPDATE``, a repeat, a stale chat) sends no notice either."""
+``NO_UPDATE``, a repeat, a one-shot's stale chat) sends no notice either."""
 
 from __future__ import annotations
 
@@ -78,14 +78,17 @@ def test_a_failed_run_posts_a_card_and_a_notice_naming_the_failure(cards, notice
     assert "failed" in notice.text and "Stopped while waiting" in notice.text
 
 
-async def test_the_async_path_notifies_once_and_not_for_a_stale_chat(cards, notices, monkeypatch):
+@pytest.mark.parametrize("schedule, delivered", [("0 9 * * *", True), ("2026-11-20T09:00:00Z", False)])
+async def test_idle_chat_gets_one_typed_notice_only_for_recurring_jobs(cards, notices, monkeypatch, schedule, delivered):
+    # #5601: reading a daily brief without replying must not silence the next day's notice.
+    monkeypatch.setattr(server.STATE, "scheduler", _Scheduler(_Job(schedule=schedule)))
     monkeypatch.setattr(a2a, "_session_recently_active", _liveness(False))
-    assert await a2a._deliver_scheduled(a2a._scheduled_delivery_payload(_Outcome(text="All green."))) is False
-    assert cards == [] and notices == []
-    monkeypatch.setattr(a2a, "_session_recently_active", _liveness(True))
-    assert await a2a._deliver_scheduled(a2a._scheduled_delivery_payload(_Outcome(text="All green."))) is True
-    assert len(cards) == 1 and len(notices) == 1
-    assert notices[0].link.endswith("/app/?session=chat-42")
+    assert await a2a._deliver_scheduled(a2a._scheduled_delivery_payload(_Outcome(text="All green."))) is delivered
+    assert len(cards) == len(notices) == int(delivered)
+    if delivered:
+        assert (notices[0].kind, notices[0].importance) == ("review", "normal")
+        assert cards[0]["notice_id"] == notices[0].notice_id
+        assert notices[0].link.endswith("/app/?session=chat-42")
 
 
 def test_a_notice_failure_never_loses_the_card_or_its_repeat_guard(cards, monkeypatch):

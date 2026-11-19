@@ -324,7 +324,7 @@ def _open_ticket_subject(art_id: str, version: int, value: dict) -> str:
     return "artifact-open:" + json.dumps([art_id, version, identity], sort_keys=True, separators=(",", ":"))
 
 
-def _open_artifact_path(art_id: str, version: int) -> str:
+def _open_artifact_path(art_id: str, version: int, ttl_s: int = _media.TTL_S) -> str:
     # Core media signing is shared across the server and operator-MCP processes; the
     # inline preview ticket table is process-local and cannot serve tool-issued grants.
     from infra.media import sign_name
@@ -332,7 +332,7 @@ def _open_artifact_path(art_id: str, version: int) -> str:
     n, value = _open_version(art_id, version)
     fh, _, _ = _open_blob(art_id, n)
     fh.close()
-    exp = int(time.time()) + _media.TTL_S
+    exp = int(time.time()) + ttl_s
     ticket = sign_name(_open_ticket_subject(art_id, n, value), exp)
     return f"/plugins/artifact/media/artifact/{quote(art_id, safe='')}/blob?version={n}&exp={exp}&t={ticket}"
 
@@ -387,21 +387,21 @@ def _page_ticket_subject(art_id: str, version: int, kind: str, value: dict) -> s
     return "artifact-page:" + json.dumps([art_id, version, kind, value.get("ts"), digest], separators=(",", ":"))
 
 
-def _open_page_grant(art_id: str, version: int) -> tuple[int, int, str]:
+def _open_page_grant(art_id: str, version: int, ttl_s: int = _media.TTL_S) -> tuple[int, int, str]:
     """``(version, exp, path)``: the signed standalone-page path for a rendered artifact version
     (0 = latest, resolved NOW so a later edit doesn't swap what the link shows). Expires after
-    ``_media.TTL_S`` like the file open link."""
+    ``ttl_s`` (default ``_media.TTL_S``) like the file open link."""
     from infra.media import sign_name
 
     n, art, value = _page_version(art_id, version)
-    exp = int(time.time()) + _media.TTL_S
+    exp = int(time.time()) + ttl_s
     ticket = sign_name(_page_ticket_subject(art_id, n, art["kind"], value), exp)
     return n, exp, f"/plugins/artifact/media/artifact/{quote(art_id, safe='')}/page?version={n}&exp={exp}&t={ticket}"
 
 
-def _open_page_path(art_id: str, version: int) -> str:
+def _open_page_path(art_id: str, version: int, ttl_s: int = _media.TTL_S) -> str:
     """The signed standalone-page path alone (what ``open_artifact`` hands out)."""
-    return _open_page_grant(art_id, version)[2]
+    return _open_page_grant(art_id, version, ttl_s=ttl_s)[2]
 
 
 def _script_json(payload: dict) -> str:

@@ -271,9 +271,12 @@ async def test_delivery_status_survives_failure_then_acceptance(setup, monkeypat
 
     web = WebPushProvider(clock=lambda: now[0], transport=httpx.MockTransport(respond))
     monkeypatch.setattr(web, "_prepare", lambda b, p: (b.endpoint, {}, b"encrypted"))
-    sender = transport(max_attempts=1 if failure == "retries_exhausted" else 5, timeout=0.01)
+    sender = transport(max_attempts=1 if failure == "retries_exhausted" else 5)
     sender.provider = web
     if failure == "transport_timeout":
+        # Only the stalled send needs a short deadline. Thread dispatch in the
+        # real provider can exceed 10 ms on Windows before the mock responds.
+        sender.timeout = 0.01
         async def stalled(binding, payload):
             await asyncio.Event().wait()
         monkeypatch.setattr(web, "send", stalled)
