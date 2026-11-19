@@ -627,3 +627,99 @@ def test_a_binding_stranded_by_a_retired_key_is_cleared_and_reported_on_the_next
     again = api.put(URL, headers=_hdr(token), json=_subscription(api, token))
     assert again.json()["binding"]["generation"] == 2
     assert api.get(URL, headers=_hdr(token)).json()["renew"] is None
+
+
+@pytest.mark.parametrize("credential", ["shared", "device"])
+def test_key_status_does_not_enable_push(devices, keys, api, credential):
+    token = _SECRET if credential == "shared" else _phone(devices)[1]
+    response = api.get("/api/push/keys", headers=_hdr(token))
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "keys": [], "rotation_window_seconds": keys.ROTATION_WINDOW_SECONDS, "bindings_by_version": {},
+    }
+    assert not keys._keyring_path().exists()
+
+
+@pytest.mark.parametrize("credential", ["shared", "device"])
+def test_operator_rotates_keys_and_status_counts_migrating_bindings(devices, keys, api, monkeypatch, caplog, credential):
+    import logging
+    import threading
+
+    dev, token = _phone(devices)
+    body = _subscription(api, token)
+    assert api.put(URL, headers=_hdr(token), json=body).status_code == 200
+    if credential == "device":
+        devices.set_device_scope(dev["id"], "full")
+    caller = token if credential == "device" else _SECRET
+    now = keys._now()
+    monkeypatch.setattr(keys, "_now", lambda: now)
+    rotate = keys.rotate
+
+    def checked_rotate(**kwargs):
+        # TestClient's portal runs the event loop; key I/O belongs in a worker.
+        import asyncio
+
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        assert threading.current_thread() is not threading.main_thread()
+        return rotate(**kwargs)
+
+    monkeypatch.setattr(keys, "rotate", checked_rotate)
+    with caplog.at_level(logging.INFO, logger="protoagent.server.pairing"):
+        response = api.post("/api/push/keys/rotate", headers=_hdr(caller))
+    assert response.status_code == 200
+    fresh = response.json()
+    assert fresh == keys.public_keys()[-1].public()
+    assert set(fresh) == {"version", "public_key", "created_at", "active", "retire_after"}
+    assert fresh["version"] == body["vapid_version"] + 1
+    assert fresh["active"] is True and fresh["retire_after"] is None
+    assert fresh["created_at"] == now
+    assert (dev["id"] if credential == "device" else "None") in caplog.text
+    status = api.get("/api/push/keys", headers=_hdr(token))
+    assert status.json() == {
+        "keys": [key.public() for key in keys.public_keys()],
+        "rotation_window_seconds": keys.ROTATION_WINDOW_SECONDS,
+        "bindings_by_version": {str(body["vapid_version"]): 1, str(fresh["version"]): 0},
+    }
+    old = status.json()["keys"][0]
+    assert old["active"] is False
+    assert old["retire_after"] == now + keys.ROTATION_WINDOW_SECONDS
+    for key in status.json()["keys"]:
+        assert set(key) == set(fresh)
+    for secret in (body["endpoint"], *body["keys"].values()):
+        assert secret not in status.text and secret not in response.text
+    # A renewed binding moves counts, without a stale status cache.
+    body["vapid_version"] = fresh["version"]
+    assert api.put(URL, headers=_hdr(token), json=body).status_code == 200
+    assert api.get("/api/push/keys", headers=_hdr(token)).json()["bindings_by_version"] == {
+        str(old["version"]): 0, str(fresh["version"]): 1,
+    }
+
+
+@pytest.mark.parametrize("method, path", [("GET", "/api/push/keys"), ("POST", "/api/push/keys/rotate")])
+def test_key_management_requires_authentication(api, method, path):
+    assert api.request(method, path).status_code == 401
+
+
+@pytest.mark.parametrize("method, path", [("GET", "/api/push/keys"), ("POST", "/api/push/keys/rotate")])
+def test_key_management_reports_corruption_without_exposing_it(devices, keys, api, method, path):
+    keys.active_public_key()
+    keyring = keys._keyring_path()
+    keyring.write_text("broken-secret-keyring", "utf-8")
+    response = api.request(method, path, headers=_hdr(_SECRET))
+    assert response.status_code == 503
+    assert response.json()["error"] == "push_keyring_unavailable"
+    assert str(keyring) not in response.text and "broken-secret-keyring" not in response.text
+    assert keyring.read_text("utf-8") == "broken-secret-keyring"
+
+
+def test_rotation_does_not_replace_a_lost_keyring_with_bindings(devices, keys, api):
+    _, token = _phone(devices)
+    assert api.put(URL, headers=_hdr(token), json=_subscription(api, token)).status_code == 200
+    keyring = keys._keyring_path()
+    keyring.unlink()
+    response = api.post("/api/push/keys/rotate", headers=_hdr(_SECRET))
+    assert response.status_code == 503
+    assert response.json()["error"] == "push_keyring_unavailable"
+    assert not keyring.exists()

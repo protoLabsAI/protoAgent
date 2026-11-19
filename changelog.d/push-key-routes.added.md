@@ -1,0 +1,1 @@
+- **Push signing key status and rotation.** Operators can inspect public key versions, retirement deadlines and binding counts through the API; full-access operators can rotate the instance key with the existing migration window. Refs #5539.
