@@ -1,12 +1,15 @@
 """Delivery lifecycle through the real device registry and durable attempt ledger."""
 import asyncio
+import json
+import threading
 import sqlite3
 from dataclasses import replace
 
+import httpx
 import pytest
 
 from graph.plugins.chat_surface import ChatNotice
-from graph.push_transport import PushResult, PushTransport
+from graph.push_transport import PushResult, PushTransport, WebPushProvider
 from infra.paths import reset_instance_paths
 from security import devices
 
@@ -247,3 +250,121 @@ async def test_competing_drains_claim_once_and_failed_read_defers(setup):
     finally:
         release.set()
         await first
+
+
+@pytest.mark.parametrize("failure", [
+    "timeout", "network", "service_retry", "rejected", "retries_exhausted",
+    "transport_timeout", "expiry",
+])
+async def test_delivery_status_survives_failure_then_acceptance(setup, monkeypatch, failure):
+    now, provider, transport, enroll = setup
+    device_id, token = enroll()
+    binding = devices.get_device(device_id).push
+    private = "private response " + binding.endpoint + binding.auth + binding.p256dh
+
+    def respond(request):
+        if failure == "timeout":
+            raise httpx.ReadTimeout(private, request=request)
+        if failure == "network":
+            raise httpx.ConnectError(private, request=request)
+        return httpx.Response(403 if failure == "rejected" else 503, text=private)
+
+    web = WebPushProvider(clock=lambda: now[0], transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(web, "_prepare", lambda b, p: (b.endpoint, {}, b"encrypted"))
+    sender = transport(max_attempts=1 if failure == "retries_exhausted" else 5, timeout=0.01)
+    sender.provider = web
+    if failure == "transport_timeout":
+        async def stalled(binding, payload):
+            await asyncio.Event().wait()
+        monkeypatch.setattr(web, "send", stalled)
+    writes = []
+    save = devices._save
+    loop_thread = threading.get_ident()
+
+    def track_save(rows):
+        writes.append(threading.get_ident())
+        save(rows)
+
+    monkeypatch.setattr(devices, "_save", track_save)
+    await sender.deliver(notice(1010 if failure == "expiry" else 2000))
+    expected = {"transport_timeout": "timeout", "expiry": "retries_exhausted"}.get(failure, failure)
+    failed = devices.push_status(device_id)
+    assert failed["last_attempt_at"] == failed["last_error_at"] == 1000
+    assert failed["last_error"] == expected
+    assert failed["last_accepted_at"] is None
+    assert len(writes) == 1 and writes[0] != loop_thread
+
+    now[0] = 1100
+    await transport().deliver(replace(notice(), notice_id="later"))
+    accepted = devices.push_status(device_id)
+    assert accepted["last_attempt_at"] == accepted["last_accepted_at"] == 1100
+    assert accepted["last_error"] == expected and accepted["last_error_at"] == 1000
+    for secret in (private, binding.endpoint, binding.auth, binding.p256dh):
+        assert secret not in json.dumps(accepted)
+    renewed = bind(device_id, token, "phone")
+    assert renewed == {**accepted, "renewed_at": 1100}  # same generation retains history
+
+
+async def test_accepted_delivery_is_visible_in_device_route(setup, monkeypatch):
+    from fastapi import FastAPI
+    from a2a_impl import auth
+    from operator_api.pairing_routes import register_pairing_routes
+
+    _, _, transport, enroll = setup
+    device_id, _ = enroll()
+    await transport().deliver(notice())
+    monkeypatch.delenv("PROTOAGENT_UI", raising=False)
+    app = FastAPI()
+    register_pairing_routes(app, agent_name=lambda: "box")
+    auth.install(app, bearer_token="operator-secret", api_key="", allowed_origins_raw="")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        response = await client.get("/api/devices", headers={"Authorization": "Bearer operator-secret"})
+    assert response.status_code == 200
+    row = next(d for d in response.json()["devices"] if d["id"] == device_id)
+    assert row["push"]["last_attempt_at"] == row["push"]["last_accepted_at"] == 1000
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "retry", "failed"])
+@pytest.mark.parametrize("change", ["replace", "clear", "revoke"])
+async def test_late_results_do_not_touch_changed_bindings(setup, outcome, change):
+    _, provider, transport, enroll = setup
+    device_id, token = enroll()
+
+    async def late(binding, payload):
+        if change == "replace":
+            bind(device_id, token, "replacement")
+        elif change == "clear":
+            devices.clear_push_binding(device_id, token)
+        else:
+            devices.revoke_device(device_id)
+        return PushResult(outcome)
+
+    provider.hook = late
+    await transport().deliver(notice())
+    current = devices.get_device(device_id)
+    if change == "replace":
+        assert current.push.generation == 2
+        assert current.push.last_attempt_at is None
+        assert current.push.last_accepted_at is None
+        assert current.push.last_error is None
+        assert current.push.last_error_at is None
+    else:
+        assert current is None or current.push is None
+
+
+def test_old_binding_rows_and_unknown_errors_are_safe(setup):
+    _, _, _, enroll = setup
+    device_id, _ = enroll()
+    path = devices._registry_path()
+    rows = json.loads(path.read_text())
+    for key in ("last_attempt_at", "last_accepted_at", "last_error", "last_error_at"):
+        rows[0]["push"].pop(key)
+    path.write_text(json.dumps(rows))
+    status = devices.push_status(device_id)
+    assert all(status[key] is None for key in ("last_attempt_at", "last_accepted_at", "last_error", "last_error_at"))
+    with pytest.raises(ValueError, match="unknown push outcome"):
+        devices.record_push_result(device_id, 1, "secret response body", 1000)
+    assert devices.push_status(device_id) == status
+    rows[0]["push"]["last_error"] = "secret response body"
+    path.write_text(json.dumps(rows))
+    assert devices.push_status(device_id) == status

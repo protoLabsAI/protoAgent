@@ -172,7 +172,7 @@ def test_timeout_is_a_retry(env):
     def timeout(request):
         raise httpx.ReadTimeout("slow", request=request)
 
-    assert send(Service(timeout), Browser().binding()) == PushResult("retry")
+    assert send(Service(timeout), Browser().binding()) == PushResult("retry", error="timeout")
 
 
 def test_redirect_is_not_followed(env):
@@ -190,13 +190,13 @@ def test_endpoint_failing_validation_is_not_contacted(env, endpoint, address):
     _, resolved = env
     resolved["address"] = address
     service = Service()
-    assert send(service, Browser().binding(endpoint)) == PushResult("retry")
+    assert send(service, Browser().binding(endpoint)) == PushResult("retry", error="network")
     assert service.requests == []
 
 
 def test_unsendable_notices_never_reach_the_service(env):
     service, browser = Service(), Browser()
-    assert send(service, browser.binding(), payload(expires_at=NOW)) == PushResult("failed")  # expired
+    assert send(service, browser.binding(), payload(expires_at=NOW)) == PushResult("failed", error="retries_exhausted")  # expired
     assert send(service, browser.binding(), payload(notice_id="free text id")) == PushResult("failed")
     assert send(service, browser.binding(version=99)) == PushResult("failed")  # retired VAPID key
     assert service.requests == []
