@@ -20,6 +20,9 @@ from tools import fleet_supervision as fs
 from tools.lg_tools import get_all_tools
 
 
+_load_restarts = supervisor._load_restarts
+
+
 @pytest.fixture
 def recovery(monkeypatch, tmp_path):
     main_thread = threading.get_ident()
@@ -116,6 +119,33 @@ async def test_refusals_are_audited_without_approval_or_mutation(recovery, case,
     assert not env.events
     env.approval.assert_not_called()
     assert env.audit.get_recent()[-1]["success"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_approval", [False, True])
+@pytest.mark.parametrize("running", [False, True])
+async def test_unreadable_stop_history_refuses_recovery(recovery, monkeypatch, tmp_path, after_approval, running):
+    # #5534: lost operator stop intent must not allow either start or restart.
+    history = tmp_path / "fleet-restarts.json"
+    monkeypatch.setattr(supervisor, "_restart_path", lambda: history)
+    monkeypatch.setattr(supervisor, "_load_restarts", _load_restarts)
+    recovery.roster[0]["running"] = running
+
+    def corrupt_history(card=None):
+        history.write_text("{unreadable")
+        return True
+
+    if after_approval:
+        recovery.approval.side_effect = corrupt_history
+    else:
+        corrupt_history()
+    result = await invoke(recovery)
+    assert result == {"ok": False, "error": "restart_history_unreadable"}
+    assert not recovery.events
+    assert recovery.approval.call_count == int(after_approval)
+    entry = recovery.audit.get_recent()[-1]
+    assert entry["success"] is False
+    assert entry["args"]["reason"] == "Recover stale worker"
 
 
 @pytest.mark.asyncio

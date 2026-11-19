@@ -292,8 +292,9 @@ def _restart_target(member: str) -> dict[str, Any]:
     entry = matches[0]
     if _kind(entry) != "local" or not fd._slug_for(entry):
         return {"ok": False, "error": "local_member_required"}
-    if supervisor.stopped_on_purpose(entry["id"]):
-        return {"ok": False, "error": "stopped_on_purpose"}
+    refusal = supervisor.recovery_refusal(entry["id"])
+    if refusal:
+        return {"ok": False, "error": refusal}
     return {"ok": True, "id": entry["id"], "running": bool(entry.get("running"))}
 
 
