@@ -119,6 +119,14 @@ _AGENT_CODE_LEN = 10
 _AGENT_CODE_STRIP = str.maketrans({"-": None, " ": None, "_": None, "O": "0", "I": "1", "L": "1"})
 
 
+# Why the registry itself removed a device's push binding (`Device.push_cleared`) — what the
+# device's console reads to offer "Renew on this device" (ADR 0135 W2).
+PUSH_CLEARED_HANDOFF = "handoff"  # the phone moved to another origin; that origin enrolls anew
+PUSH_CLEARED_IDLE = "idle"  # the device idled past ``devices.idle_ttl_days``
+PUSH_CLEARED_KEY = "vapid_key"  # its VAPID key version was retired or left its migration window
+_PUSH_CLEARED = frozenset({PUSH_CLEARED_HANDOFF, PUSH_CLEARED_IDLE, PUSH_CLEARED_KEY})
+
+
 @dataclass
 class PushBinding:
     """A device's Web Push subscription (ADR 0135 W2), held ON its `Device` row.
@@ -129,8 +137,9 @@ class PushBinding:
 
     ``vapid_version`` is the keyring version (``security.push_keys``) the browser subscribed
     under — the only key this subscription can be sent with. ``generation`` rises every time
-    the device's subscription is replaced, so a late result for an old endpoint can be told
-    from its replacement. ``created_at`` is when the device enrolled; ``renewed_at`` is when
+    the device's subscription is replaced AND every time the device's token is rotated, so a
+    send queued (or a late result for one) under an older generation can be told from the
+    binding as it stands now and dropped. ``created_at`` is when the device enrolled; ``renewed_at`` is when
     the current subscription was last stored.
     """
 
@@ -186,8 +195,11 @@ class Device:
     # it is keyed by the stable device id, survives a token rotation, and is deleted by the
     # same write that revokes the device. ``push_generation`` is the last generation issued
     # to this device; it outlives a cleared binding so generations are never reused.
+    # ``push_cleared`` says why the REGISTRY removed the binding (a ``PUSH_CLEARED_*``
+    # reason) until the device enrolls again or disables push itself; None otherwise.
     push: PushBinding | None = None
     push_generation: int = 0
+    push_cleared: str | None = None
 
     def effective_scope(self) -> str:
         """The scope this device's token earns. An agent (another protoAgent's hub, ADR 0113)
@@ -366,6 +378,7 @@ def _load() -> list[Device]:
                     # ADR 0135 W2. Absent on every row written before it: not enrolled.
                     push=_parse_push(item.get("push")),
                     push_generation=_opt_generation(item.get("push_generation")),
+                    push_cleared=_opt_push_cleared(item.get("push_cleared")),
                 )
             )
         except (AttributeError, KeyError, TypeError, ValueError):  # AttributeError: a non-dict entry
@@ -385,6 +398,10 @@ def _opt_float(value: object) -> float | None:
 
 def _opt_generation(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _opt_push_cleared(value: object) -> str | None:
+    return value if isinstance(value, str) and value in _PUSH_CLEARED else None
 
 
 def _parse_push(raw: object) -> PushBinding | None:
@@ -486,7 +503,8 @@ def set_device_scope(device_id: str, scope: object) -> dict | None:
 def revoke_device(device_id: str) -> bool:
     """Drop a device. Its token stops authenticating on the next request, and any stream it
     holds open closes within one keepalive (``is_live``, ADR 0121 D5). Its push binding
-    (ADR 0135 W2) is part of the row, so the same write deletes it."""
+    (ADR 0135 W2) is part of the row, so the same write deletes it — and a binding write
+    that lost the race to this one finds no row and is refused (`_push_owner`)."""
     with _LOCK:
         devices = _load()
         remaining = [d for d in devices if d.id != device_id]
@@ -500,14 +518,43 @@ def revoke_device(device_id: str) -> bool:
 
 # ── Push enrollment (ADR 0135 W2) ───────────────────────────────────────────────────────
 # A device's Web Push subscription is a field of its own row — there is no second store. So
-# the binding is keyed by the stable device id, an ordinary token rotation leaves it alone,
-# and every way a row is removed (unpair, reuse revocation) removes the binding in the same
-# atomic write. What a token rotation, a handoff and idle expiry do to a binding beyond
-# that is a later card (W2a3).
+# the binding is keyed by the stable device id and follows the device's OWN lifecycle
+# (ADR 0121, D8) — there is no second expiry mechanism beside the row:
+#
+# * every way a row is removed (unpair, reuse revocation) removes the binding in the same
+#   atomic write, so a binding write that arrives after it finds no device and is refused;
+# * a token rotation keeps the binding and moves it to the next generation (`rotate_device`),
+#   so a send queued under the old generation no longer matches and is dropped;
+# * a handoff moves nothing: the binding belongs to the origin that enrolled it. It is
+#   cleared in the write that retires the handed-off token (the new origin's token is first
+#   presented — `verify_token`), and the new origin enrolls its own. A handoff nobody
+#   completes leaves the old origin's binding alone;
+# * a device idle past ``devices.idle_ttl_days`` loses the binding where it loses its
+#   pairing: `verify_token` refusing its token, or `sweep_push_bindings`;
+# * a binding whose VAPID key version was retired, or left its migration window, is cleared
+#   by `reconcile_push_bindings` and the device is told to renew (`push_renewal`).
 
 
 class PushBindingConflict(Exception):
     """The endpoint already belongs to another device's binding (see `set_push_binding`)."""
+
+
+def _drop_push(device: Device, reason: str) -> bool:
+    """Remove ``device``'s push binding because of ``reason`` (a ``PUSH_CLEARED_*``); False
+    when it had none. Caller holds ``_LOCK`` and saves. ``push_generation`` is left alone,
+    so the next enrollment gets a generation no queued send was made under."""
+    if device.push is None:
+        return False
+    device.push = None
+    device.push_cleared = reason
+    return True
+
+
+def _handoff_unconfirmed(device: Device) -> bool:
+    """Is ``device`` mid-handoff: its previous token was handed off to another origin
+    (`_rebind`) and the new origin's token has not been presented yet? Until then any
+    binding on the row is still the OLD origin's."""
+    return bool(device.prev_handed_off and device.prev_token_sha256 and device.prev_retired_at is None)
 
 
 def _holds_live_credential(device: Device, digest: str) -> bool:
@@ -544,6 +591,14 @@ def push_status(device_id: str | None) -> dict | None:
     return device.push.public() if device is not None and device.push is not None else None
 
 
+def push_renewal(device_id: str | None) -> str | None:
+    """Why the registry removed ``device_id``'s push binding (a ``PUSH_CLEARED_*`` reason),
+    or None: it has a binding, never had one, or turned push off itself. What the device's
+    console reads to offer "Renew on this device" and enroll again."""
+    device = get_device(device_id)
+    return device.push_cleared if device is not None and device.push is None else None
+
+
 def push_bindings_exist() -> bool:
     """Does any device hold a push binding? What ``security.push_keys`` needs to know before
     it would mint a keyring: with bindings present, a missing keyring is a LOST one."""
@@ -576,6 +631,13 @@ def set_push_binding(
             return None
         if any(d.id != device.id and d.push is not None and d.push.endpoint == endpoint for d in devices):
             raise PushBindingConflict()
+        if _handoff_unconfirmed(device) and hmac.compare_digest(device.token_sha256, _hash(presented_token)):
+            # The origin this phone moved TO is enrolling with a token `verify_token` has not
+            # seen yet (an in-process caller; the routes verify first). This IS that token's
+            # first presentation: retire the handed-off one here, with the binding its origin
+            # made, so the confirmation that follows can't mistake the new binding for it.
+            device.prev_retired_at = now
+            _drop_push(device, PUSH_CLEARED_HANDOFF)
         old = device.push
         same = (
             old is not None
@@ -595,10 +657,27 @@ def set_push_binding(
             created_at=old.created_at if old is not None else now,
             renewed_at=now,
         )
+        device.push_cleared = None
         _save(devices)
         status = device.push.public()
     logger.info("[devices] %s %s its push binding", device.id, "renewed" if same else "set")
     return status
+
+
+def invalidate_push_binding(device_id: str, generation: int) -> bool:
+    """Internal sender seam: retire only the generation rejected by the service.
+
+    A late 404/410 must never clear a replacement subscription. No device token
+    is needed by the trusted transport; enrollment routes use clear_push_binding.
+    """
+    with _LOCK:
+        devices = _load()
+        device = next((d for d in devices if d.id == device_id), None)
+        if device is None or device.push is None or device.push.generation != generation:
+            return False
+        device.push = None
+        _save(devices)
+    return True
 
 
 def clear_push_binding(device_id: str | None, presented_token: str) -> bool | None:
@@ -610,11 +689,87 @@ def clear_push_binding(device_id: str | None, presented_token: str) -> bool | No
         if device is None:
             return None
         if device.push is None:
+            if device.push_cleared is not None:
+                # The device turned push off itself: nothing is left for it to renew.
+                device.push_cleared = None
+                _save(devices)
             return False
         device.push = None
+        device.push_cleared = None
         _save(devices)
     logger.info("[devices] %s cleared its push binding", device_id)
     return True
+
+
+def sweep_push_bindings(usable_versions: frozenset[int] | set[int] | None = None) -> list[dict]:
+    """Clear every push binding its device's lifecycle no longer allows; return what went.
+
+    A binding goes when its device has idled past the idle limit (the same test that
+    refuses its token), or — when ``usable_versions`` is given — when it was enrolled under
+    a VAPID key version not in that set: one that was retired, or whose migration window
+    has closed (``security.push_keys.usable_versions``). ``None`` skips the key check, for
+    a caller that can't read the keyring: an unknown keyring clears nothing.
+
+    Each report is ``{"device_id", "reason", "vapid_version", "generation"}`` — never the
+    endpoint or the client keys. The reason is also kept on the row (`push_renewal`) so the
+    device's console can enroll again. A sender calls this before it fans out; so does the
+    enrollment GET (`reconcile_push_bindings`). Nothing here runs on a timer.
+    """
+
+    def reason_for(device: Device, now: float) -> str | None:
+        if device.push is None:
+            return None
+        if device.is_expired(now):
+            return PUSH_CLEARED_IDLE
+        if usable_versions is not None and device.push.vapid_version not in usable_versions:
+            return PUSH_CLEARED_KEY
+        return None
+
+    now = _now()
+    # Lock-free first, like `verify_token`: the common answer is "nothing to clear", and a
+    # decision made here is never acted on — it is re-made under the lock.
+    if not any(reason_for(d, now) for d in _load()):
+        return []
+    cleared: list[dict] = []
+    with _LOCK:
+        devices = _load()
+        for device in devices:
+            reason = reason_for(device, now)
+            if reason is None or device.push is None:
+                continue
+            cleared.append(
+                {
+                    "device_id": device.id,
+                    "reason": reason,
+                    "vapid_version": device.push.vapid_version,
+                    "generation": device.push.generation,
+                }
+            )
+            _drop_push(device, reason)
+        if cleared:
+            _save(devices)
+    for item in cleared:
+        logger.info(
+            "[devices] cleared the push binding of %s (%s, key version %d)",
+            item["device_id"],
+            item["reason"],
+            item["vapid_version"],
+        )
+    return cleared
+
+
+def reconcile_push_bindings() -> list[dict]:
+    """`sweep_push_bindings` against this instance's VAPID keyring: bindings on a retired
+    key version, or one past its migration window, are cleared along with those of
+    idle-expired devices. A keyring that is absent or unreadable clears nothing by version —
+    restoring it must find the bindings still there. Blocking (file reads)."""
+    from security import push_keys
+
+    try:
+        usable = push_keys.usable_versions()
+    except push_keys.PushKeyringError:
+        usable = None
+    return sweep_push_bindings(usable)
 
 
 def verify_token(token: str) -> Device | None:
@@ -628,7 +783,8 @@ def verify_token(token: str) -> Device | None:
     Lifetime (ADR 0121 D5), decided here so every caller (the HTTP middleware, the fleet WS
     proxy's ``bearer_tier``/``bearer_scope``) gets the same answer:
 
-    * an **expired** device (idle past ``devices.idle_ttl_days``) is refused, but stays listed;
+    * an **expired** device (idle past ``devices.idle_ttl_days``) is refused, but stays listed
+      — and loses its push binding in that refusal (ADR 0135 W2);
     * the **current** token's first presentation after a rotation starts the previous
       token's ``ROTATION_GRACE_SECONDS`` grace;
     * the **previous** token is accepted until then and through the grace — and presented
@@ -661,8 +817,22 @@ def verify_token(token: str) -> Device | None:
         if _REVOKE in actions and device is not None:
             _save([d for d in devices if d.id != device.id])
             revoked, device = device, None
+        elif _EXPIRE in actions and device is not None:
+            # Idle expiry takes the binding where it takes the pairing: in this refusal.
+            _drop_push(device, PUSH_CLEARED_IDLE)
+            try:
+                _save(devices)
+                logger.info("[devices] %s idled out; its push binding was cleared", device.id)
+            except OSError:
+                logger.warning("[devices] could not clear the push binding of expired %s", device.id)
+            device = None
         elif device is not None and actions & _WRITES:
             if _CONFIRM in actions:
+                if device.prev_handed_off:
+                    # The new origin's token is in use, so the handed-off one is retired —
+                    # and with it the binding the OLD origin made (ADR 0135 W2). Browser
+                    # subscriptions don't cross origins; the new one enrolls its own.
+                    _drop_push(device, PUSH_CLEARED_HANDOFF)
                 device.prev_retired_at = now
             if _TOUCH in actions:
                 device.last_seen_at = now
@@ -688,13 +858,14 @@ _CONFIRM = "confirm"  # the new token's first use: start the previous token's gr
 _TOUCH = "touch"  # stamp last-seen (throttled)
 _REVOKE = "revoke"  # a retired token came back after its grace
 _HANDED_OFF = "handed_off"
-_WRITES = frozenset({_CONFIRM, _TOUCH, _REVOKE})
+_EXPIRE = "expire"  # an idle-expired device still holds a push binding: clear it, refuse
+_WRITES = frozenset({_CONFIRM, _TOUCH, _REVOKE, _EXPIRE})
 
 
 def _verify_decision(devices: list[Device], digest: str, now: float) -> tuple[Device | None, frozenset[str]]:
     """What presenting ``digest`` at ``now`` means against ``devices``: the device it
-    authenticates as (or, for ``_REVOKE``/``_HANDED_OFF``, the device it is refused for) and
-    the actions it implies. Pure — `verify_token` decides the locking."""
+    authenticates as (or, for ``_REVOKE``/``_HANDED_OFF``/``_EXPIRE``, the device it is
+    refused for) and the actions it implies. Pure — `verify_token` decides the locking."""
     current: Device | None = None
     previous: Device | None = None
     for device in devices:
@@ -705,7 +876,7 @@ def _verify_decision(devices: list[Device], digest: str, now: float) -> tuple[De
             previous = device
     if current is not None:
         if current.is_expired(now):
-            return None, frozenset()
+            return _expired(current)
         actions = set()
         if current.prev_token_sha256 and current.prev_retired_at is None:
             actions.add(_CONFIRM)
@@ -718,9 +889,15 @@ def _verify_decision(devices: list[Device], digest: str, now: float) -> tuple[De
             # token: refused, never a reuse revocation — see `_rebind`.
             return previous, frozenset({_HANDED_OFF if previous.prev_handed_off else _REVOKE})
         if previous.is_expired(now):
-            return None, frozenset()
+            return _expired(previous)
         return previous, frozenset({_TOUCH}) if _touch_due(previous, now) else frozenset()
     return None, frozenset()
+
+
+def _expired(device: Device) -> tuple[Device | None, frozenset[str]]:
+    """The refusal of an idle-expired device's token: nothing to write unless the row still
+    holds a push binding to clear."""
+    return (device, frozenset({_EXPIRE})) if device.push is not None else (None, frozenset())
 
 
 def _log_handed_off(device: Device | None) -> None:
@@ -787,7 +964,8 @@ def rotate_device(device_id: str, presented_token: str) -> tuple[dict, str] | No
 
     The registry ends up with the new hash as current and the PRESENTED token as previous —
     the one the caller provably holds — so a rotate never leaves the browser without a
-    working token, whatever happens to its storage write:
+    working token, whatever happens to its storage write. A push binding (ADR 0135 W2) is
+    kept and moved to the next generation in the same write:
 
     * **Presented the current token** (the normal case): previous ← current, current ← new.
       A previous token still inside its grace is dropped (it 401s from now on).
@@ -813,6 +991,10 @@ def rotate_device(device_id: str, presented_token: str) -> tuple[dict, str] | No
         if device is None or device.is_expired(now) or device.effective_scope() != SCOPE_DEVICE:
             return None
         if hmac.compare_digest(device.token_sha256, digest):
+            if _handoff_unconfirmed(device):
+                # The new origin rotates before `verify_token` ever saw its token: the
+                # handed-off token is dropped right here, and the old origin's binding with it.
+                _drop_push(device, PUSH_CLEARED_HANDOFF)
             prev = device.token_sha256
         elif device.prev_token_sha256 and hmac.compare_digest(device.prev_token_sha256, digest):
             if device.prev_retired_at is not None:
@@ -830,6 +1012,11 @@ def rotate_device(device_id: str, presented_token: str) -> tuple[dict, str] | No
         # A plain rotation: the previous token is held by THIS origin's own storage, so a late
         # presentation of it is the theft signal again.
         device.prev_handed_off = False
+        if device.push is not None:
+            # The binding stays (it is keyed by the device, not the token) under the next
+            # generation: a send queued while the old token was current no longer matches.
+            device.push_generation = max(device.push_generation, device.push.generation) + 1
+            device.push.generation = device.push_generation
         _save(devices)
         view = device.public()
         view["rotate_due"] = device.rotate_due(now)
@@ -1129,7 +1316,11 @@ def _rebind(device_id: str, digest: str) -> tuple[dict, str] | None:
     rotation, presenting it after the grace is refused WITHOUT revoking the device
     (``prev_handed_off``): the old origin's storage still holds it by design, and the phone
     going back there must not cost it its pairing. The old origin's console drops the token
-    as soon as the server says it was handed off (``self_view``'s ``handed_off``)."""
+    as soon as the server says it was handed off (``self_view``'s ``handed_off``).
+
+    The push binding (ADR 0135 W2) is NOT moved or touched here: it belongs to the origin
+    that enrolled it, which keeps working until the new token is used. It is cleared when
+    that happens (`verify_token`), so a move nobody completes costs the old origin nothing."""
     with _LOCK:  # re-entrant: `claim_pairing` already holds it; taken here so no path can skip it
         return _rebind_locked(device_id, digest)
 
@@ -1141,6 +1332,10 @@ def _rebind_locked(device_id: str, digest: str) -> tuple[dict, str] | None:
     if device is None or device.kind != KIND_DEVICE or device.is_expired(now):
         return None
     if hmac.compare_digest(device.token_sha256, digest):
+        if _handoff_unconfirmed(device):
+            # A second move, asked for with a token `verify_token` never saw: the token of
+            # the FIRST origin is dropped here, and the binding that origin made with it.
+            _drop_push(device, PUSH_CLEARED_HANDOFF)
         prev = device.token_sha256
     elif (
         device.prev_token_sha256

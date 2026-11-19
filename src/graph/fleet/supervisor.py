@@ -236,10 +236,8 @@ def _log_tail_since(log_path: Path, offset: int, limit: int = 500) -> str:
 # dies, so a record whose pid is dead is an exit nobody asked for. Every place that drops
 # such a record goes through ``_prune_dead_records``, which writes the evidence first.
 
-#
-# Two dead records are NOT such an exit (#5584), and the helper drops them unrecorded:
-# one left by a previous hub run (a relaunch after an app update finds the old run's
-# members dead), and one found dead while this hub is shutting down.
+# A dead record left by a previous hub run is NOT such an exit (#5584): a relaunch
+# after an app update finds the old run's members dead. Drop it unrecorded.
 
 #: When this hub process loaded the supervisor: a record started before it belongs to
 #: a previous hub run. Same clock and format as a record's ``started_at``.
@@ -326,9 +324,8 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
 
     A dead record that is not an unexpected exit is dropped WITHOUT an exit record,
     whichever caller sees it first, so nothing pages or restarts it (#5584): a previous
-    hub run's leftover (``_is_boot_leftover``), and any record found dead by
-    ``shutdown_all`` (``detected_by="shutdown"``: the hub is going down and its members
-    go with it).
+    hub run's leftover (``_is_boot_leftover``). Shutdown uses the same rule: a member
+    already dead before teardown still needs this run's crash evidence preserved.
     """
     dead = []
     for k in list(state) if keys is None else keys:
@@ -344,7 +341,7 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
     recorded = []
     for key in dead:
         rec = state[key]
-        if detected_by == "shutdown" or _is_boot_leftover(key, rec):
+        if _is_boot_leftover(key, rec):
             log.info("[fleet] dropped the stale record of member %s (pid %s): it did not exit "
                      "under this hub run (seen by %s)", key, rec.get("pid"), detected_by)
             continue
@@ -2517,9 +2514,9 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
         except Exception:  # noqa: BLE001 — teardown proceeds on the registry alone
             known = set(state)
         _record_stop_intent(sorted(known), shutdown=True)
-        # A member already dead here (on a desktop quit each member exits by its own
-        # parent-death watchdog, which can beat this sweep) used to keep its record,
-        # and the next hub run read it as a crash (#5584). Drop it through the helper.
+        # The live-only stop sweep leaves already-dead records behind (#5584).
+        # Prune through the helper, preserving current-run crash evidence before
+        # removing the record; only previous-run leftovers are discarded silently.
         _prune_dead_records(state, detected_by="shutdown")
         # PID-reuse guard (#10): only ours; reserve all stops under the lock.
         live = [(k, int(r["pid"])) for k, r in state.items() if _alive(r.get("pid")) and _is_our_agent(int(r["pid"]))]

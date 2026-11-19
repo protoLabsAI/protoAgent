@@ -384,12 +384,27 @@ def test_member_that_outlived_the_previous_hub_is_still_watched(member, monkeypa
     assert [(x["pid"], x["detected_by"]) for x in supervisor.collect_exits()] == [(pids[0], "version_skew")]
 
 
-def test_shutdown_all_leaves_no_record_for_a_member_already_dead(member, monkeypatch):
-    # On a desktop quit members exit by their own parent-death watchdog, so one can be
-    # dead before the hub's sweep reads fleet.json. Its record went stale into the next run.
-    _ws, _flag, pids = member
+@pytest.mark.parametrize("previous_run", [False, True], ids=["current-crash", "boot-leftover"])
+def test_shutdown_all_preserves_current_run_crash_evidence(member, monkeypatch, previous_run):
+    # A dead pid used to survive shutdown's live-only sweep in fleet.json (#5584).
+    # Cleaning it up must preserve evidence when shutdown is the first crash reader.
+    ws, _flag, pids = member
     _kill(pids[0])
+    if previous_run:
+        _relaunch_hub(monkeypatch)
+    else:
+        # Even a member no reader observed alive belongs to this run by started_at.
+        supervisor._seen_alive.clear()
     assert supervisor.shutdown_all() == []
-    assert supervisor._load_state() == {} and not supervisor._exits_path().exists()
+    assert supervisor._load_state() == {}
     _relaunch_hub(monkeypatch)
-    assert _sweep(1) == [] and supervisor.collect_exits() == []
+    assert _sweep(1) == []
+    exits = supervisor.collect_exits()
+    if previous_run:
+        assert exits == [] and not supervisor._exits_path().exists()
+    else:
+        assert [(x["id"], x["pid"], x["detected_by"]) for x in exits] == [
+            (ws["id"], pids[0], "shutdown")
+        ]
+        assert "member booted" in exits[0]["log_tail"]
+    assert supervisor.collect_exits() == []
