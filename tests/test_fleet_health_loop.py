@@ -10,6 +10,7 @@ import pytest
 from events.bus import EventBus
 from graph.config import LangGraphConfig
 from graph.fleet import supervisor
+from graph.plugins import chat_surface
 from graph.workspaces import manager
 from inbox.store import InboxStore
 from runtime.state import STATE
@@ -28,6 +29,12 @@ async def health_loop(tmp_path, monkeypatch):
     monkeypatch.setattr(STATE, "inbox_store", inbox)
     monkeypatch.setattr(loops, "_event_bus", bus)
     monkeypatch.setattr(manager, "is_workspace_member", lambda: False)
+    notices = []
+    monkeypatch.setattr(
+        chat_surface, "notify_chat_surfaces",
+        lambda text, link, **kw: notices.append(SimpleNamespace(text=text, link=link, **kw)),
+    )
+    monkeypatch.setenv("A2A_PUBLIC_URL", "https://hub.example")
     sleeping = asyncio.Queue()
     resume = asyncio.Queue()
 
@@ -47,7 +54,7 @@ async def health_loop(tmp_path, monkeypatch):
             resume.put_nowait(None)
         return await asyncio.wait_for(sleeping.get(), timeout=10)
 
-    yield SimpleNamespace(tick=tick, inbox=inbox, bus=bus, cfg=cfg)
+    yield SimpleNamespace(tick=tick, inbox=inbox, bus=bus, cfg=cfg, notices=notices)
     if task is not None:
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -75,6 +82,11 @@ async def test_real_exit_pages_once_even_before_first_sweep(member, health_loop,
     assert event["event"] == "fleet.health.down"
     assert event["data"]["reason"] == "unexpected_exit"
     assert "log_tail" not in event["data"]
+    assert "_notice_sent" not in event["data"]
+    (notice,) = health_loop.notices  # one typed notice per page; none on the unchanged tick
+    assert (notice.kind, notice.importance) == ("notify", "high")
+    assert notice.text.startswith("Fleet member m") and "has stopped" in notice.text and "Open the console" in notice.text
+    assert notice.link == "https://hub.example/app/"
     assert not next(row for row in supervisor.status() if row["id"] == ws["id"])["running"]
 
 
@@ -83,7 +95,7 @@ async def test_intentional_stop_does_not_page(member, health_loop):
     await health_loop.tick()
     await asyncio.to_thread(supervisor.stop, "m")
     await health_loop.tick()
-    assert health_loop.inbox.list() == events(health_loop) == []
+    assert health_loop.inbox.list() == events(health_loop) == health_loop.notices == []
 
 
 @pytest.mark.platform_sensitive
@@ -103,6 +115,9 @@ async def test_wedge_recovery_and_second_episode_each_page_once(member, health_l
         "fleet.health.wedged", "fleet.health.recovered",
     ]
     assert len(health_loop.inbox.list()) == 4  # no dedup suppression of a new episode
+    assert [(n.importance, "not responding" in n.text, "responding again" in n.text) for n in health_loop.notices] == [
+        ("high", True, False), ("normal", False, True),
+    ] * 2  # one notice per transition, recovery included
     assert next(row for row in supervisor.status() if row["id"] == ws["id"])["pid"] == pids[0]  # never restarted
 
 
@@ -120,7 +135,7 @@ async def test_loop_guards_do_not_collect_or_probe(health_loop, monkeypatch, mod
     else:
         monkeypatch.setattr(STATE, "inbox_store", None)
     await health_loop.tick()
-    assert health_loop.inbox.list() == events(health_loop) == []
+    assert health_loop.inbox.list() == events(health_loop) == health_loop.notices == []
 
 
 @pytest.mark.platform_sensitive
@@ -139,12 +154,13 @@ async def test_pending_exit_retries_inbox_off_loop_and_reads_live_config(member,
 
     monkeypatch.setattr(health_loop.inbox, "add", flaky_add)
     await health_loop.tick()
-    assert events(health_loop) == []
+    assert events(health_loop) == health_loop.notices == []  # no notice before its inbox item
     health_loop.cfg.fleet_health_interval_seconds = 11
     assert await health_loop.tick() == 11
     await health_loop.tick()
     assert len(health_loop.inbox.list()) == len(events(health_loop)) == 1
     assert len(attempts) == 2
+    assert len(health_loop.notices) == 1
     assert all(tid != main_thread for tid in attempts)
 
 
@@ -204,3 +220,27 @@ async def test_collection_timeout_retains_committed_transition(member, health_lo
     await health_loop.tick()
     assert len(health_loop.inbox.list()) == len(events(health_loop)) == before + 1
     assert events(health_loop)[-1]["event"] == f"fleet.health.{state}"
+
+
+async def test_notice_failure_and_event_retry_never_repeat_the_notice(health_loop, monkeypatch):
+    change = {"id": "w1", "name": "m", "kind": "local", "state": "gave_up", "pid": 1, "changed_at": "t"}
+    batches = [[dict(change)]]
+    monkeypatch.setattr(loops, "_fleet_health_notices", lambda *a: batches.pop() if batches else [])
+    publish, calls = health_loop.bus.publish, []
+
+    def flaky_publish(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("bus down")
+        publish(*args)
+
+    monkeypatch.setattr(health_loop.bus, "publish", flaky_publish)
+    await health_loop.tick()
+    await health_loop.tick()
+    assert len(health_loop.inbox.list()) == len(events(health_loop)) == len(health_loop.notices) == 1
+    assert health_loop.notices[0].importance == "high" and "given up" in health_loop.notices[0].text
+
+    batches.append([dict(change, state="recovered", changed_at="t2")])
+    monkeypatch.setattr(chat_surface, "notify_chat_surfaces", lambda *a, **kw: 1 / 0)
+    await health_loop.tick()
+    assert len(health_loop.inbox.list()) == len(events(health_loop)) == 2  # the page survives a notice failure
