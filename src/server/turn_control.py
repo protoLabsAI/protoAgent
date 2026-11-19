@@ -379,6 +379,63 @@ def _truthy(value) -> bool:
     return bool(value)
 
 
+def spend_cap_status() -> dict:
+    """Read-only instance meter and durable pause/approval state; never creates a decision."""
+    from datetime import UTC, datetime
+
+    from graph.decisions import decision_store
+    from runtime.state import STATE
+
+    config = STATE.graph_config
+    enabled = bool(getattr(config, "spend_cap_enabled", False))
+    store = STATE.telemetry_store
+    spend = store.daily_autonomous_spend(_AUTONOMOUS_ORIGINS) if store else {
+        "day": datetime.now(UTC).date().isoformat(), "cost_usd": None, "total_tokens": None,
+    }
+    rec = decision_store().spend_cap_decision(spend["day"]) if enabled else None
+    approved = rec is not None and rec.state == "answered"
+    cost_limit = getattr(config, "spend_cap_daily_cost_hard_limit", 10.0)
+    token_limit = getattr(config, "spend_cap_daily_token_hard_limit", 1_000_000)
+    reached = store is not None and (spend["cost_usd"] >= cost_limit or spend["total_tokens"] >= token_limit)
+    return {**spend, "enabled": enabled, "meter_available": store is not None,
+            "daily_cost_hard_limit": cost_limit, "daily_token_hard_limit": token_limit,
+            "approved_today": approved, "decision_id": rec.id if rec else None,
+            "paused": enabled and (bool(rec and rec.pending) or (not approved and (reached or store is None)))}
+
+
+def autonomous_admission_error(origin: object, session_id: str) -> str | None:
+    """One instance admission gate for both drivers, before any model/dispatch work.
+
+    No awaits between checking and creating: admissions on the server event loop
+    cannot raise duplicate decisions. The ledger deduplicates the UTC-day identity
+    and survives restart. Missing/unreadable accounting fails closed when enabled.
+    """
+    from graph.decisions import SPEND_CAP_PREFIX, decision_store
+    from runtime.state import STATE
+
+    if not is_autonomous_origin(origin) or not getattr(STATE.graph_config, "spend_cap_enabled", False):
+        return None
+    try:
+        status = spend_cap_status()
+        if not status["paused"]:
+            return None
+        if not status["decision_id"]:
+            rec = decision_store().create(
+                session_id or "system:activity",
+                "Unattended work is paused at the daily spend cap. Resume for the rest of today (UTC)?",
+                [{"id": "resume", "label": "Resume unattended work for today"}],
+                interrupt_id=SPEND_CAP_PREFIX + status["day"],
+                context=f"Autonomous spend: ${status['cost_usd']}; tokens: {status['total_tokens']}. "
+                        f"Daily limits: ${status['daily_cost_hard_limit']}; {status['daily_token_hard_limit']} tokens. "
+                        "An answer permits all unattended work for the current UTC day. Job settings are unchanged.",
+            )
+            status["decision_id"] = rec.id
+        return f"Unattended work paused by spend cap; answer decision {status['decision_id']} to resume."
+    except Exception:
+        log.exception("[spend-cap] admission accounting unavailable")
+        return "Unattended work paused: spend-cap accounting is unavailable."
+
+
 def is_autonomous_origin(origin: object) -> bool:
     """Whether ``origin`` names a SERVER-FIRED turn — one nobody is watching or holding a
     stream for (see ``_AUTONOMOUS_ORIGINS``).

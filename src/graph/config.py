@@ -1726,6 +1726,11 @@ class LangGraphConfig:
     # blank → in-memory (history cleared on restart). Bound at graph-compile
     # time (see graph/checkpointer.py); changing the path needs a restart.
     checkpoint_db_path: str = "/sandbox/checkpoints.db"
+    # Instance-wide unattended admission budget (ADR 0135 D12), per UTC day.
+    spend_cap_enabled: bool = False
+    spend_cap_daily_cost_hard_limit: float = 10.0
+    spend_cap_daily_token_hard_limit: int = 1_000_000
+
     # Local telemetry store (ADR 0006 Slice 2) — one per-turn cost/latency row
     # per terminal A2A turn, queryable via /api/telemetry/*. ON by default
     # (cheap, one write per turn); path follows /sandbox→~/.protoagent fallback
@@ -2738,6 +2743,11 @@ class LangGraphConfig:
             knowledge_backend=knowledge.get("backend", cls.knowledge_backend),
             knowledge_embedder=knowledge.get("embedder", cls.knowledge_embedder),
             checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
+            spend_cap_enabled=data.get("spend_cap", {}).get("enabled", cls.spend_cap_enabled),
+            spend_cap_daily_cost_hard_limit=float(data.get("spend_cap", {}).get(
+                "daily_cost_hard_limit", cls.spend_cap_daily_cost_hard_limit)),
+            spend_cap_daily_token_hard_limit=int(data.get("spend_cap", {}).get(
+                "daily_token_hard_limit", cls.spend_cap_daily_token_hard_limit)),
             telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
             telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
             telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),

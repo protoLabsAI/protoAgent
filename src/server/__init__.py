@@ -1303,7 +1303,9 @@ def _main():
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
     # Per-turn cost/latency + advise-only insights (ADR 0006). Extracted to
     # operator_api/telemetry_routes.py (ADR 0023 phase 3).
-    register_telemetry_routes(fastapi_app)
+    from server.turn_control import spend_cap_status
+
+    register_telemetry_routes(fastapi_app, spend_cap_status=spend_cap_status)
     # Per-turn user feedback (ADR 0126 E2 / D3) — POST/GET /api/feedback stores a thumbs
     # rating and writes a Langfuse user_feedback score on that turn's trace. Same operator
     # auth as its telemetry neighbours (the default-deny /api/* middleware).

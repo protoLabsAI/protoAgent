@@ -114,6 +114,7 @@ def register_decision_routes(app) -> None:
         DecisionNotFound,
         decision_store,
         restart_recovery_ref,
+        is_spend_cap_decision,
     )
 
     @app.get("/api/decisions")
@@ -225,6 +226,14 @@ def register_decision_routes(app) -> None:
                     raise HTTPException(status_code=409, detail=with_delivery(current) if current else None)
                 # Its result isn't needed: the ledger, re-read below, says whose answer landed.
                 recovery_ref = restart_recovery_ref(current)
+                if is_spend_cap_decision(current):
+                    # Admission is resumed by the durable answer; no model turn is started.
+                    try:
+                        await asyncio.to_thread(store.answer, decision_id, answer,
+                                                answered_by=actor, answered_surface=body.surface)
+                    except DecisionClosed as exc:
+                        raise HTTPException(status_code=409, detail=str(exc)) from exc
+                    return
                 if recovery_ref is not None:
                     # ADR 0129 D7 S7: no parked interrupt — the answer performs
                     # Resume / Re-run / Drop on the held occurrence instead.
@@ -303,6 +312,8 @@ def register_decision_routes(app) -> None:
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:
             raise HTTPException(status_code=404, detail=f"no decision {decision_id!r}")
+        if is_spend_cap_decision(rec):
+            raise HTTPException(status_code=409, detail="Answer the spend-cap decision to resume unattended work.")
         # A restart-recovery decision (ADR 0129 D7 S7) has no checkpoint interrupt to
         # clear: withdrawing the record IS the whole dismissal — a clearing resume would
         # instead start a fresh turn on the job session, which only Re-run may do. The

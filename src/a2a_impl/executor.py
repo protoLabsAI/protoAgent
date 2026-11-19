@@ -1661,6 +1661,18 @@ class ProtoAgentExecutor(AgentExecutor):
                     _notify_terminal(_outcome("completed", final_text))
                     return
 
+                elif event_type == "refused":
+                    # Persist the refusal on the status message so GetTask replay can
+                    # distinguish a turn that never ran from an operator cancellation.
+                    if _private():
+                        _discard_private_buffers()
+                    await updater.cancel(message=updater.new_agent_message(
+                        [] if _private() else [_text_part(str(payload))],
+                        metadata={"admission_refused": True},
+                    ))
+                    _notify_terminal(_outcome("canceled", accumulated))
+                    return
+
                 elif event_type == "error":
                     if _private():
                         # A private segment's error text never reaches the peer (#5400): discard

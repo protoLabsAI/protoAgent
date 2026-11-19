@@ -2380,6 +2380,11 @@ async def _chat_langgraph_stream(
     """Idle-beacon wrapper (#1720): mark a turn in flight for the whole generator
     lifetime — including early ``aclose()`` and errors — then delegate. Keeps the
     public name/signature so every caller (A2A executor, console) is unchanged."""
+    if refusal := _turn_control.autonomous_admission_error((request_metadata or {}).get("origin"), session_id):
+        # "refused", not "error": the executor ends the task CANCELED, so a scheduled
+        # fire refused by the pause records no failure and never backs its job off.
+        yield ("refused", refusal)
+        return
     _turn_control._turn_started(session_id)
     # ADR 0074 — idle→active lifecycle event (debounced). Emitted inside the triggering
     # turn's fence scope: a configured prompt reaction is a turn the event enqueues, so it
@@ -3313,6 +3318,9 @@ async def _chat_langgraph(
     to describe the agent. The row is written HERE rather than inside the impl
     because the impl has a dozen return points; the wrapper has exactly one exit.
     """
+    if refusal := _turn_control.autonomous_admission_error(origin, session_id):
+        return [{"role": "assistant", "content": refusal,
+                 "error": {"message": refusal, "type": "spend_cap"}}]
     _turn_control._turn_started(session_id)
     with fence_scope(tool_fence):  # the triggering turn's fence — see _chat_langgraph_stream
         _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
