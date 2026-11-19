@@ -61,7 +61,7 @@ MAX_PAYLOAD_BYTES = 64 * 1024
 #: Payload keys tried, in order, for the entity identity a change event names (D2:
 #: events carry identities, not payloads). Producers aren't forced onto one key —
 #: ``session_id``, ``job_id``, ``task_id`` etc. all predate this log.
-_ENTITY_KEYS = ("entity_id", "id", "session_id", "context_id", "task_id", "job_id", "item_id", "name")
+_ENTITY_KEYS = ("entity_id", "id", "session_id", "context_id", "task_id", "job_id", "item_id", "name", "notice_id")
 
 
 def entity_ref_of(data: dict[str, Any] | None) -> tuple[str, str]:
