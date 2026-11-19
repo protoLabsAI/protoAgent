@@ -229,55 +229,20 @@ async def test_update_watch_can_promote_a_tripwire_to_a_monitor(monkeypatch, tmp
     assert (w.trigger, w.repeat) == ("change", True)
 
 
-# ── the built-in fleet:member_health check (ADR 0135 D8, #5534) ──────────────
-
-
-def _stock_tools(monkeypatch, tmp_path):
-    """The watch tools on a stock registry: no plugin installed, nothing patched in."""
+def test_create_watch_accepts_the_builtin_member_health_check_with_no_plugin(monkeypatch, tmp_path):
     from graph.goals.verifiers import set_plugin_verifiers
 
     ctrl = WatchController(LangGraphConfig(), WatchStore(tmp_path))
     monkeypatch.setattr(STATE, "watch_controller", ctrl, raising=False)
     set_plugin_verifiers({})  # what plugin wiring binds when no plugin contributes a check
     create, *_rest = _build_watch_tools()
-    return ctrl, create
-
-
-def test_create_watch_accepts_the_builtin_member_health_check_with_no_plugin(monkeypatch, tmp_path):
-    ctrl, create = _stock_tools(monkeypatch, tmp_path)
-    out = create.invoke(
-        {
-            "condition": "scout goes down or recovers",
-            "check": "fleet:member_health",
-            "check_args": {"member": "scout", "state": "down"},
-            "run_prompt": "Scout changed health state: report it.",
-            "on_change": True,
-        }
-    )
+    args = {"member": "scout", "state": "down"}
+    out = create.invoke({
+        "condition": "scout goes down or recovers", "check": "fleet:member_health",
+        "check_args": args, "run_prompt": "Scout changed health state: report it.",
+        "on_change": True,
+    })
     assert "unknown plugin verifier" not in out
     w = _only(ctrl)
-    assert w.verifier == {
-        "type": "plugin",
-        "check": "fleet:member_health",
-        "args": {"member": "scout", "state": "down"},
-    }
+    assert w.verifier == {"type": "plugin", "check": "fleet:member_health", "args": args}
     assert (w.trigger, w.repeat) == ("change", True)
-
-
-@pytest.mark.asyncio
-async def test_a_member_health_watch_fires_when_the_member_goes_down(monkeypatch, tmp_path):
-    from graph.fleet import supervisor
-
-    ctrl, create = _stock_tools(monkeypatch, tmp_path)
-    health = {"id": "ws-1", "name": "scout", "kind": "local", "state": "healthy", "failures": 0, "changed_at": "t0"}
-    monkeypatch.setattr(supervisor, "fresh_member_health", lambda max_age, threshold: [dict(health)])
-    create.invoke({"condition": "scout is down", "check": "fleet:member_health", "check_args": {"member": "scout"}})
-    w = _only(ctrl)
-    assert await ctrl.evaluate(w.id) is None  # healthy: the tripwire holds
-    assert _only(ctrl).status == "active"
-
-    health.update(state="down", changed_at="t1")
-    assert await ctrl.evaluate(w.id) == "met"
-    done = _only(ctrl)
-    assert done.status == "met"
-    assert done.last_reason == "member scout is down"

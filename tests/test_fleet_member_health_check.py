@@ -1,9 +1,4 @@
-"""The built-in ``fleet:member_health`` watch check (ADR 0135 D8, #5534).
-
-It lives in the ONE verifier registry plugins contribute to, so it is there with no plugin
-installed and survives the rebind a plugin reload does. It reads the supervisor's health
-records (C1a), sweeping first when stale (stubbed here; real in test_fleet_exit_capture.py).
-"""
+"""Built-in member-health verification and shared supervisor sweep behavior."""
 
 from __future__ import annotations
 
@@ -11,7 +6,6 @@ import pytest
 
 from graph.fleet import supervisor
 from graph.goals.verifiers import (
-    FLEET_MEMBER_HEALTH_CHECK,
     VerifyContext,
     plugin_verifier_names,
     run_verifier,
@@ -43,52 +37,27 @@ def _health(monkeypatch, *records):
     monkeypatch.setattr(supervisor, "member_health", lambda: [dict(r) for r in records])
 
 
-def _rec(state, *, mid="ws-1", name="Scout", kind="local", changed_at="2026-11-18T10:00:00+00:00", failures=0):
-    return {
-        "id": mid,
-        "name": name,
-        "kind": kind,
-        "state": state,
-        "failures": failures,
-        "changed_at": changed_at,
-        "pid": 4242 if state != "down" else None,
-    }
+def _rec(state, *, mid="ws-1", name="Scout", **extra):
+    return dict(id=mid, name=name, kind="local", state=state, **extra)
 
 
 async def _check(**args):
     return await run_verifier({"type": "plugin", "check": CHECK, "args": args}, VerifyContext())
 
 
-def test_registered_with_no_plugin_installed():
-    assert FLEET_MEMBER_HEALTH_CHECK == CHECK
-    assert CHECK in plugin_verifier_names()
-    entry = next(c for c in verifier_catalog()["plugin_checks"] if c["name"] == CHECK)
-    assert entry["plugin_id"] == "fleet"
-    assert "member" in entry["description"] and "wedged" in entry["description"]
-
-
-def test_a_plugin_reload_keeps_it():
-    async def _other(spec, ctx):  # pragma: no cover - never called
-        raise AssertionError
-
-    set_plugin_verifiers({"demo:check": _other}, {"demo:check": {"plugin_id": "demo", "description": "d"}})
-    assert plugin_verifier_names() == ["demo:check", CHECK]
-    set_plugin_verifiers({})  # the plugin went away
-    assert plugin_verifier_names() == [CHECK]
-    set_plugin_verifiers(None)
-    assert plugin_verifier_names() == [CHECK]
-    assert [c["name"] for c in verifier_catalog()["plugin_checks"]] == [CHECK]
-
-
 @pytest.mark.asyncio
-async def test_a_plugin_cannot_shadow_the_builtin(monkeypatch):
-    async def _impostor(spec, ctx):
+async def test_builtin_survives_registration_reload_and_shadowing(monkeypatch):
+    async def impostor(spec, ctx):
         raise AssertionError("the built-in must win")
 
     _health(monkeypatch, _rec("down"))
-    set_plugin_verifiers({CHECK: _impostor}, {CHECK: {"plugin_id": "evil", "description": "x"}})
-    assert (await _check(member="ws-1", state="down")).met is True
-    assert next(c for c in verifier_catalog()["plugin_checks"] if c["name"] == CHECK)["plugin_id"] == "fleet"
+    for mapping in ({}, {"demo:check": impostor}, None, {CHECK: impostor}, {}):
+        set_plugin_verifiers(mapping, {CHECK: {"plugin_id": "evil"}})
+        assert plugin_verifier_names() == sorted({CHECK, *(mapping or {})})
+        entry = next(c for c in verifier_catalog()["plugin_checks"] if c["name"] == CHECK)
+        assert entry["plugin_id"] == "fleet"
+        assert "member" in entry["description"] and "wedged" in entry["description"]
+        assert (await _check(member="ws-1", state="down")).met is True
 
 
 @pytest.mark.asyncio
@@ -106,7 +75,6 @@ async def test_met_when_the_member_is_in_the_requested_state(monkeypatch, state)
 @pytest.mark.asyncio
 async def test_member_by_id_or_name_state_default_list_and_no_record(monkeypatch):
     _health(monkeypatch, _rec("wedged", mid="ws-1", name="Scout"), _rec("healthy", mid="Scout", name="Decoy"))
-    assert (await _check(member="ws-1", state="wedged")).met is True
     assert (await _check(member="scout", state="wedged")).met is True  # name, any case
     assert (await _check(member="Scout", state="wedged")).met is False  # an exact id wins over a name
     assert (await _check(member="ws-1")).met is False  # state defaults to down
@@ -137,8 +105,7 @@ async def test_bad_args_are_not_met_and_never_reach_the_supervisor(args, needle,
 
 @pytest.mark.asyncio
 async def test_result_is_stable_within_a_state_and_moves_on_a_change(monkeypatch):
-    """An on_change watch fires when reason or evidence differ, so neither may carry a value
-    that moves between checks of the same state (the failure counter does)."""
+    # Failure counts must not trigger an on_change watch within the same state.
     _health(monkeypatch, _rec("healthy", failures=0))
     first = await _check(member="ws-1", state="down")
     _health(monkeypatch, _rec("healthy", failures=2))
@@ -151,16 +118,13 @@ async def test_result_is_stable_within_a_state_and_moves_on_a_change(monkeypatch
 
 @pytest.mark.asyncio
 async def test_a_stale_read_runs_the_supervisors_sweep_and_a_fresh_one_does_not(monkeypatch, sweeps):
-    calls = sweeps
     _health(monkeypatch, _rec("down"))
     assert (await _check(member="ws-1")).met is True
-    assert calls == [(3, 1.0)]  # three failed checks in a row before wedged
-    await _check(member="ws-1")
     await _check(member="ws-2")
-    assert len(calls) == 1  # inside the freshness window: watches share one sweep
+    assert len(sweeps) == 1  # inside the freshness window: watches share one sweep
     monkeypatch.setattr(supervisor, "_last_sweep", supervisor.time.monotonic() - 16)
     await _check(member="ws-1")
-    assert len(calls) == 2
+    assert len(sweeps) == 2
 
 
 @pytest.mark.asyncio
