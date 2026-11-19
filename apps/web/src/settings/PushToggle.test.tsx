@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import * as desktop from "../lib/api/desktop";
 import * as push from "../lib/push";
 import { PushToggle } from "./PushToggle";
 
@@ -147,4 +148,14 @@ it("a read that started before the tap can't overwrite what the tap decided", as
   await act(async () => button()!.click());
   await act(async () => late("not enrolled"));
   expect(note()).toContain("On for this device");
+});
+
+it("the desktop app is told it already gets notifications, not to pair", async () => {
+  localStorage.removeItem("protoagent.deviceToken");
+  vi.spyOn(desktop, "isDesktopWebview").mockReturnValue(true);
+  vi.spyOn(push, "pushState").mockResolvedValue("unsupported");
+  await render();
+  expect(note()).toContain("desktop app shows notifications itself");
+  expect(note()).not.toContain("Pair this one");
+  expect(button()).toBeNull();
 });
