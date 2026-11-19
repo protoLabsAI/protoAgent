@@ -1,0 +1,1 @@
+- **Bounded push delivery ledger.** Track per-device attempts by notice ID and binding generation, retry timeouts and network failures with bounded backoff across restart, and retire gone subscriptions without clearing replacements. Refs #5539.
