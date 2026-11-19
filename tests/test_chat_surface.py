@@ -147,3 +147,85 @@ def test_start_skips_when_not_configured_or_disabled():
 
 async def _collect(bucket, s):
     bucket.append(s)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_decision_notice_uses_owner_hook_not_inbound_replies(monkeypatch, legacy):
+    import asyncio
+
+    from graph.decisions import DecisionStore
+
+    monkeypatch.setattr("graph.sdk.console_url", lambda: "https://console.example")
+    monkeypatch.setattr("security.public_console.public_origin", lambda: "")
+    reg, adapter, _ = _wire({"enabled": True, "bot_token": "t"})
+    notices, replies = [], []
+    delivered = asyncio.Event()
+
+    async def typed(text, link, *, kind, importance):
+        notices.append((text, link, kind, importance))
+        delivered.set()
+
+    async def old(text, link):
+        notices.append((text, link))
+        delivered.set()
+
+    # The transport's owner hook is distinct from per-user/group reply callbacks.
+    adapter.notify = old if legacy else typed
+    register_chat_surface(reg, adapter)
+    try:
+        await reg.surface["start"]()
+        for user, channel in [("owner", "owner-dm"), ("other", "group")]:
+            await adapter.handle(InboundMessage("hello", user, channel, lambda s: _collect(replies, s)))
+        replies.clear()
+        store = DecisionStore(":memory:")
+        record = store.create("fake:group", "Continue?", ["Yes"], thread_id="t", interrupt_id="i")
+        assert store.create("fake:group", "Continue?", ["Yes"], thread_id="t", interrupt_id="i").id == record.id
+        await asyncio.wait_for(delivered.wait(), 2)
+        await asyncio.sleep(0)
+        expected = (
+            "Agent needs a decision: Continue?\n- Yes\nOpen this decision in the console to answer.",
+            "https://console.example/app/?session=fake%3Agroup",
+        )
+        assert notices == [expected if legacy else (*expected, "question", "high")]
+        assert replies == []  # No unsolicited delivery to an inbound chat, including the decision's chat.
+    finally:
+        await reg.surface["stop"]()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,importance", [("notify", "low"), ("review", "high")])
+async def test_sync_typed_hook_and_failure_are_not_retried(kind, importance, caplog):
+    import asyncio
+    import threading
+
+    from graph.plugins.chat_surface import notify_chat_surfaces
+
+    reg, adapter, _ = _wire({"enabled": True, "bot_token": "t"})
+    calls = []
+    loop_thread = threading.get_ident()
+    completed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def notify(text, link, *, kind, importance):
+        calls.append((text, link, kind, importance, threading.get_ident()))
+        loop.call_soon_threadsafe(completed.set)
+        raise TypeError("transport failed after sending")
+
+    adapter.notify = notify
+    register_chat_surface(reg, adapter)
+    try:
+        await reg.surface["start"]()
+        await asyncio.to_thread(
+            notify_chat_surfaces, "Review the result in the console.", "/app/", kind=kind, importance=importance
+        )
+        await asyncio.wait_for(completed.wait(), 2)
+        # A callback queued from the worker can precede completion of the hook.
+        async with asyncio.timeout(2):
+            while "transport failed after sending" not in caplog.text:
+                await asyncio.sleep(0)
+        assert len(calls) == 1
+        assert calls[0][:4] == ("Review the result in the console.", "/app/", kind, importance)
+        assert calls[0][4] != loop_thread
+    finally:
+        await reg.surface["stop"]()
