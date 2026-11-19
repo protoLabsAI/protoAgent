@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { MobileWorkHandle } from "../app/MobileShell";
 import { useKbIntents } from "../keybindings/intents";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
 import { copyText } from "../lib/clipboard";
@@ -60,7 +60,7 @@ import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { prefixDraft, registerSlashDispatcher } from "./slashDispatch";
-import { isTaskCanceled, isTaskFailed } from "./taskState";
+import { isTaskCanceled, isTaskFailed, isTaskPaused } from "./taskState";
 import { resolveComposerUp } from "./queuedRecall";
 import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
@@ -232,6 +232,7 @@ export function ChatSessionSlot({
   });
   const decisionTranscript = useLiveDecisionTranscript(hitlRef, updateHitl, resumeHitl);
   const abortRef = useRef<AbortController | null>(null);
+  const [reattachRequest, setReattachRequest] = useState(0);
   // The live turn's reveal-queue flush (#2993): stop() settles bubbles outside
   // runTurn's closure, and it must drain any withheld answer tail first.
   const revealFlushRef = useRef<(() => void) | null>(null);
@@ -685,7 +686,7 @@ export function ChatSessionSlot({
     // And it changes when the bus reports a PAUSED turn resumed server-side (a decision
     // answered elsewhere, noteParkedTurnResumed), so the continued turn streams in here.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks intentionally bind this slot
-  }, [sessionId, reattachKey]);
+  }, [sessionId, reattachKey, reattachRequest]);
 
   const messages = session?.messages || [];
   // Regenerate is offered only on the most recent OPERATOR-initiated assistant reply — a
@@ -1752,6 +1753,31 @@ export function ChatSessionSlot({
         setStatusMessage("idle");
       } else {
         const message = errMsg(exc);
+        // The socket may fail before its park frame is read (#5477). Confirm the
+        // durable pause once, then let the reload reattach effect replay its form.
+        const transportFailure = !(exc instanceof ApiError) &&
+          !/^\d{3}\b/.test(message) &&
+          /Failed to fetch|NetworkError|Load failed|network error|network connection|error decoding response body/i.test(message);
+        if (turnTaskId && transportFailure) {
+          const task = await api.getTask(turnTaskId).catch(() => null);
+          // Stop/unmount may have released this turn while the read was pending.
+          if (controller.signal.aborted) return;
+          if (isTaskPaused(task?.state)) {
+            reveal.flush();
+            const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+            if (latest) {
+              chatStore.updateMessages(
+                session.id,
+                latest.messages.map((m) => (m.id === assistantId ? settleStreamEnd(m, { parked: true }) : m)),
+              );
+            }
+            chatStore.setSessionStatus(session.id, "idle");
+            setStatusMessage("idle");
+            // finally releases the local stream before this effect takes ownership.
+            setReattachRequest((request) => request + 1);
+            return;
+          }
+        }
         onError(message);
         setStatusMessage(message);
         chatStore.setSessionStatus(session.id, "error");
