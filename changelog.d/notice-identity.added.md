@@ -1,0 +1,1 @@
+- **Shared proactive notice identity.** Notices carry an id and bounded expiry, publish a replayable operator event, and support core delivery adapters without a chat plugin while preserving legacy hooks. Refs #5539.

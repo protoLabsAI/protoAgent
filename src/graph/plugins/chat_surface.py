@@ -23,14 +23,20 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 import threading
-from dataclasses import dataclass
+import time
+import uuid
+from dataclasses import asdict, dataclass
 from typing import Awaitable, Callable, Literal, Protocol, runtime_checkable
 
 log = logging.getLogger("protoagent.plugins.chat_surface")
 
 NoticeKind = Literal["notify", "question", "review"]
 NoticeImportance = Literal["low", "normal", "high"]
+
+# Delivery freshness in seconds, independent of a decision's own deadline.
+_NOTICE_LIFETIMES: dict[NoticeKind, float] = {"notify": 3600, "question": 86400, "review": 3600}
 
 
 @dataclass(frozen=True)
@@ -41,25 +47,94 @@ class ChatNotice:
     importance: NoticeImportance
     text: str
     link: str
+    notice_id: str = ""
+    created_at: float = 0.0  # UTC Unix seconds
+    expires_at: float = 0.0
 
 
-# Only live, configured surfaces participate; stop/reload removes their dispatcher.
+# Live chat surfaces and core transports share this registry; stop/unregister removes them.
 _notifiers: dict[object, Callable[[ChatNotice], None]] = {}
 _notify_lock = threading.Lock()
 
 
+def register_notice_adapter(key: object, hook: Callable[[ChatNotice], object]) -> None:
+    """Register an owner-only transport on the running hub loop without a plugin.
+
+    Re-registering a key replaces its hook. Dispatch is safe from worker threads;
+    async hooks run on this loop and synchronous hooks run in a worker. Already
+    running deliveries may finish after unregister; queued ones are discarded.
+    """
+    loop = asyncio.get_running_loop()
+    tasks: set[asyncio.Task] = set()
+
+    async def deliver(notice: ChatNotice) -> None:
+        with _notify_lock:
+            if _notifiers.get(key) is not dispatch:
+                return
+        try:
+            if inspect.iscoroutinefunction(hook):
+                await hook(notice)
+            else:
+                result = await asyncio.to_thread(hook, notice)
+                if inspect.isawaitable(result):
+                    await result
+        except Exception:  # noqa: BLE001 — one transport cannot break another
+            log.exception("Core notice adapter failed")
+
+    def queue(notice: ChatNotice) -> None:
+        with _notify_lock:
+            if _notifiers.get(key) is not dispatch:
+                return
+        task = loop.create_task(deliver(notice))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    def dispatch(notice: ChatNotice) -> None:
+        loop.call_soon_threadsafe(queue, notice)
+
+    with _notify_lock:
+        _notifiers[key] = dispatch
+
+
+def unregister_notice_adapter(key: object) -> None:
+    """Remove a core transport by key; missing keys are harmless."""
+    with _notify_lock:
+        _notifiers.pop(key, None)
+
+
 def notify_chat_surfaces(
-    text: str, link: str, *, kind: NoticeKind = "notify", importance: NoticeImportance = "normal"
-) -> None:
+    text: str, link: str, *, kind: NoticeKind = "notify", importance: NoticeImportance = "normal",
+    ttl_seconds: float | None = None,
+) -> str:
     """Queue optional adapter notifications without waiting for network delivery.
 
     Safe from a store's worker thread as well as the server loop. An adapter with
     no ``notify`` hook does nothing by default. Calling server code fixes importance
     for its notice type; never expose it as a model-selected tool argument.
     Adapters deliver only to configured owner destinations, never inbound chats.
-    The two-argument calling form remains supported for existing plugins.
+    The two-argument calling form remains supported for existing plugins. Returns
+    the opaque id shared by transports and the retained bus event. Times are UTC
+    Unix seconds; ``ttl_seconds`` can shorten, but never extend, the kind's default
+    lifetime (notify/review: one hour; question: one day).
     """
-    notice = ChatNotice(kind=kind, importance=importance, text=text, link=link)
+    lifetime = _NOTICE_LIFETIMES[kind]
+    if ttl_seconds is not None:
+        if not math.isfinite(ttl_seconds) or ttl_seconds < 0:
+            raise ValueError("ttl_seconds must be finite and non-negative")
+        lifetime = min(lifetime, ttl_seconds)
+    created_at = time.time()
+    notice = ChatNotice(
+        kind=kind, importance=importance, text=text, link=link,
+        notice_id=uuid.uuid4().hex, created_at=created_at, expires_at=created_at + lifetime,
+    )
+    # The server wires HOST even without chat plugins; publish retains by default.
+    from graph.plugins.host import HOST
+
+    try:
+        if HOST.publish:
+            HOST.publish("notice", asdict(notice))
+    except Exception:  # noqa: BLE001 — a bus failure must not suppress adapters
+        log.exception("Could not publish notice event")
     with _notify_lock:
         dispatchers = list(_notifiers.values())
     for dispatch in dispatchers:
@@ -67,6 +142,7 @@ def notify_chat_surfaces(
             dispatch(notice)
         except Exception:  # noqa: BLE001 — one stopped loop cannot block another surface
             log.exception("Could not queue chat surface notification")
+    return notice.notice_id
 
 
 @dataclass
@@ -106,6 +182,7 @@ class ChatAdapter(Protocol):
     # do nothing; never fall back to a last-seen user, channel, or group, or treat
     # the inbound admin allowlist as notification recipients. Destination resolution
     # belongs to the transport adapter, which alone knows platform identities.
+    # Hooks can also accept notice_id, created_at and expires_at keyword metadata.
     # Legacy ``notify(text, link)`` hooks retain the same owner-only contract.
     # Omission is a no-op; synchronous hooks run in a worker thread.
 
@@ -147,9 +224,14 @@ def register_chat_surface(registry, adapter: ChatAdapter) -> None:
             hook = getattr(adapter, "notify", None)
             if not callable(hook):
                 return
-            metadata = {"kind": notice.kind, "importance": notice.importance}
+            metadata = asdict(notice)
+            metadata.pop("text")
+            metadata.pop("link")
             try:
-                inspect.signature(hook).bind(notice.text, notice.link, **metadata)
+                signature = inspect.signature(hook)
+                if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+                    metadata = {k: v for k, v in metadata.items() if k in signature.parameters}
+                signature.bind(notice.text, notice.link, **metadata)
             except (TypeError, ValueError):
                 # Adapt before invoking: a TypeError *inside* a hook must never
                 # trigger a second send through the legacy shape.
