@@ -162,6 +162,15 @@ class SchedulerBackend(Protocol):
         Raises ``ValueError`` if no such job exists (matching ``update_job``)."""
         ...
 
+    def list_runs(self, job_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """A job's past runs, newest first, bounded by ``limit`` (ADR 0135 D8).
+
+        OPTIONAL — like ``set_enabled``, callers check for it with ``getattr``. The
+        local backend reads its ``occurrences`` ledger, the one run-history source;
+        each run carries ``scheduled_for``, ``state``, ``task_state``, ``ok`` and
+        ``error``. An id with no recorded runs returns ``[]``."""
+        ...
+
     def list_jobs(self) -> list[Job]:
         """All jobs visible to the calling agent. Implementations are
         responsible for filtering by ``agent_name`` so multi-agent

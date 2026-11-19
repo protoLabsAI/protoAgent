@@ -613,6 +613,29 @@ async def _operator_scheduler_set_enabled(job_id: str, enabled: bool) -> dict:
     return {"job": job.as_dict()}
 
 
+async def _operator_scheduler_runs(job_id: str, limit: int) -> dict:
+    """A job's run history, newest first — read from the scheduler's own ledger through
+    the backend's OPTIONAL ``list_runs`` (ADR 0135 D8; no second history store).
+
+    A backend without ``list_runs`` raises ``NotImplementedError`` (a 501 at the route).
+    The ledger outlives its job (a finished one-shot is deleted, its runs are not), so an
+    id is unknown — ``NotFoundError``, a 404 — only when it has neither a job nor a run.
+    Read-only: publishes nothing."""
+    import asyncio
+
+    if STATE.scheduler is None:
+        raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+    list_runs = getattr(STATE.scheduler, "list_runs", None)
+    if not callable(list_runs):
+        raise NotImplementedError("This scheduler backend does not keep run history.")
+    runs = await asyncio.to_thread(list_runs, job_id, limit)
+    if not runs and await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
+        from operator_api.routes import NotFoundError
+
+        raise NotFoundError(f"No scheduled job {job_id!r}.")
+    return {"job_id": job_id, "runs": runs}
+
+
 def _scheduler_job(scheduler, job_id: str):
     """One job by id — ``get_job`` where the backend has it, else a ``list_jobs`` scan
     (``get_job`` isn't part of the minimal ``SchedulerBackend`` protocol)."""

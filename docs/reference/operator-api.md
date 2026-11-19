@@ -160,6 +160,7 @@ task store cannot be read. Failure to read the conversation index returns
 | GET · POST | `/api/scheduler/jobs` | List / create scheduled jobs. A malformed `schedule` (not a 5-field cron expression or an ISO-8601 datetime) or `timezone` (not an IANA name) is a `400` |
 | PUT | `/api/scheduler/jobs/{job_id}` | Edit a job in place (partial: only the fields sent change). Unknown id → `404` |
 | DELETE | `/api/scheduler/jobs/{job_id}` | Delete a scheduled job → `{canceled: true}`. Unknown id → `404` (was `200 {canceled: false}`) |
+| GET | `/api/scheduler/jobs/{job_id}/runs` | A job's past runs, newest first → `{job_id, runs}`, read from the scheduler's occurrences ledger. Each run has `scheduled_for`, `state`, `task_state`, `ok` and `error`. `?limit=` bounds the list (default 50, clamped to 1–200). Runs outlive a finished or canceled job; an id with neither a job nor a run → `404` |
 
 ## Knowledge & skills
 
