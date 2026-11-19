@@ -391,11 +391,12 @@ checkpoint:
 #   enabled: true
 #   host: https://cloud.langfuse.com   # blank → LANGFUSE_HOST, else http://host.docker.internal:3001 (compose only)
 
-# Private steering (P1h): operator opt-in, off by default. Reserved for the
-# private-partition intake; setting this alone does not change behavior yet.
-# Config-file only; not exposed in Settings.
+# Private steering (ADR 0131, P1h): on by default. A steer the human operator marks
+# private (`"private": true` on POST /api/chat/sessions/{id}/steer) goes to the agent
+# without ever reaching the peer that owns the thread. Peer callers are refused. Set
+# false to turn it off. Config-file only; not exposed in Settings.
 # private_steering:
-#   enabled: false
+#   enabled: true
 
 # Background jobs (ADR 0050/0070) — delegations fired with run_in_background.
 # auto_resume: when a job finishes, immediately run a turn in the session that
