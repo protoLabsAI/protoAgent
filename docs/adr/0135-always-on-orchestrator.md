@@ -99,6 +99,236 @@ The phase numbers stay as issue groupings. The build order is by what each wave 
 
 The hub is switched on after wave A is in a release: the health loop and restart are enabled, its SOUL gains the standing duties, and the morning brief is created.
 
+## W2 — Push transport design (2026-11-18, proposed; Refs #5539)
+
+This section builds on D9–D13 from PR #5563. **The transport design is proposed
+for Josh's read; it does not change D10's accepted status or claim push has
+shipped.** The console currently has no service worker or web manifest.
+
+### One notice seam, every operator device
+
+Push is **one adapter behind W1's notice seam (`notify_chat_surfaces`, card W1a,
+#5537)**, not a second sender. Today that function accepts `(text, link)` and
+registration is coupled to chat-plugin lifecycle. W1a must supply structured
+notices and core adapter registration at hub startup without requiring a chat
+plugin, chat ingress or model invocation, while preserving existing adapters.
+W2 consumes that contract rather than introducing another notice producer/store.
+
+W1 owns notice identity, notify/question/review kind, code-assigned importance
+(D11), expiry, canonical target and quiet-hours/digest eligibility. W2 owns
+transport attempts and fans eligible notices out to **every live, enrolled
+operator device**; agent-kind pairings are excluded. Success on a chat surface
+or focus on one device never suppresses delivery to another. Unsupported,
+unpaired, permission-denied and unsubscribed devices must appear as not reachable
+by push. D10 requires an enrollment path for every supported device class;
+permission cannot be granted on the operator's behalf, and OS delivery is not
+guaranteed. `apps/web/src/lib/notify.ts` stays the foreground path, including its
+existing callers.
+
+### Transport by device class
+
+| Device | Proposed transport | Requirements and limits |
+|---|---|---|
+| iPhone / iPad | Standards-based Web Push to a service worker in the installed console web app | iOS/iPadOS 16.4+ support Home Screen web apps. Install at the home origin, open the installed app, pair there if its storage is separate, then enable notifications through a user gesture. An ordinary browser tab is not the supported iOS push target. |
+| Android phone / tablet | The same Web Push adapter and worker; offer an installed web app | Detect Push API and Notifications support and request permission on a user gesture. Installation is the preferred phone experience, not a universal Android Push API prerequisite. Background delivery depends on browser/OS restrictions. |
+| Desktop browser | The same Web Push adapter and worker | A tab need not stay open; installation is optional on supported browsers. Browser exit, disabled background operation, sleep and OS notification settings can delay or suppress presentation. Verify each browser/OS; do not promise delivery after every kind of browser shutdown. |
+| Desktop app | W1 notice delivery to the running Tauri shell through its existing native notification plugin | An authenticated native notice-stream/reconnect consumer remains active in the tray, independent of webview timers, while the hub runs. Do not assume WKWebView/WebView2 supports browser Web Push. Window-close keeps the shell running today; Quit removes this receiver. If the hub runs separately after Quit, an enrolled desktop browser is the background target; the hub alone cannot wake a terminated Tauri app in this design. |
+
+The iOS install and gesture requirements are documented by
+[WebKit](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).
+Use a **trusted HTTPS home origin** for remote devices, as in
+[ADR 0121 D1](./0121-device-pairing-over-an-operator-supplied-public-url.md#d1--one-home-origin-per-device-the-address-set-arrives-after-the-claim).
+The Push API requires a secure context; the localhost development exception does
+not make an HTTP LAN address secure on a phone. See
+[PushManager.subscribe](https://developer.mozilla.org/en-US/docs/Web/API/PushManager/subscribe).
+A tailnet HTTPS origin works: providers do not connect inbound to the hub. The
+hub needs outbound internet to send; the phone needs its home origin to enroll
+and open details. Push can arrive without Tailscale connected, but opening the
+console still requires it. An identity-aware proxy may require login on click.
+
+Add a web manifest with stable app id, start URL, standalone display and icons,
+and a same-origin worker scoped to `/app/`. Serve these as non-secret console
+static assets without opening authenticated APIs or bypassing edge login. Handle
+`push` and `notificationclick`; this is not an offline transcript cache and must
+not cache authenticated API responses. Display generic payload text without
+fetching the hub or holding its bearer token. On click, focus/open a same-origin
+console window, authenticate there and resolve the notice target.
+
+The native receiver consumes W1's notice ids with bounded replay after reconnect.
+Remote shells enroll through existing device pairing. A local full-scope shell
+can establish its own device row through the existing device-mint operation;
+there is no native-device registry. Coordinate browser worker, native receiver
+and live-console presentation by notice id per device to avoid duplicate banners.
+Route W1 notices to one presentation owner per surface, preserving unrelated
+`lib/notify.ts` callers. Browser push must still produce a visible notification,
+using a stable tag to replace duplicates; it is not silent background sync, even
+with an open tab. [Apple requires visible presentation for web pushes](https://developer.apple.com/documentation/usernotifications/sending-web-push-notifications-in-web-apps-and-browsers).
+
+### Subscriptions belong to paired-device records
+
+Extend `security.devices.Device` and its existing `devices.json` persistence with
+an optional push binding, using the existing locked/atomic update path. Key it
+by **stable device id**, not the raw token or rotating token hash. Ordinary
+ADR 0121 token rotation preserves it; old rows load without it. One browser
+profile/installed app at one home origin has one active subscription per row;
+independently paired profiles remain separate Devices entries. Native bindings
+record their transport instead of a Web Push endpoint. No second device registry.
+
+A Web Push binding stores endpoint, `p256dh` public key, `auth` secret, normalized
+home origin, VAPID key version, subscription generation, optional browser
+`expirationTime`, enrollment time and bounded delivery status (last attempt,
+service acceptance, error category and retry time). Treat endpoints and keys as
+secrets: exclude them from public device serialization, logs, diagnostics and
+config exports. Devices responses expose only safe status/times. Protect storage
+with owner-only permissions or equivalent Windows ACLs.
+
+Proposed authenticated `GET/PUT/DELETE /api/devices/self/push` operations expose
+safe status and the public application key, replace the caller's binding, and
+disable it. Derive device id from auth, enforce `kind == device`, and allow
+device-scope callers to change only their own binding. A shared bearer without
+a device id must pair first. Preserve ADR 0121's credential-plane ceiling.
+Require the current device credential for binding changes: a retired handoff
+credential cannot overwrite the new home's subscription during its grace.
+Validate home origin against the authenticated console origin and existing
+offered-origin rules. Reject an endpoint already owned by another device instead
+of silently transferring it. Serialize changes with token/handoff/revoke updates.
+
+Endpoints are untrusted outbound URLs. Allow only HTTPS endpoints on explicitly
+supported Apple, Google and Mozilla service hosts, using exact-host or controlled
+subdomain matching, normal TLS verification, bounded input sizes, no userinfo or
+redirects, and rejection of private/loopback/link-local resolved addresses. The
+enrollment API must not become SSRF or an open relay; new providers need explicit
+support and tests.
+
+Successful ADR 0121 home-origin handoff retires the old binding and queued attempts;
+the new origin subscribes under the same device id. An abandoned handoff offer
+does not disable the old home. Browser subscriptions do not migrate across origins.
+Unpairing, reuse-detection revocation and idle expiry stop sends through
+`security.devices.is_live` and clear/disable bindings. Background sends and
+service receipts **never refresh `last_seen_at`**. Recheck device liveness and
+subscription generation before sending and before applying results; a late `410`
+for an old endpoint must not delete its replacement. Already accepted pushes
+cannot reliably be recalled after revoke, hence the generic payload.
+
+### Per-instance key generation, storage and rotation
+
+Use Web Push with VAPID (P-256), not separate APNs/FCM application credentials.
+Generate one keypair from OS cryptographic randomness on first enablement and
+persist a versioned keyring atomically under `instance_paths().store("push")`,
+with owner-only permissions/Windows ACLs. Private keys never enter config YAML,
+frontend assets, logs or Devices responses. Authenticated enrollment gets only
+the active public key/version. Named instances have independent keys, not a
+machine-wide or vendor shared key. Restarts reuse the keyring; corruption or loss
+with existing bindings fails visibly rather than silently replacing their identity.
+
+VAPID signs short-lived tokens with the service origin as audience, at most
+24-hour validity, and an operator-configured contact URI (`mailto:` or HTTPS).
+Providers see that contact; do not silently borrow an email from another setting.
+Any new configuration field needs its settings-schema entry. VAPID authenticates
+the sender; subscription keys separately encrypt the payload. See
+[RFC 8292](https://www.rfc-editor.org/rfc/rfc8292).
+
+Rotation is an explicit full-scope operator action. Activate a new version and
+retain the old signing key for a proposed 30-day migration window. On their next
+authenticated visit, clients unsubscribe/resubscribe with the new public key and
+replace their binding. Existing subscriptions cannot simply be sent with a new
+VAPID key. At the deadline disable unmigrated bindings as "Renew on this device"
+and delete the old key. Compromise retires the key immediately, cancels pending
+attempts and requires renewal of affected bindings. Protect backups as secrets;
+an instance cloned into another active hub must generate new keys and re-enroll,
+not share the original's subscriptions.
+
+### What leaves the machine
+
+The hub sends outbound HTTPS **directly to the subscription's browser-selected
+service**: Apple's Web Push/APNs infrastructure for Safari/iOS Home Screen apps,
+Google's FCM for Chrome, or Mozilla's push service for Firefox. There is no
+protoAgent-hosted relay or chat-plugin dependency, and Apple Developer Program
+membership is not required. Check provider endpoint support at implementation;
+do not assume every Chromium browser uses Google's service. See
+[Apple's documentation](https://developer.apple.com/documentation/usernotifications/sending-web-push-notifications-in-web-apps-and-browsers),
+[Google's protocol explanation](https://web.dev/articles/push-notifications-web-push-protocol)
+and [Mozilla's service description](https://support.mozilla.org/en-US/kb/push-notifications-firefox).
+
+Providers receive the endpoint, hub public IP, timing, ciphertext size,
+TTL/urgency headers, VAPID public key and signed claims including the contact URI.
+They also operate the device delivery connection and observe its connection
+metadata. Web Push encrypts content for the subscribing browser; providers do
+not receive plaintext notices. This is not metadata-private delivery. Enrollment
+also connects the browser to its provider. The native Tauri path uses the hub
+connection and local OS notification API, adding no Web Push provider request.
+
+The proposed versioned payload is capped at 2 KiB before encryption: opaque notice
+id, kind, fixed importance, created/expiry times, generic title ("protoAgent needs
+your attention"), generic body ("Open the console to view a decision" or "Open the
+console to view an update"), and a relative console route carrying the opaque id.
+It includes **no** decision question/answer, review action, chat text, job output,
+member/repository names, file paths, credentials, subscription secrets or absolute
+private hub URL. Lock screens show generic copy. The worker accepts only known
+same-origin routes, never arbitrary destinations or executable action commands.
+
+Clicking fetches the current authoritative record after authentication; push
+does not grant approval or answer from the lock screen. Answered, expired,
+withdrawn and cancelled decisions get their real terminal presentation and no
+answer controls. A `409` or `answered_elsewhere` transport result is not proof of
+an answer: the returned record determines presentation, preserving the existing
+missing-record fallback separately.
+
+### Expiry, delivery failures and evidence
+
+Service success means **accepted by the service**, not displayed, read or answered.
+W1 keeps the notice/decision as source of truth; a failed transport never rolls
+it back. Use W1's delivery queue to track `(notice_id, device_id,
+subscription_generation, transport)` attempts and resume after hub restart,
+without a second notice ledger. Ambiguous timeouts can cause duplicate delivery;
+per-device dedup and notification tags limit it, not an exactly-once promise.
+
+- Set provider TTL to the lesser of W1's remaining notice lifetime and 24 hours;
+  drop already expired work locally. Recheck decision state before retries and
+  discard obsolete prompts. Queued generic notifications may still arrive after
+  state changes, so click always resolves current state.
+- Known subscription expiry stops sends at that time. Missing `expirationTime`
+  does not mean immortality. Reconcile `getSubscription()` and permission at each
+  authenticated app start; use `pushsubscriptionchange` where supported but never
+  rely on it alone. A worker without credentials defers renewal to foreground
+  authentication instead of storing an operator bearer token.
+- Provider `404`/`410` invalidates that subscription generation and cancels its
+  attempts. Unsubscribe/permission denial disables it. Show renewal/permission
+  status rather than repeatedly prompting.
+- Timeouts, network failures, `429` and `5xx` retry independently per destination
+  with jittered exponential backoff: at most five attempts, 30-second initial
+  delay, one-hour delay cap. Honor a longer `Retry-After` if it fits the notice
+  lifetime; otherwise expire. Bound request timeouts, concurrency and queue size;
+  report overflow rather than claiming delivery. One endpoint cannot block others.
+- `401`/`403` indicates sender-key/contact or provider-policy trouble, not proof
+  of unpairing. Pause that destination/key version and expose a redacted operator
+  error. Other permanent `4xx`, including oversized payloads, fail without blind
+  retries until the sender is corrected.
+- Revoke, idle expiry and handoff cancel pending attempts even offline. Missing
+  device rows fail closed. The next authenticated visit shows undelivered notices
+  and transport status; delivery errors must not recursively create unlimited
+  notices about delivery errors.
+
+TTL and service semantics follow [RFC 8030](https://www.rfc-editor.org/rfc/rfc8030).
+Hub downtime prevents new sends; only previously accepted, unexpired pushes may
+remain at providers. OS Focus, denied permission and offline devices remain
+honest delivery limits.
+
+### Proposed build cards — not boarded
+
+**These are proposals only, not boarded. They need Josh's read of this design
+before scheduling.** "New" paths are proposed, not shipped APIs. Each card
+includes focused tests and operator documentation. Wave B settings work also
+requires the design-system spec and preview approval already required above.
+
+| Proposed title | Files / seams | Dependency |
+|---|---|---|
+| W2a — Bind push enrollment to paired devices | `src/security/devices.py`, `src/operator_api/pairing_routes.py`, `src/a2a_impl/auth.py`; new `src/security/push_keys.py`; `tests/test_device_pairing.py`, `tests/test_device_handoff.py`, new push enrollment/key tests; `docs/reference/operator-api.md` | Josh's design read and W1a contract agreed. Cover self-only access, token rotation, handoff/revoke races, idle expiry, endpoint validation and key migration. |
+| W2b — Web Push adapter and bounded delivery | `src/graph/plugins/chat_surface.py`, new `src/graph/push_transport.py`, W1 delivery queue/lifecycle files, `src/server/` lifecycle wiring; `pyproject.toml` and `uv.lock` if a library is added; new adapter tests | W1a shipped and W2a. Fake-provider tests prove fan-out without chat plugins, bounded retries/restart recovery, partial failures, stale generations and missing devices. |
+| W2c — Installable console and closed-page receiver | `apps/web/index.html`, `apps/web/public/` (new manifest, icons and worker), `apps/web/src/main.tsx`, new `apps/web/src/lib/push.ts`, `apps/web/src/lib/pairing.ts`, `apps/web/src/lib/deviceHandoff.ts`, `apps/web/src/lib/notify.ts`; console static serving in `src/server/`; focused unit tests and new `apps/web/e2e/push.spec.ts` | W2a/W2b and approved enrollment UX. Test secure origins, denied permission, renewal, click routing and duplicates. Real-device acceptance: locked paired iOS Home Screen and Android apps receive a decision and urgent notice with console closed and chat plugins disabled. |
+| W2d — Native desktop receiver while the hub runs | New `apps/desktop/src-tauri/src/notices.rs`, `apps/desktop/src-tauri/src/lib.rs`, `apps/desktop/src-tauri/Cargo.toml`, `apps/web/src/lib/notify.ts`, W1 event/replay seam; focused Rust and web bridge tests | W1a/W2a; agree presentation ownership with W2c. Test tray/window-close, reconnect/replay, permission denial and Quit boundaries on macOS, Windows and Linux, without assuming WebView Push API support. |
+| W2e — Device reachability, privacy and renewal controls | `apps/web/src/settings/sections.ts`, `apps/web/src/settings/devices.css`, `apps/web/src/settings/devicesSection.test.ts`, `apps/web/e2e/devices.spec.ts`; `src/graph/settings_schema.py` and config/golden files if fields are added; `docs/guides/phone-access.md`, `docs/guides/pairing.md`, `docs/explanation/security-and-trust.md` | W2a–W2d and approved Wave B spec/preview. Show per-device unsupported/denied/renewal/service-accepted states, provider disclosure, rotation effects and HTTPS/install instructions; never label service acceptance as read. |
+
 ## Consequences
 
 - The hub gains standing work, so its cost is no longer zero when idle. D5 and the spend cap bound it.
