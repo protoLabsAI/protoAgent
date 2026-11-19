@@ -2309,14 +2309,51 @@ def register_chat_routes(app, ui: str) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"directive": d.to_dict()}
 
+    def _directive_ledger(session_id: str | None, instance_wide: bool) -> str:
+        """Which ledger a by-id directive request addresses: exactly one of
+        ``?session_id=`` (that chat's) or ``?instance_wide=true`` (the instance-wide one,
+        ADR 0135 D13). Returns the session id ("" for the instance ledger); 422 otherwise."""
+        if instance_wide == bool(session_id):
+            raise HTTPException(
+                status_code=422, detail="give exactly one of session_id (a chat's directive) or instance_wide=true"
+            )
+        return session_id or ""
+
+    @app.get("/api/directives")
+    async def _api_instance_directives(status: str | None = None):
+        """The instance-wide directives (ADR 0135 D13), oldest first — the same
+        ``{"directives": [...], "in_force": N}`` shape as a chat's list, with the same
+        ``?status=`` filter. A chat's own directives stay on
+        ``/api/chat/sessions/{id}/directives``."""
+        from graph.directives import STATUSES, directive_store
+
+        if status is not None and status not in STATUSES:
+            raise HTTPException(status_code=400, detail=f"status must be one of {', '.join(STATUSES)}")
+        items = await asyncio.to_thread(lambda: directive_store().list("", instance_wide=True))
+        in_force = sum(1 for d in items if d.in_force)
+        if status is not None:
+            items = [d for d in items if d.status == status]
+        return {"directives": [d.to_dict() for d in items], "in_force": in_force}
+
     @app.patch("/api/directives/{directive_id}")
-    async def _api_update_directive(directive_id: str, session_id: SessionId, body: DirectiveUpdateRequest):
-        """The session query parameter scopes the id; the body only edits scope/conditions."""
+    async def _api_update_directive(
+        directive_id: str,
+        body: DirectiveUpdateRequest,
+        session_id: SessionId | None = None,
+        instance_wide: bool = False,
+    ):
+        """The session query parameter scopes the id (``?instance_wide=true`` instead for an
+        instance-wide directive); the body only edits scope/conditions."""
         from graph.directives import DirectiveClosed, DirectiveNotFound, directive_store
 
+        session_id = _directive_ledger(session_id, instance_wide)
         try:
             d = await asyncio.to_thread(
-                directive_store().update, session_id, directive_id, **body.model_dump(exclude_unset=True)
+                directive_store().update,
+                session_id,
+                directive_id,
+                **body.model_dump(exclude_unset=True),
+                instance_wide=instance_wide,
             )
         except DirectiveNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -2325,8 +2362,48 @@ def register_chat_routes(app, ui: str) -> None:
         return {"directive": d.to_dict()}
 
     @app.post("/api/directives/{directive_id}/withdraw")
-    async def _api_withdraw_directive(directive_id: str, session_id: SessionId, reason: str | None = None):
-        return await _api_revoke_directive(session_id, directive_id, reason)
+    async def _api_withdraw_directive(
+        directive_id: str,
+        session_id: SessionId | None = None,
+        reason: str | None = None,
+        instance_wide: bool = False,
+    ):
+        """Withdraw one directive as the operator: a chat's (``?session_id=``) or an
+        instance-wide one (``?instance_wide=true``), which then stops rendering for every
+        chat and unattended turn."""
+        session_id = _directive_ledger(session_id, instance_wide)
+        if not instance_wide:
+            return await _api_revoke_directive(session_id, directive_id, reason)
+        from graph.directives import STATUS_REVOKED, DirectiveClosed, DirectiveNotFound, directive_store
+
+        try:
+            d = await asyncio.to_thread(
+                directive_store().close,
+                "",
+                directive_id,
+                status=STATUS_REVOKED,
+                reason=(reason or "").strip() or "revoked by the operator",
+                closed_by="operator",
+                instance_wide=True,
+            )
+        except DirectiveNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DirectiveClosed as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Same withdrawal note as a chat directive (#4861), in the chat the order was given
+        # in — its transcript still carries the operator's original words. An instance-wide
+        # directive outlives that chat, so skip the note once the chat is gone: appending
+        # would write a message into a deleted thread. Best effort, like the note itself.
+        try:
+            origin_known = bool(d.session_id) and await session_summary(d.session_id) is not None
+        except Exception:  # noqa: BLE001 — bookkeeping must never fail a good withdraw
+            log.warning("[chat] could not check the origin chat of directive %s", d.id, exc_info=True)
+            origin_known = False
+        if origin_known:
+            from server.chat import record_directive_withdrawal
+
+            await record_directive_withdrawal(d.session_id, d, (reason or "").strip())
+        return {"directive": d.to_dict()}
 
     @app.get("/api/chat/sessions/{session_id}/directives")
     async def _api_directives(session_id: SessionId, request: Request, status: str | None = None):

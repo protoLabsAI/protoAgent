@@ -794,6 +794,14 @@ reads and revokes directives with `/directives` and the
 [chat-session API](/reference/operator-api#chat-sessions). See
 [Standing directives](/guides/scheduler#standing-directives).
 
+`record_directive(..., instance_wide=True)` records an **instance-wide** standing order
+(ADR 0135 D13): it renders for every chat and every scheduled or watch turn, tagged
+`[instance-wide]`, and lives in the same store. It is recorded only from an operator chat
+turn, a directive's reach is fixed when it is recorded, and the agent can close one only
+during a chat turn with the operator. The operator lists them with `GET /api/directives`
+and withdraws one with `POST /api/directives/{id}/withdraw?instance_wide=true` or
+`/directives revoke <id>` from any chat.
+
 ### `record_directive` {#record_directive}
 
 ```python
