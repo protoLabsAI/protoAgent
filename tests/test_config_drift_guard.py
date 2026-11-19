@@ -172,6 +172,9 @@ HOST_SCOPED_KEYS = {
     # Egress allowlist (ADR 0008) — a box-wide outbound security policy, so it lives
     # at the Host layer alongside the inbound bind interface.
     "egress.allowed_hosts",
+    "fleet.health.enabled",
+    "fleet.health.interval_seconds",
+    "fleet.health.failure_threshold",
     "fleet.autostart",
     "fleet.port_base",
     "fleet.discovery.port_min",

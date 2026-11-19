@@ -1334,8 +1334,7 @@ class LangGraphConfig:
     tools_memoize_reads_enabled: bool = False
 
     # Fleet diagnostics model exposure (ADR 0071 / #3170). This gates whether a
-    # future fleet-diagnostics tool is exposed to the model. Slice 1 only lands
-    # the config switch; no tool is written or bound here. Default OFF so
+    # fleet_diagnostics tool is exposed to the model. Default OFF so
     # ordinary agents do not gain a new diagnostics surface until an operator
     # opts in.
     tools_fleet_diagnostics_enabled: bool = False
@@ -2085,6 +2084,9 @@ class LangGraphConfig:
     # Full-scope and legacy device rows never expire. Read per request by
     # ``security.devices`` (hot-reloads with the config). No env fallback.
     device_idle_ttl_days: int = 30
+    fleet_health_enabled: bool = False
+    fleet_health_interval_seconds: int = 60
+    fleet_health_failure_threshold: int = 3
     fleet_port_base: int = 7870  # workspace agents get port_base+1, +2, …
     discovery_port_min: int = 7860  # fleet discovery scan window (inclusive)
     discovery_port_max: int = 7910
@@ -2552,6 +2554,7 @@ class LangGraphConfig:
         network = data.get("network", {}) or {}
         devices_cfg = data.get("devices", {}) or {}
         fleet = data.get("fleet", {}) or {}
+        health = fleet.get("health", {}) or {}
         discovery = fleet.get("discovery", {}) or {}
         warm = fleet.get("warm", {}) or {}
 
@@ -2938,6 +2941,9 @@ class LangGraphConfig:
             device_idle_ttl_days=_non_negative_int(
                 devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),
+            fleet_health_enabled=health.get("enabled", cls.fleet_health_enabled),
+            fleet_health_interval_seconds=health.get("interval_seconds", cls.fleet_health_interval_seconds),
+            fleet_health_failure_threshold=health.get("failure_threshold", cls.fleet_health_failure_threshold),
             fleet_port_base=fleet.get("port_base", cls.fleet_port_base),
             discovery_port_min=discovery.get("port_min", cls.discovery_port_min),
             discovery_port_max=discovery.get("port_max", cls.discovery_port_max),

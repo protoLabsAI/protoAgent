@@ -1,0 +1,1 @@
+- **Opt-in fleet health paging.** The hub uses supervisor health sweeps and recorded exits to page once per transition, including recovery, without restarting members. Adds host-scoped health settings and corrects the fleet diagnostics tool help. Refs #5533; Fixes #5548.

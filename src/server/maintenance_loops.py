@@ -408,6 +408,86 @@ async def _checkpoint_prune_loop() -> None:
         await asyncio.sleep(max(1, interval_h or 1) * 3600)
 
 
+def _fleet_health_notices(failure_threshold: int) -> list[dict]:
+    """Use the supervisor's single detector, coalescing exits with down transitions.
+
+    Runs in a worker: probes, fleet file locks and exit collection are blocking.
+    Deliberately omit log tails and remote credentials from notification payloads.
+    """
+    from graph.fleet import supervisor
+
+    changes = supervisor.health_sweep(failure_threshold)
+    exits = supervisor.collect_exits()  # includes exits discovered by this sweep
+    health = {entry["id"]: entry for entry in supervisor.member_health()}
+    notices = []
+    for record in exits:
+        mid = record["id"]
+        notices.append({
+            "id": mid,
+            "name": health.get(mid, {}).get("name", mid),
+            "kind": "local",
+            "state": "down",
+            "pid": record["pid"],
+            "changed_at": record["at"],
+            "reason": "unexpected_exit",
+        })
+    exited = {record["id"] for record in exits}
+    for change in changes:
+        if change["kind"] == "local" and change["state"] == "down" and change["id"] in exited:
+            continue  # one crash is one page, even when a fleet reader pruned it first
+        notices.append({
+            key: change[key] for key in ("id", "name", "kind", "state", "pid", "changed_at")
+        })
+        if change["state"] == "healthy":
+            notices[-1]["state"] = "recovered"
+    return notices
+
+
+async def _fleet_health_loop() -> None:
+    """Hub-only, opt-in supervision. Reload config each tick; never restart a member.
+
+    Keep undelivered notices across transient inbox/bus failures. Transition detection
+    belongs solely to C1a; the inbox dedup key also identifies the transition episode so
+    a second failure after recovery can page even inside the inbox's dedup window.
+    """
+    from graph.workspaces import manager
+
+    pending: list[dict] = []
+    while True:
+        cfg = STATE.graph_config
+        interval = getattr(cfg, "fleet_health_interval_seconds", 60)
+        if (
+            getattr(cfg, "fleet_health_enabled", False)
+            and not manager.is_workspace_member()
+            and STATE.inbox_store is not None
+        ):
+            try:
+                pending.extend(await asyncio.to_thread(
+                    _fleet_health_notices, getattr(cfg, "fleet_health_failure_threshold", 3)
+                ))
+                while pending:
+                    notice = pending[0]
+                    state = notice["state"]
+                    if not notice.get("_inbox_written"):
+                        await asyncio.to_thread(
+                            STATE.inbox_store.add,
+                            f"Fleet member {notice['name']} ({notice['id']}) is {state}."
+                            + (" Process exited unexpectedly." if notice.get("reason") else ""),
+                            priority="next" if state == "recovered" else "now",
+                            source="fleet.health",
+                            dedup_key=f"fleet.health:{notice['id']}:{state}:{notice['changed_at']}",
+                            needs_human=state != "recovered",
+                        )
+                        notice["_inbox_written"] = True
+                    _event_bus.publish(
+                        f"fleet.health.{state}", {k: v for k, v in notice.items() if not k.startswith("_")}
+                    )
+                    pending.pop(0)
+            except Exception:
+                log.exception("[fleet-health] tick failed")
+        await asyncio.sleep(max(1.0, float(interval or 60)))
+
+
 async def _watch_loop() -> None:
     """Out-of-band cadence for watches (ADR 0067): periodically run each active watch's
     verifier — no agent turn — so a met watch reacts (run_in_session + hooks) without waiting
