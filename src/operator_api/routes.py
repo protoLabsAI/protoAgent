@@ -750,6 +750,7 @@ def register_operator_routes(
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     scheduler_set_enabled: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_runs: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -1100,6 +1101,24 @@ def register_operator_routes(
                 raise HTTPException(
                     status_code=501,
                     detail="This scheduler backend does not support pause/resume.",
+                ) from exc
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if scheduler_runs is not None:
+
+        @app.get("/api/scheduler/jobs/{job_id}/runs")
+        async def _scheduler_runs(job_id: str, limit: int = 50):
+            # A job's past runs, newest first, read from the scheduler's occurrences
+            # ledger (ADR 0135 D8). ``limit`` bounds the list; the backend clamps it into
+            # its own range rather than rejecting it. An id with neither a job nor a run
+            # is a 404; a backend without run history is a 501.
+            try:
+                return await scheduler_runs(job_id, limit)
+            except NotImplementedError as exc:
+                raise HTTPException(
+                    status_code=501,
+                    detail="This scheduler backend does not keep run history.",
                 ) from exc
             except Exception as exc:
                 raise _http_error(exc) from exc

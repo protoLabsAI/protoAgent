@@ -336,6 +336,11 @@ _DELIVERY_UNKNOWN = "delivery unknown; not automatically retried"
 # their owner (D6 — the next slot waits) and survive a restart for D7 classification.
 _UNRESOLVED_STATES_SQL = "'claimed', 'unknown', 'running'"
 
+# Run history (ADR 0135 D8): the ``occurrences`` ledger is the ONLY history source.
+# ``list_runs`` reads it bounded — a caller's limit is clamped into this range.
+RUN_HISTORY_DEFAULT_LIMIT = 50
+RUN_HISTORY_MAX_LIMIT = 200
+
 # ADR 0129 D7: occurrence dispositions for a dispatch a restart interrupted. Neither is
 # 'settled' — 'interrupted' records a skipped recurring occurrence (the next slot runs
 # normally); 'interrupted_needs_operator' holds the row for the S7 Needs-you decision
@@ -1068,6 +1073,49 @@ class LocalScheduler:
             db.close()
         return _row_to_job(row) if row else None
 
+    def list_runs(self, job_id: str, limit: int = RUN_HISTORY_DEFAULT_LIMIT) -> list[dict[str, Any]]:
+        """A job's past runs, newest first, read from the ``occurrences`` ledger
+        (ADR 0135 D8 — the one run-history source; there is no second store).
+
+        One entry per claimed fire slot, across every generation of ``job_id`` — the
+        ledger outlives its job (a finished one-shot deletes its row, a cancel keeps
+        the evidence), so history stays readable after the job is gone. ``limit`` is
+        clamped to ``1..RUN_HISTORY_MAX_LIMIT``. Each run carries:
+
+        - ``scheduled_for`` — the slot the run was claimed for (ISO, the run's time);
+        - ``state`` — the ledger's dispatch state (``claimed`` / ``running`` /
+          ``unknown`` / ``retryable`` / ``settled`` / ``interrupted`` /
+          ``interrupted_needs_operator``) and ``task_state`` — the turn's terminal
+          A2A state once known (``completed`` / ``failed`` / ``canceled`` / …);
+        - ``ok`` — ``True`` / ``False`` for a settled run whose outcome the ledger
+          recorded, else ``None`` (still unresolved, canceled, dropped, or settled
+          before the ledger kept outcomes);
+        - ``error`` — the run's failure or unresolved-delivery diagnostic, ``None``
+          for a run that succeeded or is simply still running.
+
+        Read-only. Unlike :meth:`list_jobs`, a DB read failure RAISES: an empty list
+        would read as "this job never ran" (or as an unknown job at the API)."""
+        try:
+            bound = int(limit)
+        except (TypeError, ValueError):
+            bound = RUN_HISTORY_DEFAULT_LIMIT
+        bound = max(1, min(bound, RUN_HISTORY_MAX_LIMIT))
+        db = self._connect()
+        try:
+            # Agent isolation mirrors ``get_job``: the ledger has no agent column, so a
+            # run is hidden only when a live job of that id belongs to ANOTHER agent.
+            rows = db.execute(
+                "SELECT o.job_id, o.next_fire, o.created_at, o.state, o.task_state, "
+                "o.diagnostic, o.task_id, o.message_id FROM occurrences o "
+                "WHERE o.job_id = ? AND NOT EXISTS (SELECT 1 FROM jobs j "
+                "WHERE j.id = o.job_id AND j.agent_name != ?) "
+                "ORDER BY o.next_fire DESC, o.created_at DESC, o.rowid DESC LIMIT ?",
+                (job_id, self.agent_name, bound),
+            ).fetchall()
+        finally:
+            db.close()
+        return [_row_to_run(r) for r in rows]
+
     async def start(self) -> None:
         if self._task is not None:
             return
@@ -1286,6 +1334,12 @@ class LocalScheduler:
             # must not leave a quarantined claim with a cleared diagnostic.
             db.execute("UPDATE occurrences SET state = 'settled' WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                        (job.id, job.next_fire, job.created_at))
+            if failure:
+                # Keep the failure on the run's own ledger row too (ADR 0135 D8):
+                # ``jobs.last_error`` holds only the LATEST outcome, so a fire settled
+                # without a task handle would otherwise leave run history with no error.
+                db.execute("UPDATE occurrences SET diagnostic = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                           (failure, job.id, job.next_fire, job.created_at))
             if not failure:
                 db.execute(
                     "UPDATE jobs SET consecutive_failures = 0, last_error = NULL, last_ok = ? WHERE id = ?",
@@ -2646,6 +2700,31 @@ class LocalScheduler:
         # observability surfaces (audit log, dashboards) even though
         # the DB row is already namespaced by agent_name.
         return f"{self.agent_name}-{uuid.uuid4().hex[:12]}"
+
+
+def _row_to_run(row: Any) -> dict[str, Any]:
+    """Shape one ``occurrences`` row into a run-history entry (see ``list_runs``)."""
+    state, task_state, diagnostic = row["state"], row["task_state"], row["diagnostic"]
+    ok: bool | None = None
+    if state == "settled":
+        if task_state == "completed":
+            ok = True
+        elif task_state in ("failed", "rejected") or (task_state is None and diagnostic):
+            ok = False
+    return {
+        "job_id": row["job_id"],
+        "scheduled_for": row["next_fire"],
+        "state": state,
+        "task_state": task_state,
+        "ok": ok,
+        # A 'running' row's diagnostic is only the interim "pending" note (#5106) —
+        # the turn outlived the bounded wait and nothing about it is an error.
+        "error": None if state == "running" or ok else diagnostic,
+        "task_id": row["task_id"],
+        "message_id": row["message_id"],
+        # The job generation this run belongs to (a re-created id starts a new one).
+        "job_created_at": row["created_at"],
+    }
 
 
 def _row_to_job(row: Any) -> Job:
