@@ -496,25 +496,44 @@ async def test_private_parked_steer_rides_the_guarded_resume(tmp_path, monkeypat
     steering._reset()
 
 
-@pytest.fixture
-def private_intake_config(monkeypatch):
-    # These P1b intake tests count all private rows, before P1h scheduling adds a
-    # separate pending-turn row. Pin that mode rather than inherit another test's
-    # STATE config. Scheduling-on dedupe is covered by test_private_steering_parity.
-    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(private_steering_enabled=False))
+async def _assert_one_steer_and_one_pending_turn(store, session_id, msg_id, ref):
+    """With private steering ON, one accepted private steer is exactly TWO private rows.
+
+    The steer-input record (``private_intake.PRIVATE_KIND_STEER``) holds the text; the P1h
+    pending-turn record (``segment_schedule.KIND_PENDING_TURN``) holds its place in the queue
+    and points back at that input. A retried or concurrent steer of the same message id must
+    add neither a second input nor a second pending turn — and nothing else private at all.
+    """
+    import json
+
+    from sqlalchemy import text as _sql
+
+    from a2a_impl import private_intake, segment_schedule
+
+    async with store.engine.connect() as conn:
+        rows = (await conn.execute(_sql("SELECT id, private_payload FROM tasks WHERE public_visible=0"))).all()
+    payloads = {row[0]: json.loads(row[1]) if isinstance(row[1], str) else row[1] for row in rows}
+    steers = {k: v for k, v in payloads.items() if v.get("kind") == private_intake.PRIVATE_KIND_STEER}
+    turns = {k: v for k, v in payloads.items() if v.get("kind") == segment_schedule.KIND_PENDING_TURN}
+    assert list(steers) == [private_intake.ref_task_id(ref)]  # ONE steer input: the referenced one
+    assert steers[private_intake.ref_task_id(ref)]["dedupe"] == msg_id
+    assert len(turns) == 1  # ONE pending turn for this message id…
+    (turn_id, turn), = turns.items()
+    assert turn_id == segment_schedule.pending_task_id(session_id, 1) and turn["seq"] == 1
+    assert turn["dedupe"] == msg_id and turn["input_ref"] == ref  # …bound to that one input
+    assert set(payloads) == set(steers) | set(turns)  # and no other private rows
 
 
-@pytest.mark.usefixtures("private_intake_config")
 @pytest.mark.asyncio
 async def test_private_steer_is_idempotent_across_a_retry(tmp_path, monkeypatch, delegation_env):
     # The dedupe key persisted in the partition — not only the in-memory start guard — keeps a
     # retried msg_id from minting a second shell or starting a second turn (r2 review).
-    from sqlalchemy import text as _sql
-
+    # Private steering is ON (the shipped default), set here rather than inherited.
     from a2a_impl import private_intake
 
     steering._reset()
     engine, store = await _partition(tmp_path)
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(private_steering_enabled=True), raising=False)
     monkeypatch.setattr(STATE, "graph", _Graph(_idle_snapshot()), raising=False)
     monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
     op = _operator_ctx()
@@ -536,17 +555,17 @@ async def test_private_steer_is_idempotent_across_a_retry(tmp_path, monkeypatch,
     )
     assert again["started_turn"] == first["started_turn"] and len(starts) == 1
 
-    async def _n_shells() -> int:
-        async with store.engine.connect() as conn:
-            return (await conn.execute(_sql("SELECT COUNT(*) FROM tasks WHERE public_visible=0"))).scalar()
+    await _assert_one_steer_and_one_pending_turn(store, "chat-dup", "m1", ref)
 
     # A restart drops the in-memory guard; the persisted dedupe key still reuses the ONE record
-    # (same reference, no second shell).
+    # (same reference, no second shell, no second pending turn).
     steering._reset()
     third = await chat_mod.steer_or_start_turn(
         "chat-dup", "SECRET-ONCE", "m1", private=True, private_store=store, private_context=op
     )
-    assert third["private_ref"] == ref and await _n_shells() == 1
+    assert third["private_ref"] == ref and third["started_turn"] == first["started_turn"]
+    assert len(starts) == 1
+    await _assert_one_steer_and_one_pending_turn(store, "chat-dup", "m1", ref)
 
     # Once the turn has folded its reply into the record, a retry starts NO further turn.
     assert await private_intake.record_private_reply(store, ref, "done, privately", op)
@@ -556,7 +575,8 @@ async def test_private_steer_is_idempotent_across_a_retry(tmp_path, monkeypatch,
         "chat-dup", "SECRET-ONCE", "m1", private=True, private_store=store, private_context=op
     )
     assert replayed["ok"] is True and "started_turn" not in replayed and replayed["private_ref"] == ref
-    assert starts == [] and await _n_shells() == 1
+    assert starts == []
+    await _assert_one_steer_and_one_pending_turn(store, "chat-dup", "m1", ref)
     await engine.dispose()
     steering._reset()
 
@@ -668,18 +688,17 @@ async def test_trusted_runner_resolves_the_reference_and_fails_closed(tmp_path, 
     steering._reset()
 
 
-@pytest.mark.usefixtures("private_intake_config")
 @pytest.mark.asyncio
 async def test_two_concurrent_private_steers_record_one_shell_and_start_one_turn(tmp_path, monkeypatch, delegation_env):
     # Two concurrent private POSTs of the SAME msg_id must record ONE private shell and start
     # ONE turn: the start is claimed synchronously BEFORE the partition read/write, so the
     # second joins the first instead of both missing the dedupe record and each minting a shell.
+    # Private steering is ON (the shipped default), set here rather than inherited.
     import asyncio
-
-    from sqlalchemy import text as _sql
 
     steering._reset()
     engine, store = await _partition(tmp_path)
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(private_steering_enabled=True), raising=False)
     monkeypatch.setattr(STATE, "graph", _Graph(_idle_snapshot()), raising=False)
     monkeypatch.setattr(STATE, "a2a_task_engine", engine, raising=False)
     op = _operator_ctx()
@@ -708,11 +727,9 @@ async def test_two_concurrent_private_steers_record_one_shell_and_start_one_turn
     assert r1["started_turn"] == r2["started_turn"]  # both name the ONE turn
     assert len(starts) == 1  # ONE loopback send…
 
-    async def _n_shells() -> int:
-        async with store.engine.connect() as conn:
-            return (await conn.execute(_sql("SELECT COUNT(*) FROM tasks WHERE public_visible=0"))).scalar()
-
-    assert await _n_shells() == 1  # …and exactly ONE private shell, not two
+    # …and exactly ONE private steer input (plus its one pending turn), not two
+    assert starts == [r1["private_ref"]]
+    await _assert_one_steer_and_one_pending_turn(store, "chat-cc", "m1", r1["private_ref"])
     await engine.dispose()
     steering._reset()
 
