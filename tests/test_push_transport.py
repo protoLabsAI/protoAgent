@@ -120,6 +120,16 @@ async def test_stale_recipients_are_dropped(setup, change):
         assert db.execute("SELECT count(*) FROM attempts").fetchone()[0] == 0
 
 
+async def test_failed_ends_the_attempt_and_keeps_the_binding(setup):
+    _, provider, transport, enroll = setup
+    device_id, _ = enroll()
+    provider.status = "failed"  # e.g. the service answered 401/403: not proof of unpairing
+    await transport().deliver(notice())
+    await transport().drain()
+    assert len(provider.calls) == 1
+    assert devices.get_device(device_id).push is not None
+
+
 @pytest.mark.parametrize("replacement", [False, True])
 async def test_gone_only_invalidates_its_generation(setup, replacement):
     _, provider, transport, enroll = setup
