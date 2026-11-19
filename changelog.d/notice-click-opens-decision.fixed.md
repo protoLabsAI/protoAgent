@@ -1,0 +1,1 @@
+- **Tapping a decision notification opens the decision.** A notification on a phone or in a browser opened the console on whatever screen it was last left on, such as Settings. It now closes Settings and opens that decision's answer form in Work, whether the console was already open or is opened by the tap. Refs #5539.

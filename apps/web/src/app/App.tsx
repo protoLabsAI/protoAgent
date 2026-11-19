@@ -19,6 +19,7 @@ import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
 import { DownloadWatch } from "./DownloadWatch";
 import { ScheduledWatch } from "./ScheduledWatch";
+import { NoticeClickWatch } from "./NoticeClickWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
 import { ArtifactOpenWatch } from "./ArtifactOpenWatch";
 import { ChatAttendance } from "./ChatAttendance";
@@ -1178,6 +1179,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           chat that created the schedule as a ScheduledReportCard (or a compact chip on
           recurring re-fires) if that chat is open — instead of it hiding in Activity. */}
       <ScheduledWatch />
+      {/* A clicked push notification (ADR 0135 W2) opens what it is about: a decision's
+          answer form, not whatever screen the console was left on. */}
+      <NoticeClickWatch />
       {/* Browser storage upkeep (ADR 0114 D5/D6): keep localStorage under budget by
           clearing old agents' saved chats, and say so when it does. */}
       <StorageUpkeep />
