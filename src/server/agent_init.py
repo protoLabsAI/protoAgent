@@ -1277,6 +1277,20 @@ def _stop_scheduler_async(backend: "SchedulerBackend") -> None:
     _run_on_server_loop(lambda: backend.stop(), "scheduler stop")
 
 
+def _notify_scheduler_notice(text: str, link: str, *, kind, importance) -> None:
+    """Resolve the operator console origin and use the shared owner delivery seam."""
+    from graph.plugins.chat_surface import notify_chat_surfaces
+    from graph.sdk import console_url
+    from security.public_console import public_origin
+
+    try:
+        base = (public_origin() or console_url() or "").rstrip("/")
+    except Exception:  # noqa: BLE001 — retain the notice and relative link
+        log.exception("[server] could not resolve scheduler notice console origin")
+        base = ""
+    notify_chat_surfaces(text, f"{base}{link}", kind=kind, importance=importance)
+
+
 def _build_scheduler(config) -> "SchedulerBackend | None":
     """Return the scheduler backend (the bundled sqlite ``LocalScheduler``), or
     ``None`` when scheduling is disabled.
@@ -1329,6 +1343,7 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
             api_key=api_key,
             bearer_token=bearer,
             event_publish=publish,  # scheduler.fired on the bus (ADR 0051)
+            notify=_notify_scheduler_notice,
         )
     except Exception as exc:
         log.warning(

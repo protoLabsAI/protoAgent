@@ -1,0 +1,1 @@
+- **Recurring job health notices.** Notify the operator once when an overdue run is skipped or a recurring job reaches three consecutive failures, with a link to its conversation and recovery steps. A successful run re-arms failure notices. Refs #5543.

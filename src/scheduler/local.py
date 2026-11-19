@@ -40,6 +40,7 @@ from contextlib import closing, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from croniter import croniter
 
@@ -55,6 +56,7 @@ log = logging.getLogger(__name__)
 
 _POLL_INTERVAL_S = 1.0
 _MISSED_FIRE_WINDOW_S = 24 * 60 * 60  # 24h
+FAILURE_NOTICE_AFTER = 3  # Fixed urgency threshold (ADR 0135 D11).
 
 
 # Owner-lock interlock (ADR 0004): one live instance owns a given jobs.db. Two
@@ -444,7 +446,9 @@ class LocalScheduler:
         event_publish=None,
         adopt_existing_jobs: bool = True,
         watch_store=None,
+        notify=None,
     ):
+        self._notify = notify  # Injected typed owner-notice delivery seam.
         self._watch_store = watch_store
         self.agent_name = agent_name
         self._invoke_url = invoke_url.rstrip("/")
@@ -1298,7 +1302,26 @@ class LocalScheduler:
             self._claimed_messages.pop(job.id, None)
             self._inflight_ids.discard(job.id)
 
-    def _record_fire_outcome(self, job: Job, *, failure: str, db: sqlite3.Connection | None = None) -> None:
+    def _notify_job(self, job: Job, text: str) -> None:
+        """Queue an actionable owner notice after commit, outside the store lock."""
+        if self._notify is None:
+            return
+        try:
+            self._notify(
+                text, f"/app/?{urlencode({'session': job.context_id})}",
+                kind="notify", importance="high",
+            )
+        except Exception:  # noqa: BLE001 — delivery must not disrupt scheduling
+            log.exception("[scheduler] could not queue notice for job %s", job.id)
+
+    def _notify_failure(self, job: Job) -> None:
+        self._notify_job(
+            job,
+            f"Scheduled job {job.id} has failed {FAILURE_NOTICE_AFTER} times in a row. "
+            "Open its conversation to review the failure and fix the cause, or pause the job in Work.",
+        )
+
+    def _record_fire_outcome(self, job: Job, *, failure: str, db: sqlite3.Connection | None = None) -> bool:
         """Record whether the turn worked, and back a failing job off (#3376).
 
         Success resets the streak — a job that recovers is immediately back on its
@@ -1316,88 +1339,76 @@ class LocalScheduler:
         broken job while keeping it self-healing.
 
         Best-effort when called alone. A supplied transaction owns commit and
-        rollback, so errors propagate to keep occurrence settlement atomic.
+        rollback, so errors propagate to keep occurrence settlement atomic. A true
+        return value asks that caller to deliver the failure notice after commit.
         """
-        own_db = db is None
-        db = db or self._connect()
-        # Own the write only when we opened the connection; a supplied db means the
-        # caller already holds the per-file lock (#5122) — re-acquiring it here would
-        # deadlock (threading.Lock is not reentrant).
-        if own_db:
-            self._lock.acquire()
-        try:
-            if own_db:
-                db.execute("BEGIN IMMEDIATE")
-            if not self._owns_occurrence(db, job):
-                return
-            # Commit the known result and its dispatch state together: a crash
-            # must not leave a quarantined claim with a cleared diagnostic.
-            db.execute("UPDATE occurrences SET state = 'settled' WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                       (job.id, job.next_fire, job.created_at))
-            if failure:
-                # Keep the failure on the run's own ledger row too (ADR 0135 D8):
-                # ``jobs.last_error`` holds only the LATEST outcome, so a fire settled
-                # without a task handle would otherwise leave run history with no error.
-                db.execute("UPDATE occurrences SET diagnostic = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                           (failure, job.id, job.next_fire, job.created_at))
-            if not failure:
-                db.execute(
-                    "UPDATE jobs SET consecutive_failures = 0, last_error = NULL, last_ok = ? WHERE id = ?",
-                    (datetime.now(UTC).isoformat(), job.id),
-                )
-                if own_db:
-                    db.commit()
-                return
-            db.execute(
-                "UPDATE jobs SET consecutive_failures = consecutive_failures + 1, last_error = ? WHERE id = ?",
-                (failure, job.id),
-            )
-            row = db.execute("SELECT consecutive_failures, next_fire FROM jobs WHERE id = ?", (job.id,)).fetchone()
-            streak = int(row["consecutive_failures"]) if row else 1
-            if streak < BACKOFF_AFTER_FAILURES or not is_cron(job.schedule):
-                if own_db:
-                    db.commit()
-                return
-            slots = min(2 ** (streak - BACKOFF_AFTER_FAILURES), MAX_BACKOFF_SLOTS)
-            # Base the backoff on the PERSISTED post-claim next_fire, not the stale
-            # pre-claim `job.next_fire` this fire carries (#3381). `_tick` already rolled
-            # the row forward one slot via `_reschedule_or_delete` at claim time, so
-            # computing from the in-memory pre-claim value made the first eligible backoff
-            # a no-op (it recomputed the very slot the claim had already scheduled) and
-            # every later delay one slot short. Fall back to the snapshot only if the row
-            # somehow carries no next_fire.
-            base = (row["next_fire"] if row else None) or job.next_fire
+        if db is None:
             try:
-                nxt = datetime.fromisoformat(base)
-            except ValueError:
-                if own_db:
-                    db.commit()
-                return
-            for _ in range(slots):
-                nxt = datetime.fromisoformat(_compute_next_fire(job.schedule, after=nxt, tz=job.timezone))
-            db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (nxt.isoformat(), job.id))
-            db.execute("UPDATE occurrences SET expected_next = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                       (nxt.isoformat(), job.id, job.next_fire, job.created_at))
-            if own_db:
-                db.commit()
-            log.error(
-                "[scheduler] job %s has failed %d times in a row — backing off %d slot(s) to %s. Last error: %s",
-                job.id,
-                streak,
-                slots,
-                nxt.isoformat(),
-                failure,
+                with self._lock, closing(self._connect()) as owned_db, owned_db:
+                    owned_db.execute("BEGIN IMMEDIATE")
+                    notice_due = self._record_fire_outcome(job, failure=failure, db=owned_db)
+            except (sqlite3.DatabaseError, ValueError):
+                log.exception("[scheduler] could not record the fire outcome for job %s", job.id)
+                return False
+            if notice_due:
+                self._notify_failure(job)
+            return notice_due
+
+        notice_due = False
+        if not self._owns_occurrence(db, job):
+            return notice_due
+        # Commit the known result and its dispatch state together: a crash
+        # must not leave a quarantined claim with a cleared diagnostic.
+        db.execute("UPDATE occurrences SET state = 'settled' WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                   (job.id, job.next_fire, job.created_at))
+        if failure:
+            # Keep the failure on the run's own ledger row too (ADR 0135 D8):
+            # ``jobs.last_error`` holds only the LATEST outcome, so a fire settled
+            # without a task handle would otherwise leave run history with no error.
+            db.execute("UPDATE occurrences SET diagnostic = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                       (failure, job.id, job.next_fire, job.created_at))
+        if not failure:
+            db.execute(
+                "UPDATE jobs SET consecutive_failures = 0, last_error = NULL, last_ok = ? WHERE id = ?",
+                (datetime.now(UTC).isoformat(), job.id),
             )
-        except (sqlite3.DatabaseError, ValueError):
-            if not own_db:
-                raise
-            log.exception("[scheduler] could not record the fire outcome for job %s", job.id)
-        finally:
-            if own_db:
-                try:
-                    db.close()
-                finally:
-                    self._lock.release()
+            return notice_due
+        db.execute(
+            "UPDATE jobs SET consecutive_failures = consecutive_failures + 1, last_error = ? WHERE id = ?",
+            (failure, job.id),
+        )
+        row = db.execute("SELECT consecutive_failures, next_fire FROM jobs WHERE id = ?", (job.id,)).fetchone()
+        streak = int(row["consecutive_failures"]) if row else 1
+        notice_due = is_cron(job.schedule) and streak == FAILURE_NOTICE_AFTER
+        if streak < BACKOFF_AFTER_FAILURES or not is_cron(job.schedule):
+            return notice_due
+        slots = min(2 ** (streak - BACKOFF_AFTER_FAILURES), MAX_BACKOFF_SLOTS)
+        # Base the backoff on the PERSISTED post-claim next_fire, not the stale
+        # pre-claim `job.next_fire` this fire carries (#3381). `_tick` already rolled
+        # the row forward one slot via `_reschedule_or_delete` at claim time, so
+        # computing from the in-memory pre-claim value made the first eligible backoff
+        # a no-op (it recomputed the very slot the claim had already scheduled) and
+        # every later delay one slot short. Fall back to the snapshot only if the row
+        # somehow carries no next_fire.
+        base = (row["next_fire"] if row else None) or job.next_fire
+        try:
+            nxt = datetime.fromisoformat(base)
+        except ValueError:
+            return notice_due
+        for _ in range(slots):
+            nxt = datetime.fromisoformat(_compute_next_fire(job.schedule, after=nxt, tz=job.timezone))
+        db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (nxt.isoformat(), job.id))
+        db.execute("UPDATE occurrences SET expected_next = ? WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                   (nxt.isoformat(), job.id, job.next_fire, job.created_at))
+        log.error(
+            "[scheduler] job %s has failed %d times in a row — backing off %d slot(s) to %s. Last error: %s",
+            job.id,
+            streak,
+            slots,
+            nxt.isoformat(),
+            failure,
+        )
+        return notice_due
 
     def mark_expiry_notice_sent(self, job_id: str, generation: str) -> None:
         """Remember a published result notice for this generation across restart."""
@@ -1778,6 +1789,7 @@ class LocalScheduler:
           firing a flood of stale prompts after a long downtime is worse
           than dropping them.
         """
+        missed: list[Job] = []
         cutoff_recent = datetime.now(UTC) - timedelta(seconds=_MISSED_FIRE_WINDOW_S)
         # Hold the shared per-file write lock (#5122) for this BEGIN-less read/modify/write
         # recovery pass; acquired explicitly (not via ``with``) to keep this long body
@@ -1842,6 +1854,7 @@ class LocalScheduler:
                         continue
                 if is_cron(job.schedule):
                     next_iso = _compute_next_fire(job.schedule, tz=job.timezone)
+                    missed.append(job)
                     db.execute(
                         "UPDATE jobs SET next_fire = ? WHERE id = ?",
                         (next_iso, job.id),
@@ -1876,12 +1889,21 @@ class LocalScheduler:
                     log.info("[scheduler] dropped stale one-shot job %s", job.id)
             db.commit()
         except sqlite3.DatabaseError:
+            missed.clear()
             log.exception("[scheduler] missed-fire recovery failed")
         finally:
             try:
                 db.close()
             finally:
                 self._lock.release()
+
+        for job in missed:
+            self._notify_job(
+                job,
+                f"Scheduled job {job.id} missed its run at {job.next_fire}; "
+                "that run was skipped and the next run remains scheduled. "
+                "Open its conversation to request a catch-up, or edit the schedule in Work.",
+            )
 
     def _publish_turn(
         self,
@@ -1974,9 +1996,10 @@ class LocalScheduler:
                       f"task {task_id} missing or unavailable; not automatically resent")
         failure = _a2a_turn_failure(payload) if terminal else ""
         canceled = state in {"canceled", "cancelled"}
+        notice_due = False
         settled_action = ""  # the job ROW was removed — published only after the commit below
         # Shared per-file write lock (#5122) around the whole transaction; the inner
-        # _record_fire_outcome/_settle_cron_expiry run on this same db (own_db=False) and
+        # _record_fire_outcome/_settle_cron_expiry run on this same db and
         # must NOT re-acquire the non-reentrant lock.
         with self._lock, closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
@@ -2000,7 +2023,7 @@ class LocalScheduler:
                 if canceled:
                     db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (claim["previous_error"], job.id))
                 else:
-                    self._record_fire_outcome(job, failure=failure, db=db)
+                    notice_due = self._record_fire_outcome(job, failure=failure, db=db)
                 if is_cron(job.schedule):
                     if self._settle_cron_expiry(job, db=db):
                         settled_action = "expired"
@@ -2016,6 +2039,8 @@ class LocalScheduler:
                  state if valid else "missing",
                  (failure or None) if terminal else diagnostic, job.id, job.next_fire, job.created_at),
             )
+        if notice_due:
+            self._notify_failure(job)
         if terminal:
             if failure:
                 log.error("[scheduler] job %s fired but the turn FAILED: %s", job.id, failure)
