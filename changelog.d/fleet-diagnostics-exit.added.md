@@ -1,0 +1,1 @@
+- **Fleet exit diagnostics.** Read a local member’s last recorded exit and restart attempts with `fleet_diagnostics(read="exit")`, including available exit codes or signals and a bounded, redacted log tail without consuming health-loop evidence. Refs #5596.

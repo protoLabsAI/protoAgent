@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 
 import httpx
 import pytest
@@ -141,7 +142,7 @@ async def test_fleet_diagnostics_bound_tool_refuses_non_read_actions_without_htt
 
     assert out["ok"] is False
     assert out["error"] == "unsupported_read"
-    assert "only supports read='logs' or read='task'" in out["detail"]
+    assert "only supports read='logs', read='task', or read='exit'" in out["detail"]
     assert "runtime control" in out["detail"]
     assert out["member"] == "Alpha"
 
@@ -681,3 +682,118 @@ async def test_non_json_task_preview_is_redacted_before_it_is_bounded(monkeypatc
 def test_task_public_surface_takes_only_member_and_task_id():
     # No host/URL path on the task read either — a member NAME and a task id, nothing else.
     assert set(inspect.signature(fd.read_member_task).parameters) == {"member", "task_id"}
+
+
+@pytest.fixture
+def exit_store(tmp_path, monkeypatch):
+    from graph.fleet import supervisor
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor, "_reaped_status", {})
+    _install_roster(monkeypatch, [_LOCAL, _REMOTE, _HOST])
+    _forbid_http(monkeypatch)
+    return supervisor
+
+
+@pytest.mark.parametrize("member,error", [("Alpha", None), ("missing", "unknown_member"),
+                                          ("Remote", "unsupported_read"), ("main", "unsupported_read")])
+async def test_exit_missing_and_refused_members(exit_store, member, error):
+    out = await fd.read_member_exit(member)
+    if error:
+        assert out["ok"] is False and out["error"] == error
+    else:
+        assert out["ok"] is True and out["exit"] is None
+    assert not exit_store._exits_path().exists()
+    assert not exit_store._restart_path().exists()
+
+
+async def test_exit_read_is_latest_redacted_bounded_and_does_not_collect(exit_store, monkeypatch):
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    exit_store._save_exits([
+        {"id": "alpha", "pid": 1, "collected": True},
+        {"id": "alpha", "pid": 2, "log_tail": f"tok {secret} " + "Z" * 100},
+        {"id": "other", "pid": 3, "collected": True},
+    ])
+    history = {"attempts": [123.0, 456.0], "gave_up": True}
+    exit_store._save_restarts({"members": {"alpha": history}})
+    before = [p.read_bytes() for p in (exit_store._exits_path(), exit_store._restart_path())]
+    monkeypatch.setattr(fd, "_TOOL_TEXT_CAP", 18)
+    tool = _bound_tool(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
+    out = await tool.ainvoke({"member": "Alpha", "read": "exit"})
+    record = out["exit"]
+    assert out["ok"] and record["pid"] == 2
+    assert record["log_tail"] == "tok [REDACTED] ZZZ"
+    assert record["tool_truncated"] is True and secret not in json.dumps(out)
+    assert record["restarts"] == history
+    assert record["exit_code"] is None and record["signal"] is None
+    assert before == [p.read_bytes() for p in (exit_store._exits_path(), exit_store._restart_path())]
+    assert [x["pid"] for x in exit_store.collect_exits()] == [2]
+    assert exit_store.collect_exits() == []
+    assert (await fd.read_member_exit("Alpha"))["exit"]["pid"] == 2
+    exit_store._restart_path().write_text("broken")
+    assert (await fd.read_member_exit("Alpha"))["exit"]["restart_history_unreadable"] is True
+    exit_store._exits_path().write_text("broken")
+    assert (await fd.read_member_exit("Alpha"))["exit"] is None
+
+
+# Share the existing real member fixture: a tiny HTTP child started by the supervisor.
+from tests import test_fleet_exit_capture
+
+exit_member = test_fleet_exit_capture.member
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.skipif(os.name == "nt", reason="POSIX waitpid and SIGKILL")
+async def test_exit_tool_reports_sigkill_after_watchdog_restart(exit_member, monkeypatch):
+    import os
+    import signal
+    import threading
+    import time
+
+    from graph.fleet import supervisor
+
+    ws, _flag, pids = exit_member
+    monkeypatch.setattr(supervisor, "autostart_members", lambda: [ws["id"]])
+    monkeypatch.setattr(supervisor, "_shutting_down", False)
+    os.kill(pids[0], signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while supervisor._alive(pids[0]) and time.monotonic() < deadline:
+        threading.Event().wait(0.01)
+    assert not supervisor._alive(pids[0])
+    supervisor.status()
+    evidence = supervisor.last_exit(ws["id"])
+    result = supervisor.restart_policy(evidence, max_attempts=3, window=60, backoff=0)
+    current = supervisor._load_state()[ws["id"]]["pid"]
+    pids.append(current)
+    assert result["outcome"] == "restarted" and current != pids[0]
+    tool = _bound_tool(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
+    out = await tool.ainvoke({"member": "m", "read": "exit"})
+    record = out["exit"]
+    assert out["ok"] and record["pid"] == pids[0]
+    assert record["signal"] == 9 and record["exit_code"] is None
+    assert record["at"] and record["detected_by"] == "status"
+    assert "member booted" in record["log_tail"] and "sk-ant-api03" not in record["log_tail"]
+    assert len(record["log_tail"]) <= fd._TOOL_TEXT_CAP
+    assert len(record["restarts"]["attempts"]) == 1
+    assert [x["pid"] for x in supervisor.collect_exits()] == [pids[0]]
+    assert supervisor.collect_exits() == []
+
+
+@pytest.mark.platform_sensitive
+async def test_exit_tool_reports_boot_exit_code(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    from graph.fleet import supervisor
+    from graph.workspaces import manager
+    from tests.test_fleet_exit_capture import _free_port
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    argv = [sys.executable, "-c", "import sys; sys.exit(3)"]
+    monkeypatch.setattr(manager, "run_exec", lambda ident, passthrough: ({}, argv))
+    manager.create("dies", port=_free_port())
+    with pytest.raises(supervisor.FleetError):
+        supervisor.start("dies")
+    out = await fd.read_member_exit("dies")
+    assert out["ok"] and out["exit"]["exit_code"] == (None if os.name == "nt" else 3)
+    assert out["exit"]["signal"] is None
