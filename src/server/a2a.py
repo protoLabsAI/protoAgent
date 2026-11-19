@@ -2025,6 +2025,7 @@ def _notify_scheduled_card(payload: dict) -> None:
             _console_link(payload["origin_session"]),
             kind="review",
             importance=_SCHEDULED_NOTICE_IMPORTANCE,
+            notice_id=payload.get("notice_id"),
         )
     except Exception:  # noqa: BLE001 — delivery of the card must never fail on the notice
         log.exception("[scheduler] could not queue the result notice for job %s", payload.get("job_id"))
@@ -2033,6 +2034,9 @@ def _notify_scheduled_card(payload: dict) -> None:
 def _post_scheduled_card(payload: dict, fingerprint: dict | None) -> None:
     """The single point where a scheduled result card IS posted: publish the card,
     record its fingerprint for the repeat guard, and send exactly one typed notice."""
+    from uuid import uuid4
+
+    payload = {**payload, "notice_id": uuid4().hex}
     _event_bus.publish("scheduler.completed", payload)
     _remember_scheduled_card(fingerprint)
     _notify_scheduled_card(payload)

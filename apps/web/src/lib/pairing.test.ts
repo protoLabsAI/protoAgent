@@ -10,6 +10,9 @@ import {
   subscribePaired,
   takePairedNotice,
 } from "./pairing";
+import { renewPush } from "./push";
+vi.mock("./push", () => ({ renewPush: vi.fn(async () => "not enrolled") }));
+
 import { authToken } from "./api/routing";
 import { QuotaStorage } from "./quotaStorage.testkit";
 import { __resetStorageSeamForTests } from "./storage";
@@ -307,4 +310,19 @@ describe("describePairingError", () => {
   it("passes a storage failure through untouched", () => {
     expect(describePairingError({ error: "browser storage is full" })).toBe("browser storage is full");
   });
+});
+
+it("renews push after a handoff claim stores the new origin credential; push failure cannot undo pairing", async () => {
+  window.localStorage.clear();
+  vi.mocked(renewPush).mockImplementationOnce(async () => {
+    expect(window.localStorage.getItem("protoagent.deviceToken")).toBe("new-home-token");
+    throw new Error("push offline");
+  });
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    token: "new-home-token", device: { id: "same-device" }, moved: true,
+  }))));
+  expect(await claimPairingCode("CODE")).toEqual({ ok: true });
+  expect(renewPush).toHaveBeenCalled();
+  expect(takePairedNotice()).toMatchObject({ id: "same-device", moved: true });
+  vi.unstubAllGlobals();
 });

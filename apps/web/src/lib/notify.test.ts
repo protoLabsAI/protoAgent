@@ -14,11 +14,13 @@ class FakeNotification {
   static requestPermission = vi.fn(async () => "granted");
   onclick: (() => void) | null = null;
   body?: string;
+  tag?: string;
   constructor(
     public title: string,
-    options?: { body?: string },
+    options?: { body?: string; tag?: string },
   ) {
     this.body = options?.body;
+    this.tag = options?.tag;
     created.push(this);
   }
 }
@@ -113,4 +115,9 @@ describe("notifyIfHidden inside the desktop app", () => {
     notifyIfHidden("Agent needs a decision", "Ship it?", undefined, { notice: true });
     expect(created).toHaveLength(1);
   });
+});
+
+it("tags a notice with the hub identity used by the worker", () => {
+  notifyIfHidden("Decision", "Review", undefined, { notice: true, noticeId: "notice-123" });
+  expect(created[0].tag).toBe("notice-123");
 });
