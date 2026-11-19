@@ -164,6 +164,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "fleet_health_enabled": False,
     "fleet_health_interval_seconds": 60,
     "fleet_health_failure_threshold": 3,
+    "fleet_health_restart_dead": False,
+    "fleet_health_max_attempts": 3,
+    "fleet_health_window_seconds": 300,
+    "fleet_health_backoff_seconds": 30,
     "fleet_autostart": [],
     "fleet_max_warm": 0,
     "fleet_trace_export_enabled": False,
@@ -1433,7 +1437,8 @@ def test_any_subagent_overlay_roundtrip(tmp_path):
 
 
 def test_fleet_health_settings_round_trip(tmp_path):
-    health = {"enabled": True, "interval_seconds": 17, "failure_threshold": 4}
+    health = {"enabled": True, "interval_seconds": 17, "failure_threshold": 4,
+              "restart_dead": True, "max_attempts": 2, "window_seconds": 120, "backoff_seconds": 10}
     cfg = LangGraphConfig.from_dict({"fleet": {"health": health}})
     serialized = config_to_dict(cfg)
     assert serialized["fleet"]["health"] == health
@@ -1444,6 +1449,7 @@ def test_fleet_health_settings_round_trip(tmp_path):
 
 
 @pytest.mark.parametrize("enabled", [False, "false", "off", "no", None])
-def test_fleet_health_false_values_remain_disabled(enabled):
-    cfg = LangGraphConfig.from_dict({"fleet": {"health": {"enabled": enabled}}})
-    assert cfg.fleet_health_enabled is False
+@pytest.mark.parametrize("key", ["enabled", "restart_dead"])
+def test_fleet_health_false_values_remain_disabled(enabled, key):
+    cfg = LangGraphConfig.from_dict({"fleet": {"health": {key: enabled}}})
+    assert getattr(cfg, f"fleet_health_{key}") is False
