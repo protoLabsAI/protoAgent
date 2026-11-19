@@ -161,6 +161,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_run_requires_approval": True,
     "filesystem_run_auto_approve": [],
     "filesystem_run_command_env_passthrough": [],
+    "fleet_member_restart_enabled": False,
     "fleet_health_enabled": False,
     "fleet_health_interval_seconds": 60,
     "fleet_health_failure_threshold": 3,
@@ -1453,3 +1454,12 @@ def test_fleet_health_settings_round_trip(tmp_path):
 def test_fleet_health_false_values_remain_disabled(enabled, key):
     cfg = LangGraphConfig.from_dict({"fleet": {"health": {key: enabled}}})
     assert getattr(cfg, f"fleet_health_{key}") is False
+
+
+@pytest.mark.parametrize("enabled,expected", [(True, True), (False, False), ("false", False), (None, False)])
+def test_fleet_member_restart_setting_round_trip(tmp_path, enabled, expected):
+    cfg = LangGraphConfig.from_dict({"fleet": {"member_restart_enabled": enabled}})
+    assert cfg.fleet_member_restart_enabled is expected
+    out = tmp_path / "restart.yaml"
+    save_yaml_doc(apply_updates_to_yaml({}, config_to_dict(cfg)), out)
+    assert LangGraphConfig.from_yaml(str(out)).fleet_member_restart_enabled is expected

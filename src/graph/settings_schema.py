@@ -1899,6 +1899,15 @@ FIELDS: list[Field] = [
         credential_plane=True,
     ),
     Field(
+        "fleet.member_restart_enabled",
+        "fleet_member_restart_enabled",
+        "Fleet member restart tool",
+        "bool",
+        "Network",
+        "Let the hub request approval to start or restart one local member when idle. Operator stops are respected.",
+        scope="host",
+    ),
+    Field(
         "fleet.health.enabled",
         "fleet_health_enabled",
         "Monitor fleet health",
