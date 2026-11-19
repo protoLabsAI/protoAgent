@@ -2087,6 +2087,14 @@ class LangGraphConfig:
     # ``security.devices`` (hot-reloads with the config). No env fallback.
     device_idle_ttl_days: int = 30
     fleet_member_restart_enabled: bool = False
+    # Unattended approval policy (ADR 0124 D5): what a turn nobody is watching (scheduled,
+    # watch, inbox, webhook, background, goal-driven) may do when a tool pauses for approval.
+    # Each entry is a tool name or ``tool:action``. allow = runs; ask = parks one decision
+    # showing the exact action; never = refused. Anything unlisted is denied, never waited on.
+    # The hub's built-in allowance (ADR 0135 D2) lives in graph/unattended_policy.py.
+    unattended_allow: list[str] = field(default_factory=list)
+    unattended_ask: list[str] = field(default_factory=list)
+    unattended_never: list[str] = field(default_factory=list)
     fleet_health_enabled: bool = False
     fleet_health_interval_seconds: int = 60
     fleet_health_failure_threshold: int = 3
@@ -2562,6 +2570,8 @@ class LangGraphConfig:
         devices_cfg = data.get("devices", {}) or {}
         fleet = data.get("fleet", {}) or {}
         health = fleet.get("health", {}) or {}
+        unattended = data.get("unattended")
+        unattended = unattended if isinstance(unattended, dict) else {}
         discovery = fleet.get("discovery", {}) or {}
         warm = fleet.get("warm", {}) or {}
 
@@ -2949,6 +2959,9 @@ class LangGraphConfig:
                 devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),
             fleet_member_restart_enabled=not _falsey(fleet.get("member_restart_enabled"), default=True),
+            unattended_allow=_string_list(unattended.get("allow")),
+            unattended_ask=_string_list(unattended.get("ask")),
+            unattended_never=_string_list(unattended.get("never")),
             fleet_health_enabled=not _falsey(health.get("enabled"), default=True),
             fleet_health_interval_seconds=health.get("interval_seconds", cls.fleet_health_interval_seconds),
             fleet_health_failure_threshold=health.get("failure_threshold", cls.fleet_health_failure_threshold),

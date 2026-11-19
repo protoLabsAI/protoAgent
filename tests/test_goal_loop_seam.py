@@ -39,7 +39,7 @@ _SHARED = (
     "GoalContinuation",
     "GoalDrive",
     "GoalNote",
-    "HitlAutoAnswer",
+    "UnattendedPolicy",
     "PARK",
     "PAUSE_NOTE",
     "active_goal",
@@ -200,17 +200,17 @@ async def test_both_drivers_run_the_shared_kickoff(state, monkeypatch, surface):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface", ["stream", "sync"])
 async def test_both_drivers_run_the_shared_auto_answer_policy(state, monkeypatch, surface):
-    """A patched ``HitlAutoAnswer`` (here: gives up at once) governs either driver."""
+    """A patched ``UnattendedPolicy`` (here: gives up at once) governs either driver."""
     cleared: list = []
 
-    class _GiveUpNow(goal_loop.HitlAutoAnswer):
-        def on_interrupt(self):
+    class _GiveUpNow(goal_loop.UnattendedPolicy):
+        def on_interrupt(self, payload=None):
             return goal_loop.GIVE_UP
 
         async def give_up(self, config):
             cleared.append(config["configurable"]["thread_id"])
 
-    monkeypatch.setattr(goal_loop, "HitlAutoAnswer", _GiveUpNow)
+    monkeypatch.setattr(goal_loop, "UnattendedPolicy", _GiveUpNow)
     monkeypatch.setattr(state, "goal_controller", FakeGoals([None]), raising=False)
     if surface == "stream":
         g = ScriptedGraph(streams=[[set_interrupt("q?")]])
@@ -300,8 +300,8 @@ async def test_every_goal_driven_graph_call_runs_inside_goal_turn(state, monkeyp
 
 
 def test_auto_answer_policy_spends_its_budget_then_gives_up(monkeypatch):
-    monkeypatch.setattr(turn_control, "_MAX_AUTONOMOUS_AUTOANSWERS", 2)
-    aa = goal_loop.HitlAutoAnswer(True)
+    monkeypatch.setattr(turn_control, "_MAX_UNATTENDED_REFUSALS", 2)
+    aa = goal_loop.UnattendedPolicy(True)
     verdicts = []
     for _ in range(3):
         verdicts.append(aa.on_interrupt())
@@ -309,7 +309,7 @@ def test_auto_answer_policy_spends_its_budget_then_gives_up(monkeypatch):
             assert aa.answer() is turn_control._AUTONOMOUS_HITL_SENTINEL
     assert verdicts == [goal_loop.ANSWER, goal_loop.ANSWER, goal_loop.GIVE_UP]
     assert aa.answered == 2
-    assert goal_loop.HitlAutoAnswer(False).on_interrupt() == goal_loop.PARK
+    assert goal_loop.UnattendedPolicy(False).on_interrupt() == goal_loop.PARK
 
 
 @pytest.mark.parametrize(

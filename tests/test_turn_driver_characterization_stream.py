@@ -640,7 +640,7 @@ async def test_hitl_hold_converts_a_marked_answer_into_a_resume(env):
 
 @pytest.mark.asyncio
 async def test_autonomous_turn_auto_answers_then_gives_up_and_clears(env):
-    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    cap = turn_control._MAX_UNATTENDED_REFUSALS
     # Every pass re-parks: the budget is spent, the interrupt cleared, the turn completes.
     streams = [[text("r0", "asking"), set_interrupt("Which env?")]] + [
         [set_interrupt("Still: which env?")] for _ in range(cap)
@@ -890,7 +890,7 @@ async def test_goal_continuation_interrupt_is_auto_answered_on_an_autonomous_tur
 async def test_goal_continuation_interrupts_share_the_turns_auto_answer_budget(env, monkeypatch):
     """#3891 F4: ONE budget per turn — answers spent in the initial pass count against a
     continuation's, and once it is spent the continuation's ask is cleared, never parked."""
-    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    cap = turn_control._MAX_UNATTENDED_REFUSALS
     goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
     monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
     g = env.install(
@@ -912,7 +912,7 @@ async def test_fresh_context_continuation_gives_up_on_its_own_scoped_thread(env,
     so when its ask outlives the auto-answer budget the give-up must clear THAT thread's
     interrupt — clearing the base thread (the turn's ``config``) leaves the continuation's
     checkpoint dangling on an un-answered ask."""
-    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    cap = turn_control._MAX_UNATTENDED_REFUSALS
     goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")], iteration=1, fresh=True)
     monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
     g = env.install(

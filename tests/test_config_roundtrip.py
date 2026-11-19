@@ -162,6 +162,11 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_run_auto_approve": [],
     "filesystem_run_command_env_passthrough": [],
     "fleet_member_restart_enabled": False,
+    # Unattended approval policy (ADR 0124 D5): the example ships no `unattended:` section,
+    # so every tier is empty and the default (deny) holds.
+    "unattended_allow": [],
+    "unattended_ask": [],
+    "unattended_never": [],
     "fleet_health_enabled": False,
     "fleet_health_interval_seconds": 60,
     "fleet_health_failure_threshold": 3,
@@ -1454,6 +1459,24 @@ def test_fleet_health_settings_round_trip(tmp_path):
 def test_fleet_health_false_values_remain_disabled(enabled, key):
     cfg = LangGraphConfig.from_dict({"fleet": {"health": {key: enabled}}})
     assert getattr(cfg, f"fleet_health_{key}") is False
+
+
+def test_unattended_policy_tiers_round_trip(tmp_path):
+    tiers = {"allow": ["fleet_member_restart:start"], "ask": ["run_command"], "never": ["delete_file"]}
+    cfg = LangGraphConfig.from_dict({"unattended": tiers})
+    assert (cfg.unattended_allow, cfg.unattended_ask, cfg.unattended_never) == (
+        tiers["allow"], tiers["ask"], tiers["never"],
+    )
+    assert config_to_dict(cfg)["unattended"] == tiers
+    out = tmp_path / "unattended.yaml"
+    save_yaml_doc(apply_updates_to_yaml({}, config_to_dict(cfg)), out)
+    assert config_to_dict(LangGraphConfig.from_yaml(str(out)))["unattended"] == tiers
+
+
+@pytest.mark.parametrize("section", [None, [], "run_command", {"allow": None}])
+def test_unattended_policy_defaults_to_deny(section):
+    cfg = LangGraphConfig.from_dict({"unattended": section})
+    assert (cfg.unattended_allow, cfg.unattended_ask, cfg.unattended_never) == ([], [], [])
 
 
 @pytest.mark.parametrize("enabled,expected", [(True, True), (False, False), ("false", False), (None, False)])

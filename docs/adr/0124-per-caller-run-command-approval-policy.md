@@ -1,9 +1,12 @@
 # ADR 0124 — Per-caller run_command approval policy for A2A callers
 
-- Status: Proposed
-- Date: 2026-10-26
-- Implementation: Not implemented; this change records the design only.
-- Issue: #4535 (part 1, policy)
+- Status: Proposed (D1–D4); D5 accepted and implemented
+- Date: 2026-10-26, amended 2026-11-18 (D5)
+- Implementation: D5 (the unattended tiers) is implemented: `src/graph/unattended_policy.py`,
+  `src/graph/middleware/unattended_policy.py` and `UnattendedPolicy` in
+  `src/server/goal_loop.py`. D1–D4 (per-caller `run_command` policy for authenticated A2A
+  callers) are not implemented.
+- Issue: #4535 (part 1, policy); #5541 (D5)
 - Builds on: [ADR 0089](./0089-intra-instance-trust-boundary.md) (authenticated
   operator and fleet-service-token boundary), [ADR 0066](./0066-goal-trust-operator-channel.md)
   (federation token and trust tiers), [ADR 0121](./0121-device-pairing-over-an-operator-supplied-public-url.md)
@@ -227,7 +230,90 @@ identity string from D1, never a caller-supplied label. Identity strings are
 treated as inert display text in logs and the marker (they are credential-derived
 but not themselves secrets), consistent with how 0123 D2 treats hop names.
 
+### D5 — Unattended turns: allow / ask / never per tool (amendment, #5541)
+
+D1–D4 scope approval by **who is calling**. A server-fired turn has no caller: a scheduled
+job, a watch, an inbox page, a webhook, a background result and a goal-driven turn are
+started by the server itself, with no credential and nobody watching. For those turns the
+approval card has no reader, so the question is not "whose policy" but "what may run with
+nobody there". [ADR 0135](./0135-always-on-orchestrator.md) D7 asks for exactly that: a
+stated allow / ask / never policy that defaults to deny. This section is that policy. It is
+the same policy ADR, not a second one (ADR 0135 D8), and it differs from D2 in three ways,
+recorded here:
+
+- **Tiers, not a prefix list.** D2 has two outcomes per caller (auto-approve or show the
+  card). An unattended turn needs three, because "show the card" is not available.
+- **Keyed by tool or action, not by caller identity.** The turn is classified by the
+  server (`is_autonomous_origin` / `_AUTONOMOUS_ORIGINS` in `src/server/turn_control.py`,
+  plus goal-driven turns and an explicit `unattended: true`), never by caller metadata.
+  That keeps D1's rule.
+- **It covers every approval pause, not only `run_command`.** Any tool that pauses with an
+  approval card is ruled on.
+
+**Tiers.**
+
+| Tier | What happens on an unattended turn |
+| --- | --- |
+| `allow` | The action runs. No decision is recorded. |
+| `ask` | The turn parks **one** `request_decision` showing the tool, its arguments and the tool's own card text. The operator's answer resumes the turn through the existing decision path; only Approve runs the action. |
+| `never` | The call returns a refusal that names the tool and the reason. Nothing is parked. |
+| not listed | Same as `never`. The default is deny, not wait. |
+
+**Config.** Three string lists, so they ride the ordinary Settings list editor:
+
+```yaml
+unattended:
+  allow: []
+  ask: []
+  never: []
+```
+
+An entry is a tool name, or `tool:action` for one action of a tool; the action is the
+`action` key on the tool's approval card. An entry for the exact action beats an entry for
+the whole tool. At the same level the stricter tier wins (`never`, then `ask`, then
+`allow`). All three default to empty.
+
+**The hub's allow tier.** ADR 0135 D2 fixes it at one action: start a local member whose
+process is dead. It is built in as `fleet_member_restart:start` and applies only on an
+instance that is not a fleet member, when the operator's config names the tool in no tier.
+The tool states `start` or `restart` on its card, and an unattended allowance is pinned to
+the action it was given for: if the member came back up before the tool acted, it refuses
+with `state_changed` instead of restarting a running member. Operator stops are still
+respected by the tool itself.
+
+**Where it acts.** A tool-call middleware (`UnattendedPolicyMiddleware`) rules on the pause
+where the tool raises it. `allow` stamps the card and the turn driver approves it. `ask`
+replaces the card with a decision payload, so the park, the ledger record, the inbox card
+and the resume are the existing `request_decision` path unchanged. `never` and unlisted
+return the refusal as the tool result. A tool listed under `never` is refused before it
+runs. `allow` and `ask` act at the approval pause; a tool that never pauses for approval is
+not gated by them.
+
+**What it replaces.** Before this, every pause on an unattended turn was answered with a
+fixed "no interactive operator available" text, up to three times, then the turn was forced
+to finish. That text read as a denial to an approval gate, so the outcome for an approval
+was always "declined", with no way to allow or to ask. The tiers now decide approvals. The
+notice remains only as the answer to a **question** (`ask_human`, a form) that no tier
+names, with the same bound as a loop guard. A question is not an action, so the default for
+it is unchanged: say nobody is there, and let the turn finish.
+
+**Unchanged.** An operator's turn shows the card and waits, exactly as before; the
+middleware does nothing unless the turn driver marked the invocation unattended.
+`request_decision` parks on every turn. A scheduled job's `Job.fence` still narrows the
+tools a turn has before any of this applies. `filesystem.run_auto_approve` and `/bypass`
+act inside `run_command` before it pauses, so a command they pass never reaches the tiers.
+
+**Relation to D1–D4.** When the per-caller policy is built, an unattended turn is one more
+server-derived identity. D2's `caller_policies` decides what `run_command` asks about for a
+caller; D5 decides what happens to whatever is still asked when nobody can answer.
+
 ## Consequences
+
+- (D5) An unattended turn does what the operator allowed, asks once for what needs a
+  person, and refuses the rest with a reason the model can report. It never parks on an
+  approval card nobody will see.
+- (D5) A tool whose approval gate does not accept the standard approval answer is refused
+  on the second pause instead of being approved in a loop.
 
 - An operator can tighten *or* loosen `run_command` approval for a named,
   server-authenticated caller without touching the host default, and the marker
@@ -248,6 +334,9 @@ but not themselves secrets), consistent with how 0123 D2 treats hop names.
   contract before #4535 part 1 is claimed done.
 
 ## Ordered implementation slices
+
+D5 shipped on its own under #5541 and does not depend on the slices below, which cover
+D1–D4.
 
 Each card lists at most four files **including its own changelog fragment**.
 New test modules below are planned, not files added by this documentation PR.
