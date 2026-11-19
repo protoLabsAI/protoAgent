@@ -40,6 +40,10 @@ from typing import Any
 from infra.sqlite_locks import file_lock
 
 
+class TaskStatusConflict(ValueError):
+    """A conditional task mutation no longer matches the stored status."""
+
+
 def _publish(topic: str, data: dict) -> None:
     """Best-effort bus push so the console Tasks panel can invalidate live on a change
     instead of polling every 5s (#1310). No-op when the host hasn't wired a publisher
@@ -548,7 +552,9 @@ class TaskStore:
         _publish("task.changed", _changed(issue_id, action, closed_now=action == "closed"))
         return result
 
-    def close(self, issue_id: str, reason: str | None = None) -> dict[str, Any]:
+    def close(
+        self, issue_id: str, reason: str | None = None, *, expected_status: str | None = None,
+    ) -> dict[str, Any]:
         if not issue_id:
             raise ValueError("issue_id is required")
         now = _now()
@@ -556,6 +562,8 @@ class TaskStore:
             prior = self._row(issue_id)
             if prior is None:
                 raise KeyError(f"unknown issue {issue_id!r}")
+            if expected_status is not None and prior["status"] != expected_status:
+                raise TaskStatusConflict(f"Task {issue_id!r} is no longer {expected_status}.")
             self._conn.execute(
                 "UPDATE issues SET status='closed', closed_at=?, close_reason=?, updated_at=? WHERE id=?",
                 (now, reason or "", now, issue_id),

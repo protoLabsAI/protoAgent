@@ -345,7 +345,20 @@ def build_fleet_supervision_tools() -> list:
                             else f"api/tasks/issues/{encoded}/close")
                     payload = {"reason": reason}
                     if kind == "task":
+                        # Read the member's authoritative tasks, not the bounded pending preview.
+                        body = await member_read._fetch_member_json(fd._slug_for(matches[0]), _TASKS_PATH)
+                        if body is None or not isinstance(body.get("issues"), list):
+                            return result
+                        task = next((t for t in body["issues"] if t.get("id") == item_id), None)
+                        if task is None:
+                            result = {"ok": False, "error": "not_found"}
+                            return result
+                        if task.get("status") != "waiting":
+                            result = {"ok": False, "error": "task_not_waiting"}
+                            return result
                         payload["outcome"] = "dismissed"
+                        # The member rechecks under its write lock if the task resumes meanwhile.
+                        payload["expected_status"] = "waiting"
                     result = await member_read._post_member_json(fd._slug_for(matches[0]), path, payload)
                     if not result["ok"] and "status_code" in result:
                         result = {**result, "error": "not_found" if result["status_code"] == 404 else "member_error"}

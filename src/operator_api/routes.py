@@ -256,6 +256,7 @@ class TaskUpdateRequest(BaseModel):
 
 
 class TaskCloseRequest(BaseModel):
+    expected_status: Literal["waiting"] | None = None
     outcome: Literal["done", "dismissed"] = "done"
     project_path: str = ""  # ignored — the tasks store is agent-global
     reason: str | None = None
@@ -487,9 +488,16 @@ class _TaskStoreAdapter:
             raise NotFoundError(f"No task {issue_id!r}.")
         return issue
 
-    def close(self, project_path: str, issue_id: str, reason: str | None = None) -> dict[str, Any]:
+    def close(
+        self, project_path: str, issue_id: str, reason: str | None = None, *, expected_status: str | None = None,
+    ) -> dict[str, Any]:
+        from tasks.store import TaskStatusConflict
+
         try:
-            return self._s.close(issue_id, reason=reason)
+            kwargs = {"expected_status": expected_status} if expected_status is not None else {}
+            return self._s.close(issue_id, reason=reason, **kwargs)
+        except TaskStatusConflict as exc:
+            raise ConflictError(str(exc)) from exc
         except KeyError as exc:
             raise NotFoundError(f"No task {issue_id!r}.") from exc
 
@@ -998,9 +1006,11 @@ def register_operator_routes(
     async def _tasks_close(issue_id: str, req: TaskCloseRequest):
         _require_tasks()
         try:
-            if inbox_add is not None:
+            if inbox_add is not None or req.expected_status is not None:
                 previous = await asyncio.to_thread(task_svc.get, issue_id)
-                if previous["status"] == "waiting":
+                if req.expected_status is not None and previous["status"] != req.expected_status:
+                    raise ConflictError(f"Task {issue_id!r} is no longer {req.expected_status}.")
+                if inbox_add is not None and previous["status"] == "waiting":
                     # Queue before closing: a failed inbox write leaves the task waiting
                     # so the operator can retry. Dedup covers a retry after enqueue.
                     await inbox_add({
@@ -1019,7 +1029,9 @@ def register_operator_routes(
             # Keep the outcome in the existing durable close reason; legacy/done closes
             # retain their original reason. Work recognizes the dismissed: prefix.
             reason = f"dismissed: {req.reason or ''}".rstrip() if req.outcome == "dismissed" else req.reason
-            issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, reason)
+            issue = await asyncio.to_thread(
+                task_svc.close, req.project_path, issue_id, reason, expected_status=req.expected_status,
+            )
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc

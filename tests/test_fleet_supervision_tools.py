@@ -491,3 +491,66 @@ async def test_dismiss_remote_uses_only_stored_credentials(dismiss_env, monkeypa
         assert (await _dismiss(dismiss_env, member="rem1"))["ok"] is True
     assert len(sent) == 1
     assert sent[0].headers.get("authorization", "") == (f"Bearer {bearer}" if bearer else "")
+
+
+@pytest.mark.parametrize("status", ["open", "in_progress", "blocked", "deferred", "closed", "missing", "resumed"])
+async def test_dismiss_preserves_non_waiting_tasks(dismiss_env, monkeypatch, tmp_path, status):
+    import httpx
+    from fastapi import FastAPI
+    from graph.fleet import proxy
+    from operator_api.routes import register_operator_routes
+    from tasks.store import TaskStore
+
+    tasks = TaskStore(db_path=str(tmp_path / "tasks.db"))
+    task = tasks.create("Keep this work")
+    task = tasks.update(task["id"], status="waiting" if status == "resumed" else (
+        "open" if status == "missing" else status
+    ))
+    if status == "missing":
+        tasks.delete(task["id"])
+    preserved = tasks.get(task["id"])
+
+    async def inbox_add(payload):
+        # Resume after the route's read but before the store's close (#5602).
+        nonlocal preserved
+        preserved = tasks.update(task["id"], status="in_progress")
+
+    app = FastAPI()
+    register_operator_routes(app, runtime_status=lambda: {}, subagent_list=lambda: [],
+                             subagent_run=lambda req: "", subagent_batch=lambda req: "",
+                             tasks_store=tasks, inbox_add=inbox_add)
+    sent = []
+
+    async def capture(request):
+        sent.append(request.method)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), event_hooks={"request": [capture]}) as client:
+        monkeypatch.setattr(proxy, "_get_client", lambda: client)
+        result = await _dismiss(dismiss_env, kind="task", item_id=task["id"])
+    expected = "member_error" if status == "resumed" else "not_found" if status == "missing" else "task_not_waiting"
+    assert result["ok"] is False and result["error"] == expected
+    assert sent == (["GET", "POST"] if status == "resumed" else ["GET"])
+    if status == "resumed":
+        assert result["status_code"] == 409
+    assert tasks.get(task["id"]) == preserved
+    entries = dismiss_env.audit.get_recent()
+    assert len(entries) == 1 and not entries[0]["success"]
+    assert expected in entries[0]["result_summary"]
+    tasks._conn.close()
+
+
+@pytest.mark.parametrize("response", [None, {}, {"issues": None}])
+async def test_dismiss_task_requires_a_successful_status_read(dismiss_env, monkeypatch, response):
+    from graph.fleet import member_read
+
+    async def read(slug, path):
+        return response
+
+    async def post(*args):
+        pytest.fail("An unreadable task must not be closed")
+
+    monkeypatch.setattr(member_read, "_fetch_member_json", read)
+    monkeypatch.setattr(member_read, "_post_member_json", post)
+    assert await _dismiss(dismiss_env, kind="task") == {"ok": False, "error": "unreachable"}
+    entries = dismiss_env.audit.get_recent()
+    assert len(entries) == 1 and not entries[0]["success"]
