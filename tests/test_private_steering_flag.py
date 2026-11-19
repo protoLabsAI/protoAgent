@@ -1,4 +1,5 @@
-"""Default-off configuration and ordinary traffic compatibility for P1h."""
+"""Default-on configuration (Josh, 2026-11-18) and ordinary traffic compatibility for P1h:
+ordinary steers and A2A traffic behave the same whether the flag is on or off."""
 
 import importlib
 import json
@@ -19,7 +20,7 @@ chat = importlib.import_module("server.chat")
 
 @pytest.mark.parametrize(
     "data, expected",
-    [(None, False), ({}, False), ({"private_steering": {}}, False),
+    [(None, True), ({}, True), ({"private_steering": {}}, True),
      ({"private_steering": {"enabled": False}}, False),
      ({"private_steering": {"enabled": True}}, True)],
 )
@@ -30,7 +31,7 @@ def test_private_steering_config(monkeypatch, data, expected):
     assert chat.private_steering_enabled() is expected
     monkeypatch.setattr(STATE, "graph_config", None)
     assert chat.private_steering_enabled() is False
-    assert LangGraphConfig().private_steering_enabled is False
+    assert LangGraphConfig().private_steering_enabled is True
 
 
 @pytest.mark.asyncio
