@@ -359,6 +359,29 @@ class TelemetryStore:
         finally:
             db.close()
 
+    def daily_autonomous_spend(self, origins, *, now: datetime | None = None) -> dict:
+        """UTC-day spend from completed turn legs, including failed/parked legs.
+
+        The admission owner supplies its canonical autonomous origins; observability
+        must not import server. Unknown/legacy and operator origins never count.
+        """
+        now = (now or datetime.now(UTC)).astimezone(UTC)
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        origins = tuple(origins)
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) AS cost_usd, "
+                "COALESCE(SUM(total_tokens), 0) AS total_tokens FROM turns "
+                "WHERE julianday(ended_at) >= julianday(?) AND julianday(ended_at) < julianday(?) "
+                f"AND lower(trim(origin)) IN ({','.join('?' for _ in origins)})",
+                (start.isoformat(), end.isoformat(), *origins),
+            ).fetchone()
+            return {"day": start.date().isoformat(), **dict(row)}
+        finally:
+            db.close()
+
     def attributed_tokens(self, account_key: str, since: str, until: str, model: str | None = None) -> int:
         """Bounded aggregate over one account/window; no turn content leaves the store."""
         db = self._connect()

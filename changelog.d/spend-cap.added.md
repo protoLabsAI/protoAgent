@@ -1,0 +1,1 @@
+- **Cap unattended daily spend.** An opt-in instance gate meters autonomous token and dollar usage, pauses new unattended turns behind one durable decision, and resumes them when the operator answers for the current UTC day. Operator turns and job enable flags are unaffected; a read-only telemetry endpoint reports spend and pause state. Refs #5540.

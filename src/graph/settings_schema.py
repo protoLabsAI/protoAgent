@@ -1497,6 +1497,14 @@ FIELDS: list[Field] = [
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
     Field("middleware.audit", "audit_middleware", "Audit middleware", "bool", "Middleware"),
+    Field("spend_cap.enabled", "spend_cap_enabled", "Cap unattended spend", "bool", "Spend cap",
+          description="Pause all unattended turns at either daily hard limit until an operator answers the decision."),
+    Field("spend_cap.daily_cost_hard_limit", "spend_cap_daily_cost_hard_limit", "Daily cost hard limit (USD)",
+          "number", "Spend cap", minimum=0,
+          description="Autonomous turn cost per UTC day. Zero pauses immediately. Answering permits the rest of the day."),
+    Field("spend_cap.daily_token_hard_limit", "spend_cap_daily_token_hard_limit", "Daily token hard limit",
+          "number", "Spend cap", minimum=0,
+          description="Autonomous tokens per UTC day, including subscription turns. Zero pauses immediately."),
     Field("middleware.scheduler", "scheduler_enabled", "Scheduler", "bool", "Middleware"),
     # Enforcement is a code/YAML fork seam (deny-list + rate-limits + a pluggable
     # predicate), not a console feature: the bare on/off toggle is a no-op until a
@@ -2648,6 +2656,7 @@ _SECTION_CATEGORY = {
     # host-console-only, which is exactly where tracing was unreachable before. The
     # box-wide SQL rollup (`telemetry.*`) stays under Box.
     "Tracing": "Observability",
+    "Spend cap": "Behavior",
     # Secrets — the external secrets manager (ADR 0080); the console renders this
     # category as its own sidenav section with a status/test/sync card.
     "Secrets manager": "Secrets",

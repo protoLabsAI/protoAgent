@@ -53,6 +53,15 @@ MAX_LABEL_CHARS = 400
 MAX_ANSWER_CHARS = 4000
 MAX_OPTIONS = 25
 
+# Server-owned admission decision, with no graph checkpoint to resume.
+SPEND_CAP_PREFIX = "spend-cap:"
+
+
+def is_spend_cap_decision(rec: Decision) -> bool:
+    """Whether the record controls instance admission rather than a parked graph."""
+    return not rec.thread_id and rec.interrupt_id.startswith(SPEND_CAP_PREFIX)
+
+
 # One lock for every store object: :func:`decision_store` may hand out a fresh one per call,
 # and the SQLite file is shared; serialize the read-modify-write of answer/cancel so two
 # store objects over the same db can't race a non-pending transition.
@@ -465,6 +474,21 @@ class DecisionStore:
                 self._close(db)
         return [Decision.from_row(r) for r in rows]
 
+    def spend_cap_decision(self, day: str) -> Decision | None:
+        """Pending instance pause (even across midnight), or today's durable approval."""
+        with self._reading():
+            db = self._connect()
+            try:
+                row = db.execute(
+                    "SELECT * FROM decisions WHERE thread_id = '' AND interrupt_id LIKE ? "
+                    "AND (state = 'pending' OR (state = 'answered' AND substr(answered_at, 1, 10) = ?)) "
+                    "ORDER BY CASE WHEN state = 'pending' THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
+                    (SPEND_CAP_PREFIX + "%", day),
+                ).fetchone()
+                return Decision.from_row(row) if row else None
+            finally:
+                self._close(db)
+
     def pending_session_ids(self) -> set[str]:
         """Every session with at least one pending decision — UNBOUNDED, unlike :meth:`list`.
 
@@ -560,6 +584,8 @@ class DecisionStore:
                 rec = Decision.from_row(row)
                 if not rec.pending:
                     raise DecisionClosed(f"decision {decision_id} is already {rec.state}")
+                if is_spend_cap_decision(rec) and state != STATE_ANSWERED:
+                    raise DecisionError("Answer the spend-cap decision to resume unattended work.")
                 if state == STATE_EXPIRED:
                     if not rec.expires_at or not rec.default_option or datetime.fromisoformat(rec.expires_at) > self._clock():
                         raise DecisionError("decision is not due for expiry")

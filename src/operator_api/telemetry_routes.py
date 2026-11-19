@@ -280,8 +280,13 @@ def _member_entry(
     return entry
 
 
-def register_telemetry_routes(app) -> None:
+def register_telemetry_routes(app, *, spend_cap_status=None) -> None:
     """Register the ``/api/telemetry/*`` read-only routes on ``app``."""
+
+    if spend_cap_status is not None:
+        @app.get("/api/telemetry/spend-cap")
+        def _api_spend_cap():
+            return spend_cap_status()
 
     # Per-turn cost/latency rollups from the local store. Powers the operator
     # console's cost/latency surface (Slice 3) and ad-hoc "what's expensive"
