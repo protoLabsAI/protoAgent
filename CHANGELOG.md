@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.252.1] - 2026-11-19
+
+### Fixed
+- **Tapping a decision notification opens the decision (#5611).** A notification on a phone or in a browser opened the console on whatever screen it was last left on, such as Settings. It now closes Settings and opens that decision's answer form in Work, whether the console was already open or is opened by the tap. Refs #5539.
+
+- **The desktop app no longer tells you to pair it for notifications (#5610).** Settings → Devices → "Notifications on this device" asked the desktop app to pair itself as a device first. The app already shows notifications itself while it runs, so the row now says that, reminds you that your system settings must allow notifications for protoAgent, and points you to the phone or browser where there is something to turn on. Refs #5539.
+
 ## [0.252.0] - 2026-11-19
 
 ### Added

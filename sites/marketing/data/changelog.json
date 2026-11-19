@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.252.1",
+    "date": "2026-11-19",
+    "changes": [
+      "Tapping a decision notification opens the decision (#5611).",
+      "The desktop app no longer tells you to pair it for notifications (#5610)."
+    ]
+  },
+  {
     "version": "v0.252.0",
     "date": "2026-11-19",
     "changes": [
