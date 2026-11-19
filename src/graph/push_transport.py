@@ -35,7 +35,8 @@ class PushProvider(Protocol):
         """Return service acceptance, proven retryable failure, or 404/410 gone.
 
         Payload expires_at bounds provider TTL (also capped at 24 hours).
-        Exceptions/timeouts are ambiguous and quarantined, not blindly retried.
+        Exceptions/timeouts use bounded retries with the same notice identity.
+        Acceptance can be ambiguous; receivers must deduplicate presentation.
         """
         ...
 
@@ -164,7 +165,7 @@ class PushTransport:
             try:
                 result = await asyncio.wait_for(self.provider.send(device.push, payload), self.timeout)
             except Exception:
-                return  # ambiguous acceptance; durable inflight claim quarantines it
+                result = PushResult("retry")
             state, next_at = "failed", now
             if result.status == "gone":
                 devices.invalidate_push_binding(device.id, row["generation"])

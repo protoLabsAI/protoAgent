@@ -75,14 +75,23 @@ async def test_fanout_and_replay_after_restart(setup):
 
 
 @pytest.mark.parametrize("expiry, expected", [(2000, 5), (1030, 1)])
-async def test_backoff_cap_and_expiry_across_restart(setup, expiry, expected):
+@pytest.mark.parametrize("failure", ["retry", "network", "timeout"])
+async def test_backoff_cap_and_expiry_across_restart(setup, expiry, expected, failure):
     now, provider, transport, enroll = setup
     enroll()
     provider.status = "retry"
-    await transport().deliver(notice(expiry))
+
+    async def fail(binding, payload):
+        if failure == "network":
+            raise ConnectionError("unreachable push service")
+        await asyncio.Event().wait()
+
+    if failure != "retry":
+        provider.hook = fail
+    await transport(timeout=0.01).deliver(notice(expiry))
     for timestamp, count in [(1029, 1), (1030, 2), (1090, 3), (1210, 4), (1450, 5), (1900, 5)]:
         now[0] = timestamp
-        await transport().drain()
+        await transport(timeout=0.01).drain()
         assert len(provider.calls) == min(count, expected)
     now[0] = 2100
     sender = transport()
@@ -131,8 +140,8 @@ async def test_gone_only_invalidates_its_generation(setup, replacement):
     assert len(provider.calls) == 1
 
 
-async def test_slow_failure_does_not_block_other_device_and_is_quarantined(setup):
-    _, provider, transport, enroll = setup
+async def test_slow_failure_retries_independently_after_restart(setup):
+    now, provider, transport, enroll = setup
     enroll("slow")
     enroll("fast")
     fast_done = asyncio.Event()
@@ -149,6 +158,15 @@ async def test_slow_failure_does_not_block_other_device_and_is_quarantined(setup
     assert fast_done.is_set()
     await transport().drain()
     assert len(provider.calls) == 2
+    now[0] += 30
+    provider.hook = None
+    await transport().drain()
+    assert [binding.endpoint.rsplit("/", 1)[-1] for binding, _ in provider.calls].count("slow") == 2
+    assert [binding.endpoint.rsplit("/", 1)[-1] for binding, _ in provider.calls].count("fast") == 1
+    assert {payload["notice_id"] for _, payload in provider.calls} == {"notice-1"}
+    now[0] += 60
+    await transport().deliver(notice())
+    assert len(provider.calls) == 3
 
 
 async def test_cancelled_send_stays_claimed_after_restart(setup):
