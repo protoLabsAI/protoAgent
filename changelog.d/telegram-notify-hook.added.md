@@ -1,1 +1,0 @@
-- **Telegram delivers proactive notices to the operator.** Typed notices include their text and console link in the explicitly configured owner DM, with send failures logged and contained. Refs #5537.

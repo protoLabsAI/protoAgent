@@ -1,1 +1,0 @@
-- **`scripts/worktree_audit.py` finds and removes finished git worktrees.** It reports every linked worktree under `~/dev` (or `--root`). With `--apply`, it removes the ones whose tracked files are unchanged and whose branch is merged or deleted upstream. It never forces a worktree with untracked files and never deletes a branch.

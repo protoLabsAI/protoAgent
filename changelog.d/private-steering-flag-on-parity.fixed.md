@@ -1,1 +1,0 @@
-- **Preserve public session memory with private steering enabled.** Sessions without private content remain available to memory, search, and chat readers when no task store exists; unreadable stores still fail closed. Private steer retries retain their original reference and started turn across process-local resets and history-window limits.

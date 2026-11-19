@@ -1,1 +1,0 @@
-- **Typed proactive chat notices.** The shared owner-only notification seam carries kind, code-selected importance, text, and a console link, while preserving legacy adapter hooks. New decisions send question notices with high importance and an explicit answer step. Refs #5537.

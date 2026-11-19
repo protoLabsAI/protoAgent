@@ -1,1 +1,0 @@
-- **Share fleet member lifecycle operations.** Fleet API start and idle-checked stop now use registered mutating ops, so other callers can reuse the console’s restart readiness checks without changing API responses. Refs #5534.
