@@ -1,0 +1,1 @@
+- **Device lists expose safe push status and service.** Paired devices report their push binding metadata, provider and renewal reason through the existing device API, without exposing subscription endpoints or client keys. Refs #5539.

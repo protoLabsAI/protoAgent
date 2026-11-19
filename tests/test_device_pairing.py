@@ -908,3 +908,74 @@ def test_turning_push_off_yourself_leaves_nothing_to_renew(devices, clock):
     assert devices.push_renewal(dev["id"]) == "vapid_key"
     assert devices.clear_push_binding(dev["id"], token) is False
     assert devices.push_renewal(dev["id"]) is None
+
+
+@pytest.mark.parametrize(
+    "endpoint, provider",
+    [
+        (_ENDPOINT, "google"),
+        (_ENDPOINT_2, "apple"),
+        ("https://updates.push.services.mozilla.com/subscription", "mozilla"),
+        ("https://unknown.example/subscription", None),
+        ("https://[invalid", None),  # tolerate a hand-edited stored endpoint
+    ],
+)
+def test_device_list_reports_only_safe_push_status(client, devices, clock, endpoint, provider):
+    from urllib.parse import urlsplit
+
+    dev, token = _enrolled(devices, endpoint=endpoint)
+    devices.set_push_binding(
+        dev["id"], token, endpoint=endpoint, p256dh="private-client-point",
+        auth="private-client-auth", vapid_version=1,
+    )
+    response = client.get("/api/devices")
+    assert response.status_code == 200
+    row = response.json()["devices"][0]
+    assert row["push"] == {
+        "vapid_version": 1, "generation": 2,
+        "created_at": clock["t"], "renewed_at": clock["t"], "provider": provider,
+    }
+    assert row["push_renew"] is None
+    try:
+        host = urlsplit(endpoint).hostname
+    except ValueError:
+        host = endpoint
+    for secret in (endpoint, host, "private-client-point", "private-client-auth", '"p256dh"', '"auth"'):
+        assert secret not in response.text
+
+
+@pytest.mark.parametrize("reason", ["idle", "vapid_key"])
+def test_device_list_tracks_push_clear_and_renewal(client, devices, clock, reason):
+    code, _ = devices.start_pairing()
+    dev, token = devices.claim_pairing(code, "phone")
+
+    def row():
+        return client.get("/api/devices").json()["devices"][0]
+
+    assert row()["push"] is None and row()["push_renew"] is None
+    _enroll(devices, dev["id"], token)
+    if reason == "idle":
+        clock["t"] += 30 * 86400 + 1
+        devices.sweep_push_bindings()
+    else:
+        devices.sweep_push_bindings(frozenset())
+    assert row()["push"] is None and row()["push_renew"] == reason
+    if reason == "vapid_key":
+        _enroll(devices, dev["id"], token, version=2)
+        assert row()["push"]["vapid_version"] == 2 and row()["push_renew"] is None
+        devices.clear_push_binding(dev["id"], token)
+        assert row()["push"] is None and row()["push_renew"] is None
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_agent_list_rows_never_report_push(client, devices, clock, bound):
+    dev, _token = _enrolled(devices)
+    rows = json.loads(devices._registry_path().read_text("utf-8"))
+    rows[0]["kind"] = "agent"
+    rows[0]["push_cleared"] = "idle"
+    if not bound:
+        rows[0]["push"] = None
+    devices._registry_path().write_text(json.dumps(rows), "utf-8")
+    row = client.get("/api/devices").json()["devices"][0]
+    assert row["id"] == dev["id"] and row["kind"] == "agent"
+    assert row["push"] is None and row["push_renew"] is None

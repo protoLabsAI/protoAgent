@@ -49,6 +49,7 @@ import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from infra.paths import instance_paths
 from security import claim_throttle
@@ -153,11 +154,18 @@ class PushBinding:
 
     def public(self) -> dict:
         """Safe status and times only — never the endpoint or the client keys."""
+        from security.push_keys import push_provider
+
+        try:
+            host = urlsplit(self.endpoint).hostname
+        except ValueError:  # A hand-edited registry must not break device serialization.
+            host = None
         return {
             "vapid_version": self.vapid_version,
             "generation": self.generation,
             "created_at": self.created_at,
             "renewed_at": self.renewed_at,
+            "provider": push_provider(host or ""),
         }
 
 
@@ -255,6 +263,8 @@ class Device:
             "expired": self.is_expired(),
             "expires_at": self.expires_at(),
             "rotated_at": self.rotated_at,
+            "push": self.push.public() if self.kind == KIND_DEVICE and self.push is not None else None,
+            "push_renew": self.push_cleared if self.kind == KIND_DEVICE and self.push is None else None,
         }
 
 
