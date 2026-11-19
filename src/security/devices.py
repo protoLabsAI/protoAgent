@@ -128,6 +128,9 @@ PUSH_CLEARED_KEY = "vapid_key"  # its VAPID key version was retired or left its 
 _PUSH_CLEARED = frozenset({PUSH_CLEARED_HANDOFF, PUSH_CLEARED_IDLE, PUSH_CLEARED_KEY})
 
 
+PUSH_ERROR_CODES = ("timeout", "network", "service_retry", "rejected", "retries_exhausted")
+
+
 @dataclass
 class PushBinding:
     """A device's Web Push subscription (ADR 0135 W2), held ON its `Device` row.
@@ -142,6 +145,12 @@ class PushBinding:
     send queued (or a late result for one) under an older generation can be told from the
     binding as it stands now and dropped. ``created_at`` is when the device enrolled; ``renewed_at`` is when
     the current subscription was last stored.
+
+    Delivery times describe service acceptance, not display or receipt. ``last_error``
+    is one of PUSH_ERROR_CODES: "timeout" (send timeout), "network" (request failed
+    before a response), "service_retry" (retryable service status), "rejected"
+    (non-retryable refusal), or "retries_exhausted" (attempt limit or notice expiry).
+    A later acceptance preserves the last failure for diagnosis.
     """
 
     endpoint: str = field(repr=False)
@@ -151,6 +160,10 @@ class PushBinding:
     generation: int
     created_at: float
     renewed_at: float
+    last_attempt_at: float | None = None
+    last_accepted_at: float | None = None
+    last_error: str | None = None
+    last_error_at: float | None = None
 
     def public(self) -> dict:
         """Safe status and times only — never the endpoint or the client keys."""
@@ -166,6 +179,10 @@ class PushBinding:
             "created_at": self.created_at,
             "renewed_at": self.renewed_at,
             "provider": push_provider(host or ""),
+            "last_attempt_at": self.last_attempt_at,
+            "last_accepted_at": self.last_accepted_at,
+            "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
         }
 
 
@@ -433,6 +450,10 @@ def _parse_push(raw: object) -> PushBinding | None:
         generation=generation,
         created_at=created_at,
         renewed_at=renewed_at or created_at,
+        last_attempt_at=_opt_float(raw.get("last_attempt_at")),
+        last_accepted_at=_opt_float(raw.get("last_accepted_at")),
+        last_error=(raw.get("last_error") if raw.get("last_error") in PUSH_ERROR_CODES else None),
+        last_error_at=_opt_float(raw.get("last_error_at")),
     )
 
 
@@ -679,12 +700,39 @@ def set_push_binding(
             generation=device.push_generation,
             created_at=old.created_at if old is not None else now,
             renewed_at=now,
+            last_attempt_at=old.last_attempt_at if same else None,
+            last_accepted_at=old.last_accepted_at if same else None,
+            last_error=old.last_error if same else None,
+            last_error_at=old.last_error_at if same else None,
         )
         device.push_cleared = None
         _save(devices)
         status = device.push.public()
     logger.info("[devices] %s %s its push binding", device.id, "renewed" if same else "set")
     return status
+
+
+def record_push_result(device_id: str, generation: int, outcome: str, at: float) -> bool:
+    """Trusted sender write: record only the still-current subscription's result.
+
+    Accept only bounded categories, never provider text. One locked registry write
+    preserves both the last acceptance and the last failure across later attempts.
+    """
+    if outcome != "accepted" and outcome not in PUSH_ERROR_CODES:
+        raise ValueError("unknown push outcome")
+    with _LOCK:
+        devices = _load()
+        device = next((d for d in devices if d.id == device_id), None)
+        if device is None or device.push is None or device.push.generation != generation:
+            return False
+        device.push.last_attempt_at = at
+        if outcome == "accepted":
+            device.push.last_accepted_at = at
+        else:
+            device.push.last_error = outcome
+            device.push.last_error_at = at
+        _save(devices)
+    return True
 
 
 def invalidate_push_binding(device_id: str, generation: int) -> bool:

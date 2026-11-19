@@ -52,6 +52,7 @@ class PushResult:
 
     status: Literal["accepted", "retry", "gone", "failed"]
     retry_after: float = 0
+    error: str | None = None
 
 
 class PushProvider(Protocol):
@@ -206,11 +207,13 @@ class PushTransport:
             }
             try:
                 result = await asyncio.wait_for(self.provider.send(device.push, payload), self.timeout)
+            except (TimeoutError, httpx.TimeoutException):
+                result = PushResult("retry", error="timeout")
             except Exception:
-                result = PushResult("retry")
+                result = PushResult("retry", error="network")
             state, next_at = "failed", now
             if result.status == "gone":
-                devices.invalidate_push_binding(device.id, row["generation"])
+                await asyncio.to_thread(devices.invalidate_push_binding, device.id, row["generation"])
                 state = "gone"
             elif result.status == "accepted":
                 state = "accepted"
@@ -219,6 +222,22 @@ class PushTransport:
                 next_at = self.clock() + max(delay, result.retry_after)
                 if math.isfinite(next_at) and next_at < row["expires_at"]:
                     state = "pending"
+            if result.status != "gone":
+                if result.status == "accepted":
+                    outcome = "accepted"
+                elif result.status == "retry" and state == "failed":
+                    outcome = "retries_exhausted"
+                else:
+                    outcome = result.error or ("service_retry" if result.status == "retry" else "rejected")
+                try:
+                    await asyncio.to_thread(
+                        devices.record_push_result, device.id, row["generation"], outcome, self.clock(),
+                    )
+                except Exception:
+                    # Status is best-effort: a registry failure must not strand a
+                    # completed send inflight or prevent its scheduled retry.
+                    # Omit exception text, which could contain binding secrets.
+                    logger.warning("[push] delivery status could not be persisted")
             with self._db() as db:
                 db.execute(f"UPDATE attempts SET state = ?, next_at = ? WHERE {where}", (state, next_at, *key))
 
@@ -351,18 +370,18 @@ class WebPushProvider:
             logger.error("[push] notice not sent: %s", exc)
             return PushResult("failed")
         if ttl <= 0:
-            return PushResult("failed")  # expired: dropped locally
+            return PushResult("failed", error="retries_exhausted")  # expired: dropped locally
         try:
             endpoint = push_keys.validate_push_endpoint(binding.endpoint)
         except push_keys.PushEndpointError as exc:
             # Could be a DNS blip, so the binding is kept; the service is never contacted.
             logger.warning("[push] endpoint refused before send: %s", exc)
-            return PushResult("retry")
+            return PushResult("retry", error="network")
         try:
             key = push_keys.signing_key(binding.vapid_version)
         except push_keys.PushKeyringError as exc:
             logger.error("[push] VAPID keyring unavailable: %s", exc)
-            return PushResult("retry")
+            return PushResult("retry", error="network")
         if key is None:
             # Retired or out of its migration window: the registry's reconcile clears the
             # binding with its renew reason; this attempt just ends.
@@ -396,7 +415,7 @@ class WebPushProvider:
                 response = await client.post(endpoint, headers=headers, content=body)
         except httpx.HTTPError as exc:
             logger.warning("[push] %s request failed: %s", provider, type(exc).__name__)
-            return PushResult("retry")
+            return PushResult("retry", error="timeout" if isinstance(exc, httpx.TimeoutException) else "network")
         status = response.status_code
         if 200 <= status < 300:
             return PushResult("accepted")

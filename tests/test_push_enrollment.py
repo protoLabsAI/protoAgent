@@ -198,6 +198,10 @@ def test_a_device_stores_its_own_binding_on_its_own_row(devices, clock_free_now,
             "created_at": clock_free_now.t,
             "renewed_at": clock_free_now.t,
             "provider": "google",
+            "last_attempt_at": None,
+            "last_accepted_at": None,
+            "last_error": None,
+            "last_error_at": None,
         },
     }
     _assert_no_secrets(r, body)
@@ -210,6 +214,10 @@ def test_a_device_stores_its_own_binding_on_its_own_row(devices, clock_free_now,
         "generation": 1,
         "created_at": clock_free_now.t,
         "renewed_at": clock_free_now.t,
+        "last_attempt_at": None,
+        "last_accepted_at": None,
+        "last_error": None,
+        "last_error_at": None,
     }
     # One store: the registry file, nothing beside it.
     assert devices.push_bindings_exist() is True
@@ -231,6 +239,10 @@ def test_storing_the_same_subscription_again_renews_it(devices, clock_free_now, 
         "created_at": enrolled,
         "renewed_at": enrolled + 3600,
         "provider": "google",
+        "last_attempt_at": None,
+        "last_accepted_at": None,
+        "last_error": None,
+        "last_error_at": None,
     }
 
 
@@ -554,7 +566,10 @@ def test_no_device_listing_or_repr_carries_the_binding_secrets(devices, api):
     for secret in secrets:
         assert secret not in listing and secret not in me
         assert secret not in repr(device) and secret not in repr(device.push)
-    assert set(device.push.public()) == {"vapid_version", "generation", "created_at", "renewed_at", "provider"}
+    assert set(device.push.public()) == {
+        "vapid_version", "generation", "created_at", "renewed_at", "provider",
+        "last_attempt_at", "last_accepted_at", "last_error", "last_error_at",
+    }
     assert set(devices.push_status(dev["id"])) == set(device.push.public())
 
 
