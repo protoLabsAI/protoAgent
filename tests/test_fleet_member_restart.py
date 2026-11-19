@@ -196,6 +196,35 @@ async def test_real_interrupt_parks_and_unattended_answer_denies(recovery, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("running,action", [(False, "start"), (True, "restart")])
+async def test_approval_card_names_the_action_for_the_unattended_policy(recovery, running, action):
+    # ADR 0135 D2: only "start" (a dead member) is in the hub's unattended allow tier.
+    recovery.roster[0]["running"] = running
+    recovery.approval.return_value = False
+    await invoke(recovery)
+    assert recovery.approval.call_args.args[0]["action"] == action
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("came_back", [False, True])
+async def test_unattended_start_allowance_does_not_restart_a_member_that_came_back(recovery, came_back):
+    from graph.unattended_policy import approval_grant
+
+    def allow(card):
+        recovery.roster[0]["running"] = came_back
+        return approval_grant({"action": card["action"]})
+
+    recovery.approval.side_effect = allow
+    result = await invoke(recovery)
+    if came_back:
+        assert result == {"ok": False, "error": "state_changed"}
+        assert not recovery.events
+    else:
+        assert result["ok"] is True
+        assert recovery.events == [("start", "worker-1234")]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("principal", ["federation", "public"])
 async def test_restricted_callers_lose_tool_and_cannot_invoke_it(recovery, principal):
     class Request:

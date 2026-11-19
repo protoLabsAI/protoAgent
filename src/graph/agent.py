@@ -542,6 +542,13 @@ def _build_middleware(
 
         middleware.append(SubagentOnlyMiddleware(subagent_only))
 
+    # Unattended approval policy (ADR 0124 D5): allow / ask / never for a tool's approval
+    # pause on a turn nobody is watching. Always on, and a no-op unless the turn driver
+    # marked the invocation unattended, so an operator's turn pays one contextvar read.
+    from graph.middleware.unattended_policy import UnattendedPolicyMiddleware
+
+    middleware.append(UnattendedPolicyMiddleware(config))
+
     # Multimodal tool results (#1930) — a tool that opts in (via the
     # graph.multimodal sentinel envelope) can return an image the vision model
     # SEES as ToolMessage content blocks; on a text-only model it degrades to

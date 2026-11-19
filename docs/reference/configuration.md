@@ -20,6 +20,7 @@ uv run python -m server config explain
 | Tune memory and context | [knowledge](#knowledge), [memory](#memory), [context](#context), [compaction](#compaction) |
 | Schedule or repeat work | [Scheduler](#scheduler), [goal](#goal), [watches](#watches), [workflows](#workflows) |
 | Secure remote access | [network](#network), [devices](#devices), [security](#security), [Secrets](#secrets) |
+| Decide what runs with nobody watching | [unattended](#unattended) |
 | Configure extensions | [plugins](#plugins), [mcp](#mcp), [skills](#skills) |
 | Diagnose runs | [telemetry](#telemetry), [tracing](#tracing) |
 
@@ -716,6 +717,35 @@ security:
 |---|---|---|
 | `callback_allowlist` | `[]` | CIDRs an outbound callback / peer destination may resolve into. **Empty = off.** When set it becomes the policy: a destination is allowed iff **every** resolved IP is inside a listed range (overrides the default callback denylist, so you can permit a specific internal/tailnet range; everything else is rejected). Hot-reloads. |
 | `redact_tool_output` | `true` | Scrub credential patterns from tool output **before** it reaches the model, session transcript, and checkpoints. Patterns include OpenAI keys (`sk-…`), GitHub tokens (`ghp_…`), Bearer tokens, env-var assignments (`OPENAI_API_KEY=…`), AWS access keys, Slack/Discord tokens, and any value the [external secrets manager](./configuration.md#secrets_manager) has fetched. Audit logging is always redacted regardless of this flag. Set `false` only when debugging a credential issue that requires seeing the raw output. |
+
+## `unattended` {#unattended}
+
+What a turn nobody is watching may do when a tool pauses for approval ([ADR 0124](../adr/0124-per-caller-run-command-approval-policy.md) D5). Unattended means a scheduled job, a watch, an inbox page, a webhook, a background result, or a goal-driven turn. Edit the lists in **Settings ▸ Unattended approvals**. Operator chat turns are not affected: they show the approval card as before.
+
+```yaml
+unattended:
+  allow:
+    - fleet_member_restart:start   # one action of a tool
+  ask:
+    - run_command                  # a whole tool
+  never:
+    - delete_file
+```
+
+| Key | Default | What |
+|---|---|---|
+| `allow` | `[]` | The action runs with no decision. |
+| `ask` | `[]` | The turn parks **one** decision that shows the tool and its arguments, and the action runs only after you approve it. Deny, cancel or any other answer declines it. |
+| `never` | `[]` | The tool is refused before it runs, and the model is told why. |
+
+An entry is a tool name, or `tool:action` for one action of a tool. The action is the `action` value on the tool's approval card. `fleet_member_restart` states `start` for a member whose process is dead and `restart` for a running one.
+
+- **Anything in none of the lists is denied.** The call returns a refusal and the turn carries on. It never waits for an approval nobody can give.
+- An entry for an exact action beats an entry for the whole tool. At the same level `never` beats `ask`, and `ask` beats `allow`.
+- `allow` and `ask` act where a tool pauses for approval. A tool that never asks for approval runs as usual, unless it is under `never`.
+- A hub starts with one built-in allowance ([ADR 0135](../adr/0135-always-on-orchestrator.md) D2): `fleet_member_restart:start`, which starts a local member whose process is dead. It needs `fleet.member_restart_enabled`, and it never restarts a member you stopped on purpose. Listing `fleet_member_restart` in any of the three lists replaces it.
+- A question (`ask_human`, `request_user_input`) is not an action. With no entry it is answered with a "no operator available" notice, as before. Under `ask` it becomes a decision.
+- A scheduled job's own tool fence (`Job.fence`) still applies first: a tool outside the fence is not available to the turn at all.
 
 ## `runtime`
 

@@ -131,8 +131,8 @@ roster. Review the command, workdir, permissions, and probe result before approv
    re-propose the same entry.
 
 Autonomous turns (scheduled, inbox, background) **fail closed**: there is no
-operator to approve, the runtime auto-answers the pause, and the auto-answer
-declines. The Project Manager preset relies on this tool for its empty-bench
+operator to approve, so the [unattended approval policy](/reference/configuration#unattended)
+refuses the pause unless you listed the tool there. The Project Manager preset relies on this tool for its empty-bench
 rule (an absent `list_agents` *is* the answer — propose, don't retry); the
 [coding-agent guide](/guides/build-with-a-coding-agent#_2-wire-a-coder) shows it
 in that flow, and the archetype's Configure step can pick whatever it registered.

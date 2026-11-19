@@ -45,7 +45,7 @@ _REEXPORTED = (
     "_INTERACTIVE_ORIGINS",
     "_LIVE_SERVER_TURNS",
     "_LiveServerTurn",
-    "_MAX_AUTONOMOUS_AUTOANSWERS",
+    "_MAX_UNATTENDED_REFUSALS",
     "_THREAD_LOCKS",
     "_background_resume_attended",
     "_control_origin",
@@ -93,7 +93,7 @@ _CALL_THROUGH = (
     "_resolve_thread_id",
     "_hold_if_hitl_pending",
     "_is_autonomous",
-    "_MAX_AUTONOMOUS_AUTOANSWERS",
+    "_MAX_UNATTENDED_REFUSALS",
     "_AUTONOMOUS_HITL_SENTINEL",
     "_turn_started",
     "_turn_ended",
@@ -332,7 +332,7 @@ async def test_native_turn_reads_the_autoanswer_cap_and_sentinel_from_turn_contr
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
     monkeypatch.setattr(chat, "_clear_pending_interrupt", _clear)
-    monkeypatch.setattr(turn_control, "_MAX_AUTONOMOUS_AUTOANSWERS", 1)
+    monkeypatch.setattr(turn_control, "_MAX_UNATTENDED_REFUSALS", 1)
     monkeypatch.setattr(turn_control, "_AUTONOMOUS_HITL_SENTINEL", sentinel)
     frames = await _native_frames(chat, {"origin": "scheduler"})
     assert [k for k, _ in frames][-1] == "done"
@@ -441,7 +441,7 @@ async def test_nonstreaming_driver_reads_beacon_priority_and_hitl_constants_from
     monkeypatch.setattr(turn_control, "_interactive_turn_priority", _priority)
     monkeypatch.setattr(turn_control, "_hold_if_hitl_pending", _hold)
     monkeypatch.setattr(turn_control, "_HITL_RESUME", marker)
-    monkeypatch.setattr(turn_control, "_MAX_AUTONOMOUS_AUTOANSWERS", 2)
+    monkeypatch.setattr(turn_control, "_MAX_UNATTENDED_REFUSALS", 2)
     monkeypatch.setattr(turn_control, "_AUTONOMOUS_HITL_SENTINEL", sentinel)
 
     out = await chat.chat("hello", "s-sync")

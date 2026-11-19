@@ -124,7 +124,7 @@ from server.turn_control import (  # noqa: F401 — re-export
     _HITL_RESUME,
     _INTERACTIVE_ORIGINS,
     _LIVE_SERVER_TURNS,
-    _MAX_AUTONOMOUS_AUTOANSWERS,
+    _MAX_UNATTENDED_REFUSALS,
     _THREAD_LOCKS,
     _background_resume_attended,
     _control_origin,
@@ -738,6 +738,12 @@ async def _resume_payload(config: dict, resume_value):
     LangGraph whose interrupts always carry ids."""
     found = await _pending_interrupt(config)
     iid = found[0] if found else None
+    if found:
+        # An ask-tier decision (ADR 0124 D5) stands in for the tool's own approval card, so
+        # the operator's answer is translated into the approve / deny that card expects.
+        from graph.unattended_policy import resume_value as _policy_resume_value
+
+        resume_value = _policy_resume_value(found[1], resume_value)
     return {iid: resume_value} if iid else resume_value
 
 
@@ -2142,10 +2148,11 @@ async def _run_native_turn(
     message = _goal_loop.kickoff_message(_goal_state, message, resume=resume, overflow_retry=overflow_retry)
 
     # An autonomous turn (no operator watching, or goal-driven — #1911) must never deadlock
-    # on a HITL pause: the shared policy (server/goal_loop.py) answers each input_required
-    # with the no-operator sentinel and runs another pass, up to a cap, then gives up. ONE
-    # policy (and budget) for the whole turn: the initial pass and every goal continuation.
-    _auto = _goal_loop.HitlAutoAnswer(_goal_loop.is_autonomous_turn(request_metadata, goal_active=goal_active))
+    # on a HITL pause: the shared unattended policy (server/goal_loop.py, ADR 0124 D5) approves
+    # an allow-tier action, and refuses any other pause with the no-operator notice and runs
+    # another pass, up to a cap, then gives up. ONE policy (and budget) for the whole turn:
+    # the initial pass and every goal continuation.
+    _auto = _goal_loop.UnattendedPolicy(_goal_loop.is_autonomous_turn(request_metadata, goal_active=goal_active))
 
     async def _drive_passes(pass_message, pass_config, *, resume_value, pass_images, out: dict):
         """Run one graph turn on ``pass_config`` to completion — a pass, then another for
@@ -2162,12 +2169,15 @@ async def _run_native_turn(
         _carried = ""
         while True:
             _autoanswer_pending = False
+            _answered_payload = None
             _autonomous_giveup = False
             _pass_text = ""
             # aclosing (#3877): a bare `async for` leaves the inner generator unclosed when
             # this one is closed early — its cleanup would run at GC, not before aclose() returns.
+            # `_auto.scoped` marks the pass unattended for the approval policy's tool-call
+            # middleware (ADR 0124 D5); it does nothing on an attended turn.
             async with contextlib.aclosing(
-                _turn_stream._run_turn_stream(
+                _auto.scoped(_turn_stream._run_turn_stream(
                     pass_message,
                     session_id,
                     pass_config,
@@ -2183,7 +2193,7 @@ async def _run_native_turn(
                     # unfenced turn, so no pass inherits a fence the thread held before.
                     subagent_fence=_turn_fence["fence"],
                     operator_chat_turn=_turn_control.operator_chat_turn((request_metadata or {}).get("origin", "")),
-                )
+                ))
             ) as _turn_frames:
                 async for kind, payload in _turn_frames:
                     if kind == "__raw__":
@@ -2206,19 +2216,22 @@ async def _run_native_turn(
                         yield (kind, payload)
                         out["paused"] = True
                     elif kind == "input_required":
-                        _verdict = _auto.on_interrupt()
+                        _verdict = _auto.on_interrupt(payload)
                         if _verdict == _goal_loop.PARK:
                             # Operator/a2a turn: surface it and park the turn; the A2A runner sets
                             # the task input-required and the caller resumes via message/send on the
                             # same taskId. (A human — local or at the remote a2a caller — can answer.)
                             yield (kind, payload)
                             out["paused"] = True
-                        elif _verdict == _goal_loop.ANSWER:
-                            # No human can answer — auto-answer this interrupt and re-run the turn so
-                            # it completes, rather than parking an (un-sweepable) input-required task.
-                            # The graph is checkpointed at the interrupt; the resume below feeds the
-                            # sentinel as ask_human / request_user_input's return value.
+                        elif _verdict in (_goal_loop.ANSWER, _goal_loop.ALLOW):
+                            # No human can answer. ALLOW: the unattended policy (ADR 0124 D5)
+                            # put this action in the allow tier, so the resume approves it.
+                            # ANSWER: a pause the policy does not allow is refused with the
+                            # no-operator notice, so the turn completes rather than parking an
+                            # (un-sweepable) input-required task. The graph is checkpointed at
+                            # the interrupt; the resume below feeds the value to the paused tool.
                             _autoanswer_pending = True
+                            _answered_payload = payload
                         else:
                             # Still asking after the auto-answer budget is spent: an autonomous turn
                             # must NEVER park, so give up on the pause and force the turn to a
@@ -2236,10 +2249,11 @@ async def _run_native_turn(
             if _autonomous_giveup and _carried:
                 out["raw"] = _carried
             if _autoanswer_pending:
-                # Resume past the interrupt with the no-operator sentinel and run another pass;
+                # Resume past the interrupt with the policy's answer (an approval for an
+                # allow-tier action, else the no-operator notice) and run another pass;
                 # images belong only to the first (fresh) pass, so drop them on resume. The
                 # turn stream keys the resume by interrupt id (_resume_payload).
-                resume_value = _auto.answer()
+                resume_value = _auto.answer(_answered_payload)
                 pass_images = None
                 continue
             if _autonomous_giveup:

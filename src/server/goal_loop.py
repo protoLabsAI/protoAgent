@@ -18,13 +18,14 @@ DECISIONS and leave the running of a graph pass to the driver:
   streaming driver shows it, the other has no status surface) and
   :class:`GoalContinuation` (run this continuation, then set ``step.text`` to its output).
   A pass the round governor ended at its round cap pauses the drive (#3957).
-* :class:`HitlAutoAnswer` — the autonomous no-deadlock policy (#1911): park / answer with
-  the no-operator sentinel / give up and clear, within the ``_MAX_AUTONOMOUS_AUTOANSWERS``
-  budget. Every resume is keyed by interrupt id through ``server.chat._resume_payload``
-  (the #3872 fix). :meth:`HitlAutoAnswer.settle` is the whole loop for an ``ainvoke``-style
-  driver; the streaming driver calls :meth:`~HitlAutoAnswer.on_interrupt` per
-  ``input_required`` frame and resumes through ``_run_turn_stream(resume_value=…)``, which
-  keys the resume the same way.
+* :class:`UnattendedPolicy` — the unattended approval policy's driver half (#1911, ADR 0124
+  D5): park an attended turn; on an autonomous one approve a pause the policy allows, and
+  refuse any other with the no-operator notice / give up and clear, within the
+  ``_MAX_UNATTENDED_REFUSALS`` loop guard. Every resume is keyed by interrupt id through
+  ``server.chat._resume_payload`` (the #3872 fix). :meth:`UnattendedPolicy.settle` is the
+  whole loop for an ``ainvoke``-style driver; the streaming driver calls
+  :meth:`~UnattendedPolicy.on_interrupt` per ``input_required`` frame and resumes through
+  ``_run_turn_stream(resume_value=…)``, which keys the resume the same way.
 
 **Collaborators stay where they live and are read at CALL time**, so a test's patch on the
 owner is what runs (``tests/test_goal_loop_seam.py``): ``server.chat``'s
@@ -43,6 +44,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
+from graph import unattended_policy as _unattended_policy
 from runtime.state import STATE
 from server import turn_control as _turn_control
 
@@ -114,8 +116,9 @@ async def record_goal_note(config: dict, note: str, *, pass_config: dict | None 
         return False
 
 
-# HitlAutoAnswer.on_interrupt verdicts.
+# UnattendedPolicy.on_interrupt verdicts.
 PARK = "park"
+ALLOW = "allow"
 ANSWER = "answer"
 GIVE_UP = "give_up"
 
@@ -394,30 +397,70 @@ def is_autonomous_turn(request_metadata: dict | None, *, goal_active: bool) -> b
     return _turn_control._is_autonomous(request_metadata) or goal_active
 
 
-class HitlAutoAnswer:
-    """The autonomous no-deadlock policy for one turn's HITL interrupts.
+class UnattendedPolicy:
+    """The unattended approval policy for one turn's HITL interrupts (ADR 0124 D5).
 
-    An attended turn PARKS (a human answers). An autonomous one ANSWERS with the
-    no-operator sentinel and re-runs, up to ``_MAX_AUTONOMOUS_AUTOANSWERS`` times; still
-    asking after that, it GIVES UP: the stray interrupt is cleared so the checkpoint isn't
-    left dangling, and the turn completes on whatever text it has — it must never park."""
+    An attended turn PARKS (a human answers). An autonomous one never waits:
+
+    * a pause the policy's tool-call middleware (``graph.middleware.unattended_policy``)
+      stamped **allow** is APPROVED, so the action runs;
+    * an **ask**-tier pause reaches the drivers as a ``request_decision`` payload, which
+      parks through the existing decision path, not through this class;
+    * a **never**-tier action, or one with no policy, is refused by the middleware before
+      it can pause.
+
+    What is left is a pause that carries no policy: a question (``ask_human``, a form), or
+    an approval raised outside a tool call. It is refused (ANSWER) with the no-operator
+    notice and the turn re-runs, up to ``_MAX_UNATTENDED_REFUSALS`` times; still asking
+    after that, it GIVES UP: the stray interrupt is cleared so the checkpoint isn't left
+    dangling, and the turn completes on whatever text it has — it must never park. That
+    bound is a loop guard, not a tier."""
 
     def __init__(self, autonomous: bool):
         self.autonomous = autonomous
         self.answered = 0
+        self._allowed_calls: set[str] = set()
 
-    def on_interrupt(self) -> str:
-        """The verdict for an interrupt the turn just hit: PARK, ANSWER or GIVE_UP."""
+    def scope(self):
+        """Mark graph work run inside as unattended (a no-op for an attended turn), so the
+        tool-call middleware applies the tiers."""
+        return _unattended_policy.unattended_turn(self.autonomous)
+
+    async def scoped(self, frames: AsyncIterator[Any]) -> AsyncIterator[Any]:
+        """``frames`` (one streamed graph pass), run under :meth:`scope`."""
+        with self.scope():
+            async with contextlib.aclosing(frames):
+                async for frame in frames:
+                    yield frame
+
+    def _allowed(self, payload: object) -> dict | None:
+        """The allow stamp on ``payload`` when this turn may approve it. One approval per
+        tool call: a gate that pauses again after being approved did not accept it, and is
+        refused instead of approved in a loop."""
+        stamp = _unattended_policy.policy_stamp(payload)
+        if stamp is None or stamp.get("tier") != _unattended_policy.ALLOW:
+            return None
+        return None if str(stamp.get("call_id") or "") in self._allowed_calls else stamp
+
+    def on_interrupt(self, payload: object = None) -> str:
+        """The verdict for an interrupt the turn just hit: PARK, ALLOW, ANSWER or GIVE_UP."""
         if not self.autonomous:
             return PARK
-        if self.answered < _turn_control._MAX_AUTONOMOUS_AUTOANSWERS:
+        if self._allowed(payload) is not None:
+            return ALLOW
+        if self.answered < _turn_control._MAX_UNATTENDED_REFUSALS:
             return ANSWER
         return GIVE_UP
 
-    def answer(self):
-        """Spend one auto-answer; the RAW sentinel to resume with. The resume is keyed by
+    def answer(self, payload: object = None):
+        """The RAW value to resume with: the approval for an allow-tier pause, else one
+        spent refusal (the no-operator notice). The resume is keyed by
         the pending interrupt's id where it's built (``server.chat._resume_payload`` — a
         bare resume with several pending interrupts is a hard LangGraph error, #3872)."""
+        stamp = self._allowed(payload)
+        if stamp is not None:
+            self._allowed_calls.add(str(stamp.get("call_id") or ""))
+            return _unattended_policy.approval_grant(stamp)
         self.answered += 1
         return _turn_control._AUTONOMOUS_HITL_SENTINEL
 
@@ -438,8 +481,9 @@ class HitlAutoAnswer:
         while (payload := await chat._pending_interrupt_value(config)) is not None:
             if _turn_control.is_decision_interrupt(payload):
                 break
-            if self.on_interrupt() == GIVE_UP:
+            if self.on_interrupt(payload) == GIVE_UP:
                 await self.give_up(config)
                 break
-            result = await invoke(Command(resume=await chat._resume_payload(config, self.answer())))
+            with self.scope():
+                result = await invoke(Command(resume=await chat._resume_payload(config, self.answer(payload))))
         return result

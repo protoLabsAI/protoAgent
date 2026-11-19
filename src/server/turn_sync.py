@@ -166,7 +166,7 @@ async def _native_turn(
     # compact_session, rewind_session) holds the per-thread lock — an
     # unlocked graph turn here could lost-update a concurrent one (e.g. the
     # desktop /api/chat fallback racing a console /compact on the same tab).
-    auto = _goal_loop.HitlAutoAnswer(_goal_loop.is_autonomous_turn(turn_metadata, goal_active=goal_active))
+    auto = _goal_loop.UnattendedPolicy(_goal_loop.is_autonomous_turn(turn_metadata, goal_active=goal_active))
     async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
         # HITL hold (#1560) — same contract as the streaming path: while the
         # thread is parked at a form/question/approval interrupt, hold a fresh
@@ -233,10 +233,13 @@ async def _native_turn(
                 **state_extra,
             }
         with goal_turn(goal_active) as goal_pass:
+            # `auto.scope()` marks the pass unattended for the approval policy's tool-call
+            # middleware (ADR 0124 D5); it does nothing on an attended turn.
             async with _turn_control.decision_resume(
                 config, turn_message if hold is _turn_control._HITL_RESUME else None
             ):
-                result = await STATE.graph.ainvoke(graph_input, config=config)
+                with auto.scope():
+                    result = await STATE.graph.ainvoke(graph_input, config=config)
             # Headless-first parity (#1911), the shared policy (server/goal_loop.py): a
             # goal-driven turn, or one from an autonomous origin (#3891 F2), has no
             # operator here to answer a HITL park — resume (keyed by interrupt id, #3872)
@@ -326,7 +329,7 @@ async def _native_turn(
             # thread directly; fresh-context ones still exclude compact/rewind/
             # streaming turns keyed on the base id.
             async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
-                with goal_turn() as step.goal_pass:
+                with goal_turn() as step.goal_pass, auto.scope():
                     result = await STATE.graph.ainvoke(
                         {
                             "messages": [HumanMessage(content=step.message)],

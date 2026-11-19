@@ -193,8 +193,8 @@ async def test_autonomous_turn_force_completes_after_cap(monkeypatch):
     assert kinds[-1] == "done"  # forced to a terminal state
     # cap auto-answers (each resumed with the sentinel) + 1 fresh pass + 1 give-up pass.
     assert fake.resume_values[0] is None
-    assert fake.resume_values.count(turn_control._AUTONOMOUS_HITL_SENTINEL) == turn_control._MAX_AUTONOMOUS_AUTOANSWERS
-    assert len(fake.resume_values) == turn_control._MAX_AUTONOMOUS_AUTOANSWERS + 1
+    assert fake.resume_values.count(turn_control._AUTONOMOUS_HITL_SENTINEL) == turn_control._MAX_UNATTENDED_REFUSALS
+    assert len(fake.resume_values) == turn_control._MAX_UNATTENDED_REFUSALS + 1
     assert len(cleared) == 1  # the stray interrupt was cleared exactly once
 
 

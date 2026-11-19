@@ -321,6 +321,12 @@ def _restart_target(member: str) -> dict[str, Any]:
     return {"ok": True, "id": entry["id"], "running": bool(entry.get("running"))}
 
 
+def _restart_action(target: dict[str, Any]) -> str:
+    """The action a restart call takes on ``target``: ``start`` when its process is dead,
+    ``restart`` (stop when idle, then start) when it is running."""
+    return "restart" if target.get("running") else "start"
+
+
 def build_fleet_member_restart_tools(graph_config) -> list:
     """Bind the independently opt-in, hub-only member recovery tool."""
     from graph.workspaces.manager import is_workspace_member
@@ -365,6 +371,10 @@ def build_fleet_member_restart_tools(graph_config) -> list:
                 "title": "Approve fleet member start / restart when idle?",
                 "detail": f"Member: {slug}\nReason: {reason}",
                 "session_allow": False,
+                # What this call would do, for the unattended approval policy (ADR 0124 D5):
+                # "start" a member whose process is dead, or "restart" a running one. ADR
+                # 0135 D2 puts only "start" in the hub's allow tier.
+                "action": _restart_action(target),
             })
             if not _approved(decision):
                 result = {"ok": False, "error": "approval_denied"}
@@ -374,6 +384,12 @@ def build_fleet_member_restart_tools(graph_config) -> list:
             target = await asyncio.to_thread(_restart_target, slug)
             if not target["ok"]:
                 result = target
+                return result
+            # An unattended allowance names the one action it covers. If the member came
+            # back up since, restarting it is a different action: not covered, not run.
+            granted = decision.get("action") if isinstance(decision, dict) and decision.get("unattended") else None
+            if granted and granted != _restart_action(target):
+                result = {"ok": False, "error": "state_changed"}
                 return result
             if target["running"]:
                 stopped = await fleet.stop(slug, when_idle=True)
@@ -394,7 +410,7 @@ def build_fleet_member_restart_tools(graph_config) -> list:
             return result
         finally:
             # Also records refused calls and approval interrupts. Bubble-up exceptions
-            # propagate so the existing unattended runner can answer the approval.
+            # propagate so the unattended approval policy can rule on the approval.
             await asyncio.to_thread(
                 audit_logger.log,
                 session_id=(state or {}).get("session_id", ""),

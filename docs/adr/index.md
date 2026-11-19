@@ -135,7 +135,7 @@ retired behavior; follow linked guides and references for current procedures.
 | [0121](./0121-device-pairing-over-an-operator-supplied-public-url.md) | Device pairing over an operator-supplied public URL: one home origin, a throttled claim, device-scoped tokens | Accepted (2026-10-18) |
 | [0122](./0122-subscription-usage-model-and-routing.md) | Subscription usage model and routing: two sources into one cache, normalized windows, and unknown routes as today | Accepted (2026-10-21) |
 | [0123](./0123-forward-delegate-approvals-up-the-chain.md) | Forward delegate approvals up the delegation chain | Accepted (2026-10-25) |
-| [0124](./0124-per-caller-run-command-approval-policy.md) | Per-caller run_command approval policy for A2A callers | Proposed |
+| [0124](./0124-per-caller-run-command-approval-policy.md) | Per-caller run_command approval policy for A2A callers; allow / ask / never for unattended turns (D5) | Proposed (D5 shipped) |
 | [0125](./0125-memory-knowledge-history-separation.md) | Separate memory, knowledge and history: three stores, per-layer tools, history never auto-injects, optional shared operator profile | Accepted (2026-10-28) |
 | [0126](./0126-eval-flywheel-traces-feedback-cases.md) | Close the eval loop: three eval tiers, a nightly gate on the host, feedback and friction as scores on the turn's trace, and turns promoted to per-instance eval cases | Accepted (2026-10-29) |
 | [0127](./0127-compaction-fidelity.md) | Compaction fidelity: one engine for all compaction paths, whole-span summaries, operator messages carried verbatim, the agent's pending actions shown in full, and a per-chat directive ledger | Accepted (2026-11-08) |

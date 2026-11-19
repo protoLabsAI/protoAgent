@@ -1341,6 +1341,41 @@ FIELDS: list[Field] = [
         "`sh`, bare `git`) are ignored.",
         depends_on={"key": "filesystem.run_requires_approval"},
     ),
+    # Unattended approval policy (ADR 0124 D5) — allow / ask / never for a turn nobody is
+    # watching. Three string lists, so the section rides the ordinary string_list editor.
+    Field(
+        "unattended.allow",
+        "unattended_allow",
+        "Run without asking",
+        "string_list",
+        "Unattended approvals",
+        "Actions an unattended turn (scheduled, watch, inbox, webhook, background or "
+        "goal-driven) may approve for itself. One per line: a tool name (`run_command`) or one "
+        "action of a tool (`fleet_member_restart:start`). Anything listed in none of the three "
+        "lists is refused. A hub always starts with one allowance: starting a local fleet "
+        "member whose process is dead (`fleet_member_restart:start`). List that tool in any "
+        "of the three lists to replace it.",
+    ),
+    Field(
+        "unattended.ask",
+        "unattended_ask",
+        "Ask first",
+        "string_list",
+        "Unattended approvals",
+        "Actions that park ONE decision showing the tool and its arguments, and run only "
+        "after you approve it. Same entry format. An entry here wins over the same entry "
+        "under Run without asking.",
+    ),
+    Field(
+        "unattended.never",
+        "unattended_never",
+        "Never run unattended",
+        "string_list",
+        "Unattended approvals",
+        "Tools an unattended turn is refused outright, before they run. Same entry format. "
+        "An entry here wins over the other two lists. Operator chat turns are not affected "
+        "by any of these lists.",
+    ),
     Field(
         "filesystem.run_command_env_passthrough",
         "filesystem_run_command_env_passthrough",
@@ -2620,6 +2655,9 @@ _SECTION_CATEGORY = {
     # Mapped to Behavior rather than a standalone category: it's a runtime knob, not
     # an integration or infrastructure surface.
     "Security": "Behavior",
+    # Unattended approvals (ADR 0124 D5) — what a turn nobody is watching may approve for
+    # itself. A runtime disposition like Security, so it sits in Behavior.
+    "Unattended approvals": "Behavior",
     # Plugins — the one core FIELD under the Plugins surface (ADR 0093 opt-in). Mapped
     # explicitly (not via the default) so the core-section guard stays honest.
     "Plugins": "Plugins",

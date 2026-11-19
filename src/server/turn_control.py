@@ -355,16 +355,19 @@ async def attendance_stream(session_id: str, *, keepalive_s: float = 15.0, is_di
             release_session_attended(sid)
 
 
-# What we resume an autonomous turn's HITL interrupt with, so the agent stops waiting and
-# finishes the turn instead of deadlocking. Bounded by the cap below so a model that keeps
-# re-asking can't auto-answer in an infinite loop; past the cap we force the turn to complete
-# (clearing the stray interrupt) rather than parking — an autonomous turn must never park.
+# What an autonomous turn's HITL interrupt is refused with when the unattended approval
+# policy (ADR 0124 D5, graph/unattended_policy.py) does not allow it: the agent stops waiting
+# and finishes the turn instead of deadlocking. The policy decides approvals per tool (allow /
+# ask / never); this notice is what is left for a pause that carries no policy, such as a
+# question. The bound below is a loop guard, not a tier: a model that keeps re-asking can't be
+# refused in an infinite loop, and past it we force the turn to complete (clearing the stray
+# interrupt) rather than parking — an autonomous turn must never park.
 _AUTONOMOUS_HITL_SENTINEL = (
     "[no interactive operator available] This turn is running autonomously "
     "(scheduled / inbox / background), so no human can answer right now. Do not wait for "
     "input — proceed using your best judgment and explicitly state any assumption you made."
 )
-_MAX_AUTONOMOUS_AUTOANSWERS = 3
+_MAX_UNATTENDED_REFUSALS = 3
 
 
 def _truthy(value) -> bool:

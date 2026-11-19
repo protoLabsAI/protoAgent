@@ -368,11 +368,13 @@ class InterruptedTurnRecovery:
                     # projection, goal pause and prompt snapshots behave as if the fire
                     # had never been cut down.
                     with request_metadata_scope(self._resume_metadata(task_id, job_id=job_id, origin=origin, fence=fence)):
-                        result = await graph.ainvoke(None, config)
-                        # The shared autonomous policy (one copy with the live drivers):
-                        # answer each HITL pause with the sentinel and re-run; a decision
-                        # stays pending; past the cap, clear the pause and complete.
-                        auto = goal_loop.HitlAutoAnswer(True)
+                        # The shared unattended policy (one copy with the live drivers, ADR
+                        # 0124 D5): approve an allow-tier pause, refuse any other with the
+                        # no-operator notice and re-run; a decision stays pending; past the
+                        # cap, clear the pause and complete.
+                        auto = goal_loop.UnattendedPolicy(True)
+                        with auto.scope():
+                            result = await graph.ainvoke(None, config)
                         result = await auto.settle(config, result, lambda value: graph.ainvoke(value, config))
                         pending = await chat_mod._pending_interrupt_value(config)
                     if pending is not None and turn_control.is_decision_interrupt(pending):

@@ -546,7 +546,7 @@ async def test_goal_turn_auto_answers_parallel_interrupts_one_id_at_a_time(env, 
 
 @pytest.mark.asyncio
 async def test_goal_turn_gives_up_and_clears_after_the_auto_answer_budget(env, monkeypatch):
-    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    cap = turn_control._MAX_UNATTENDED_REFUSALS
     monkeypatch.setattr(env.state, "goal_controller", FakeGoals([None]), raising=False)
     g = env.install(
         [Invoke(turn_result(), steps=[set_interrupt("q0")])]
@@ -589,7 +589,7 @@ async def test_goal_continuation_interrupt_is_auto_answered_on_an_autonomous_tur
 async def test_goal_continuation_interrupts_share_the_turns_auto_answer_budget(env, monkeypatch):
     """#3891 F4: ONE budget per turn — answers spent in the initial pass count against a
     continuation's, and once it is spent the continuation's ask is cleared, never parked."""
-    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    cap = turn_control._MAX_UNATTENDED_REFUSALS
     goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
     monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
     g = env.install(
