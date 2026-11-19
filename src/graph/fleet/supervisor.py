@@ -362,7 +362,10 @@ def _load_restarts() -> dict:
             raise ValueError("invalid restart history")
         return records
     except (OSError, ValueError) as exc:
-        log.error("[fleet] restart history unreadable; automatic recovery disabled: %s", exc)
+        log.error(
+            "[fleet] restart history unreadable; automatic recovery is off until a member is "
+            "started explicitly (which rewrites it): %s", exc,
+        )
         return {"disabled": True}
 
 
@@ -372,21 +375,57 @@ def _save_restarts(records: dict) -> None:
     atomic_write(_restart_path(), json.dumps(records) + "\n")
 
 
+# Stop intent this process could not persist (a failed fleet-restarts.json write must
+# not block a stop or hub teardown). Held in memory so the policy still honours it for
+# the life of the hub; an explicit start clears it like the durable record.
+_unsaved_stops: set[str] = set()
+_shutting_down = False
+
+
+def _record_stop_intent(wids: list[str], *, shutdown: bool = False) -> None:
+    """Best-effort durable stop intent. Never raises: stopping a process matters more
+    than the record, and the in-memory copy covers this hub's lifetime."""
+    global _shutting_down
+    _unsaved_stops.update(wids)
+    if shutdown:
+        _shutting_down = True
+    try:
+        records = _load_restarts()
+        if shutdown:
+            records["shutdown"] = True
+        members = records.setdefault("members", {})
+        for wid in wids:
+            members.setdefault(wid, {})["stopped"] = True
+        _save_restarts(records)
+    except Exception as exc:  # noqa: BLE001 — see docstring
+        log.error("[fleet] could not persist stop intent for %s: %s", ", ".join(wids) or "shutdown", exc)
+        return
+    if not records.get("disabled"):  # an unreadable file took the write but not the meaning
+        _unsaved_stops.difference_update(wids)
+
+
 def stopped_on_purpose(ident: str) -> bool:
-    """Whether stop(), warm eviction or hub shutdown forbids automatic recovery.
+    """Whether the operator's intent is for this member to be down: it was stopped
+    through stop() (API, console, warm-cap eviction) or the hub is shutting down.
 
     Intent survives pruning and hub restarts; an explicit start clears it. Also used
-    by callers deciding whether a down member warrants attention (ADR 0135 D8).
+    by callers deciding whether a down member warrants attention (ADR 0135 D8). This
+    reports intent only: an unreadable history file disables automatic recovery (see
+    ``_restart_allowed``) but is not reported here as a deliberate stop.
     """
+    wid = _resolve_key(ident)
+    if _shutting_down or wid in _unsaved_stops:
+        return True
     records = _load_restarts()
-    return bool(records.get("disabled") or records.get("shutdown")
-                or records.get("members", {}).get(_resolve_key(ident), {}).get("stopped"))
+    return bool(records.get("shutdown") or records.get("members", {}).get(wid, {}).get("stopped"))
 
 
 def _restart_allowed(exit_record: dict) -> bool:
     wid = exit_record["id"]
-    history = _load_restarts().get("members", {}).get(wid, {})
-    return not stopped_on_purpose(wid) and exit_record["at"] > history.get("manual_start", "")
+    records = _load_restarts()
+    if records.get("disabled") or stopped_on_purpose(wid):
+        return False
+    return exit_record["at"] > records.get("members", {}).get(wid, {}).get("manual_start", "")
 
 
 def restart_policy(
@@ -455,6 +494,8 @@ def restart_policy(
             outcome = "restarted"
         except (FleetError, manager.WorkspaceError, OSError):
             pass
+        except Exception:  # noqa: BLE001 — the attempt is already counted; it must still be audited
+            log.exception("[fleet] %s: restart attempt raised unexpectedly", wid)
         from observability.audit import audit_logger
 
         audit_logger.log(
@@ -596,10 +637,22 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
             log.warning("[fleet] %s: port %s is held by another process — moved to :%s", name, moved_from, new_port)
 
         if restart_exit is None:
+            global _shutting_down
             records = _load_restarts()
+            if records.pop("disabled", None):
+                # The history was unreadable, so other members' stop intent is unknown.
+                # Rewrite it clean, treating every member that is not running as stopped:
+                # recovery resumes for live members, and nothing stopped is revived.
+                known = set(state) | set(records.get("members", {}))
+                known |= {x["id"] for x in _load_exits() if x.get("id")}
+                records["members"] = {
+                    k: {"stopped": True} for k in known if not _alive(state.get(k, {}).get("pid"))
+                }
             records["shutdown"] = False
             records.setdefault("members", {})[wid] = {"manual_start": datetime.now(timezone.utc).isoformat()}
             _save_restarts(records)
+            _shutting_down = False
+            _unsaved_stops.discard(wid)
         env, argv = manager.run_exec(wid, ["--ui", "none"])
         full_env = {**os.environ, **env}
         # Delegation signing authority belongs to the hub. Never hand its private seed
@@ -742,9 +795,7 @@ def stop(ident: str, *, timeout: float = 8.0) -> dict:
     name = _resolve_key(ident)
     with _state_lock():
         state = _load_state()
-        records = _load_restarts()
-        records.setdefault("members", {}).setdefault(name, {})["stopped"] = True
-        _save_restarts(records)
+        _record_stop_intent([name])
         rec = state.get(name)
         if not rec or not _alive(rec.get("pid")):
             _prune_dead_records(state, detected_by="stop", keys=[name])
@@ -2337,17 +2388,21 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
     shared ``timeout`` before hard-killing straggler trees — so teardown stays bounded regardless of
     member count and fits the hub's graceful-shutdown window. Best-effort throughout.
     """
-    with _state_lock():
-        records = _load_restarts()
-        records["shutdown"] = True
-        members = records.setdefault("members", {})
-        for wid in set(members) | set(_load_state()) | {x["id"] for x in _load_exits() if x.get("id")}:
-            members.setdefault(wid, {})["stopped"] = True
-        _save_restarts(records)
+    global _shutting_down
+    _shutting_down = True  # this hub restarts nothing from here on, whatever happens below
     if keep_members_on_exit():
+        # Members outlive the hub on purpose, so nothing durable marks them stopped:
+        # the next hub recovers them like any running member.
         return []
     with _state_lock():
         state = _load_state()
+        # Record the shutdown before any signal, so a watchdog pass racing teardown
+        # restarts nothing. Best-effort: a failed write never keeps a member alive.
+        try:
+            known = set(state) | {x["id"] for x in _load_exits() if x.get("id")}
+        except Exception:  # noqa: BLE001 — teardown proceeds on the registry alone
+            known = set(state)
+        _record_stop_intent(sorted(known), shutdown=True)
         # PID-reuse guard (#10): only ours; reserve all stops under the lock.
         live = [(k, int(r["pid"])) for k, r in state.items() if _alive(r.get("pid")) and _is_our_agent(int(r["pid"]))]
         if not live:

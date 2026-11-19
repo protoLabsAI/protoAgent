@@ -18,6 +18,8 @@ def recovery(member, tmp_path, monkeypatch):  # noqa: F811 — pytest fixture in
     monkeypatch.setattr(supervisor, "autostart_members", lambda: [ws["name"]])
     logger = audit.AuditLogger(tmp_path / "audit.jsonl")
     monkeypatch.setattr(audit, "audit_logger", logger)
+    monkeypatch.setattr(supervisor, "_shutting_down", False)
+    monkeypatch.setattr(supervisor, "_unsaved_stops", set())
     return ws, flag, pids, logger
 
 
@@ -93,6 +95,8 @@ def test_ineligible_members_never_restart(recovery, monkeypatch, action):
         monkeypatch.setattr(supervisor, "keep_members_on_exit", lambda: action == "shutdown_keep")
         supervisor.shutdown_all()
         assert supervisor.stopped_on_purpose(ws["id"])
+        if action == "shutdown_keep":  # kept members carry no durable stop into the next hub
+            assert "stopped" not in supervisor._load_restarts().get("members", {}).get(ws["id"], {})
     elif action == "event":
         stop.set()
     elif action == "remote":
@@ -185,3 +189,49 @@ def test_starting_another_member_preserves_shutdown_stop_intent(recovery, monkey
     assert supervisor.stopped_on_purpose(ws["id"])
     assert not supervisor.stopped_on_purpose(other["id"])
     assert apply(record)["outcome"] == "ignored"
+
+
+def _broken_save(monkeypatch):
+    def fail(records):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(supervisor, "_save_restarts", fail)
+
+
+@pytest.mark.parametrize("how", ["stop", "shutdown"])
+def test_stop_intent_write_failure_never_keeps_a_member_alive(recovery, monkeypatch, how):
+    ws, _, pids, logger = recovery
+    _broken_save(monkeypatch)
+    if how == "stop":
+        assert supervisor.stop(ws["id"])["stopped"]
+    else:
+        assert supervisor.shutdown_all() == [ws["id"]]
+    assert not supervisor._alive(pids[-1])
+    assert supervisor.stopped_on_purpose(ws["id"])  # held in memory for this hub's lifetime
+    record = {"id": ws["id"], "pid": pids[-1], "at": "2099-01-01", "started_at": ""}
+    assert apply(record)["outcome"] == "ignored"
+    assert logger.get_recent() == []
+
+
+def test_corrupt_history_is_not_operator_intent_and_explicit_start_recovers(recovery):
+    ws, _, pids, _ = recovery
+    supervisor._restart_path().write_text("{invalid")
+    assert not supervisor.stopped_on_purpose(ws["id"])
+    assert apply(crash(pids))["outcome"] == "ignored"
+    pids.append(supervisor.start(ws["id"])["pid"])
+    assert "disabled" not in supervisor._load_restarts()
+    assert apply(crash(pids))["outcome"] == "restarted"
+    pids.append(supervisor._load_state()[ws["id"]]["pid"])
+
+
+def test_unexpected_start_error_is_still_audited(recovery, monkeypatch):
+    _, _, pids, logger = recovery
+    record = crash(pids)
+
+    def boom(*a, **kw):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(supervisor, "start", boom)
+    assert apply(record)["outcome"] == "failed"
+    rows = logger.get_recent()
+    assert len(rows) == 1 and not rows[0]["success"]
