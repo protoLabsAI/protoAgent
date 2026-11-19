@@ -484,11 +484,13 @@ class DirectiveStore:
 
     # ── linked-work auto-fulfil (ADR 0129 D4/Q2) ─────────────────────────────────
 
-    def _ledger_session_ids(self) -> list[str]:
+    def _ledger_session_ids(self, ref: str | None = None) -> list[str]:
         """Every ledger key with a file under this store — each chat's session id, plus
         :data:`INSTANCE_LEDGER` once an instance-wide directive exists (for the cross-chat
         link paths — an event names a ref, not a chat). Skips unreadable files and any file
-        that doesn't sit where its own session id hashes (the ``_load`` ownership guard)."""
+        that doesn't sit where its own session id hashes (the ``_load`` ownership guard).
+        With ``ref``, pre-filter the loaded JSON for in-force rows linking it. Scan
+        outside the lock; writers must reload candidates under the lock before editing."""
         if not self._base.is_dir():
             return []
         out: list[str] = []
@@ -500,16 +502,22 @@ class DirectiveStore:
                 continue
             session_id = str(data.get("session_id") or "") if isinstance(data, dict) else ""
             if session_id and self._path(session_id) == path:
+                if ref is not None and not any(
+                    isinstance(row, dict)
+                    and (row.get("status") or STATUS_IN_FORCE) == STATUS_IN_FORCE
+                    and any(entry["ref"] == ref for entry in _parse_links(row.get("links")))
+                    for row in data.get("directives") or []
+                ):
+                    continue
                 out.append(session_id)
         return out
 
     def linked_in_force(self) -> list[Directive]:
         """Every in-force directive (any chat) that carries links — the periodic GitHub
         sweep's work list."""
-        with self._lock:
-            out: list[Directive] = []
-            for session_id in self._ledger_session_ids():
-                out.extend(d for d in self._load(session_id) if d.in_force and d.links)
+        out: list[Directive] = []
+        for session_id in self._ledger_session_ids():
+            out.extend(d for d in self._load(session_id) if d.in_force and d.links)
         return out
 
     def resolve_link(self, ref: str, reason: str = "") -> list[Directive]:
@@ -523,8 +531,8 @@ class DirectiveStore:
             return []
         reason = (reason or "").strip()
         touched: list[Directive] = []
-        with self._lock:
-            for session_id in self._ledger_session_ids():
+        for session_id in self._ledger_session_ids(ref):
+            with self._lock:
                 items = self._load(session_id)
                 changed = False
                 for d in items:

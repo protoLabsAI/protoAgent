@@ -7,6 +7,10 @@ Unlinked directives keep today's behavior untouched.
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+
 import pytest
 
 from events.bus import EventBus
@@ -329,3 +333,75 @@ def test_record_rejects_a_directive_id_as_a_link(store):
     with pytest.raises(DirectiveError, match="is a directive, not work"):
         store.record("s1", "q", links=["bd-abc", "dir-fbfcab"])
     assert store.list("s1") == []
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("operation", ["resolve_link", "linked_in_force"])
+def test_link_scan_does_not_block_record_in_another_session(store, monkeypatch, operation):
+    # #5372: directory reads must not monopolize the process-wide store lock.
+    directive = store.record("s1", "ship", links=["bd-ship"])
+    scanning, release = Event(), Event()
+    original = store._ledger_session_ids
+
+    def blocked_scan(*args):
+        scanning.set()
+        assert release.wait(5), "scan was not released"
+        return original(*args)
+
+    monkeypatch.setattr(store, "_ledger_session_ids", blocked_scan)
+    other = DirectiveStore(store.path)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        scan = pool.submit(getattr(store, operation), *(["bd-ship"] if operation == "resolve_link" else []))
+        try:
+            assert scanning.wait(5), "scan did not start"
+            recorded = pool.submit(other.record, "s2", "hold").result(timeout=2)
+            assert recorded.session_id == "s2"
+        finally:
+            release.set()
+        assert [d.id for d in scan.result(timeout=5)] == [directive.id]
+
+
+@pytest.mark.parametrize("change", ["revoked", "fulfilled", "deleted"])
+def test_link_resolution_rechecks_a_candidate_changed_after_scan(store, bus, monkeypatch, change):
+    directive = store.record("s1", "ship", links=["bd-ship"])
+    seen = []
+    bus.subscribe_handler("directive.changed", lambda p: seen.append(p["data"]))
+    original = store._ledger_session_ids
+    closed = None
+
+    def scan_then_change(ref):
+        nonlocal closed
+        candidates = original(ref)
+        assert candidates == ["s1"]
+        if change == "deleted":
+            store.forget("s1")
+        else:
+            closed = store.close("s1", directive.id, status=change, reason="operator decision", closed_by="operator")
+        return candidates
+
+    monkeypatch.setattr(store, "_ledger_session_ids", scan_then_change)
+    assert store.resolve_link("bd-ship", "merged") == []
+    assert len(seen) == 1  # Only the intervening change announces itself.
+    if closed is None:
+        assert store.list("s1") == []
+        assert not store._path("s1").exists()
+    else:
+        assert store.get("s1", directive.id) == closed
+        assert closed.links[0]["state"] == "open"
+
+
+def test_link_resolution_leaves_unrelated_ledgers_unread_and_unwritten(store, monkeypatch):
+    store.record("unrelated", "hold", links=["bd-other"])
+    directive = store.record("matching", "ship", links=["bd-ship"])
+    path = store._path("unrelated")
+    os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+    before = path.stat().st_mtime_ns
+    original = store._load
+
+    def load(session_id):
+        assert session_id != "unrelated", "nonmatching ledger should be filtered during discovery"
+        return original(session_id)
+
+    monkeypatch.setattr(store, "_load", load)
+    assert [d.id for d in store.resolve_link("bd-ship")] == [directive.id]
+    assert path.stat().st_mtime_ns == before
