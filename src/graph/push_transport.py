@@ -1,6 +1,7 @@
 """Bounded per-device delivery attempts, not a notice store (ADR 0135 W2).
 
-Register ``deliver`` with the notice seam and periodically call ``drain`` (W2b4).
+The hub registers ``accept`` with the notice seam and one maintenance loop calls
+``drain`` (W2b4: ``server.maintenance_loops``), so raising a notice never waits on a send.
 ``WebPushProvider`` is the one sender behind ``PushProvider`` (D8): it encrypts a
 generic payload for the device (RFC 8291) and signs it with VAPID (RFC 8292).
 Only transport metadata is retained: no notice text, target, or binding secrets.
@@ -40,6 +41,9 @@ from security import devices, public_console, push_keys
 from security.devices import PushBinding
 
 logger = logging.getLogger(__name__)
+
+# The core notice adapter's registry key (``register_notice_adapter``).
+NOTICE_ADAPTER_KEY = "web-push"
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,7 @@ class PushTransport:
         self.clock, self.jitter, self.eligible = clock, jitter, eligible
         self.max_attempts, self.capacity, self.timeout = max_attempts, capacity, timeout
         self._slots = asyncio.Semaphore(concurrency)
+        self._wake = asyncio.Event()
         self.path = instance_paths().store("push") / "delivery.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self._db() as db:
@@ -137,6 +142,23 @@ class PushTransport:
         """Notice-adapter entrypoint; enqueue durably before attempting delivery."""
         self.enqueue(notice)
         await self.drain()
+
+    async def accept(self, notice: ChatNotice) -> None:
+        """Hub notice-adapter entrypoint: write the ledger and return; the drain loop sends.
+
+        No provider is contacted here, so a failing push service can neither raise into
+        the notice seam nor hold up another adapter.
+        """
+        if await asyncio.to_thread(self.enqueue, notice):
+            self._wake.set()
+
+    async def wait_for_work(self, timeout: float) -> None:
+        """Return when ``accept`` queued something, or after ``timeout`` (retry cadence)."""
+        try:
+            await asyncio.wait_for(self._wake.wait(), timeout)
+        except asyncio.TimeoutError:
+            pass
+        self._wake.clear()
 
     async def drain(self) -> None:
         """Send due rows independently; pending retries survive reconstruction."""

@@ -35,6 +35,7 @@ class AppState:
     a2a_reaper_task: Any = None  # #3418 orphaned-WORKING A2A task reaper loop
     task_link_sweep_task: Any = None  # ADR 0129 Q1 — periodic PR-link sweep for linked tasks
     fleet_health_task: Any = None  # ADR 0135 D8 — hub-only fleet health paging
+    push_delivery_task: Any = None  # ADR 0135 W2 — hub-only Web Push ledger drain loop
     task_stall_task: Any = None  # ADR 0129 D9 — periodic stall sweep for in-progress tasks
     directive_link_sweep_task: Any = None  # ADR 0129 D4/Q2 — periodic GitHub-ref sweep for linked directives
     # Stores / registries bound into the active graph.
