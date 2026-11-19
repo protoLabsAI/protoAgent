@@ -141,7 +141,7 @@ the corresponding items in §7.
    |---|---|
    | `model.api_base`, `model.provider` | the LiteLLM **gateway** is machine infra |
    | `model.name` | the box's default model — this IS today's "model-only inheritance", now via the cascade; **agents override freely** (their own `model.name` in the leaf wins) |
-   | `fleet.health.enabled/interval_seconds/failure_threshold` | hub-owned supervision cadence and paging policy (ADR 0135 D8); workspace members never run the loop |
+   | `fleet.health.enabled/interval_seconds/failure_threshold/restart_dead/max_attempts/window_seconds/backoff_seconds` | hub-owned supervision cadence, paging and bounded crash recovery policy (ADR 0135 D8); workspace members never run the loop |
    | `routing.aux_model`, `routing.fallback_models` | gateway routing |
    | `prompt_cache.enabled/ttl/warm.enabled/warm.interval_seconds` | cache tier is gateway/deployment-dependent |
    | `telemetry.enabled`, `telemetry.retention_days`, `telemetry.ledger_retention_days` | observability is machine-wide |
