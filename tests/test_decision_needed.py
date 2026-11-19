@@ -171,6 +171,10 @@ def test_decision_changed_published_on_create_and_answer(store, monkeypatch):
     monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
     rec = store.create("s-1", "Go?", ["yes", "no"])
     store.answer(rec.id, "yes")
+    # The raised decision also publishes its one shared ``notice`` event (W2b1).
+    notices = [d for t, d in events if t == "notice"]
+    assert len(notices) == 1 and notices[0]["kind"] == "question" and notices[0]["notice_id"]
+    events = [e for e in events if e[0] != "notice"]
     topics = [t for t, _ in events]
     assert topics == ["decision.changed", "decision.changed"]
     assert events[0][1] == {"id": rec.id, "session_id": "s-1", "state": STATE_PENDING}
@@ -194,7 +198,7 @@ def test_disk_store_survives_reopen_and_cancel_publishes_once(tmp_path, monkeypa
     with pytest.raises(DecisionClosed):
         first.answer(rec.id, "yes")
     assert first.get(rec.id).state == "cancelled"
-    assert [data["state"] for _, data in events] == ["pending", "cancelled"]
+    assert [data["state"] for topic, data in events if topic == "decision.changed"] == ["pending", "cancelled"]
 
 
 @pytest.mark.platform_sensitive
@@ -223,7 +227,7 @@ def test_independent_writers_cannot_both_close_decision(tmp_path, monkeypatch):
         results = list(pool.map(close, range(2)))
     winner, = [result for result in results if result is not None]
     assert stores[0].get(rec.id) == winner
-    assert [data["state"] for _, data in events] == ["pending", winner.state]
+    assert [data["state"] for topic, data in events if topic == "decision.changed"] == ["pending", winner.state]
 
 
 @pytest.mark.parametrize("ignored", [False, True])
