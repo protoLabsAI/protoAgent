@@ -1,0 +1,1 @@
+- **Directive link scans no longer block other ledger operations.** Discover matching ledgers outside the shared lock, then reload and update each candidate under the lock so concurrent closures are preserved. Read-only linked-directive scans also run outside the lock. Fixes #5372.
