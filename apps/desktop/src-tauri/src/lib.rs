@@ -12,6 +12,7 @@ use tauri_plugin_global_shortcut::ShortcutState;
 mod downloads;
 mod hotkeys;
 mod navigation;
+mod notices;
 mod sidecar;
 mod updater;
 #[cfg(target_os = "macos")]
@@ -641,7 +642,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Notifications — bridges the web Notification API in the webview so the
         // console can alert (e.g. a HITL form awaiting input) even when the
-        // menu-bar window is hidden.
+        // menu-bar window is hidden. Also what the native notice receiver
+        // (notices.rs, ADR 0135 W2) shows hub notices through.
         .plugin(tauri_plugin_notification::init())
         .plugin(
             // The global-shortcut HANDLER only — registration happens fallibly in
@@ -741,6 +743,12 @@ pub fn run() {
                 port,
                 last_wake: Mutex::new(Instant::now()),
             });
+            // Native notice receiver (ADR 0135 W2): reads the sidecar's event stream for
+            // `notice` events and shows them as OS notifications for as long as the app
+            // runs — it does not depend on a window or on webview timers, so a console
+            // closed to the tray still alerts. Reconnects on its own while the sidecar
+            // boots or restarts; ended at Quit (RunEvent::Exit below).
+            notices::start(app.handle(), port);
             let app_url = || WebviewUrl::App(format!("index.html?__apiPort={port}").into());
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\"; \
@@ -873,9 +881,16 @@ pub fn run() {
                 // System woke to the foreground (ADR 0074) — debounced system.wake.
                 maybe_signal_wake(app_handle);
             }
+            // A click on a native notice activates the app; land on what it points at.
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { has_visible_windows, .. } = &event {
+                notices::on_reopen(app_handle, *has_visible_windows);
+            }
             // Tear the bundled server down with the app rather than orphaning it, and
             // wait (bounded) for its port so a quick relaunch lands on 7870 (#3503).
             if let RunEvent::Exit = event {
+                // Quit removes the notice receiver before the hub it reads goes away.
+                notices::stop(app_handle);
                 stop_sidecar(app_handle);
             }
         });

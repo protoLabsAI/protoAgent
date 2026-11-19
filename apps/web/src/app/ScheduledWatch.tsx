@@ -83,7 +83,14 @@ export function ScheduledWatch() {
           title: failed ? "Scheduled task failed" : "Scheduled task ran",
           message: `Job ${scheduled.jobId}`,
         });
-        notifyIfHidden(failed ? "Scheduled task failed" : "Scheduled task ran", `Job ${scheduled.jobId}`);
+        // The server raises a notice with every scheduled card it posts, and the desktop
+        // shell shows that one — so this is the browser's copy only (the toast stays).
+        notifyIfHidden(
+          failed ? "Scheduled task failed" : "Scheduled task ran",
+          `Job ${scheduled.jobId}`,
+          undefined,
+          { notice: true },
+        );
       }
     });
   }, [toast]);
