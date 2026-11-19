@@ -161,6 +161,9 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_run_requires_approval": True,
     "filesystem_run_auto_approve": [],
     "filesystem_run_command_env_passthrough": [],
+    "fleet_health_enabled": False,
+    "fleet_health_interval_seconds": 60,
+    "fleet_health_failure_threshold": 3,
     "fleet_autostart": [],
     "fleet_max_warm": 0,
     "fleet_trace_export_enabled": False,
@@ -1427,3 +1430,20 @@ def test_any_subagent_overlay_roundtrip(tmp_path):
     assert reloaded.researcher == cfg.researcher
     assert reloaded.researcher.profile == "lane"
     assert reloaded.researcher.final_profile == "final"
+
+
+def test_fleet_health_settings_round_trip(tmp_path):
+    health = {"enabled": True, "interval_seconds": 17, "failure_threshold": 4}
+    cfg = LangGraphConfig.from_dict({"fleet": {"health": health}})
+    serialized = config_to_dict(cfg)
+    assert serialized["fleet"]["health"] == health
+    out = tmp_path / "health.yaml"
+    save_yaml_doc(apply_updates_to_yaml({}, serialized), out)
+    loaded = LangGraphConfig.from_yaml(str(out))
+    assert config_to_dict(loaded)["fleet"]["health"] == health
+
+
+@pytest.mark.parametrize("enabled", [False, "false", "off", "no", None])
+def test_fleet_health_false_values_remain_disabled(enabled):
+    cfg = LangGraphConfig.from_dict({"fleet": {"health": {"enabled": enabled}}})
+    assert cfg.fleet_health_enabled is False

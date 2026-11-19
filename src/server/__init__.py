@@ -468,6 +468,7 @@ from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the e
     _a2a_reaper_loop,
     _checkpoint_prune_loop,
     _directive_link_sweep_loop,
+    _fleet_health_loop,
     _start_forget_sweep_once,
     _memory_guard_loop,
     _plugin_autoupdate_loop,
@@ -891,6 +892,7 @@ def _main():
         import asyncio
 
         STATE.watch_task = asyncio.create_task(_watch_loop())
+        STATE.fleet_health_task = asyncio.create_task(_fleet_health_loop())
 
         # Memory ceiling (#3365). Started unconditionally like the loops above: it
         # idles at one attribute read a minute while the ceiling is 0 (the default),
@@ -1084,6 +1086,12 @@ def _main():
         # below only stop work; they can wait their turn.
         if STATE.memory_guard_task is not None:
             STATE.memory_guard_task.cancel()
+        if STATE.fleet_health_task is not None:
+            STATE.fleet_health_task.cancel()
+            try:
+                await STATE.fleet_health_task
+            except asyncio.CancelledError:
+                pass
         if _ORPHAN_SWEEP_TASK is not None:
             _ORPHAN_SWEEP_TASK.cancel()
         try:

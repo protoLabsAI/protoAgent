@@ -1419,8 +1419,8 @@ FIELDS: list[Field] = [
         "Expose fleet diagnostics to the model",
         "bool",
         "Tools",
-        "When on, the future fleet-diagnostics tool may be exposed to the model. Off by default; "
-        "this slice only lands the config gate and binds no tool.",
+        "When on, exposes the bounded, read-only fleet_diagnostics tool to the model. "
+        "Off by default; fleet diagnostics remains operator-authenticated.",
     ),
     Field(
         "tools.fleet_demo.enabled",
@@ -1897,6 +1897,35 @@ FIELDS: list[Field] = [
         "truth for the OpenShell sandbox network policy.",
         scope="host",
         credential_plane=True,
+    ),
+    Field(
+        "fleet.health.enabled",
+        "fleet_health_enabled",
+        "Monitor fleet health",
+        "bool",
+        "Network",
+        "Page the hub inbox when a member exits, goes down, wedges or recovers. Never restarts members.",
+        scope="host",
+    ),
+    Field(
+        "fleet.health.interval_seconds",
+        "fleet_health_interval_seconds",
+        "Fleet health interval (seconds)",
+        "number",
+        "Network",
+        "Seconds between fleet health sweeps on the hub.",
+        minimum=1,
+        scope="host",
+    ),
+    Field(
+        "fleet.health.failure_threshold",
+        "fleet_health_failure_threshold",
+        "Fleet health failure threshold",
+        "number",
+        "Network",
+        "Consecutive failed probes before paging for an unresponsive member.",
+        minimum=1,
+        scope="host",
     ),
     Field(
         "fleet.port_base",
