@@ -1056,6 +1056,9 @@ def _record_a2a_telemetry(outcome) -> None:
         # message for a wedged turn (#4726). getattr-guarded like the fields above.
         error=str(getattr(outcome, "error", "") or ""),
         incognito=bool(getattr(outcome, "incognito", False)),
+        # What triggered the turn — the spend cap meters unattended origins from this
+        # column (ADR 0135 D12, #5540). getattr-guarded like the fields above.
+        origin=str(getattr(outcome, "origin", "") or ""),
     )
 
     # Fleet trace export → lab (the flywheel Observe, #1897). Off unless

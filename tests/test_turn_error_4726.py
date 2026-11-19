@@ -103,7 +103,7 @@ def test_the_error_column_reaches_an_existing_store_and_keeps_its_rows(tmp_path,
 def test_a_fresh_store_has_the_column(tmp_path):
     path = str(tmp_path / "fresh.db")
     TelemetryStore(path)
-    assert _columns(path)[-1] == "error"
+    assert "error" in _columns(path)
 
 
 # ── 2. record_turn stores a redacted, clipped reason ────────────────────────────────

@@ -61,6 +61,10 @@ _COLUMNS = (
     "context_tokens",  # peak single-call prompt size = context-window fill (#2773, ADR 0101 D6)
     "run_id",  # the delegation-ledger run this leg belongs to (#4726); "" before it
     "error",  # why a non-completed turn ended, redacted + clipped by record_turn (#4726)
+    # What triggered the turn (ADR 0135 D12, #5540): scheduler|watch|inbox|webhook|… for a
+    # server-fired turn, the surface name for a non-streaming one, "" for a live operator
+    # turn and for every row written before the column existed. Recorded, not classified.
+    "origin",
 )
 
 _TOOL_COLUMNS = (
@@ -148,7 +152,8 @@ class TelemetryStore:
                     account_key                 TEXT,
                     context_tokens              INTEGER DEFAULT 0,
                     run_id                      TEXT,
-                    error                       TEXT
+                    error                       TEXT,
+                    origin                      TEXT    DEFAULT ''
                 )
                 """
             )
@@ -168,6 +173,8 @@ class TelemetryStore:
                     ("context_tokens", "INTEGER DEFAULT 0"),  # #2773 / ADR 0101 D6
                     ("run_id", "TEXT"),  # #4726
                     ("error", "TEXT"),  # #4726
+                    # #5540 / ADR 0135 D12. The default is what an old row reads back.
+                    ("origin", "TEXT DEFAULT ''"),
                 ),
             )
             self._migrate_to_row_id(db)  # #3001 — must run after the ADD COLUMNs above
@@ -275,7 +282,8 @@ class TelemetryStore:
                 account_key                 TEXT,
                 context_tokens              INTEGER DEFAULT 0,
                 run_id                      TEXT,
-                error                       TEXT
+                error                       TEXT,
+                origin                      TEXT    DEFAULT ''
             )
             """
         )
@@ -294,6 +302,9 @@ class TelemetryStore:
         if not row.get("task_id"):
             return
         values = [row.get(c) for c in _COLUMNS]
+        # An explicit NULL would bypass the column default, so a row from a caller that
+        # names no origin stores "" like a pre-column row reads (#5540).
+        values[_COLUMNS.index("origin")] = str(row.get("origin") or "")
         placeholders = ",".join("?" for _ in _COLUMNS)
         cols = ",".join(_COLUMNS)
         # Best-effort, like every telemetry write: a failed insert (a locked db, a store

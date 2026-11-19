@@ -229,6 +229,7 @@ def record_turn(
     account_key: str = "",
     error: str = "",
     incognito: bool = False,
+    origin: str = "",
 ) -> None:
     """Record one finished turn leg: Prometheus, the realtime bus, and the store.
 
@@ -247,6 +248,12 @@ def record_turn(
     It is ignored for a completed or parked leg, redacted and clipped before it is
     stored, and filled from the stall guard's stop reason when the caller has none
     (see :func:`_turn_error`).
+
+    ``origin`` is what triggered the turn (ADR 0135 D12, #5540): the A2A request's
+    ``metadata.origin`` (``scheduler``, ``watch``, ``inbox``… or ``""`` for a live
+    operator turn), or the surface name on the non-streaming driver (``v1``,
+    ``api-chat``, ``plugin``, ``local``). It is stored verbatim and never classified
+    here — the spend cap decides which origins are unattended.
 
     Every step is independently guarded, so a failure in one still lets the
     others run and none of them can reach the caller.
@@ -342,6 +349,7 @@ def record_turn(
         # run for a background job, or the edge's run for a coder dispatch.
         "run_id": _current_run_id(),
         "error": _turn_error(state, error, incognito=incognito),
+        "origin": str(origin or ""),
     }
 
     if publish_usage_event:
@@ -442,6 +450,7 @@ def record_local_turn(
             publish_usage_event=False,
             error=error,
             incognito=incognito,
+            origin=origin,
         )
     except Exception:  # noqa: BLE001 — telemetry must never break a turn
         log.debug("[telemetry] failed to record a non-streaming turn", exc_info=True)
