@@ -13,6 +13,9 @@ from graph.goals.verifiers import (
     verifier_catalog,
 )
 
+# The verifier module branches on the OS, so the Windows lane must run this file.
+pytestmark = pytest.mark.platform_sensitive
+
 CHECK = "fleet:member_health"
 
 

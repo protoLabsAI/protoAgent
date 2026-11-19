@@ -411,6 +411,7 @@ async def _checkpoint_prune_loop() -> None:
 
 def _fleet_health_notices(
     failure_threshold: int, changes: list[dict], watching_since: str | None,
+    restart_pending: dict[str, dict], restart_dead: bool,
 ) -> list[dict]:
     """Use the supervisor's single detector, coalescing exits with down transitions.
 
@@ -429,6 +430,8 @@ def _fleet_health_notices(
         if watching_since is not None and record["at"] < watching_since:
             continue
         mid = record["id"]
+        if restart_dead and not record.get("restart_handled"):
+            restart_pending[mid] = record
         notices.append({
             "id": mid,
             "name": health.get(mid, {}).get("name", mid),
@@ -451,8 +454,39 @@ def _fleet_health_notices(
     return notices
 
 
+def _fleet_health_restarts(cfg, restart_pending: dict[str, dict], notices: list[dict]) -> None:
+    """Retry collected exits through the supervisor policy, on the health worker."""
+    from graph.fleet import supervisor
+
+    for mid, record in list(restart_pending.items()):
+        try:
+            result = supervisor.restart_policy(
+                record, max_attempts=cfg.fleet_health_max_attempts,
+                window=cfg.fleet_health_window_seconds, backoff=cfg.fleet_health_backoff_seconds,
+            )
+        except Exception:
+            log.exception("[fleet-health] restart policy failed for %s", mid)
+            continue  # retain the collected evidence for the next tick
+        outcome = result["outcome"]
+        if outcome in ("backoff", "failed"):
+            continue
+        del restart_pending[mid]
+        if outcome not in ("restarted", "gave_up"):
+            continue
+        notice = next((n for n in notices if n["id"] == mid
+                       and n["changed_at"] == record["at"] and n["state"] == "down"
+                       and not n.get("_inbox_written")), None)
+        if outcome == "restarted" and notice is not None:
+            notice["state"] = "restarted"  # one notice for the crash and immediate recovery
+        else:
+            notices.append({
+                "id": mid, "name": mid, "kind": "local", "state": outcome,
+                "pid": record["pid"], "changed_at": record["at"],
+            })
+
+
 async def _fleet_health_loop() -> None:
-    """Hub-only, opt-in supervision. Reload config each tick; never restart a member.
+    """Hub-only, opt-in supervision. Reload config each tick; recovery is separately opt-in.
 
     Keep undelivered notices across transient inbox/bus failures. Transition detection
     belongs solely to C1a; the inbox dedup key also identifies the transition episode so
@@ -462,11 +496,15 @@ async def _fleet_health_loop() -> None:
 
     pending: list[dict] = []
     changes: list[dict] = []
+    restart_pending: dict[str, dict] = {}
     watching_since: str | None = None
     was_inactive = False
     while True:
         cfg = STATE.graph_config
         interval = getattr(cfg, "fleet_health_interval_seconds", 60)
+        restart_dead = getattr(cfg, "fleet_health_restart_dead", False)
+        if not restart_dead:
+            restart_pending.clear()
         if (
             getattr(cfg, "fleet_health_enabled", False)
             and not manager.is_workspace_member()
@@ -480,20 +518,23 @@ async def _fleet_health_loop() -> None:
             try:
                 pending.extend(await asyncio.to_thread(
                     _fleet_health_notices, getattr(cfg, "fleet_health_failure_threshold", 3),
-                    changes, watching_since,
+                    changes, watching_since, restart_pending, restart_dead,
                 ))
+                if restart_dead:
+                    await asyncio.to_thread(_fleet_health_restarts, cfg, restart_pending, pending)
                 while pending:
                     notice = pending[0]
                     state = notice["state"]
+                    description = "recovery gave up after reaching the attempt limit" if state == "gave_up" else f"is {state}"
                     if not notice.get("_inbox_written"):
                         await asyncio.to_thread(
                             STATE.inbox_store.add,
-                            f"Fleet member {notice['name']} ({notice['id']}) is {state}."
+                            f"Fleet member {notice['name']} ({notice['id']}) {description}."
                             + (" Process exited unexpectedly." if notice.get("reason") else ""),
-                            priority="next" if state == "recovered" else "now",
+                            priority="next" if state in ("recovered", "restarted") else "now",
                             source="fleet.health",
                             dedup_key=f"fleet.health:{notice['id']}:{state}:{notice['changed_at']}",
-                            needs_human=state != "recovered",
+                            needs_human=state not in ("recovered", "restarted"),
                         )
                         notice["_inbox_written"] = True
                     _event_bus.publish(
@@ -504,6 +545,7 @@ async def _fleet_health_loop() -> None:
                 log.exception("[fleet-health] tick failed")
         else:
             was_inactive = True
+            restart_pending.clear()
         await asyncio.sleep(max(1.0, float(interval or 60)))
 
 
