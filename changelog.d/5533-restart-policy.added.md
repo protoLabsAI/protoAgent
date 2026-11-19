@@ -1,1 +1,0 @@
-- **Bounded local fleet recovery.** Add a supervisor restart policy with durable stop intent, attempt limits, backoff, and audited crash evidence. Operator stops, warm-cap evictions, shutdown, remotes, and live processes are excluded. Refs #5533.

@@ -1,1 +1,0 @@
-- **Private turns close their streams cleanly.** Stream cleanup now runs in the same context as the turn, keeping its private tool fence active through cleanup and resetting it afterwards. Genuine cleanup failures remain logged.

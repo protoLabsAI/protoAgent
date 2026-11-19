@@ -1,1 +1,0 @@
-- **Fleet health pages reach your chat surfaces.** When the hub's health loop pages a member going down, wedging, recovering, being restarted or exhausting its restart attempts, it now also sends one typed notice (kind `notify`, importance fixed in code per state, with a console link) through `notify_chat_surfaces`, once per state change. The inbox item stays. Refs #5537.

@@ -1,1 +1,0 @@
-- **Isolate private-steering tests.** Drain detached restart tasks and clear private-run ownership between tests. Pin the legacy intake tests to their intended scheduling mode so an enabled runtime config does not add scheduling rows to their shell counts.
