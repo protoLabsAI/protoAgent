@@ -15,6 +15,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.251.0] - 2026-11-19
+
+### Added
+- **Keep paired consoles enrolled for push (#5593).** Register the console worker without prompting, expose enrollment helpers, renew subscriptions after key and token rotation, and clean up completed origin handoffs. Share notice tags with browser notifications without adding a console surface. Refs #5539.
+
+- **Desktop app shows hub notices as native notifications (#5588).** While the desktop app runs, with its window open or closed to the tray, it reads the local hub's event stream and shows each notice (a decision that needs you, a scheduled result, a fleet-health or spend alert) as an OS notification with generic text; clicking it raises the console at the chat the notice links to, on macOS, Windows and Linux. It reconnects with backoff and replays what was raised while disconnected, including while the hub was still starting or since the app last ran, shows each notice once, and skips expired ones. In the desktop app the console leaves those alerts to the native side so they are not shown twice; browsers are unchanged. Refs #5539.
+
+- **Device lists expose safe push status and service (#5594).** Paired devices report their push binding metadata, provider and renewal reason through the existing device API, without exposing subscription endpoints or client keys. Refs #5539.
+
+- **Fleet exit diagnostics (#5604).** Read a local member’s last recorded exit and restart attempts with `fleet_diagnostics(read="exit")`, including available exit codes or signals and a bounded, redacted log tail without consuming health-loop evidence. Refs #5596.
+
+- **Installable console with a push worker (#5582).** The console now ships a web manifest (`/app/manifest.webmanifest`: stable app id, start URL `/app/`, standalone display, PNG icons, plus the iOS Home Screen meta tags) and a service worker at `/app/sw.js` scoped to `/app/`. The worker handles `push` and `notificationclick` only: it shows the generic title and body from the versioned payload of ADR 0135 W2, tags each notification with its notice id so a repeat replaces the first, and shows a generic fallback for anything it cannot read. It has no `fetch` handler, never calls the hub, holds no credential and caches nothing; a click focuses or opens a known same-origin console route and ignores any other destination. Both files are served as non-secret static assets with `Cache-Control: no-cache`, and the worker carries its own restrictive Content-Security-Policy. Nothing registers the worker yet. Refs #5539.
+
+- **Shared proactive notice identity (#5580).** Notices carry an id and bounded expiry, publish a replayable operator event, and support core delivery adapters without a chat plugin while preserving legacy hooks. Refs #5539.
+
+- **Configurable artifact link lifetime (#5599).** `open_artifact` accepts `expires_in_minutes` for file and rendered artifacts, clamped to 1–1440 minutes, and reports the actual lifetime and any adjustment. The default and HTTP links remain 30 minutes; inline preview tickets are unchanged. Refs #5312.
+
+- **Notices now reach enrolled devices by Web Push, with no chat plugin installed (#5592).** At startup the hub registers Web Push as one more adapter behind the existing notice seam (`notify_chat_surfaces`), so there is still a single sender of notices. A notice is written to the bounded delivery ledger and the call returns at once; one maintenance loop sends it, picks up due retries, and after a restart sends what was still pending and drops what has expired. A push service that fails or times out cannot raise into the code that raised the notice or hold up another adapter. There is no setting: a device that enrolled for push is the opt-in, and with none enrolled nothing is sent. A fleet workspace member registers nothing; the hub owns the operator's devices (ADR 0135 W2). Refs #5539.
+
+- **Device push delivery status (#5598).** Push bindings now retain the last attempt, service acceptance, and bounded failure category and time, exposed safely in device responses. Late results cannot alter replacement subscriptions. Refs #5539.
+
+- **A paired device's push subscription now follows that device's own lifecycle (#5586).** Rotating
+  a device's token keeps its Web Push binding and moves it to the next generation, so a send
+  queued under the old generation is dropped. A handoff to another origin moves nothing: the
+  binding is cleared when the handed-off token is retired (the new origin's token is first
+  used), and an offer nobody completes leaves the old origin's binding alone. Unpairing and
+  a reuse-detection revocation delete the binding with the row, so a binding write that
+  arrives afterwards is refused, and a device idle past `devices.idle_ttl_days` loses its
+  binding where it loses its pairing. A binding enrolled under a VAPID key version that was
+  retired, or that has left its 30-day migration window, is cleared too, and
+  `GET /api/devices/self/push` now returns `renew` (`vapid_key`, `handoff` or `idle`) so the
+  device can subscribe again. All of it runs through the existing device registry paths
+  (ADR 0121); there is no second expiry mechanism, and nothing sends a push yet. Refs #5539.
+
+- **Bounded push delivery ledger (#5587).** Track per-device attempts by notice ID and binding generation, retry timeouts and network failures with bounded backoff across restart, and retire gone subscriptions without clearing replacements. Refs #5539.
+
+- **Push enrollment for paired phones and browsers, stored on the device's own pairing record (#5583).**
+  A paired device can now fetch this agent's VAPID public key and store, renew or delete its
+  own Web Push subscription through `GET` / `PUT` / `DELETE /api/devices/self/push` (ADR 0135
+  W2). The subscription is a field of the device's row in the existing device registry, not
+  a second store: a token rotation keeps it, and unpairing the device (or a reuse-detection
+  revocation) deletes it in the same write, so a revoked device's pushes stop with it. The
+  routes are self-only: the device is the one the caller's token resolves to, so no caller
+  can read or change another device's subscription, and the shared auth token, an agent
+  pairing and unauthenticated callers are refused. An endpoint must pass
+  `validate_push_endpoint`, the client keys must be a valid P-256 point and a 16-byte secret,
+  and the key version must be the active one or still inside its migration window; a refusal
+  stores nothing. No response returns the endpoint or the client keys. Nothing sends a push
+  yet, and there is no new setting or console UI. Refs #5539.
+
+- **Push signing key status and rotation (#5595).** Operators can inspect public key versions, retirement deadlines and binding counts through the API; full-access operators can rotate the instance key with the existing migration window. Refs #5539.
+
+- **Push security primitives: a per-instance VAPID keyring and push endpoint validation (#5581).**
+  Groundwork for Web Push from the hub (ADR 0135 W2). `security.push_keys` generates this
+  instance's own P-256 signing key on first use and keeps it in a versioned, owner-only
+  keyring under the instance's `push` store — no vendor key, nothing shared between
+  instances, nothing in config. Rotating activates a new version and keeps the old one
+  signing for a 30-day migration window; retiring a compromised version removes it at once.
+  A corrupt keyring, or one that has gone missing while devices are enrolled, raises a clear
+  error instead of being quietly regenerated (which would silently stop every device's
+  notifications). `validate_push_endpoint` admits only HTTPS endpoints on the supported
+  Apple, Google and Mozilla push hosts and refuses credentials, odd ports, over-long URLs and
+  hosts that resolve to private, loopback or link-local addresses, so enrollment cannot be
+  used as an open relay. Nothing sends a push yet and no setting is added. `cryptography` is
+  now a declared dependency (it was already installed transitively). Refs #5539.
+
+- **Web Push provider: notices can be handed to a device's push service without their text (#5591).** A notice due for a device with a push binding is now sent to that device's Apple, Google or Mozilla push service as a fixed, versioned payload (notice id, kind, importance, times, generic title and body, and a relative console route) encrypted for the browser's client keys (RFC 8291, `aes128gcm`) and signed with the VAPID key version the device enrolled under (RFC 8292), with the instance's public console origin as the VAPID subject. Notice text, links and credentials never leave the machine. The endpoint is validated again before every send and redirects are not followed; `404`/`410` retire the subscription, `429`/`5xx` and timeouts retry and honour `Retry-After`, and `401`/`403` end the attempt while keeping the binding. Nothing starts the sender yet (ADR 0135 W2). Refs #5539.
+
+### Fixed
+- **Directive link scans no longer block other ledger operations (#5597).** Discover matching ledgers outside the shared lock, then reload and update each candidate under the lock so concurrent closures are preserved. Read-only linked-directive scans also run outside the lock. Fixes #5372.
+
+- **A hub relaunch no longer reports the previous run's members as crashed (#5589).** A member record left in `fleet.json` by an earlier hub run (for example across an app update) is now dropped as a boot leftover by the supervisor's single dead-record helper, whichever reader sees it first, so `fleet.health` writes no unexpected-exit record, pages nothing and restarts nothing for it. Hub shutdown also clears already-dead member records, preserving unexpected-exit evidence for current-run crashes instead of silently discarding it. Live survivors are adopted by start, autostart and version checks even before the first full-state read. A member that dies while the current hub runs is recorded, paged and restarted as before. Refs #5584.
+
+- **Fleet recovery records no longer wake the hub agent (#5590).** Restarted and recovered members are recorded at the background inbox tier, avoiding unnecessary model turns while down, wedged, and exhausted-restart alerts still wake the agent. Chat notices are unchanged. Fixes #5585.
+
+- **Recover parked questions after a dropped stream (#5600).** The console checks the durable task after a transport failure and restores the existing question form when the turn is waiting for input, even if its park frame was never read. Refs #5477.
+
+- **Recurring job results still reach quiet chats (#5603).** Scheduled cron results now post their card and typed notice even when the owner chat has been idle for more than 24 hours. One-shot idle skips, NO_UPDATE suppression, repeat suppression, expiry-notice deduplication, and follow-up backoff are preserved. Refs #5601.
+
+- **Agents can withdraw their own job decisions from chat (#5605).** Preserve the default agent identity on new decisions and stamp spend-cap decisions with their owner, so the existing withdrawal tool can record the reason and clear the parked checkpoint across sessions. Ownership checks still refuse other agents and unnamed legacy records from other sessions. Refs #5602.
+
 ## [0.250.0] - 2026-11-19
 
 ### Added

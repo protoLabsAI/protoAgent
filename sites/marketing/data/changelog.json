@@ -1,5 +1,32 @@
 [
   {
+    "version": "v0.251.0",
+    "date": "2026-11-19",
+    "changes": [
+      "Keep paired consoles enrolled for push (#5593).",
+      "Desktop app shows hub notices as native notifications (#5588).",
+      "Device lists expose safe push status and service (#5594).",
+      "Fleet exit diagnostics (#5604).",
+      "Installable console with a push worker (#5582).",
+      "Shared proactive notice identity (#5580).",
+      "Configurable artifact link lifetime (#5599).",
+      "Notices now reach enrolled devices by Web Push, with no chat plugin installed (#5592).",
+      "Device push delivery status (#5598).",
+      "A paired device's push subscription now follows that device's own lifecycle (#5586).",
+      "Bounded push delivery ledger (#5587).",
+      "Push enrollment for paired phones and browsers, stored on the device's own pairing record (#5583).",
+      "Push signing key status and rotation (#5595).",
+      "Push security primitives: a per-instance VAPID keyring and push endpoint validation (#5581).",
+      "Web Push provider: notices can be handed to a device's push service without their text (#5591).",
+      "Directive link scans no longer block other ledger operations (#5597).",
+      "A hub relaunch no longer reports the previous run's members as crashed (#5589).",
+      "Fleet recovery records no longer wake the hub agent (#5590).",
+      "Recover parked questions after a dropped stream (#5600).",
+      "Recurring job results still reach quiet chats (#5603).",
+      "Agents can withdraw their own job decisions from chat (#5605)."
+    ]
+  },
+  {
     "version": "v0.250.0",
     "date": "2026-11-19",
     "changes": [

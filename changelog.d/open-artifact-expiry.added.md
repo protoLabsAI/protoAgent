@@ -1,1 +1,0 @@
-- **Configurable artifact link lifetime.** `open_artifact` accepts `expires_in_minutes` for file and rendered artifacts, clamped to 1–1440 minutes, and reports the actual lifetime and any adjustment. The default and HTTP links remain 30 minutes; inline preview tickets are unchanged. Refs #5312.
