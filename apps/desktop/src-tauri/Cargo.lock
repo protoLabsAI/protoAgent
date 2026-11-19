@@ -2994,6 +2994,7 @@ dependencies = [
  "futures-util",
  "libc",
  "log",
+ "notify-rust",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3006,6 +3007,8 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-shell",
  "tauri-plugin-updater",
+ "tauri-winrt-notification",
+ "tokio",
 ]
 
 [[package]]
