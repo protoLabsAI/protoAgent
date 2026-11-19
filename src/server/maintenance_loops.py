@@ -851,6 +851,60 @@ async def _orphaned_a2a_reaper_loop() -> None:
         await asyncio.sleep(A2A_REAPER_INTERVAL_S)
 
 
+# Web Push ledger cadence (ADR 0135 W2). A new notice wakes the loop at once; this is
+# only how often due retries are looked for (the shortest backoff is 30 seconds).
+PUSH_DRAIN_INTERVAL_S = 15.0
+
+
+def _start_push_delivery(provider: Any = None) -> Any:
+    """Join the notice seam as its Web Push adapter and start the ledger drain loop.
+
+    Push is one adapter behind ``notify_chat_surfaces`` (ADR 0135 D8), registered by the
+    hub itself so notices reach enrolled devices with no chat plugin installed. There is
+    no setting: a device that enrolled is the opt-in, and with none enrolled every notice
+    is a no-op. A workspace member registers nothing — the hub owns the operator's
+    devices. Call on the server loop; returns the transport, or None inside a member.
+    """
+    from graph.workspaces import manager
+
+    if manager.is_workspace_member():
+        return None
+    from graph.plugins.chat_surface import register_notice_adapter
+    from graph.push_transport import NOTICE_ADAPTER_KEY, PushTransport, WebPushProvider
+
+    transport = PushTransport(provider if provider is not None else WebPushProvider())
+    register_notice_adapter(NOTICE_ADAPTER_KEY, transport.accept)
+    STATE.push_delivery_task = asyncio.create_task(_push_delivery_loop(transport))
+    return transport
+
+
+async def _stop_push_delivery() -> None:
+    """Leave the notice seam and stop the drain loop; unsent rows stay in the ledger."""
+    from graph.plugins.chat_surface import unregister_notice_adapter
+    from graph.push_transport import NOTICE_ADAPTER_KEY
+
+    unregister_notice_adapter(NOTICE_ADAPTER_KEY)
+    task, STATE.push_delivery_task = STATE.push_delivery_task, None
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _push_delivery_loop(transport: Any) -> None:
+    """Send what the push ledger holds: new notices, due retries, rows a restart left.
+
+    The first pass runs at once, so a delivery still pending when the hub stopped goes
+    out after it starts again; expired rows are dropped instead of sent. With nothing
+    due a pass contacts no provider and reads no device.
+    """
+    while True:
+        try:
+            await transport.drain()
+        except Exception:
+            log.exception("[push] delivery pass failed")
+        await transport.wait_for_work(PUSH_DRAIN_INTERVAL_S)
+
+
 MEMORY_GUARD_INTERVAL_S = 60.0
 
 

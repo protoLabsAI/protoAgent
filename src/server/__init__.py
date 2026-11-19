@@ -474,6 +474,8 @@ from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the e
     _plugin_autoupdate_loop,
     _retire_thread,
     _secrets_refresh_loop,
+    _start_push_delivery,
+    _stop_push_delivery,
     _task_link_sweep_loop,
     _task_stall_loop,
     _watch_loop,
@@ -895,6 +897,15 @@ def _main():
         STATE.watch_task = asyncio.create_task(_watch_loop())
         STATE.fleet_health_task = asyncio.create_task(_fleet_health_loop())
 
+        # Web Push joins the notice seam (ADR 0135 W2/D8): one core adapter plus the
+        # loop that drains its delivery ledger, so notices reach enrolled devices with no
+        # chat plugin installed. Hub-only (a member registers nothing) and no setting:
+        # enrollment is the opt-in. Best-effort — a broken push store never blocks boot.
+        try:
+            _start_push_delivery()
+        except Exception:
+            log.exception("[push] notice adapter startup failed")
+
         # Memory ceiling (#3365). Started unconditionally like the loops above: it
         # idles at one attribute read a minute while the ceiling is 0 (the default),
         # so turning it on in Settings takes effect without a restart.
@@ -1165,6 +1176,10 @@ def _main():
             STATE.plugin_autoupdate_task.cancel()
         if STATE.a2a_reaper_task is not None:
             STATE.a2a_reaper_task.cancel()
+        try:
+            await _stop_push_delivery()
+        except Exception:
+            log.exception("[push] notice adapter shutdown failed")
         if STATE.task_link_sweep_task is not None:
             STATE.task_link_sweep_task.cancel()
         if STATE.task_stall_task is not None:
