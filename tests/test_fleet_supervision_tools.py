@@ -60,6 +60,7 @@ def _install(monkeypatch, roster, members, health=()):
         raise AssertionError(f"unexpected member path {path!r}")
 
     monkeypatch.setattr(supervisor, "status", status)
+    monkeypatch.setattr(supervisor, "health_sweep", lambda **kw: [])
     monkeypatch.setattr(supervisor, "member_health", lambda: [dict(h) for h in health])
     monkeypatch.setattr(member_read, "_fetch_member_json", fetch)
     return calls, threads
@@ -179,6 +180,56 @@ async def test_fleet_status_marks_an_unreachable_member_without_failing(monkeypa
     assert rows["alpha-9f9f"]["reachable"] is True
 
 
+async def test_status_refreshes_real_supervisor_health_before_any_background_sweep(tmp_path, monkeypatch):
+    from graph.fleet import member_read, supervisor
+    from graph.workspaces import manager
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    monkeypatch.setattr(supervisor, "_health", {})
+    monkeypatch.setattr(supervisor, "_probe_cache", {})
+    monkeypatch.setattr(supervisor, "_alive", lambda pid: pid == 123)
+    monkeypatch.setattr(supervisor, "_host_entry", lambda: dict(_HOST))
+    ws = manager.create("coder", port=7879)
+    supervisor._save_state({ws["id"]: {"pid": 123, "port": 7879, "version": "1.2.0"}})
+    remote = supervisor.add_remote("remote", "http://remote:7870")
+    monkeypatch.setattr(supervisor, "_PROBE_TTL", 0)
+    threads = []
+    healthy = True
+
+    def probe(rec, timeout, **kw):
+        threads.append(threading.get_ident())
+        supervisor._probe_cache[rec["id"]] = (healthy, 0.0)
+        return healthy, ""
+
+    async def fetch(slug, path):
+        return None
+
+    monkeypatch.setattr(supervisor, "_probe_one", probe)
+    monkeypatch.setattr(member_read, "_fetch_member_json", fetch)
+    assert supervisor.member_health() == []
+    tool = fs.build_fleet_supervision_tools()[0]
+    first = _by_id(await tool.ainvoke({}))
+    again = _by_id(await tool.ainvoke({}))
+    for mid in (ws["id"], remote["id"]):
+        assert first[mid]["healthy"] is True
+        assert first[mid]["health_changed_at"]
+        assert again[mid]["health_changed_at"] == first[mid]["health_changed_at"]
+    assert first[remote["id"]]["running"] is True
+
+    healthy = False
+    failed = _by_id(await tool.ainvoke({}))
+    assert failed[ws["id"]]["health"] == "wedged"
+    assert failed[remote["id"]]["health"] == "down"
+    assert failed[remote["id"]]["running"] is False
+    healthy = True
+    recovered = _by_id(await tool.ainvoke({}))
+    for mid in (ws["id"], remote["id"]):
+        assert failed[mid]["healthy"] is False
+        assert recovered[mid]["healthy"] is True
+        assert recovered[mid]["health_changed_at"] != first[mid]["health_changed_at"]
+    assert threads and threading.get_ident() not in threads
+
+
 # ── fleet_pending ─────────────────────────────────────────────────────────────
 
 
@@ -251,7 +302,8 @@ async def test_fleet_pending_keeps_a_failed_read_distinct_from_empty(monkeypatch
     assert row["tool_truncated"] is True  # 9 pending, 1 listed
 
 
-async def test_a_raising_member_read_or_health_read_is_contained(monkeypatch):
+@pytest.mark.parametrize("health_failure", ["member_health", "health_sweep"])
+async def test_a_raising_member_read_or_health_read_is_contained(monkeypatch, health_failure):
     from graph.fleet import member_read, supervisor
 
     _install(monkeypatch, [_ALPHA], {})
@@ -259,11 +311,11 @@ async def test_a_raising_member_read_or_health_read_is_contained(monkeypatch):
     async def boom(slug, path):
         raise RuntimeError("registry exploded")
 
-    def no_health():
+    def no_health(**kw):
         raise RuntimeError("health exploded")
 
     monkeypatch.setattr(member_read, "_fetch_member_json", boom)
-    monkeypatch.setattr(supervisor, "member_health", no_health)
+    monkeypatch.setattr(supervisor, health_failure, no_health)
 
     pending, status = await asyncio.gather(fs.fleet_pending(), fs.fleet_status())
 

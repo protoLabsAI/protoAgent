@@ -5,7 +5,8 @@ Two read-only answers to "what is the fleet doing", built only from seams that a
 * **The roster and its health.** Members come from ``graph.fleet.supervisor.status()`` (through
   ``tools.fleet_diagnostics._roster``, the same tolerant read ``fleet_diagnostics`` resolves
   against) and their health from ``supervisor.member_health()``, the record ``health_sweep``
-  keeps. Nothing here probes a member or decides whether it is healthy.
+  keeps. Status refreshes that record through the supervisor's sweep; the supervisor
+  owns all probing and health classification.
 * **Reading a member.** Pending decisions (``/api/decisions``), waiting tasks
   (``/api/tasks/issues``) and the model (``/api/runtime/status``) are read through
   ``graph.fleet.member_read._fetch_member_json``: its auth swap, its timeout and its failure
@@ -50,13 +51,17 @@ def _roster_and_health() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]
     file lock and reads the registry), so callers run it off the event loop."""
     from graph.fleet import supervisor
 
-    roster = fd._roster()
     try:
+        # An on-demand observation must populate the record even before a background
+        # health loop exists. One failed probe reports unhealthy for this read; there
+        # is no restart or paging policy here. Sweep before status so remote running
+        # and version fields see the same refreshed probe cache.
+        supervisor.health_sweep(failure_threshold=1)
         health = {str(h.get("id") or ""): h for h in supervisor.member_health() if isinstance(h, dict)}
     except Exception:  # noqa: BLE001 — a health read failure must not fail the roster answer
         log.exception("[fleet-supervision] health read failed")
         health = {}
-    return roster, health
+    return fd._roster(), health
 
 
 def _kind(entry: dict[str, Any]) -> str:
@@ -159,7 +164,7 @@ def _bounded(rows: list[dict[str, Any]], view, flag: list[bool]) -> list[dict[st
 async def fleet_pending() -> dict[str, Any]:
     """Pending decisions and waiting tasks for every roster member. Read-only; a member that
     cannot be read is a ``status: "unreachable"`` row, never a failed call."""
-    roster, _health = await asyncio.to_thread(_roster_and_health)
+    roster = await asyncio.to_thread(fd._roster)
 
     async def one(entry: dict[str, Any]) -> dict[str, Any]:
         row = _base_row(entry)
