@@ -1,6 +1,6 @@
 # ADR 0135 — The always-on orchestrator: the hub as the fleet's chief of staff
 
-- Status: Accepted (2026-11-18, Josh: "as suggested"). Phase 0 is config on the hub; phases 1–4 are tracked on epic #5532 and are not yet boarded.
+- Status: Accepted (2026-11-18, Josh: "as suggested"). Phase 1 was boarded 2026-11-18. Phases 2–4 were regrouped into waves A–C the same day (see "Update" below).
 - Date: 2026-11-18
 - Deciders: Josh Mabry; protoAgent maintainers
 - Amends: [ADR 0007](./0007-directory-aware-operator-agent.md) (the operator persona may ship as an opt-in archetype, not only as a fork).
@@ -60,9 +60,9 @@ Josh, 2026-11-18: the main-instance agent should be "the quintessential always o
 | Paging the agent | the inbox store and its dedup key |
 | Reaching the operator | `notify_chat_surfaces` and the adapter `notify` hook; a question is `request_decision`; push is one more adapter |
 | Standing work | the scheduler, and the ADR 0129 D2 follow-up record when it lands |
-| Standing orders and approvals | the directive store, with ADR 0129 D4 finished on the same path |
+| Standing orders | the directive store, with an instance scope added |
 | Unattended policy | ADR 0124, replacing the fixed auto-answers |
-| Spend | the usage store (ADR 0122) and the existing autonomous-origin classification |
+| Spend | the per-turn `turns` records in the telemetry store and the existing autonomous-origin classification (the ADR 0122 usage store is the subscription-window cache, not per-turn accounting) |
 | Run history | the scheduler's `occurrences` ledger |
 
 Nothing ships as a workaround for a later phase. In particular the hub does not poll member health from a scheduled model turn while #5533 is unbuilt: liveness is the supervisor's job, in code.
@@ -78,6 +78,26 @@ Nothing ships as a workaround for a later phase. In particular the hub does not 
 | 4 | Orchestrator archetype; home conversation; demo script | #5544, #5545, #5546 |
 
 Phase 0 goes first because it costs nothing and shows which gaps hurt before core work is boarded. It contains no stand-in for a later phase. Console UI in phases 2–4 needs a design-system spec and preview approved before a card is cut.
+
+## Update (2026-11-18): phases 2–4 become waves, and five decisions
+
+Josh reviewed phases 2–4 and decided:
+
+- **D9. Home conversation.** Amend ADR 0129 D6: results are shown in one pinned home chat while each job keeps its own session. The amendment is written with the design spec for #5545.
+- **D10. Push is a requirement.** Notices reach every operator device and do not depend on a chat plugin. The console has no service worker or web manifest today, so #5539 starts with a design slice that settles the transport per device class.
+- **D11. Urgency is not a model judgment.** Importance is a fixed property of the notice type, set by the code path that raises it.
+- **D12. Spend cap.** At the hard limit, all unattended work on the instance pauses and one decision is raised. The cap counts tokens as well as cost.
+- **D13. Standing orders need no new guards.** #5542 builds directly on the directive store. The unbuilt ADR 0129 D4 guards are not a prerequisite; a directive is still recorded only from an operator chat turn.
+
+The phase numbers stay as issue groupings. The build order is by what each wave unblocks:
+
+| Wave | Issues | Notes |
+|---|---|---|
+| A — the loop works end to end | #5537, #5539, #5540, #5543 (server side) | Server work. With phase 1 it is what a member-down notice and a morning brief need. The spend cap lands before the first standing job. |
+| B — design-led | #5538, #5545, the Work rows for #5543, notice and device settings for #5537 and #5539 | Each needs a design-system spec and preview approved before its card is cut. Specs start in parallel with wave A. |
+| C — policy and packaging | #5541, #5542, #5544, #5546 | #5541 and #5542 are independent server work. The archetype (#5544) is last: it packages what the other cards built. |
+
+The hub is switched on after wave A is in a release: the health loop and restart are enabled, its SOUL gains the standing duties, and the morning brief is created.
 
 ## Consequences
 
