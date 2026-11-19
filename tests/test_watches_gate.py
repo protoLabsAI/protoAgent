@@ -58,8 +58,10 @@ def test_goal_tools_do_not_bring_watch_tools_along(monkeypatch):
     assert not (WATCH_TOOLS & names)
 
 
-def test_no_goal_or_watch_tools_without_verifiers():
-    # Both flags on but no plugin verifiers → all goal+watch tools suppressed.
+def test_no_goal_or_watch_tools_without_verifiers(monkeypatch):
+    # Both flags on but an EMPTY verifier registry → all goal+watch tools suppressed. Emptied
+    # explicitly: a stock registry now holds the built-in fleet:member_health check (#5534).
+    _register_verifiers(monkeypatch)
     names = {t.name for t in get_all_tools(goal_enabled=True, watches_enabled=True)}
     assert not ({"set_goal", "update_goal_plan", "abandon_goal"} & names)
     assert not (WATCH_TOOLS & names)
@@ -211,3 +213,12 @@ def test_disabling_the_flag_does_not_touch_stored_watches(monkeypatch, tmp_path)
 
     after = [w.id for w in ctrl.list_watches()]
     assert after == before  # stored watch survived the disabled build untouched
+
+
+def test_watch_and_goal_tools_bind_on_a_stock_registry_with_no_plugin():
+    # #5534: the built-in fleet:member_health check is in the registry with no plugin
+    # installed, so the gates open on the flags alone.
+    names = {t.name for t in get_all_tools(goal_enabled=True, watches_enabled=True)}
+    assert WATCH_TOOLS <= names
+    assert {"set_goal", "update_goal_plan", "abandon_goal"} <= names
+    assert not (WATCH_TOOLS & {t.name for t in get_all_tools(goal_enabled=True, watches_enabled=False)})

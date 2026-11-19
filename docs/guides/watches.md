@@ -8,6 +8,10 @@ agent itself must do the work. An instance can hold many watches.
 
 1. Choose a condition and a verifier that can observe it. Agent-created watches
    require a registered [plugin verifier](/guides/plugins#goal-and-watch-verifiers).
+   One check is built in and needs no plugin: `fleet:member_health`, with
+   `check_args` `{"member": "<id or name>", "state": "down"}`, is met when that
+   fleet member is `healthy`, `down` or `wedged` as requested. Create it with
+   `on_change` to get a turn each time the member goes down or recovers.
 2. Ask the agent to watch it. Specify how often to check, when to give up, and
    what to do when it fires: “Watch this rollout for up to an hour, check every
    minute, and run the smoke test when it finishes.”

@@ -156,6 +156,8 @@ def test_tools_tab_omits_set_goal_when_no_verifiers_registered(monkeypatch):
     import operator_api.console_handlers as ch
     import runtime.state as rs
 
+    # Emptied explicitly: a stock registry holds the built-in fleet:member_health check (#5534).
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {})
     g, cfg = _graph(goal_enabled=True)  # _PLUGIN_VERIFIERS empty → set_goal not bound
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
