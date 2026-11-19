@@ -696,20 +696,23 @@ def _build_fleet_diagnostics_tool() -> list:
 
         Args:
             member: Fleet member display name or id from the configured roster.
-            read: ``"logs"`` for recent logs, or ``"task"`` for one exact task.
+            read: ``"logs"`` for recent logs, ``"task"`` for one exact task, or
+                ``"exit"`` for a local member's last saved exit and restart attempts.
             lines: Recent log line count for ``read="logs"``; clamped by the diagnostics layer.
             task_id: Exact A2A task id for ``read="task"``.
 
         Returns a compact dict with either diagnostics data or a structured refusal/error.
         """
-        from tools.fleet_diagnostics import read_member_logs, read_member_task
+        from tools.fleet_diagnostics import read_member_exit, read_member_logs, read_member_task
 
         mode = (read or "logs").strip().lower()
         if mode in {"logs", "log"}:
             return await read_member_logs(member, lines)
         if mode in {"task", "tasks"}:
             return await read_member_task(member, task_id)
-        detail = "fleet_diagnostics only supports read='logs' or read='task'. It has no runtime control actions."
+        if mode == "exit":
+            return await read_member_exit(member)
+        detail = "fleet_diagnostics only supports read='logs', read='task', or read='exit'. It has no runtime control actions."
         return {
             "ok": False,
             "error": "unsupported_read",

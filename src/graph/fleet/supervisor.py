@@ -119,6 +119,11 @@ def _save_state(state: dict) -> None:
     atomic_write(_state_path(), json.dumps(state, indent=2) + "\n")
 
 
+# Retain (exit code, signal) when a liveness probe reaps before exit capture.
+_reaped_status: dict[int, tuple[int | None, int | None]] = {}
+_reap_lock = threading.RLock()
+
+
 def _reap(pid: int) -> None:
     """Reap ``pid`` if it's a dead child of this hub so it stops lingering as a zombie.
 
@@ -138,7 +143,16 @@ def _reap(pid: int) -> None:
     if os.name == "nt":
         return
     try:
-        os.waitpid(int(pid), os.WNOHANG)
+        with _reap_lock:
+            reaped, status = os.waitpid(int(pid), os.WNOHANG)
+            if reaped:
+                _reaped_status[reaped] = (
+                    os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,
+                    os.WTERMSIG(status) if os.WIFSIGNALED(status) else None,
+                )
+                # Intentional stops have no exit record; bound retained statuses.
+                if len(_reaped_status) > 256:
+                    _reaped_status.pop(next(iter(_reaped_status)))
     except (OSError, ValueError):
         pass  # ECHILD (not our child / already reaped), or a bad pid — nothing to do
 
@@ -347,6 +361,8 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
     recorded = []
     for key in dead:
         rec = state[key]
+        with _reap_lock:
+            exit_code, signal = _reaped_status.pop(rec.get("pid"), (None, None))
         if _is_boot_leftover(key, rec):
             log.info("[fleet] dropped the stale record of member %s (pid %s): it did not exit "
                      "under this hub run (seen by %s)", key, rec.get("pid"), detected_by)
@@ -359,6 +375,8 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
                 "started_at": rec.get("started_at", ""),
                 "detected_by": detected_by,
                 "log_tail": _exit_log_tail(rec),
+                "exit_code": exit_code,
+                "signal": signal,
             }
         )
     if recorded:
@@ -377,7 +395,7 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
 
 def collect_exits() -> list[dict]:
     """The unexpected member exits not yet collected, oldest first; each is returned
-    once. A record is ``{id, pid, at, started_at, detected_by, log_tail}``. Records
+    once. Records include identity, detection time, log tail, exit code and signal. Records
     survive a hub restart until collected (``fleet-exits.json``, beside ``fleet.json``)."""
     with _state_lock():
         exits = _load_exits()
@@ -389,6 +407,23 @@ def collect_exits() -> list[dict]:
             _save_exits(exits)
             return out
     return []
+
+
+def last_exit(member_id: str) -> dict | None:
+    """Read the newest saved exit and restart history without collecting or writing it.
+
+    Collected exits remain readable. An unreadable restart history is flagged explicitly.
+    """
+    with _state_lock():
+        record = next((x for x in reversed(_load_exits()) if x.get("id") == member_id), None)
+        if record is None:
+            return None
+        restarts = _load_restarts()
+        return {
+            "exit_code": None, "signal": None, **record,
+            "restarts": restarts.get("members", {}).get(member_id, {}),
+            "restart_history_unreadable": bool(restarts.get("disabled")),
+        }
 
 
 def _restart_path() -> Path:
@@ -791,6 +826,8 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
         # Detached (ADR 0098): its own tree root, so it survives this CLI's exit
         # and stop()/shutdown_all() can take down the whole member tree later.
         proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, **detached_kwargs())
+        with _reap_lock:
+            _reaped_status.pop(proc.pid, None)  # reused pid: a new run
         from infra.paths import package_version
 
         now = datetime.now(timezone.utc).isoformat()
@@ -818,7 +855,15 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
     # (``asyncio.to_thread``) — the routes do.
     deadline = time.monotonic() + _BOOT_WATCH_SECONDS
     while time.monotonic() < deadline:
-        if proc.poll() is not None:  # died at boot — reap the entry + surface the reason
+        with _reap_lock:
+            returncode = proc.poll()
+            if returncode is not None and os.name != "nt":
+                # poll may reap first; an earlier _alive probe may already have the status.
+                _reaped_status.setdefault(proc.pid, (
+                    returncode if returncode >= 0 else None,
+                    -returncode if returncode < 0 else None,
+                ))
+        if returncode is not None:  # died at boot — reap the entry + surface the reason
             with _state_lock():
                 state = _load_state()
                 if (state.get(wid) or {}).get("pid") == proc.pid:

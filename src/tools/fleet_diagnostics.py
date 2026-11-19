@@ -28,6 +28,10 @@ Two seams, deliberately NOT reimplemented here:
   the import-layering contract forbids ``tools`` importing ``operator_api`` — so HTTP is the
   sanctioned seam, and it is also what makes "read through the real endpoint" literally true.
 
+Saved exits (ADR 0135 D8). The local-only exit read uses the same roster resolution
+and reads the supervisor's existing exit/restart records without collecting them. It
+re-redacts and caps the saved log tail at this boundary, even after a member restarts.
+
 Containment (r2/r3). A stopped / unreachable / slow member, an unauthorized response, an unknown
 member, or a task id the member does not have each becomes a COMPACT structured failure
 (``{"ok": False, "error": ...}``) rather than an uncaught exception, so the caller gets an
@@ -114,11 +118,12 @@ class _Target:
     host — the slug is the member's immutable roster id (or the reserved ``host`` slug), and the
     proxy turns it into an actual address."""
 
-    __slots__ = ("member", "slug")
+    __slots__ = ("member", "slug", "local")
 
-    def __init__(self, member: str, slug: str) -> None:
+    def __init__(self, member: str, slug: str, *, local: bool = False) -> None:
         self.member = member
         self.slug = slug
+        self.local = local
 
 
 def _fail(error: str, detail: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -207,7 +212,10 @@ def resolve_member(member: str) -> _Target | dict[str, Any]:
         # A roster row with neither ``host`` nor an id — unaddressable. Refuse rather than
         # fabricate a target (a diagnostics answer, not a crash).
         return _fail("unknown_member", f"member {_display(entry) or (member or '').strip()!r} has no reachable slug")
-    return _Target(_display(entry) or (member or "").strip(), slug)
+    return _Target(
+        _display(entry) or (member or "").strip(), slug,
+        local=not entry.get("remote") and not entry.get("host"),
+    )
 
 
 # ── the member call, through the hub's own /agents/<slug>/* proxy (r1, r3) ─────
@@ -523,3 +531,31 @@ async def read_member_task(member: str, task_id: str) -> dict[str, Any]:
             if key in result:
                 payload[key] = result[key]
     return payload
+
+
+async def read_member_exit(member: str) -> dict[str, Any]:
+    """Read a local member's saved last exit, bounded and redacted at this boundary."""
+    import asyncio
+
+    from graph.fleet import supervisor
+
+    target = await asyncio.to_thread(resolve_member, member)
+    if isinstance(target, dict):
+        return {**target, "member": (member or "").strip()}
+    payload = {"member": target.member, "slug": target.slug}
+    if not target.local:
+        return _fail("unsupported_read", "saved exits are available only for local fleet members", payload)
+    try:
+        record = await asyncio.to_thread(supervisor.last_exit, target.slug)
+        if record is not None:
+            from graph.middleware.redaction import redact
+
+            record = redact(record)
+            tail = str(record.get("log_tail") or "")
+            record["log_tail"] = _redacted_preview(tail)
+            if len(tail) > _TOOL_TEXT_CAP:
+                record["tool_truncated"] = True
+        return {**payload, "ok": True, "exit": record}
+    except Exception:  # noqa: BLE001 — fail closed, never return raw evidence
+        log.exception("[fleet-diagnostics] exit read failed")
+        return _fail("unavailable", "saved exit diagnostics are unavailable", payload)
