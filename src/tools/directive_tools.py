@@ -1,6 +1,10 @@
 """Directive-ledger tools (ADR 0127 D6) — ``record_directive``, ``list_directives``,
 ``fulfil_directive`` and ``revoke_directive``.
 
+``record_directive(instance_wide=True)`` records an instance-wide standing order (ADR 0135
+D13): the same operator-chat-turn check gates it, and no tool changes the reach of a
+directive that already exists.
+
 Chat-scoped: each resolves the calling chat from the injected graph state
 (``tools.session._session_id_from``) — ``current_session_id()`` reads empty inside a tool
 body — and refuses with a clear message when there is no chat. The ledger itself lives in
@@ -22,6 +26,14 @@ DIRECTIVE_TOOL_NAMES = frozenset({"record_directive", "list_directives", "fulfil
 _NO_CHAT = "No active chat — {name} works only during a chat turn (directives belong to a chat)."
 
 
+def _operator_chat_turn(state: Any) -> bool:
+    """True only on a chat turn the operator sent. The server derives this stamp from
+    authenticated tier + turn origin on every pass/resume. Subagents have no stamp, and
+    scheduled, watch and other automated turns carry a false one; request contextvars are
+    unreliable inside a tool body."""
+    return isinstance(state, dict) and state.get("operator_chat_turn") is True and not state.get("subagent_fence")
+
+
 def _close(state: Any, name: str, directive_id: str, reason: str, status: str) -> str:
     from graph.directives import DirectiveError, directive_store
 
@@ -30,8 +42,22 @@ def _close(state: Any, name: str, directive_id: str, reason: str, status: str) -
         return _NO_CHAT.format(name=name)
     if not (reason or "").strip():
         return f"Error: {name} needs a reason — say why it is closed."
+    store = directive_store()
+    # An id names one ledger: this chat's first, else the instance-wide one (ADR 0135 D13).
+    instance_wide = store.get(session_id, directive_id) is None and (
+        store.get("", directive_id, instance_wide=True) is not None
+    )
+    if instance_wide and not _operator_chat_turn(state):
+        # An instance-wide directive binds every turn, so an unattended turn (or a
+        # subagent) must not be able to lift it for all of them.
+        return (
+            f"Error: {(directive_id or '').strip()} is an instance-wide directive — {name} can close it only "
+            "during a chat turn with the operator; this turn did not come from the operator"
+        )
     try:
-        d = directive_store().close(session_id, directive_id, status=status, reason=reason, closed_by="agent")
+        d = store.close(
+            session_id, directive_id, status=status, reason=reason, closed_by="agent", instance_wide=instance_wide
+        )
     except DirectiveError as exc:
         return f"Error: {exc}"
     return f"Directive {d.id} is now {d.status}: {d.close_reason}"
@@ -47,6 +73,7 @@ def build_directive_tools() -> list:
         conditions: str = "",
         scope: str = "",
         links: list[str] | None = None,
+        instance_wide: bool = False,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Record a standing instruction the operator gave in THIS chat.
@@ -74,23 +101,42 @@ def build_directive_tools() -> list:
         fulfil_directive the turn it is done. Recorded directives appear under STANDING
         DIRECTIVES in <working_state> every turn, even after compaction. Returns the new
         directive id.
+
+        `instance_wide=True` records a standing order for the whole instance: it then
+        appears in every chat and every unattended (scheduled or watch) turn, not only
+        this chat. Set it only when the operator's words this turn say it applies
+        everywhere or always; otherwise leave it False. A directive's reach is fixed when
+        it is recorded — never re-record an existing chat directive as instance-wide on
+        your own.
         """
         from graph.directives import DirectiveError, directive_store
 
         session_id = _session_id_from(state)
         if not session_id:
             return _NO_CHAT.format(name="record_directive")
-        # The server derives this stamp from authenticated tier + turn origin on every
-        # pass/resume. Subagents have no stamp; request contextvars are unreliable here.
-        if not isinstance(state, dict) or state.get("operator_chat_turn") is not True or state.get("subagent_fence"):
+        if not _operator_chat_turn(state):
+            if instance_wide:
+                return (
+                    "Error: an instance-wide directive is recorded only from what the operator says in a "
+                    "chat turn; this turn did not come from the operator, so nothing was recorded"
+                )
             return (
                 "record_directive only records what the operator says in a chat turn; "
                 "this turn did not come from the operator"
             )
         try:
-            d = directive_store().record(session_id, quote, conditions=conditions, scope=scope, links=links)
+            d = directive_store().record(
+                session_id, quote, conditions=conditions, scope=scope, links=links, instance_wide=instance_wide is True
+            )
         except DirectiveError as exc:
             return f"Error: {exc}"
+        if d.instance_wide:
+            linked = f", linked to {', '.join(e['ref'] for e in d.links)}" if d.links else ""
+            return (
+                f"Recorded instance-wide directive {d.id}{linked}. It is in force in every chat and every "
+                "unattended turn until it is fulfilled or revoked in a chat turn with the operator, or the "
+                "operator withdraws it."
+            )
         if d.links:
             refs = ", ".join(e["ref"] for e in d.links)
             return (
@@ -107,7 +153,8 @@ def build_directive_tools() -> list:
         include_closed: bool = False,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
-        """List the operator's directives recorded in THIS chat.
+        """List the operator's directives recorded in THIS chat, plus any instance-wide
+        ones (in force in every chat and unattended turn).
 
         In-force ones by default; `include_closed=True` adds fulfilled and revoked ones with
         who closed them and why. Check this before deciding you lack approval for something.
@@ -117,12 +164,14 @@ def build_directive_tools() -> list:
         session_id = _session_id_from(state)
         if not session_id:
             return _NO_CHAT.format(name="list_directives")
-        items = directive_store().list(session_id, include_closed=bool(include_closed))
-        if not items:
+        store = directive_store()
+        items = store.list(session_id, include_closed=bool(include_closed))
+        shared = store.list("", include_closed=bool(include_closed), instance_wide=True)
+        if not items and not shared:
             return (
                 "No directives in force in this chat." if not include_closed else "No directives recorded in this chat."
             )
-        return render_ledger(items)
+        return render_ledger(items, shared)
 
     @tool
     def fulfil_directive(
@@ -133,6 +182,7 @@ def build_directive_tools() -> list:
         """Close a directive in THIS chat as done (`fulfilled`), with a one-line `reason`.
 
         Call it once the instruction has been carried out, so it stops riding every turn.
+        An instance-wide directive can be closed only during a chat turn with the operator.
         """
         from graph.directives import STATUS_FULFILLED
 

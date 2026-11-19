@@ -19,6 +19,12 @@ transcript is not.
   automatically (``closed_by: "system"``, attributed reason) once EVERY linked item has
   finished; ``graph.directive_autofulfil`` wires the event paths and the GitHub sweep
   that call it. Unlinked directives behave exactly as before.
+* A directive may be **instance-wide** (ADR 0135 D8/D13, #5542): a standing order every
+  turn of the instance sees — every chat, and every scheduled or watch turn — not only
+  the chat it was given in. Same store, same record shape (``instance_wide: true``);
+  those rows live in one reserved ledger (:data:`INSTANCE_LEDGER`) so they render for
+  every session without a scan and outlive the chat they were recorded in. Like any
+  directive, one is recorded only from an operator chat turn.
 
 Storage: one JSON file per chat under the per-instance ``instance_root/directives`` store
 (ADR 0065). The file name is a hash of the session id — session ids may carry ``:`` and
@@ -57,9 +63,9 @@ CLOSED_BY_SYSTEM = "system"
 #: whole pasted message. Generous, but bounded: every in-force one renders every turn.
 MAX_QUOTE_CHARS = 4000
 MAX_NOTE_CHARS = 2000
-#: In-force directives rendered in ``<working_state>``; more point at ``list_directives``.
+#: In-force directives per scope rendered in ``<working_state>``; more point at ``list_directives``.
 WS_DIRECTIVE_CAP = 20
-#: Total character budget for the ``STANDING DIRECTIVES`` section's entry text, in line with
+#: Per-scope character budget for the ``STANDING DIRECTIVES`` entry text, in line with
 #: the other ``<working_state>`` caps (``graph.projection``). The entry cap alone could still
 #: let the section reach ~160K chars (20 maximum-size directives) that never shed; this bounds
 #: it so a few large directives can't crowd out the rest of ``<working_state>`` every turn.
@@ -69,6 +75,16 @@ WS_DIRECTIVES_MAX_CHARS = 6000
 #: from carrying (and re-rendering) an unbounded ref list every turn.
 MAX_LINKS = 20
 MAX_LINK_CHARS = 200
+
+#: The reserved ledger key instance-wide directives are stored under (ADR 0135 D13). ``*``
+#: is not a legal session-id character (``runtime.session_ids``), and every session-keyed
+#: store call refuses this key outright, so no chat — whatever its id — can read, write or
+#: delete the instance ledger by naming it.
+INSTANCE_LEDGER = "*instance"
+#: Instance-wide ids carry a non-hex marker after ``dir-`` so one can never collide with a
+#: chat directive's id (``dir-`` + hex): an id alone says which ledger holds it.
+_INSTANCE_ID_PREFIX = "dir-i"
+INSTANCE_TAG = "[instance-wide]"
 
 # One lock for every store object: :func:`directive_store` may hand out a fresh one per call.
 _LOCK = threading.RLock()
@@ -183,6 +199,22 @@ def _publish(topic: str, data: dict) -> None:
         pass
 
 
+def _announce(d: Directive) -> None:
+    """Publish ``directive.changed`` for one directive. An instance-wide one says so — its
+    ``session_id`` is only the chat it was recorded in. (Two literal payloads on purpose:
+    the generated events reference reads the keys off the call.)"""
+    if d.instance_wide:
+        _publish("directive.changed", {"session_id": d.session_id, "id": d.id, "instance_wide": True})
+    else:
+        _publish("directive.changed", {"session_id": d.session_id, "id": d.id})
+
+
+def _not_found(directive_id: str, instance_wide: bool) -> str:
+    if instance_wide:
+        return f"no instance-wide directive {directive_id!r}"
+    return f"no directive {directive_id!r} in this chat"
+
+
 class DirectiveError(ValueError):
     """A ledger operation the caller can correct (empty quote, unknown id, already closed)."""
 
@@ -211,6 +243,10 @@ class Directive:
     #: Linked work (ADR 0129 D4/Q2): ``[{ref, kind, state, reason}, …]`` — empty for the
     #: (unchanged) unlinked case.
     links: list[dict] = field(default_factory=list)
+    #: True for an instance-wide standing order (ADR 0135 D13): in force for every chat and
+    #: every unattended turn. ``session_id`` is then the chat it was recorded in
+    #: (provenance only). Set at ``record`` and never changed afterwards.
+    instance_wide: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -230,6 +266,7 @@ class Directive:
             closed_by=data.get("closed_by"),
             author=str(data.get("author") or "agent"),
             links=_parse_links(data.get("links")),
+            instance_wide=data.get("instance_wide") is True,
         )
 
     @property
@@ -261,6 +298,16 @@ class DirectiveStore:
     def _path(self, session_id: str) -> Path:
         return self._base / _file_name(session_id)
 
+    @staticmethod
+    def _key(session_id: str, instance_wide: bool = False) -> str:
+        """The ledger a call addresses: the reserved instance ledger when ``instance_wide``,
+        else the chat's own — and "" (no ledger) for a blank id or a "chat" that names the
+        reserved key, so a session id can never reach the instance ledger."""
+        if instance_wide:
+            return INSTANCE_LEDGER
+        session_id = session_id or ""
+        return "" if session_id == INSTANCE_LEDGER else session_id
+
     def _load(self, session_id: str) -> list[Directive]:
         path = self._path(session_id)
         try:
@@ -278,7 +325,13 @@ class DirectiveStore:
         out: list[Directive] = []
         for row in data.get("directives") or []:
             try:
-                out.append(Directive.from_dict(row))
+                directive = Directive.from_dict(row)
+                # Which ledger a row sits in decides its reach — never a stored flag alone,
+                # so a hand-edited chat file can't widen one of its rows.
+                directive.instance_wide = session_id == INSTANCE_LEDGER
+                if not directive.instance_wide and not directive.session_id:
+                    directive.session_id = session_id  # a legacy row without its own copy
+                out.append(directive)
             except (KeyError, TypeError, ValueError) as exc:
                 log.warning("[directives] skipping a malformed row in %s: %s", path, exc)
         return out
@@ -303,14 +356,22 @@ class DirectiveStore:
     # ── operations ──────────────────────────────────────────────────────────────
 
     def record(self, session_id: str, quote: str, *, conditions: str = "", scope: str = "", author: str = "agent",
-               links=None) -> Directive:
+               links=None, instance_wide: bool = False) -> Directive:
         """Record a new in-force directive for ``session_id``. ``quote`` is the operator's
         words verbatim for operator writes; legacy agent writes trim the ends. ``links``
         (ADR 0129 D4/Q2) are the refs of the work the directive covers — the directive
-        fulfils itself once every linked item finishes (:meth:`resolve_link`)."""
+        fulfils itself once every linked item finishes (:meth:`resolve_link`).
+
+        ``instance_wide`` (ADR 0135 D13) records it in the instance ledger instead: in force
+        for every chat and unattended turn. ``session_id`` is still required — the chat the
+        operator gave it in — and is kept as provenance. The store does not decide who may
+        record one; the caller does (``tools.directive_tools``: an operator chat turn only)."""
         session_id = (session_id or "") if author == "operator" else (session_id or "").strip()
         if not session_id.strip():
             raise DirectiveError("a directive belongs to a chat — no session id was given")
+        if session_id == INSTANCE_LEDGER:
+            raise DirectiveError(f"{INSTANCE_LEDGER!r} is reserved — it is not a chat")
+        key = self._key(session_id, instance_wide)
         if author not in CLOSED_BY:
             raise DirectiveError("author must be agent or operator")
         quote = (quote or "") if author == "operator" else (quote or "").strip()
@@ -324,12 +385,13 @@ class DirectiveStore:
         conditions = (conditions or "").strip()[:MAX_NOTE_CHARS]
         scope = (scope or "").strip()[:MAX_NOTE_CHARS]
         link_entries = normalize_links(links)
+        prefix = _INSTANCE_ID_PREFIX if instance_wide else "dir-"
         with self._lock:
-            items = self._load(session_id)
+            items = self._load(key)
             taken = {d.id for d in items}
-            new_id = f"dir-{secrets.token_hex(3)}"
+            new_id = f"{prefix}{secrets.token_hex(3)}"
             while new_id in taken:
-                new_id = f"dir-{secrets.token_hex(3)}"
+                new_id = f"{prefix}{secrets.token_hex(3)}"
             directive = Directive(
                 id=new_id,
                 session_id=session_id,
@@ -339,43 +401,49 @@ class DirectiveStore:
                 created_at=_now(),
                 author=author,
                 links=link_entries,
+                instance_wide=bool(instance_wide),
             )
             items.append(directive)
-            self._save(session_id, items)
-        _publish("directive.changed", {"session_id": session_id, "id": directive.id})
+            self._save(key, items)
+        _announce(directive)
         return directive
 
-    def list(self, session_id: str, *, include_closed: bool = True) -> list[Directive]:
-        """This chat's directives, oldest first. ``include_closed=False`` → in force only."""
-        if not session_id:
+    def list(self, session_id: str, *, include_closed: bool = True, instance_wide: bool = False) -> list[Directive]:
+        """This chat's directives, oldest first. ``include_closed=False`` → in force only.
+        ``instance_wide=True`` reads the instance ledger instead (``session_id`` is ignored)."""
+        key = self._key(session_id, instance_wide)
+        if not key:
             return []
         with self._lock:
-            items = self._load(session_id)
+            items = self._load(key)
         return items if include_closed else [d for d in items if d.in_force]
 
-    def in_force(self, session_id: str) -> list[Directive]:
-        return self.list(session_id, include_closed=False)
+    def in_force(self, session_id: str, *, instance_wide: bool = False) -> list[Directive]:
+        return self.list(session_id, include_closed=False, instance_wide=instance_wide)
 
-    def get(self, session_id: str, directive_id: str) -> Directive | None:
+    def get(self, session_id: str, directive_id: str, *, instance_wide: bool = False) -> Directive | None:
         directive_id = (directive_id or "").strip()
-        return next((d for d in self.list(session_id) if d.id == directive_id), None)
+        return next((d for d in self.list(session_id, instance_wide=instance_wide) if d.id == directive_id), None)
 
     def update(self, session_id: str, directive_id: str, *, scope: str | None = None,
-               conditions: str | None = None) -> Directive:
-        """Patch editable fields under the same lock as close; preserve provenance."""
+               conditions: str | None = None, instance_wide: bool = False) -> Directive:
+        """Patch editable fields under the same lock as close; preserve provenance. A
+        directive's reach is not editable: nothing here moves one between a chat's ledger
+        and the instance ledger."""
+        key = self._key(session_id, instance_wide)
         with self._lock:
-            items = self._load(session_id) if session_id else []
+            items = self._load(key) if key else []
             hit = next((d for d in items if d.id == directive_id), None)
             if hit is None:
-                raise DirectiveNotFound(f"no directive {directive_id!r} in this chat")
+                raise DirectiveNotFound(_not_found(directive_id, instance_wide))
             if not hit.in_force:
                 raise DirectiveClosed(f"directive {directive_id} is already {hit.status}")
             if scope is not None:
                 hit.scope = scope.strip()[:MAX_NOTE_CHARS]
             if conditions is not None:
                 hit.conditions = conditions.strip()[:MAX_NOTE_CHARS]
-            self._save(session_id, items)
-        _publish("directive.changed", {"session_id": session_id, "id": directive_id})
+            self._save(key, items)
+        _announce(hit)
         return hit
 
     def close(
@@ -386,36 +454,40 @@ class DirectiveStore:
         status: str,
         reason: str = "",
         closed_by: str = "agent",
+        instance_wide: bool = False,
     ) -> Directive:
         """Mark an in-force directive ``fulfilled`` or ``revoked``. Raises
         :class:`DirectiveNotFound` for an id this chat doesn't hold (another chat's id
         included) and :class:`DirectiveClosed` when it is already closed. ``closed_by``
-        may also be :data:`CLOSED_BY_SYSTEM` — the auto-fulfil path (ADR 0129 D4/Q2)."""
+        may also be :data:`CLOSED_BY_SYSTEM` — the auto-fulfil path (ADR 0129 D4/Q2).
+        ``instance_wide=True`` closes one in the instance ledger (``session_id`` is ignored)."""
         if status not in (STATUS_FULFILLED, STATUS_REVOKED):
             raise DirectiveError(f"status must be {STATUS_FULFILLED!r} or {STATUS_REVOKED!r}")
         if closed_by not in (*CLOSED_BY, CLOSED_BY_SYSTEM):
             raise DirectiveError(f"closed_by must be one of {(*CLOSED_BY, CLOSED_BY_SYSTEM)}")
         directive_id = (directive_id or "").strip()
+        key = self._key(session_id, instance_wide)
         with self._lock:
-            items = self._load(session_id) if session_id else []
+            items = self._load(key) if key else []
             hit = next((d for d in items if d.id == directive_id), None)
             if hit is None:
-                raise DirectiveNotFound(f"no directive {directive_id!r} in this chat")
+                raise DirectiveNotFound(_not_found(directive_id, instance_wide))
             if not hit.in_force:
                 raise DirectiveClosed(f"directive {directive_id} is already {hit.status}")
             hit.status = status
             hit.closed_at = _now()
             hit.close_reason = (reason or "").strip()[:MAX_NOTE_CHARS] or None
             hit.closed_by = closed_by
-            self._save(session_id, items)
-        _publish("directive.changed", {"session_id": session_id, "id": directive_id})
+            self._save(key, items)
+        _announce(hit)
         return hit
 
     # ── linked-work auto-fulfil (ADR 0129 D4/Q2) ─────────────────────────────────
 
     def _ledger_session_ids(self) -> list[str]:
-        """Every session id with a ledger file under this store (for the cross-chat link
-        paths — an event names a ref, not a chat). Skips unreadable files and any file
+        """Every ledger key with a file under this store — each chat's session id, plus
+        :data:`INSTANCE_LEDGER` once an instance-wide directive exists (for the cross-chat
+        link paths — an event names a ref, not a chat). Skips unreadable files and any file
         that doesn't sit where its own session id hashes (the ``_load`` ownership guard)."""
         if not self._base.is_dir():
             return []
@@ -476,12 +548,13 @@ class DirectiveStore:
                 if changed:
                     self._save(session_id, items)
         for d in touched:
-            _publish("directive.changed", {"session_id": d.session_id, "id": d.id})
+            _announce(d)
         return touched
 
     def forget(self, session_id: str) -> bool:
-        """Drop a chat's whole ledger (the chat was deleted). True when a file was removed."""
-        if not session_id:
+        """Drop a chat's whole ledger (the chat was deleted). True when a file was removed.
+        Instance-wide directives are not the chat's: they stay, even ones recorded in it."""
+        if not self._key(session_id):
             return False
         with self._lock:
             try:
@@ -522,6 +595,8 @@ def _indent(text: str, prefix: str = "  ") -> str:
 def render_entry(d: Directive, *, closed_detail: bool = False) -> str:
     """One directive: id, when, the quote verbatim, then any conditions/scope."""
     head = f"- {d.id}"
+    if d.instance_wide:
+        head += f" {INSTANCE_TAG}"
     if closed_detail:
         head += f" [{d.status}]"
     head += f" (recorded {_when(d.created_at)}):"
@@ -541,20 +616,8 @@ def render_entry(d: Directive, *, closed_detail: bool = False) -> str:
     return "\n".join(lines)
 
 
-def working_state_section(session_id: str) -> str:
-    """The ``STANDING DIRECTIVES`` section of ``<working_state>`` for this chat, or "".
-
-    Bounded two ways so the section can't grow without limit and crowd out the rest of
-    ``<working_state>`` every turn: at most :data:`WS_DIRECTIVE_CAP` entries, and at most
-    :data:`WS_DIRECTIVES_MAX_CHARS` characters of entry text. Whole entries render oldest
-    first until the next one would push the body over budget; the first entry always renders,
-    clipped with an explicit marker if it alone is over budget. Either overflow ends with a
-    ``…+N more`` pointer to the full ledger."""
-    if not session_id:
-        return ""
-    items = directive_store().in_force(session_id)
-    if not items:
-        return ""
+def _working_state_entries(items: list[Directive]) -> str:
+    """Render one scope with its own entry and character allowance."""
     capped = items[:WS_DIRECTIVE_CAP]
     rendered: list[str] = []
     used = 0
@@ -578,26 +641,70 @@ def working_state_section(session_id: str) -> str:
         body += f"\n…+{len(items) - len(rendered)} more (/directives to list them)"
     elif len(items) > len(capped):
         body += f"\n…+{len(items) - len(capped)} more (list_directives shows them all)"
+    return body
+
+
+def working_state_section(session_id: str) -> str:
+    """The ``STANDING DIRECTIVES`` section of ``<working_state>`` for this chat, or "".
+
+    Instance-wide directives (ADR 0135 D13) render for EVERY session — another chat, a
+    scheduled or watch turn, a turn with no session id at all — ahead of the session's
+    own, tagged :data:`INSTANCE_TAG`.
+
+    Each scope gets its own :data:`WS_DIRECTIVE_CAP` entries and
+    :data:`WS_DIRECTIVES_MAX_CHARS` characters of entry text, so instance orders cannot
+    displace the chat's existing allowance (and vice versa). The combined body is bounded
+    by twice those limits, plus clipping and overflow markers. Within each scope, whole
+    entries render oldest first until the next would exceed the budget; the first always
+    renders, clipped with an explicit marker if needed. Overflow ends with a ``…+N more``
+    pointer to the full ledger.
+    """
+    store = directive_store()
+    shared = store.in_force("", instance_wide=True)
+    local = store.in_force(session_id) if session_id else []
+    if not shared and not local:
+        return ""
+    body = "\n".join(_working_state_entries(items) for items in (shared, local) if items)
     return (
         f"{WS_HEADING}:\n{body}\n"
         'These are the operator\'s words, recorded when given. Act on them; close one with fulfil_directive("<id>", '
         'reason) when it is done, or revoke_directive("<id>", reason) if the operator withdraws it.'
+        + (
+            f" Entries marked {INSTANCE_TAG} apply to every chat and every unattended turn, this one included; "
+            "they are closed only in a chat turn with the operator, or by the operator."
+            if shared
+            else ""
+        )
     )
 
 
-def render_ledger(items: list[Directive]) -> str:
-    """The ``/directives`` reply and the ``list_directives`` result body."""
-    if not items:
+def render_ledger(items: list[Directive], instance_items: list[Directive] | None = None) -> str:
+    """The ``/directives`` reply and the ``list_directives`` result body: this chat's
+    ledger, then any instance-wide directives (``instance_items``) under their own heading."""
+    shared = list(instance_items or [])
+    if not items and not shared:
         return "No directives recorded in this chat."
-    live = [d for d in items if d.in_force]
-    closed = [d for d in items if not d.in_force]
     parts: list[str] = []
-    if live:
-        parts.append("In force:\n" + "\n".join(render_entry(d) for d in live))
+    if items:
+        live = [d for d in items if d.in_force]
+        closed = [d for d in items if not d.in_force]
+        if live:
+            parts.append("In force:\n" + "\n".join(render_entry(d) for d in live))
+        else:
+            parts.append("Nothing in force.")
+        if closed:
+            parts.append("Closed:\n" + "\n".join(render_entry(d, closed_detail=True) for d in closed))
     else:
-        parts.append("Nothing in force.")
+        parts.append("No directives of this chat's own to show.")
+    live = [d for d in shared if d.in_force]
+    closed = [d for d in shared if not d.in_force]
+    if live:
+        parts.append(
+            "Instance-wide, in force (every chat and every unattended turn):\n"
+            + "\n".join(render_entry(d) for d in live)
+        )
     if closed:
-        parts.append("Closed:\n" + "\n".join(render_entry(d, closed_detail=True) for d in closed))
+        parts.append("Instance-wide, closed:\n" + "\n".join(render_entry(d, closed_detail=True) for d in closed))
     return "\n\n".join(parts)
 
 
@@ -629,14 +736,15 @@ _DIRECTIVES_USAGE = "Usage: /directives  (list)   ·   /directives revoke <id> [
 
 
 def directives_command_reply(session_id: str, rest: str) -> str:
-    """The core ``/directives`` chat command: list this chat's ledger, or revoke one by id
+    """The core ``/directives`` chat command: list this chat's ledger plus the
+    instance-wide directives, or revoke one of either by id
     (``/directives revoke <id> [reason]``) as the operator."""
     args = (rest or "").strip()
     if not session_id:
         return "/directives needs a chat — there is no session on this message."
     store = directive_store()
     if not args:
-        return render_ledger(store.list(session_id))
+        return render_ledger(store.list(session_id), store.list("", instance_wide=True))
     verb, _, tail = args.partition(" ")
     if verb.lower() not in ("revoke", "cancel"):
         return _DIRECTIVES_USAGE
@@ -647,6 +755,11 @@ def directives_command_reply(session_id: str, rest: str) -> str:
 
     if current_trust_tier() != "operator":
         return "Only the operator can revoke a directive."
+    # An id names one ledger (instance-wide ids never collide with a chat's): this chat's
+    # first, else the instance ledger — so an instance-wide order is withdrawn from any chat.
+    instance_wide = store.get(session_id, directive_id) is None and (
+        store.get("", directive_id, instance_wide=True) is not None
+    )
     try:
         d = store.close(
             session_id,
@@ -654,7 +767,10 @@ def directives_command_reply(session_id: str, rest: str) -> str:
             status=STATUS_REVOKED,
             reason=reason.strip() or "revoked by the operator",
             closed_by="operator",
+            instance_wide=instance_wide,
         )
     except DirectiveError as exc:
         return f"⚠️ {exc}"
+    if instance_wide:
+        return f"Revoked {d.id}. It is no longer in force in any chat or unattended turn:\n" + _indent(f'"{d.quote}"')
     return f"Revoked {d.id}. The agent no longer has it as a standing directive:\n" + _indent(f'"{d.quote}"')

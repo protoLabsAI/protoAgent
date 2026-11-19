@@ -77,7 +77,10 @@ def _default_get_job(job_id: str):
 def _default_get_directive(session_id: str, directive_id: str):
     from graph.directives import directive_store
 
-    return directive_store().get(session_id, directive_id)
+    store = directive_store()
+    # An instance-wide directive (ADR 0135 D13) lives in the instance ledger; the event's
+    # session id is only the chat it was recorded in.
+    return store.get(session_id, directive_id) or store.get("", directive_id, instance_wide=True)
 
 
 def _default_on_closed(task: dict) -> None:
