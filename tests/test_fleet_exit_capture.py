@@ -12,6 +12,7 @@ import json
 import socket
 import sys
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -328,3 +329,67 @@ async def test_member_health_watch_check_sweeps_for_itself(member, monkeypatch):
     _kill(pids[0])
     assert (await verifiers.run_verifier(spec, verifiers.VerifyContext())).reason == "member m is down"
     assert _sweep() == [(ws["id"], "healthy", "down")]
+
+
+# ── A previous hub run's records are boot leftovers, not exits (#5584) ──────────────
+
+
+def _relaunch_hub(monkeypatch):
+    """A new hub process: it started now and has seen no member alive."""
+    monkeypatch.setattr(supervisor, "_HUB_STARTED_AT", datetime.now(timezone.utc).isoformat())
+    monkeypatch.setattr(supervisor, "_seen_alive", set())
+    monkeypatch.setattr(supervisor, "_shutting_down", False)
+    supervisor._health.clear()
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        lambda pids: supervisor.version_skew_warning(),
+        lambda pids: supervisor.status(),
+        lambda pids: supervisor.health_sweep(1, timeout=5.0),
+        _via_start,
+        _via_stop,
+    ],
+    ids=["version_skew", "status", "health_sweep", "start", "stop"],
+)
+def test_previous_hub_runs_dead_member_is_not_an_exit(member, monkeypatch, caplog, reader):
+    ws, _flag, pids = member
+    _kill(pids[0])  # died with the previous hub, its record still in fleet.json
+    _relaunch_hub(monkeypatch)
+
+    reader(pids)
+    assert (supervisor._load_state().get(ws["id"]) or {}).get("pid") != pids[0]
+    assert not supervisor._exits_path().exists()  # nothing written, so nothing to page or restart
+    assert _sweep(1) == [] and supervisor.collect_exits() == []
+    assert "exited unexpectedly" not in caplog.text
+
+    # The same member, killed during THIS run, is an exit like any other.
+    if len(pids) == 1:
+        pids.append(supervisor.start("m")["pid"])
+    assert _sweep(1) == []
+    _kill(pids[-1])
+    assert _sweep(1) == [(ws["id"], "healthy", "down")]
+    assert [(x["pid"], x["detected_by"]) for x in supervisor.collect_exits()] == [(pids[-1], "health_sweep")]
+
+
+def test_member_that_outlived_the_previous_hub_is_still_watched(member, monkeypatch):
+    # PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT: the new hub adopts the live member, so its
+    # later death is this run's exit even though it started before this hub did.
+    ws, _flag, pids = member
+    _relaunch_hub(monkeypatch)
+    assert next(s for s in supervisor.status() if s["id"] == ws["id"])["running"]
+    _kill(pids[0])
+    supervisor.version_skew_warning()
+    assert [(x["pid"], x["detected_by"]) for x in supervisor.collect_exits()] == [(pids[0], "version_skew")]
+
+
+def test_shutdown_all_leaves_no_record_for_a_member_already_dead(member, monkeypatch):
+    # On a desktop quit members exit by their own parent-death watchdog, so one can be
+    # dead before the hub's sweep reads fleet.json. Its record went stale into the next run.
+    _ws, _flag, pids = member
+    _kill(pids[0])
+    assert supervisor.shutdown_all() == []
+    assert supervisor._load_state() == {} and not supervisor._exits_path().exists()
+    _relaunch_hub(monkeypatch)
+    assert _sweep(1) == [] and supervisor.collect_exits() == []

@@ -236,6 +236,19 @@ def _log_tail_since(log_path: Path, offset: int, limit: int = 500) -> str:
 # dies, so a record whose pid is dead is an exit nobody asked for. Every place that drops
 # such a record goes through ``_prune_dead_records``, which writes the evidence first.
 
+#
+# Two dead records are NOT such an exit (#5584), and the helper drops them unrecorded:
+# one left by a previous hub run (a relaunch after an app update finds the old run's
+# members dead), and one found dead while this hub is shutting down.
+
+#: When this hub process loaded the supervisor: a record started before it belongs to
+#: a previous hub run. Same clock and format as a record's ``started_at``.
+_HUB_STARTED_AT = datetime.now(timezone.utc).isoformat()
+#: ``(member id, pid)`` this process spawned or saw alive. A member that outlived the
+#: previous hub (``PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT``) is adopted on first sight,
+#: so its later death is this run's exit. Guarded by ``_state_lock()``.
+_seen_alive: set[tuple[str, object]] = set()
+
 #: Exit records kept beside fleet.json (oldest dropped first), collected or not.
 _EXITS_KEEP = 50
 #: Chars of the member's own log kept on an exit record.
@@ -293,6 +306,14 @@ def _exit_log_tail(rec: dict) -> str:
         return ""
 
 
+def _is_boot_leftover(key: str, rec: dict) -> bool:
+    """Whether a dead record was left by a previous hub run: it started before this
+    process did, and this process never saw it alive. A record with no ``started_at``
+    cannot be dated, so it is treated as this run's."""
+    started = str(rec.get("started_at") or "")
+    return bool(started) and started < _HUB_STARTED_AT and (key, rec.get("pid")) not in _seen_alive
+
+
 def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None = None) -> list[dict]:
     """THE dead-record prune: for every record in ``state`` (or just ``keys``) whose pid
     is dead, append an exit record to ``fleet-exits.json``, then drop the record and save
@@ -302,14 +323,31 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
     dead member yields exactly one exit record however many readers race to notice it.
     ``detected_by`` names the caller (``status``, ``start``, ``boot``, ...): a ``boot``
     exit was already raised to whoever called ``start()``.
+
+    A dead record that is not an unexpected exit is dropped WITHOUT an exit record,
+    whichever caller sees it first, so nothing pages or restarts it (#5584): a previous
+    hub run's leftover (``_is_boot_leftover``), and any record found dead by
+    ``shutdown_all`` (``detected_by="shutdown"``: the hub is going down and its members
+    go with it).
     """
-    dead = [k for k in (list(state) if keys is None else keys) if k in state and not _alive(state[k].get("pid"))]
+    dead = []
+    for k in list(state) if keys is None else keys:
+        if k not in state:
+            continue
+        if _alive(state[k].get("pid")):
+            _seen_alive.add((k, state[k].get("pid")))
+        else:
+            dead.append(k)
     if not dead:
         return []
     now = datetime.now(timezone.utc).isoformat()
     recorded = []
     for key in dead:
         rec = state[key]
+        if detected_by == "shutdown" or _is_boot_leftover(key, rec):
+            log.info("[fleet] dropped the stale record of member %s (pid %s): it did not exit "
+                     "under this hub run (seen by %s)", key, rec.get("pid"), detected_by)
+            continue
         recorded.append(
             {
                 "id": key,
@@ -320,11 +358,12 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
                 "log_tail": _exit_log_tail(rec),
             }
         )
-    try:
-        _save_exits([*_load_exits(), *recorded])
-    except OSError as e:
-        # Still prune: a record we could not write must not leave a dead member "running".
-        log.error("[fleet] could not record %d member exit(s): %s", len(recorded), e)
+    if recorded:
+        try:
+            _save_exits([*_load_exits(), *recorded])
+        except OSError as e:
+            # Still prune: a record we could not write must not leave a dead member "running".
+            log.error("[fleet] could not record %d member exit(s): %s", len(recorded), e)
     for key in dead:
         state.pop(key, None)
     _save_state(state)
@@ -766,6 +805,7 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
             "version": package_version(),
         }
         state[wid] = rec
+        _seen_alive.add((wid, proc.pid))  # ours: its death is this run's exit
         _save_state(state)
 
     # Boot watch — OUTSIDE the lock (like stop()'s kill) so other state ops can't freeze
@@ -2477,6 +2517,10 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
         except Exception:  # noqa: BLE001 — teardown proceeds on the registry alone
             known = set(state)
         _record_stop_intent(sorted(known), shutdown=True)
+        # A member already dead here (on a desktop quit each member exits by its own
+        # parent-death watchdog, which can beat this sweep) used to keep its record,
+        # and the next hub run read it as a crash (#5584). Drop it through the helper.
+        _prune_dead_records(state, detected_by="shutdown")
         # PID-reuse guard (#10): only ours; reserve all stops under the lock.
         live = [(k, int(r["pid"])) for k, r in state.items() if _alive(r.get("pid")) and _is_our_agent(int(r["pid"]))]
         if not live:
