@@ -95,3 +95,30 @@ it("keeps the button and says so when the agent doesn't answer", async () => {
   expect(toast).toHaveBeenCalledWith(expect.objectContaining({ tone: "error" }));
   expect(button()?.textContent).toContain("Turn on notifications");
 });
+
+it("a failed status read is not 'off': it offers to check again", async () => {
+  const read = vi.spyOn(push, "pushState").mockRejectedValueOnce(new Error("offline")).mockResolvedValue("enrolled");
+  await render();
+  expect(note()).toContain("Couldn't check");
+  expect(button()?.textContent).toContain("Check again");
+  await act(async () => button()!.click());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(note()).toContain("On for this device");
+});
+
+it("re-reads permission when the operator comes back from settings", async () => {
+  vi.spyOn(push, "pushState").mockResolvedValueOnce("denied").mockResolvedValue("not enrolled");
+  await render();
+  expect(button()).toBeNull();
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  expect(button()?.textContent).toContain("Turn on notifications");
+});
+
+it("re-reads the state when turning off fails", async () => {
+  vi.spyOn(push, "pushState").mockResolvedValueOnce("enrolled").mockResolvedValue("not enrolled");
+  vi.spyOn(push, "unenrollPush").mockRejectedValue(new Error("Push enrollment: HTTP 503"));
+  await render();
+  await act(async () => button()!.click());
+  expect(toast).toHaveBeenCalledWith(expect.objectContaining({ tone: "error" }));
+  expect(button()?.textContent).toContain("Turn on notifications");
+});

@@ -1,7 +1,7 @@
 import { useToast } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
 import { Bell, BellOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { deviceToken } from "../lib/credentials";
 import { enrollPush, pushState, unenrollPush, type PushState } from "../lib/push";
@@ -22,6 +22,7 @@ export function pushBlocker(): string | null {
 }
 
 const UNSUPPORTED = "This browser can't receive notifications while the console is closed.";
+const UNKNOWN = "Couldn't check whether notifications are on for this device. The agent didn't answer.";
 const DENIED = "Notifications are blocked for this console. Allow them in your browser or system settings, then come back here.";
 
 /** The first W2e control (ADR 0135): this device turns its own closed-console notifications
@@ -29,20 +30,42 @@ const DENIED = "Notifications are blocked for this console. Allow them in your b
  *  from the tap itself. */
 export function PushToggle() {
   const toast = useToast();
-  const [state, setState] = useState<PushState | null>(null);
+  // "unknown" = the agent couldn't be asked. It is not "not enrolled": an enrolled device
+  // must not be offered "Turn on" just because one status read failed.
+  const [state, setState] = useState<PushState | "unknown" | null>(null);
   const [busy, setBusy] = useState(false);
   const blocker = pushBlocker();
+  // Every read and every action takes a ticket; only the newest may set the state, so a
+  // read that started before a tap can't overwrite what the tap decided.
+  const ticket = useRef(0);
+
+  const refresh = useCallback(() => {
+    const mine = ++ticket.current;
+    pushState().then(
+      (s) => { if (ticket.current === mine) setState(s); },
+      () => { if (ticket.current === mine) setState("unknown"); },
+    );
+  }, []);
 
   useEffect(() => {
-    let live = true;
-    pushState().then((s) => live && setState(s), () => live && setState("not enrolled"));
-    return () => { live = false; };
-  }, []);
+    refresh();
+    // Coming back from the browser's or the system's settings: permission may have changed.
+    const onReturn = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onReturn);
+    window.addEventListener("focus", onReturn);
+    return () => {
+      ticket.current++;
+      document.removeEventListener("visibilitychange", onReturn);
+      window.removeEventListener("focus", onReturn);
+    };
+  }, [refresh]);
 
   const turnOn = () => {
     setBusy(true);
+    const mine = ++ticket.current;
     enrollPush().then(
       (next) => {
+        if (ticket.current !== mine) return;
         setState(next);
         if (next === "enrolled") toast({ tone: "success", title: "Notifications are on", message: "This device gets decisions and urgent notices, even with the console closed." });
       },
@@ -51,15 +74,21 @@ export function PushToggle() {
   };
   const turnOff = () => {
     setBusy(true);
+    const mine = ++ticket.current;
     unenrollPush().then(
-      () => setState("not enrolled"),
-      () => toast({ tone: "error", title: "Couldn't turn off notifications", message: "The agent didn't answer. Check the connection and try again." }),
+      () => { if (ticket.current === mine) setState("not enrolled"); },
+      () => {
+        toast({ tone: "error", title: "Couldn't turn off notifications", message: "The agent didn't answer. Check the connection and try again." });
+        // The browser's own subscription may be gone even though the agent wasn't told.
+        if (ticket.current === mine) refresh();
+      },
     ).finally(() => setBusy(false));
   };
 
   const on = state === "enrolled";
   const note = on ? "On for this device. Decisions and urgent notices arrive even with the console closed."
     : blocker ?? (state === "unsupported" ? UNSUPPORTED : state === "denied" ? DENIED
+      : state === "unknown" ? UNKNOWN
       : "Get decisions and urgent notices on this device, even with the console closed.");
   const canAsk = !on && !blocker && state === "not enrolled";
 
@@ -76,6 +105,10 @@ export function PushToggle() {
       ) : canAsk ? (
         <Button type="button" onClick={turnOn} loading={busy} disabled={busy}>
           <Bell size={15} aria-hidden /> Turn on notifications
+        </Button>
+      ) : state === "unknown" && !blocker ? (
+        <Button type="button" variant="ghost" onClick={refresh}>
+          Check again
         </Button>
       ) : null}
     </section>
