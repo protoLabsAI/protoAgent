@@ -60,7 +60,7 @@ def _install(monkeypatch, roster, members, health=()):
         raise AssertionError(f"unexpected member path {path!r}")
 
     monkeypatch.setattr(supervisor, "status", status)
-    monkeypatch.setattr(supervisor, "health_sweep", lambda **kw: [])
+    monkeypatch.setattr(supervisor, "fresh_member_health", lambda max_age, **kw: [])
     monkeypatch.setattr(supervisor, "member_health", lambda: [dict(h) for h in health])
     monkeypatch.setattr(member_read, "_fetch_member_json", fetch)
     return calls, threads
@@ -186,6 +186,9 @@ async def test_status_refreshes_real_supervisor_health_before_any_background_swe
 
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     monkeypatch.setattr(supervisor, "_health", {})
+    monkeypatch.setattr(supervisor, "_last_sweep", None)
+    monkeypatch.setattr(supervisor, "_sweep_threshold", None)
+    monkeypatch.setattr(supervisor, "_unclaimed_changes", [])
     monkeypatch.setattr(supervisor, "_probe_cache", {})
     monkeypatch.setattr(supervisor, "_alive", lambda pid: pid == 123)
     monkeypatch.setattr(supervisor, "_host_entry", lambda: dict(_HOST))
@@ -216,18 +219,33 @@ async def test_status_refreshes_real_supervisor_health_before_any_background_swe
         assert again[mid]["health_changed_at"] == first[mid]["health_changed_at"]
     assert first[remote["id"]]["running"] is True
 
+    # One failed check shows in this read, but it is not the supervisor's verdict: the
+    # records are shared with the health loop and the fleet:member_health watch check, so a
+    # roster read must not mark a live member wedged under a lower threshold of its own.
     healthy = False
     failed = _by_id(await tool.ainvoke({}))
-    assert failed[ws["id"]]["health"] == "wedged"
-    assert failed[remote["id"]]["health"] == "down"
+    for mid in (ws["id"], remote["id"]):
+        assert (failed[mid]["health"], failed[mid]["healthy"], failed[mid]["failed_checks"]) == ("failing", False, 1)
+        assert failed[mid]["health_changed_at"] == first[mid]["health_changed_at"]
     assert failed[remote["id"]]["running"] is False
+    assert {h["id"]: h["state"] for h in supervisor.member_health()} == {ws["id"]: "healthy", remote["id"]: "healthy"}
+    await tool.ainvoke({})
+    # The third failed check in a row is the supervisor's threshold: now it is wedged / down.
+    third = _by_id(await tool.ainvoke({}))
+    assert (third[ws["id"]]["health"], third[remote["id"]]["health"]) == ("wedged", "down")
+    assert third[ws["id"]]["failed_checks"] == 3 and third[ws["id"]]["healthy"] is False
     healthy = True
     recovered = _by_id(await tool.ainvoke({}))
     for mid in (ws["id"], remote["id"]):
-        assert failed[mid]["healthy"] is False
-        assert recovered[mid]["healthy"] is True
+        assert (recovered[mid]["healthy"], recovered[mid]["failed_checks"]) == (True, 0)
         assert recovered[mid]["health_changed_at"] != first[mid]["health_changed_at"]
     assert threads and threading.get_ident() not in threads
+    # A roster read only reads: every change it found is still there for the loop to claim.
+    claimed = [(c["id"], c["previous"], c["state"]) for c in supervisor.health_sweep(3)]
+    assert claimed == [
+        (ws["id"], "healthy", "wedged"), (remote["id"], "healthy", "down"),
+        (ws["id"], "wedged", "healthy"), (remote["id"], "down", "healthy"),
+    ]
 
 
 # ── fleet_pending ─────────────────────────────────────────────────────────────
@@ -302,7 +320,7 @@ async def test_fleet_pending_keeps_a_failed_read_distinct_from_empty(monkeypatch
     assert row["tool_truncated"] is True  # 9 pending, 1 listed
 
 
-@pytest.mark.parametrize("health_failure", ["member_health", "health_sweep"])
+@pytest.mark.parametrize("health_failure", ["member_health", "fresh_member_health"])
 async def test_a_raising_member_read_or_health_read_is_contained(monkeypatch, health_failure):
     from graph.fleet import member_read, supervisor
 
@@ -311,7 +329,7 @@ async def test_a_raising_member_read_or_health_read_is_contained(monkeypatch, he
     async def boom(slug, path):
         raise RuntimeError("registry exploded")
 
-    def no_health(**kw):
+    def no_health(*a, **kw):
         raise RuntimeError("health exploded")
 
     monkeypatch.setattr(member_read, "_fetch_member_json", boom)

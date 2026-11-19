@@ -146,10 +146,11 @@ Built by default (absent only if the store fails to open).
 | [`check_inbox(priority_floor="next", limit=10)`](#check_inbox) | Pull pending inbound messages posted to `POST /api/inbox` and mark them delivered. |
 | [`reply_to_dm(id, text)`](#reply_to_dm) | Answer a direct message another session sent with `protoagent dm`; the sender reads it with `--wait` / `--check`. |
 
-### Goals — `goal.enabled` **and** at least one plugin verifier
+### Goals — `goal.enabled` **and** at least one registered verifier
 
-`goal.enabled` defaults to **true**, but the three goal tools also need a registered plugin
-verifier — with none, only `list_verifiers` binds. See [Goal mode](/guides/goal-mode) and
+`goal.enabled` defaults to **true**, and the three goal tools also need a registered
+verifier. Core ships one, `fleet:member_health` (described under Watches below), so they bind on a stock install;
+plugins add more. See [Goal mode](/guides/goal-mode) and
 [ADR 0028](/adr/0028-plugin-goal-verifiers). Defined in `tools/goal_tools.py`.
 
 | Tool | What it does |
@@ -159,10 +160,14 @@ verifier — with none, only `list_verifiers` binds. See [Goal mode](/guides/goa
 | [`update_goal_plan(plan)`](#update_goal_plan) | Carry a running plan across goal iterations. |
 | [`abandon_goal(reason)`](#abandon_goal) | Declare the goal unachievable and stop the loop. |
 
-### Watches — `watches.enabled` **and** at least one plugin verifier
+### Watches — `watches.enabled` **and** at least one registered verifier
 
 An independent axis from goals — a watch is verifier-only and moved by an external process.
-Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) and
+Defaults to **true**, same verifier requirement. The built-in `fleet:member_health` check
+needs no plugin: `check_args={"member": "<id or name>", "state": "down"}` is met when that
+fleet member is in the requested state (`healthy`, `down` or `wedged`, or a list; default
+`down`). It reads the hub supervisor's health records, running the supervisor's own sweep first
+when none ran in the last 15 seconds; a member with no record is not met. See [Watches](/guides/watches) and
 [ADR 0067](/adr/0067-standalone-watch-primitive). Defined in `tools/scheduler_tools.py`
 (`_build_watch_tools`).
 
@@ -205,9 +210,9 @@ In rough order of how often each one bites:
 2. **Its backend isn't there.** No `KnowledgeStore` → no `memory_*`. No scheduler → no
    `schedule_task` *and* no [`wait`](#wait). See the group headings above for the exact flag.
 3. **Goals/watches are on but no verifier is registered.** `goal.enabled: true` alone binds
-   only `list_verifiers`; `set_goal` and `create_watch` need a plugin-contributed verifier and
-   are omitted until one exists. This is the surprising one — the flag is on and the tool
-   still isn't there.
+   only `list_verifiers`; `set_goal` and `create_watch` need a registered verifier and are
+   omitted when there is none. Core registers `fleet:member_health`, so this no longer
+   happens on a stock install.
 4. **It's on the denylist.** `tools.disabled` (off, still toggleable in the console) or
    `tools.hidden` (off *and* not offered in the UI at all). Both sweep the fully assembled
    set. See [`tools`](/reference/configuration#tools).

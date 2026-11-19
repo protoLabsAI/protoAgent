@@ -227,3 +227,22 @@ async def test_update_watch_can_promote_a_tripwire_to_a_monitor(monkeypatch, tmp
     await update.ainvoke({"watch_id": "w", "on_change": True})
     w = ctrl.store.get("w")
     assert (w.trigger, w.repeat) == ("change", True)
+
+
+def test_create_watch_accepts_the_builtin_member_health_check_with_no_plugin(monkeypatch, tmp_path):
+    from graph.goals.verifiers import set_plugin_verifiers
+
+    ctrl = WatchController(LangGraphConfig(), WatchStore(tmp_path))
+    monkeypatch.setattr(STATE, "watch_controller", ctrl, raising=False)
+    set_plugin_verifiers({})  # what plugin wiring binds when no plugin contributes a check
+    create, *_rest = _build_watch_tools()
+    args = {"member": "scout", "state": "down"}
+    out = create.invoke({
+        "condition": "scout goes down or recovers", "check": "fleet:member_health",
+        "check_args": args, "run_prompt": "Scout changed health state: report it.",
+        "on_change": True,
+    })
+    assert "unknown plugin verifier" not in out
+    w = _only(ctrl)
+    assert w.verifier == {"type": "plugin", "check": "fleet:member_health", "args": args}
+    assert (w.trigger, w.repeat) == ("change", True)

@@ -49,6 +49,10 @@ async def test_real_graph_delivers_one_live_state_without_checkpointing(
         ),
     )
     monkeypatch.setattr("graph.work_providers.collect_work_sections", lambda cap: [("PLUGIN WORK", ["plugin-fixture"])])
+    # No goal/watch tools bound, so the operating model's static `<working_state>` pointer
+    # stays out of the system prompt this test scans. Emptied explicitly: a stock registry
+    # now holds the built-in fleet:member_health check (#5534).
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {})
     # No prior-session recall may be activated by the newly installed middleware.
     digest_reads = []
 

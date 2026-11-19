@@ -12,8 +12,8 @@ from tools.lg_tools import _build_list_verifiers_tool, _build_set_goal_tool, get
 
 
 def _register_verifiers(monkeypatch, *names):
-    """Register plugin verifiers so set_goal_safe's name check accepts them (the
-    registry is empty in unit tests). Only the keys matter for validation."""
+    """Register plugin verifiers so set_goal_safe's name check accepts them (a
+    stock registry holds only the built-in fleet:member_health check). Only the keys matter for validation."""
     monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {n: object() for n in names})
 
 

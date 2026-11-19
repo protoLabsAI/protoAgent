@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 
 import ast
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -360,12 +361,86 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
         return VerifyResult(False, f"evaluator error: {type(exc).__name__}", "")
 
 
+# ── Built-in checks (ADR 0135 D8, #5534) ──────────────────────────────────────
+# Checks core ships in the SAME registry plugins contribute to (below), so a watch can use
+# one with no plugin installed. ``set_plugin_verifiers`` folds them into every map it binds.
+
+FLEET_MEMBER_HEALTH_CHECK = "fleet:member_health"
+_MEMBER_HEALTH_STATES = ("healthy", "down", "wedged")
+# The check keeps the supervisor's records current itself: a read older than this runs one
+# supervisor sweep first (its existing probes, off the event loop). Several watches ticking
+# together share one sweep, and a sweep loop running more often than this makes it a plain read.
+_MEMBER_HEALTH_MAX_AGE = 15.0
+
+
+async def _verify_fleet_member_health(spec: dict, ctx: VerifyContext) -> VerifyResult:
+    """Met when a fleet member is in the requested health state.
+
+    ``args``: ``member`` (its id or name) and ``state`` (``healthy`` | ``down`` | ``wedged``,
+    or a list of them; default ``down``). Reads the supervisor's health records through
+    ``supervisor.fresh_member_health``, which runs the supervisor's own sweep first when no
+    sweep ran in the last ``_MEMBER_HEALTH_MAX_AGE`` seconds, so the records are written
+    whether or not anything else is sweeping. No second prober: the probes, the states, the
+    failure threshold and the records are the supervisor's. A member with no record (stopped on purpose, not in
+    this fleet, or already down when first checked) is in no state, so the check is not met.
+
+    ``reason`` and ``evidence`` change only when the member's state does, so an
+    ``on_change`` watch fires once per transition (down, wedged, recovered)."""
+    args = (spec or {}).get("args")
+    args = args if isinstance(args, dict) else {}
+    member = str(args.get("member") or "").strip()
+    if not member:
+        return VerifyResult(False, "fleet:member_health needs a 'member' (its id or name)", "")
+    raw = args.get("state") or "down"
+    wanted = [str(s).strip().lower() for s in (raw if isinstance(raw, (list, tuple, set)) else [raw])]
+    wanted = sorted({s for s in wanted if s})
+    bad = [s for s in wanted if s not in _MEMBER_HEALTH_STATES]
+    if bad or not wanted:
+        return VerifyResult(
+            False,
+            f"fleet:member_health: unknown state {', '.join(bad) or str(raw)} "
+            f"(expected one of: {', '.join(_MEMBER_HEALTH_STATES)})",
+            "",
+        )
+    from graph.fleet import supervisor
+
+    records = await asyncio.to_thread(supervisor.fresh_member_health, _MEMBER_HEALTH_MAX_AGE)
+    folded = member.casefold()
+    rec = (
+        next((r for r in records if r.get("id") == member), None)
+        or next((r for r in records if r.get("name") == member), None)
+        or next((r for r in records if str(r.get("name") or "").casefold() == folded), None)
+    )
+    if rec is None:
+        return VerifyResult(
+            False,
+            f"no health record for member {member!r} (stopped on purpose, not in this fleet, or already down when first checked)",
+            "",
+        )
+    state = str(rec.get("state") or "")
+    label = str(rec.get("name") or rec.get("id") or member)
+    evidence = f"member={rec.get('id')} name={label} kind={rec.get('kind')} state={state} since={rec.get('changed_at')}"
+    return VerifyResult(state in wanted, f"member {label} is {state}", evidence)
+
+
+_BUILTIN_VERIFIERS: dict = {FLEET_MEMBER_HEALTH_CHECK: _verify_fleet_member_health}
+_BUILTIN_VERIFIER_META: dict[str, dict] = {
+    FLEET_MEMBER_HEALTH_CHECK: {
+        "plugin_id": "fleet",
+        "description": (
+            "Built in: a fleet member's health. args: member (id or name), "
+            "state (healthy | down | wedged, or a list; default down)"
+        ),
+    },
+}
+
 # Plugin-contributed verifiers (ADR 0028), keyed by their namespaced name
 # (``<plugin-id>:<name>``). Populated by the loader at graph build via
 # ``set_plugin_verifiers`` (re-set on config reload). In-process, reviewed code
 # with declarative args — no shell, no eval (that's why a ``plugin`` goal is the
 # only verifier type safe to set programmatically; see ADR 0028 D3).
-_PLUGIN_VERIFIERS: dict = {}
+# Starts with (and always holds) the built-in checks above.
+_PLUGIN_VERIFIERS: dict = dict(_BUILTIN_VERIFIERS)
 # Plugin-verifier names already warned as unknown — so an armed goal/watch on a missing
 # verifier logs ONCE, not once per tick (a stalled watch re-checks every cadence, 60+×/hour).
 # Cleared whenever the mapping is re-set, so a still-missing name warns again after a reload
@@ -374,7 +449,7 @@ _WARNED_UNKNOWN_VERIFIERS: set[str] = set()
 
 # name -> {"plugin_id", "description"} for the registered plugin verifiers, set alongside
 # the callables so a chooser can render more than a bare id.
-_PLUGIN_VERIFIER_META: dict[str, dict] = {}
+_PLUGIN_VERIFIER_META: dict[str, dict] = dict(_BUILTIN_VERIFIER_META)
 
 
 def set_plugin_verifiers(mapping: dict | None, meta: dict | None = None) -> None:
@@ -389,8 +464,10 @@ def set_plugin_verifiers(mapping: dict | None, meta: dict | None = None) -> None
     never an empty one. (``_PLUGIN_VERIFIERS`` is referenced only within this module,
     so reassigning the global is safe.)"""
     global _PLUGIN_VERIFIERS, _PLUGIN_VERIFIER_META
-    _PLUGIN_VERIFIERS = dict(mapping or {})
-    _PLUGIN_VERIFIER_META = dict(meta or {})
+    # The built-in checks ride every (re)bind of the SAME map, so a plugin reload keeps
+    # them and there is no second lookup path. Built-ins go last: a plugin cannot shadow one.
+    _PLUGIN_VERIFIERS = {**(mapping or {}), **_BUILTIN_VERIFIERS}
+    _PLUGIN_VERIFIER_META = {**(meta or {}), **_BUILTIN_VERIFIER_META}
     # A fresh mapping may now resolve names that were unknown before (e.g. a plugin update
     # that registers new verifiers, #1752) — reset the dedup set so a still-missing name
     # warns again and a now-present one stops.
@@ -431,8 +508,9 @@ def verifier_catalog() -> dict:
     contributed checks — the same source-labelling other multi-registry surfaces use, so a
     chooser can group and attribute them instead of showing one flat anonymous list.
 
-    ``plugin_checks`` is empty when no installed plugin registers one; a chooser should hide
-    the ``plugin`` type in that case rather than offer a picker with nothing in it."""
+    ``plugin_checks`` also lists the built-in checks (``fleet:member_health``), which need no
+    plugin, so it is not empty on a stock install. A chooser should still hide the ``plugin``
+    type when the list is empty rather than offer a picker with nothing in it."""
     return {
         "types": [
             {

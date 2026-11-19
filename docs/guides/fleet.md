@@ -414,14 +414,18 @@ the tool is absent from every surface — the local model's toolset, the resolve
 *(ADR 0135 D8 · #5534.)* The same `tools.fleet_diagnostics.enabled` gate also binds two
 argument-free, read-only tools on the **hub** (they are not bound inside a workspace member):
 
-- **`fleet_status`** — one row per roster member: `running`, `healthy` / `health` and
+- **`fleet_status`** — one row per roster member: `running`, `healthy` / `health`, `failed_checks` and
   `health_changed_at` (the supervisor's own health record, refreshed on each status read;
   `unknown` when it has none or the refresh fails),
   `version`, `model`, and counts of pending decisions and waiting tasks.
 - **`fleet_pending`** — each member's pending decisions and its tasks in the `waiting` state.
 
-Status uses the supervisor's existing health sweep off the event loop, with one failed probe
-reporting unhealthy for that observation. The timestamp stays unchanged until the health state
+Status uses the supervisor's existing health sweep off the event loop. One failed probe
+reports `health: "failing"` (`healthy: false`, with the run length in `failed_checks`) for that
+observation; the member becomes `wedged` or `down` only at the supervisor's failure threshold
+(three checks in a row, or `fleet.health.failure_threshold` once the health loop has run),
+the same rule the health loop and the `fleet:member_health` watch check use, because all three
+share one set of health records. The timestamp stays unchanged until the health state
 changes. This read does not restart members or send alerts. The host itself and intentionally
 stopped members have no supervisor health record.
 
