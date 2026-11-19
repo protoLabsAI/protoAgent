@@ -1,0 +1,1 @@
+- **Push transport design for operator devices.** Extend ADR 0135 with proposed phone, browser and desktop delivery, paired-device subscription ownership, per-instance keys, privacy and failure handling behind the W1 notice seam. Build cards remain proposals for Josh's review. Refs #5539.
