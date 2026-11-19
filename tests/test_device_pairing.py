@@ -751,3 +751,160 @@ def test_the_claim_name_is_cleaned_never_refused(claim_http, devices, name, expe
     assert resp.status_code == 200
     assert resp.json()["device"]["name"] == expected
     assert [d["name"] for d in devices.list_devices()] == [expected]
+
+
+# ── The push binding follows the device's lifecycle (ADR 0135 W2, ADR 0121) ──────────────
+# Rotation, revoke, idle expiry and VAPID key migration. The handoff half lives in
+# tests/test_device_handoff.py. Nothing here sends a push or resolves DNS: the binding is
+# stored through `set_push_binding`, whose inputs the route has already validated.
+
+_ENDPOINT = "https://fcm.googleapis.com/fcm/send/lifecycle-1"
+_ENDPOINT_2 = "https://web.push.apple.com/lifecycle-2"
+
+
+@pytest.fixture
+def clock(devices, monkeypatch):
+    """One clock for the registry and the keyring, with the default 30-day idle limit."""
+    import security.push_keys as push_keys
+
+    now = {"t": 1_800_000_000.0}
+    monkeypatch.setattr(devices, "_now", lambda: now["t"])
+    monkeypatch.setattr(push_keys, "_now", lambda: now["t"])
+    monkeypatch.setattr(devices, "idle_ttl_days", lambda: 30)
+    return now
+
+
+def _enrolled(devices, name="iPhone", endpoint=_ENDPOINT, version=1):
+    code, _ = devices.start_pairing()
+    dev, token = devices.claim_pairing(code, name)
+    assert _enroll(devices, dev["id"], token, endpoint, version) is not None
+    return dev, token
+
+
+def _enroll(devices, device_id, token, endpoint=_ENDPOINT, version=1):
+    return devices.set_push_binding(device_id, token, endpoint=endpoint, p256dh="p", auth="a", vapid_version=version)
+
+
+def test_rotating_the_token_keeps_the_endpoint_and_bumps_the_generation(devices, clock):
+    dev, token = _enrolled(devices)
+    assert devices.push_status(dev["id"])["generation"] == 1
+    _view, new = devices.rotate_device(dev["id"], token)
+    binding = devices.get_device(dev["id"]).push
+    assert binding.endpoint == _ENDPOINT and binding.generation == 2  # a send queued under 1 is stale
+    assert devices.push_renewal(dev["id"]) is None
+    # The retry path (the browser never stored `new`) is a rotation too.
+    clock["t"] += devices.ROTATION_SETTLE_SECONDS + 1
+    devices.rotate_device(dev["id"], token)
+    assert devices.push_status(dev["id"])["generation"] == 3
+    # A replacement enrolled afterwards never reuses a generation a rotation issued.
+    assert _enroll(devices, dev["id"], token, _ENDPOINT_2)["generation"] == 4
+    assert new != token
+
+
+def test_rotating_a_device_with_no_binding_issues_no_generation(devices, clock):
+    code, _ = devices.start_pairing()
+    dev, token = devices.claim_pairing(code, "iPhone")
+    devices.rotate_device(dev["id"], token)
+    row = devices.get_device(dev["id"])
+    assert row.push is None and row.push_generation == 0
+
+
+def test_a_binding_write_that_loses_the_race_to_a_revoke_is_refused(devices, clock):
+    dev, token = _enrolled(devices)
+    assert devices.revoke_device(dev["id"]) is True
+    assert _enroll(devices, dev["id"], token, _ENDPOINT_2) is None  # the PUT arrived after the revoke
+    assert devices.clear_push_binding(dev["id"], token) is None
+    assert devices.push_bindings_exist() is False
+    assert _ENDPOINT not in devices._registry_path().read_text("utf-8")
+
+
+def test_a_reuse_revocation_clears_the_binding_and_refuses_a_late_write(devices, clock):
+    dev, old = _enrolled(devices)
+    _view, new = devices.rotate_device(dev["id"], old)
+    assert devices.verify_token(new) is not None
+    clock["t"] += devices.ROTATION_GRACE_SECONDS + 1
+    assert devices.verify_token(old) is None  # reuse detection: the row and its binding go together
+    assert devices.push_bindings_exist() is False
+    assert _enroll(devices, dev["id"], new, _ENDPOINT_2) is None
+
+
+def test_an_idle_expired_device_loses_its_binding_with_its_pairing(devices, clock):
+    dev, token = _enrolled(devices)
+    other, _other_token = _enrolled(devices, "Pixel", _ENDPOINT_2)
+    clock["t"] += 30 * 86400 + 1
+    assert devices.verify_token(token) is None  # the refusal that ends the pairing clears the binding
+    row = devices.get_device(dev["id"])
+    assert row is not None and row.push is None  # still listed ("Expired"), no longer a push target
+    assert devices.push_renewal(dev["id"]) == devices.PUSH_CLEARED_IDLE
+    assert _enroll(devices, dev["id"], token) is None
+    # A device that never comes back is caught by the sweep a sender runs before it fans out.
+    assert devices.get_device(other["id"]).push is not None
+    assert devices.sweep_push_bindings() == [
+        {"device_id": other["id"], "reason": "idle", "vapid_version": 1, "generation": 1}
+    ]
+    assert devices.push_bindings_exist() is False
+    assert devices.sweep_push_bindings() == []
+
+
+def test_a_live_device_keeps_its_binding_through_a_sweep(devices, clock):
+    dev, token = _enrolled(devices)
+    clock["t"] += 29 * 86400
+    assert devices.sweep_push_bindings() == []
+    assert devices.verify_token(token) is not None
+    assert devices.push_status(dev["id"])["generation"] == 1
+
+
+def test_a_binding_past_its_keys_migration_window_is_cleared_and_reported(devices, clock):
+    import security.push_keys as push_keys
+
+    v1 = push_keys.active_public_key().version
+    old, old_token = _enrolled(devices, "iPhone", _ENDPOINT, v1)
+    v2 = push_keys.rotate(bindings_exist=True).version
+    moved, moved_token = _enrolled(devices, "Pixel", _ENDPOINT_2, v2)
+    clock["t"] += push_keys.ROTATION_WINDOW_SECONDS - 60
+    for token in (old_token, moved_token):  # both phones are in use, so neither idles out
+        assert devices.verify_token(token) is not None
+    assert devices.reconcile_push_bindings() == []  # inside the window: version 1 still signs
+    clock["t"] += 61
+    assert devices.reconcile_push_bindings() == [
+        {"device_id": old["id"], "reason": "vapid_key", "vapid_version": v1, "generation": 1}
+    ]
+    assert devices.push_status(old["id"]) is None
+    assert devices.push_renewal(old["id"]) == devices.PUSH_CLEARED_KEY  # "Renew on this device"
+    assert devices.push_status(moved["id"])["vapid_version"] == v2
+    # Renewing under the active key clears the report and never reuses the old generation.
+    assert _enroll(devices, old["id"], old_token, _ENDPOINT, v2)["generation"] == 2
+    assert devices.push_renewal(old["id"]) is None
+
+
+def test_a_binding_on_a_retired_key_version_is_cleared_at_once(devices, clock):
+    import security.push_keys as push_keys
+
+    v1 = push_keys.active_public_key().version
+    dev, _token = _enrolled(devices, version=v1)
+    assert push_keys.retire(v1) is True  # the compromise path: no migration window
+    assert [c["reason"] for c in devices.reconcile_push_bindings()] == ["vapid_key"]
+    reloaded = importlib.reload(devices)
+    assert reloaded.get_device(dev["id"]).push is None
+    assert reloaded.push_renewal(dev["id"]) == "vapid_key"  # the report survives a restart
+
+
+def test_a_lost_or_corrupt_keyring_clears_no_binding(devices, clock):
+    import security.push_keys as push_keys
+
+    dev, _token = _enrolled(devices)  # no keyring on disk at all: lost, not "every key retired"
+    assert push_keys.usable_versions() is None
+    assert devices.reconcile_push_bindings() == []
+    path = push_keys._keyring_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", "utf-8")
+    assert devices.reconcile_push_bindings() == []
+    assert devices.get_device(dev["id"]).push.endpoint == _ENDPOINT
+
+
+def test_turning_push_off_yourself_leaves_nothing_to_renew(devices, clock):
+    dev, token = _enrolled(devices)
+    assert devices.sweep_push_bindings(frozenset()) != []
+    assert devices.push_renewal(dev["id"]) == "vapid_key"
+    assert devices.clear_push_binding(dev["id"], token) is False
+    assert devices.push_renewal(dev["id"]) is None
