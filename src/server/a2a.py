@@ -2043,17 +2043,23 @@ def _post_scheduled_card(payload: dict, fingerprint: dict | None) -> None:
 
 
 async def _deliver_scheduled(payload: dict) -> bool:
-    """Publish a scheduled fire's result card unless the origin session is stale (#2990
-    r3). Returns whether it published. Best-effort — never raises. A published card's
-    fingerprint feeds the repeat guard (bd-x66jt); a skipped one records nothing, so the
-    same result still posts once the chat wakes. Expiry notices also reach idle owner
-    chats: suppressing those would make a standing duty silently lapse."""
+    """Publish a scheduled fire's result card, skipping one-shot jobs whose origin
+    session is stale (#2990 r3). Returns whether it published. Best-effort — never raises.
+    A published card's fingerprint feeds the repeat guard (bd-x66jt); a skipped one records
+    nothing, so the same result still posts once the chat wakes. Recurring results and expiry notices
+    reach idle owner chats: standing work must not depend on the operator replying."""
+    from scheduler.interface import is_cron
+
     origin = payload["origin_session"]
     fingerprint = payload.pop("card_fingerprint", None)
     try:
-        if not await _session_recently_active(origin) and not (fingerprint and fingerprint.get("expiry_notice")):
+        if (
+            not is_cron(str(payload.get("schedule") or ""))
+            and not await _session_recently_active(origin)
+            and not (fingerprint and fingerprint.get("expiry_notice"))
+        ):
             log.info(
-                "[scheduler] session %s idle > 24h — skipping result card for job %s (result stays in Activity)",
+                "[scheduler] session %s idle > 24h — skipping one-shot result card for job %s (result stays in Activity)",
                 origin,
                 payload["job_id"],
             )
