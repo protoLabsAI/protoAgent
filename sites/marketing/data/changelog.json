@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.252.0",
+    "date": "2026-11-19",
+    "changes": [
+      "Dismiss stale fleet items from operator chat (#5606).",
+      "Turn on notifications for a paired phone or browser from Settings → Devices (#5608)."
+    ]
+  },
+  {
     "version": "v0.251.0",
     "date": "2026-11-19",
     "changes": [
