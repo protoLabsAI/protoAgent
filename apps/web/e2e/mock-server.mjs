@@ -246,6 +246,7 @@ const MIME = {
   ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",
@@ -1758,6 +1759,10 @@ async function serveStatic(pathname, res, req = null, search = "") {
     }
     const head = { "content-type": MIME[extname(filePath)] || "application/octet-stream" };
     if (filePath.endsWith("index.html") && wantsCsp(req, search)) head["content-security-policy"] = CONSOLE_CSP;
+    // The push worker and the manifest, with the headers src/operator_api/web.py sends
+    // (`_INSTALL_ASSETS`): revalidated every time, and the worker under its own policy.
+    if (rel === "sw.js" || rel === "manifest.webmanifest") head["cache-control"] = "no-cache";
+    if (rel === "sw.js") head["content-security-policy"] = "default-src 'none'; img-src 'self'";
     res.writeHead(200, head);
     res.end(data);
   } catch {

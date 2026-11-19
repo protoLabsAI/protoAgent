@@ -188,6 +188,28 @@ def log_csp_report(raw: bytes) -> int:
     return logged
 
 
+# ── Installable console (ADR 0135 W2) ───────────────────────────────────────────────────────
+# The web manifest and the push worker, served under the app path so the worker's scope is the
+# console and nothing else. Both are non-secret static files: no route here reads a credential
+# or reaches an authenticated API. ``no-cache`` makes the browser revalidate, so a new build's
+# worker is picked up at once. The worker gets its OWN policy (a worker is governed by the
+# headers on its script, not the page's): it may load its notification icon and nothing more,
+# so it cannot call the hub even if its code were changed to try.
+_INSTALL_ASSETS: dict[str, tuple[str, dict[str, str]]] = {
+    "manifest.webmanifest": ("application/manifest+json", {}),
+    "sw.js": ("text/javascript", {"Content-Security-Policy": "default-src 'none'; img-src 'self'"}),
+}
+
+
+def _install_asset_route(path: Path, media_type: str, extra: dict[str, str]):
+    async def _serve() -> Response:
+        if not path.is_file():  # an older build: a 404, never the SPA page under a script URL
+            return Response(status_code=404)
+        return FileResponse(str(path), media_type=media_type, headers={"Cache-Control": "no-cache", **extra})
+
+    return _serve
+
+
 def mount_react_app(app, dist_dir: str | Path, *, app_path: str = "/app") -> bool:
     """Mount a built Vite app under ``app_path`` when dist assets exist.
 
@@ -234,6 +256,10 @@ def mount_react_app(app, dist_dir: str | Path, *, app_path: str = "/app") -> boo
     @app.get(app_path, include_in_schema=False)
     async def _operator_index() -> FileResponse:
         return FileResponse(str(index_path), headers=page_headers())
+
+    # Registered before the catch-all below, which would guess the media type from the suffix.
+    for name, (media_type, extra) in _INSTALL_ASSETS.items():
+        app.get(f"{app_path}/{name}", include_in_schema=False)(_install_asset_route(dist / name, media_type, extra))
 
     @app.get(f"{app_path}/{{path:path}}", include_in_schema=False)
     async def _operator_fallback(path: str) -> FileResponse:

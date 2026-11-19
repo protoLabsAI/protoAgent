@@ -20,12 +20,19 @@
          it per active agent theme; the favicon stays the accent. -->
     <meta name="theme-color" content="#0a0a0c" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%protolabs-icon-outline.svg" />
-    <!-- Installable PWA: manifest only, deliberately NO service worker — a SW
-         would intercept the /a2a SSE stream and cache stale console assets
-         (the version-coherence class). The server serves /manifest.json with
-         the proper media type; in the Tauri webview this link 404s inertly. -->
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+    <!-- Installable console (ADR 0135 W2): the manifest and the push worker (public/sw.js) are
+         served under the app path, so one scope (/app/) covers both. The worker handles `push`
+         and `notificationclick` only — it has NO `fetch` handler, so it never intercepts the
+         /a2a SSE stream and never caches console assets or API responses (the
+         version-coherence class). Nothing here registers it; that is the app's job. -->
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <!-- iOS Home Screen web app: iOS reads these, not the manifest, for the icon, the title
+         under it and standalone launch (the only place iOS delivers Web Push). -->
+    <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="protoAgent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <!-- Geist web fonts, loaded WITHOUT blocking first paint (bd-aawcj). The stylesheet
          used to be a parser-inserted <link rel="stylesheet"> — render-blocking, so a switch
          (a full page load, FleetSwitcher doSwitch → window.location.href) held on a dark
