@@ -54,7 +54,7 @@ async def test_crash_restarts_once_and_notifies_with_inbox_retry(watchdog, healt
     assert len(restarted) == 1
     assert len(logger.get_recent()) == 1
     assert len(pids) == 2
-    notices = [n for n in health_loop.inbox.list() if ":restarted:" in n["dedup_key"]]
+    notices = [n for n in health_loop.inbox.list(priority_floor="later") if ":restarted:" in n["dedup_key"]]
     assert len(notices) == 1 and not notices[0]["needs_human"]
 
 

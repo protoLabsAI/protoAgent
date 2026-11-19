@@ -15,6 +15,8 @@ from graph.workspaces import manager
 from inbox.store import InboxStore
 from runtime.state import STATE
 from server import maintenance_loops as loops
+from server import stores
+from tests.test_fleet_crash_watchdog import recovery as recovery
 from tests.test_fleet_exit_capture import _kill, member as member
 
 
@@ -61,13 +63,27 @@ async def health_loop(tmp_path, monkeypatch):
             await task
 
 
+@pytest.fixture
+def inbox_turns(monkeypatch):
+    fires = []
+
+    async def deliver(item):
+        fires.append(item)
+        return True
+
+    monkeypatch.setattr(STATE, "inbox_now_delivery", deliver)
+    monkeypatch.setattr(STATE, "storm_guard", None)
+    monkeypatch.setattr(stores, "_INBOX_NOW_RETRY_ACTIVE", False)
+    return fires
+
+
 def events(loop):
     return [entry for entry in loop.bus._ring if entry["event"].startswith("fleet.health.")]
 
 
 @pytest.mark.platform_sensitive
 @pytest.mark.parametrize("polled_first", [False, True])
-async def test_real_exit_pages_once_even_before_first_sweep(member, health_loop, polled_first):
+async def test_real_exit_pages_once_even_before_first_sweep(member, health_loop, polled_first, inbox_turns):
     ws, _, pids = member
     await asyncio.to_thread(_kill, pids[0])
     if polled_first:
@@ -77,6 +93,7 @@ async def test_real_exit_pages_once_even_before_first_sweep(member, health_loop,
     pages = health_loop.inbox.list()
     assert len(pages) == len(events(health_loop)) == 1
     assert pages[0]["needs_human"]
+    assert pages[0]["priority"] == "now"
     assert ws["id"] in pages[0]["dedup_key"]
     event = events(health_loop)[0]
     assert event["event"] == "fleet.health.down"
@@ -88,6 +105,9 @@ async def test_real_exit_pages_once_even_before_first_sweep(member, health_loop,
     assert notice.text.startswith("Fleet member m") and "has stopped" in notice.text and "Open the console" in notice.text
     assert notice.link == "https://hub.example/app/"
     assert not next(row for row in supervisor.status() if row["id"] == ws["id"])["running"]
+    for _ in range(2):
+        await stores.retry_pending_now_inbox_items_when_free()
+    assert [p["id"] for p in inbox_turns] == [pages[0]["id"]]
 
 
 @pytest.mark.platform_sensitive
@@ -114,7 +134,10 @@ async def test_wedge_recovery_and_second_episode_each_page_once(member, health_l
         "fleet.health.wedged", "fleet.health.recovered",
         "fleet.health.wedged", "fleet.health.recovered",
     ]
-    assert len(health_loop.inbox.list()) == 4  # no dedup suppression of a new episode
+    assert sorted((p["priority"], bool(p["needs_human"])) for p in health_loop.inbox.list(priority_floor="later")) == [
+        ("later", False), ("later", False), ("now", True), ("now", True),
+    ]
+    assert len(health_loop.inbox.list(priority_floor="later")) == 4  # no dedup suppression of a new episode
     assert [(n.importance, "not responding" in n.text, "responding again" in n.text) for n in health_loop.notices] == [
         ("high", True, False), ("normal", False, True),
     ] * 2  # one notice per transition, recovery included
@@ -218,7 +241,7 @@ async def test_collection_timeout_retains_committed_transition(member, health_lo
     monkeypatch.setattr(supervisor, "collect_exits", collect)
     await health_loop.tick()
     await health_loop.tick()
-    assert len(health_loop.inbox.list()) == len(events(health_loop)) == before + 1
+    assert len(health_loop.inbox.list(priority_floor="later")) == len(events(health_loop)) == before + 1
     assert events(health_loop)[-1]["event"] == f"fleet.health.{state}"
 
 
@@ -243,4 +266,56 @@ async def test_notice_failure_and_event_retry_never_repeat_the_notice(health_loo
     batches.append([dict(change, state="recovered", changed_at="t2")])
     monkeypatch.setattr(chat_surface, "notify_chat_surfaces", lambda *a, **kw: 1 / 0)
     await health_loop.tick()
-    assert len(health_loop.inbox.list()) == len(events(health_loop)) == 2  # the page survives a notice failure
+    assert len(health_loop.inbox.list(priority_floor="later")) == len(events(health_loop)) == 2  # the page survives a notice failure
+
+
+@pytest.mark.platform_sensitive
+async def test_restarts_and_recovery_stay_readable_without_turns(recovery, health_loop, monkeypatch, inbox_turns):
+    # #5585: exercise the actual idle delivery path, substituting only its turn hook.
+    ws, _, pids, _ = recovery
+    health_loop.cfg.fleet_health_restart_dead = True
+    health_loop.cfg.fleet_health_max_attempts = 1
+    health_loop.cfg.fleet_health_backoff_seconds = 0
+    fires = inbox_turns
+    original_start = supervisor.start
+
+    def start(*args, **kwargs):
+        result = original_start(*args, **kwargs)
+        pids.append(result["pid"])
+        return result
+
+    monkeypatch.setattr(supervisor, "start", start)
+    await health_loop.tick()
+    await asyncio.to_thread(_kill, pids[0])
+    for _ in range(3):
+        await health_loop.tick()
+        await stores.retry_pending_now_inbox_items_when_free()
+    assert fires == []
+    assert health_loop.inbox.list() == []
+    records = health_loop.inbox.list(priority_floor="later")
+    assert len(records) == 2
+    assert all(p["priority"] == "later" and not p["needs_human"] for p in records)
+    assert all(p["delivered_at"] is None and p["recovery_claimed_at"] is None for p in records)
+    assert {p["text"] for p in records} == {
+        f"Fleet member m ({ws['id']}) is restarted. Process exited unexpectedly.",
+        f"Fleet member m ({ws['id']}) is recovered.",
+    }
+    assert [e["event"] for e in events(health_loop)] == ["fleet.health.restarted", "fleet.health.recovered"]
+    assert [(n.kind, n.importance, n.text, n.link) for n in health_loop.notices] == [
+        ("notify", "normal", "Fleet member m stopped unexpectedly and was restarted automatically. Nothing to do.", "https://hub.example/app/"),
+        ("notify", "normal", "Fleet member m is responding again. Nothing to do.", "https://hub.example/app/"),
+    ]
+
+    # Exhaust the single restart allowance: down and gave_up still each wake once.
+    await asyncio.to_thread(_kill, pids[-1])
+    for _ in range(3):
+        await health_loop.tick()
+        await stores.retry_pending_now_inbox_items_when_free()
+    assert len(fires) == 2
+    assert all(p["priority"] == "now" and p["needs_human"] for p in fires)
+    assert sum(":down:" in p["dedup_key"] for p in fires) == 1
+    assert sum(":gave_up:" in p["dedup_key"] for p in fires) == 1
+    assert [n.importance for n in health_loop.notices[2:]] == ["high", "high"]
+    assert "has stopped" in health_loop.notices[2].text
+    assert "given up" in health_loop.notices[3].text
+    assert health_loop.inbox.list(priority_floor="later") == records

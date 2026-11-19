@@ -568,7 +568,7 @@ async def _fleet_health_loop() -> None:
                             STATE.inbox_store.add,
                             f"Fleet member {notice['name']} ({notice['id']}) {description}."
                             + (" Process exited unexpectedly." if notice.get("reason") else ""),
-                            priority="next" if state in ("recovered", "restarted") else "now",
+                            priority="later" if state in ("recovered", "restarted") else "now",
                             source="fleet.health",
                             dedup_key=f"fleet.health:{notice['id']}:{state}:{notice['changed_at']}",
                             needs_human=state not in ("recovered", "restarted"),
