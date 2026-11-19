@@ -1225,6 +1225,14 @@ def get_all_tools(
         # read-only member logs and exact task-by-id inspection through the existing
         # authenticated fleet proxy; no operator/runtime mutation path is bound here.
         tools.extend(_build_fleet_diagnostics_tool())
+        # Fleet read tools (ADR 0135 D8, #5534): the same read-only diagnostics gate, and the
+        # hub only — a workspace member has no fleet of its own to report on.
+        from graph.workspaces.manager import is_workspace_member
+
+        if not is_workspace_member():
+            from tools.fleet_supervision import build_fleet_supervision_tools
+
+            tools.extend(build_fleet_supervision_tools())
     if getattr(graph_config, "tools_fleet_demo_enabled", False):
         # Demo-agent tools (#4609), default off (the setting lands in part 3 — read absent-safe).
         # create / configure / chat / delete / list, every op routed through the demo-stamp guard

@@ -1,6 +1,7 @@
 """Restart policy through the real supervisor spawn/exit path."""
 import sys
 import threading
+import time
 
 import pytest
 
@@ -206,6 +207,10 @@ def test_stop_intent_write_failure_never_keeps_a_member_alive(recovery, monkeypa
         assert supervisor.stop(ws["id"])["stopped"]
     else:
         assert supervisor.shutdown_all() == [ws["id"]]
+    # shutdown_all's hard kill is fire-and-forget (taskkill on Windows): wait for it to land.
+    deadline = time.monotonic() + 10
+    while supervisor._alive(pids[-1]) and time.monotonic() < deadline:
+        time.sleep(0.05)
     assert not supervisor._alive(pids[-1])
     assert supervisor.stopped_on_purpose(ws["id"])  # held in memory for this hub's lifetime
     record = {"id": ws["id"], "pid": pids[-1], "at": "2099-01-01", "started_at": ""}
