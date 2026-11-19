@@ -1,4 +1,4 @@
-"""The one bounded, authenticated read of a fleet member's API (ADR 0135 D8).
+"""Bounded, authenticated access to a fleet member's API (ADR 0135 D8).
 
 A hub-side caller that needs a member's JSON — the operator rollup routes
 (``/api/telemetry/fleet``, ``/api/usage/fleet``) and the hub's fleet tools —
@@ -10,6 +10,8 @@ bounds its wait and contains its failures the same way. It lives beside
 
 Callers reach it as ``member_read._fetch_member_json`` (module attribute, looked
 up at call time): there is exactly one definition, and one place to patch.
+``_post_member_json`` shares its target, credential and timeout path for writes
+through existing member operator routes.
 """
 
 from __future__ import annotations
@@ -25,6 +27,29 @@ async def _fetch_member_json(slug: str, path: str) -> dict | None:
     non-200, non-JSON — returns None: the caller REPORTS the member unreachable,
     it never retries into it or restarts it.
     """
+    try:
+        resp = await _member_request(slug, path, "get")
+        if resp is None or resp.status_code != 200:
+            return None
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001 — every failure mode is "unreachable", never a 500
+        return None
+
+
+async def _post_member_json(slug: str, path: str, payload: dict) -> dict:
+    """Contained POST: success and HTTP status, or unreachable; never expose member text."""
+    try:
+        resp = await _member_request(slug, path, "post", payload)
+        if resp is not None:
+            return {"ok": 200 <= resp.status_code < 300, "status_code": resp.status_code}
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": False, "error": "unreachable"}
+
+
+async def _member_request(slug: str, path: str, method: str, payload: dict | None = None):
+    """Shared target, credentials and timeout for contained member reads and writes."""
     # Every step is inside the boundary, resolution and token minting included
     # (#3018). Both used to sit ABOVE the try, so a raise there escaped as a 500
     # for the WHOLE rollup — the exact opposite of the contract this docstring
@@ -55,16 +80,14 @@ async def _fetch_member_json(slug: str, path: str) -> dict | None:
             from graph.fleet.service_token import resolve_service_token
 
             headers["authorization"] = f"Bearer {resolve_service_token()}"
-        resp = await proxy._get_client().get(
+        request = getattr(proxy._get_client(), method)
+        return await request(
             f"{base}/{path}",
             headers=headers,
-            # The shared proxy client reads forever (SSE-safe); a rollup read
+            **({"json": payload} if method == "post" else {}),
+            # The shared proxy client reads forever (SSE-safe); a member request
             # must not — a stalled member is just "unreachable" after the bound.
             timeout=httpx.Timeout(10.0, connect=5.0),
         )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        return data if isinstance(data, dict) else None
-    except Exception:  # noqa: BLE001 — every failure mode is "unreachable", never a 500
+    except Exception:  # noqa: BLE001
         return None

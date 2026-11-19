@@ -78,10 +78,10 @@ def _names(config=None):
 
 
 def test_tools_are_absent_by_default_and_bound_by_the_existing_flag():
-    assert not {"fleet_status", "fleet_pending"} & _names()
-    assert not {"fleet_status", "fleet_pending"} & _names(LangGraphConfig())
+    assert not {"fleet_status", "fleet_pending", "fleet_dismiss"} & _names()
+    assert not {"fleet_status", "fleet_pending", "fleet_dismiss"} & _names(LangGraphConfig())
     on = _names(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
-    assert {"fleet_status", "fleet_pending", "fleet_diagnostics"} <= on
+    assert {"fleet_status", "fleet_pending", "fleet_dismiss", "fleet_diagnostics"} <= on
 
 
 def test_tools_are_absent_inside_a_workspace_member(monkeypatch):
@@ -89,13 +89,14 @@ def test_tools_are_absent_inside_a_workspace_member(monkeypatch):
 
     monkeypatch.setattr(manager, "is_workspace_member", lambda: True)
     on = _names(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
-    assert not {"fleet_status", "fleet_pending"} & on
+    assert not {"fleet_status", "fleet_pending", "fleet_dismiss"} & on
     assert "fleet_diagnostics" in on  # the existing tool's binding is unchanged
 
 
 def test_tools_take_no_arguments():
     for t in fs.build_fleet_supervision_tools():
-        assert t.args == {}, t.name
+        if t.name != "fleet_dismiss":
+            assert t.args == {}, t.name
 
 
 def test_no_config_key_was_added():
@@ -117,13 +118,13 @@ class _Request:
 def test_federation_and_public_turns_lose_both_tools(monkeypatch, restricted, expected):
     from graph.middleware import knowledge
 
-    assert {"fleet_status", "fleet_pending"} <= knowledge._FEDERATION_DENIED_TOOLS
+    assert {"fleet_status", "fleet_pending", "fleet_dismiss"} <= knowledge._FEDERATION_DENIED_TOOLS
     monkeypatch.setattr(knowledge, "_restrict_prior_session_memory", lambda: restricted)
     bound = lg_tools.get_all_tools(graph_config=LangGraphConfig(tools_fleet_diagnostics_enabled=True))
     out = knowledge.KnowledgeMiddleware._scrub_federation_tools(_Request(bound))
     left = {t.name for t in out.tools}
     fleet = {n for n in left if n.startswith("fleet_")}
-    assert fleet == (expected or {"fleet_status", "fleet_pending", "fleet_diagnostics"})
+    assert fleet == (expected or {"fleet_status", "fleet_pending", "fleet_dismiss", "fleet_diagnostics"})
 
 
 # ── fleet_status ──────────────────────────────────────────────────────────────
@@ -339,3 +340,237 @@ async def test_a_raising_member_read_or_health_read_is_contained(monkeypatch, he
 
     assert pending["members"][0]["status"] == "unreachable"
     assert status["members"][0]["reachable"] is False and status["members"][0]["health"] == "unknown"
+
+
+@pytest.fixture
+def dismiss_env(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from graph.fleet import proxy, service_token, supervisor
+    from observability.audit import AuditLogger
+
+    roster = [dict(_ALPHA), dict(_TWIN), dict(_STOPPED), dict(_REMOTE)]
+    monkeypatch.setattr(supervisor, "status", lambda: roster)
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: (f"http://{slug}", {}))
+    monkeypatch.setattr(proxy, "_remote_slugs", {"rem1"})
+    monkeypatch.setattr(service_token, "resolve_service_token", lambda: "fleet-test-token")
+    audit = AuditLogger(tmp_path / "audit.jsonl")
+    monkeypatch.setattr("observability.audit.audit_logger", audit)
+    tool = {t.name: t for t in fs.build_fleet_supervision_tools()}["fleet_dismiss"]
+    return SimpleNamespace(tool=tool, audit=audit, roster=roster)
+
+
+async def _dismiss(env, **overrides):
+    return await env.tool.ainvoke({
+        "member": _ALPHA["id"], "kind": "decision", "item_id": "stale",
+        "reason": "No longer needed", "state": {"operator_chat_turn": True, "session_id": "chat"},
+        **overrides,
+    })
+
+
+async def test_dismiss_uses_member_operator_routes_and_removes_pending_items(dismiss_env, monkeypatch, tmp_path):
+    import httpx
+    from fastapi import FastAPI
+    from graph.decisions import DecisionStore
+    from graph.fleet import proxy
+    from operator_api.decision_routes import register_decision_routes
+    from operator_api.routes import register_operator_routes
+    from runtime.state import STATE
+    from tasks.store import TaskStore
+
+    decisions = DecisionStore(":memory:")
+    decision = decisions.create("job:scheduled", "Still needed?", ["yes", "no"])
+    tasks = TaskStore(db_path=str(tmp_path / "tasks.db"))
+    task = tasks.create("Stale ask")
+    tasks.update(task["id"], status="waiting")
+    monkeypatch.setattr(STATE, "decision_store", decisions)
+
+    async def not_parked(*args):
+        return False
+
+    monkeypatch.setattr("graph.decision_reconcile.interrupt_parked", not_parked)
+    app = FastAPI()
+    register_decision_routes(app)
+    notices = []
+
+    async def inbox_add(payload):
+        assert tasks.get(task["id"])["status"] == "closed"
+        notices.append(payload)
+
+    register_operator_routes(app, runtime_status=lambda: {}, subagent_list=lambda: [],
+                             subagent_run=lambda req: "", subagent_batch=lambda req: "",
+                             tasks_store=tasks, inbox_add=inbox_add)
+    sent = []
+
+    async def capture(request):
+        sent.append(request)
+        assert request.headers["authorization"] == "Bearer fleet-test-token"
+        assert request.extensions["timeout"]["read"] == 10
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), event_hooks={"request": [capture]}) as client:
+        monkeypatch.setattr(proxy, "_get_client", lambda: client)
+        before = _by_id(await fs.fleet_pending())[_ALPHA["id"]]
+        assert before["pending_decisions"] == before["waiting_tasks"] == 1
+        assert (await _dismiss(dismiss_env, item_id=decision.id))["ok"] is True
+        assert (await _dismiss(dismiss_env, kind="task", item_id=task["id"]))["ok"] is True
+        after = _by_id(await fs.fleet_pending())[_ALPHA["id"]]
+        assert after["pending_decisions"] == after["waiting_tasks"] == 0
+    assert len(notices) == 1 and "Outcome: dismissed" in notices[0]["text"]
+    assert decisions.get(decision.id).state == "withdrawn"
+    closed = tasks.get(task["id"])
+    assert closed["status"] == "closed" and closed["close_reason"] == "dismissed: No longer needed"
+    assert [r.url.path for r in sent if r.method == "POST"] == [
+        f"/api/decisions/{decision.id}/cancel", f"/api/tasks/issues/{task['id']}/close",
+    ]
+    entries = dismiss_env.audit.get_recent()
+    assert len(entries) == 2
+    assert all(e["success"] and e["args"]["reason"] == "No longer needed" for e in entries)
+
+
+@pytest.mark.parametrize("overrides,error", [
+    ({"state": {}}, "operator_turn_required"),
+    ({"state": {"operator_chat_turn": False}}, "operator_turn_required"),
+    ({"state": {"operator_chat_turn": True, "subagent_fence": True}}, "operator_turn_required"),
+    ({"reason": " \n"}, "reason_required"),
+    ({"member": _STOPPED["id"]}, "unreachable"),
+    ({"member": "Coder"}, "unknown_member"),
+    ({"kind": "answer"}, "invalid_kind"),
+    ({"item_id": ".."}, "invalid_item_id"),
+])
+async def test_dismiss_refusals_are_audited_without_requests(dismiss_env, monkeypatch, overrides, error):
+    from graph.fleet import proxy
+    requests = []
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: requests.append(slug))
+    result = await _dismiss(dismiss_env, **overrides)
+    assert result == {"ok": False, "error": error}
+    assert requests == []
+    entries = dismiss_env.audit.get_recent()
+    assert len(entries) == 1
+    assert entries[0]["args"] == {"member": overrides.get("member", _ALPHA["id"]),
+                                  "kind": overrides.get("kind", "decision"),
+                                  "id": overrides.get("item_id", "stale"),
+                                  "reason": overrides.get("reason", "No longer needed")}
+    assert error in entries[0]["result_summary"] and not entries[0]["success"]
+
+
+@pytest.mark.parametrize("failure,error", [(404, "not_found"), (409, "member_error"),
+                                            ("timeout", "unreachable"), ("resolution", "unreachable")])
+async def test_dismiss_member_failures_are_contained(dismiss_env, monkeypatch, failure, error):
+    import httpx
+    from graph.fleet import proxy
+
+    def handle(request):
+        if request.url.host == _ALPHA["id"]:
+            if failure == "timeout":
+                raise httpx.ReadTimeout("private detail")
+            return httpx.Response(failure, text="private detail")
+        return httpx.Response(200)
+
+    if failure == "resolution":
+        def target(slug):
+            if slug == _ALPHA["id"]:
+                raise KeyError("port")
+            return f"http://{slug}", {}
+        monkeypatch.setattr(proxy, "_target_for_slug", target)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(proxy, "_get_client", lambda: client)
+        result = await _dismiss(dismiss_env)
+        assert result["error"] == error and result["ok"] is False
+        assert "private detail" not in str(result)
+        assert (await _dismiss(dismiss_env, member=_TWIN["id"]))["ok"] is True
+    entries = dismiss_env.audit.get_recent()
+    assert len(entries) == 2
+    assert sum(e["success"] for e in entries) == 1
+
+
+@pytest.mark.parametrize("bearer", ["stored-remote-token", ""])
+async def test_dismiss_remote_uses_only_stored_credentials(dismiss_env, monkeypatch, bearer):
+    import httpx
+    from graph.fleet import proxy
+    headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://remote", headers))
+    sent = []
+
+    def handle(request):
+        sent.append(request)
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(proxy, "_get_client", lambda: client)
+        assert (await _dismiss(dismiss_env, member="rem1"))["ok"] is True
+    assert len(sent) == 1
+    assert sent[0].headers.get("authorization", "") == (f"Bearer {bearer}" if bearer else "")
+
+
+@pytest.mark.parametrize("status", ["open", "in_progress", "blocked", "deferred", "closed", "missing", "resumed"])
+async def test_dismiss_preserves_non_waiting_tasks(dismiss_env, monkeypatch, tmp_path, status):
+    import httpx
+    from fastapi import FastAPI
+    from graph.fleet import proxy
+    from operator_api.routes import register_operator_routes
+    from tasks.store import TaskStore
+
+    tasks = TaskStore(db_path=str(tmp_path / "tasks.db"))
+    task = tasks.create("Keep this work")
+    task = tasks.update(task["id"], status="waiting" if status == "resumed" else (
+        "open" if status == "missing" else status
+    ))
+    if status == "missing":
+        tasks.delete(task["id"])
+    preserved = tasks.get(task["id"])
+
+    notices = []
+
+    async def inbox_add(payload):
+        notices.append(payload)
+
+    original_close = tasks.close
+
+    def resume_before_close(*args, **kwargs):
+        # Resume after the route's read but before its atomic close (#5602).
+        nonlocal preserved
+        preserved = tasks.update(task["id"], status="in_progress")
+        return original_close(*args, **kwargs)
+
+    if status == "resumed":
+        monkeypatch.setattr(tasks, "close", resume_before_close)
+
+    app = FastAPI()
+    register_operator_routes(app, runtime_status=lambda: {}, subagent_list=lambda: [],
+                             subagent_run=lambda req: "", subagent_batch=lambda req: "",
+                             tasks_store=tasks, inbox_add=inbox_add)
+    sent = []
+
+    async def capture(request):
+        sent.append(request.method)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), event_hooks={"request": [capture]}) as client:
+        monkeypatch.setattr(proxy, "_get_client", lambda: client)
+        result = await _dismiss(dismiss_env, kind="task", item_id=task["id"])
+    expected = "member_error" if status == "resumed" else "not_found" if status == "missing" else "task_not_waiting"
+    assert result["ok"] is False and result["error"] == expected
+    assert sent == (["GET", "POST"] if status == "resumed" else ["GET"])
+    if status == "resumed":
+        assert result["status_code"] == 409
+    assert tasks.get(task["id"]) == preserved
+    assert notices == []
+    entries = dismiss_env.audit.get_recent()
+    assert len(entries) == 1 and not entries[0]["success"]
+    assert expected in entries[0]["result_summary"]
+    tasks._conn.close()
+
+
+@pytest.mark.parametrize("response", [None, {}, {"issues": None}])
+async def test_dismiss_task_requires_a_successful_status_read(dismiss_env, monkeypatch, response):
+    from graph.fleet import member_read
+
+    async def read(slug, path):
+        return response
+
+    async def post(*args):
+        pytest.fail("An unreadable task must not be closed")
+
+    monkeypatch.setattr(member_read, "_fetch_member_json", read)
+    monkeypatch.setattr(member_read, "_post_member_json", post)
+    assert await _dismiss(dismiss_env, kind="task") == {"ok": False, "error": "unreachable"}
+    entries = dismiss_env.audit.get_recent()
+    assert len(entries) == 1 and not entries[0]["success"]

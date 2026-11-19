@@ -1,4 +1,4 @@
-"""Fleet supervision tools for the hub agent: ``fleet_status`` and ``fleet_pending`` (ADR 0135 D8, #5534).
+"""Fleet supervision tools for the hub agent (ADR 0135 D8).
 
 Two read-only answers to "what is the fleet doing", built only from seams that already exist:
 
@@ -20,6 +20,7 @@ Two read-only answers to "what is the fleet doing", built only from seams that a
 Members are reported as a list keyed by their immutable roster ``id``, so two members that share
 a display name stay two rows. The two read tools never mutate members. The independently
 opt-in restart tool uses approval interrupts and the shared fleet lifecycle ops.
+``fleet_dismiss`` uses the member operator routes, only in operator chat turns.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import asyncio
 import logging
 import time
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from langchain_core.tools import tool
 from langgraph.errors import GraphBubbleUp
@@ -190,7 +192,8 @@ def _bounded(rows: list[dict[str, Any]], view, flag: list[bool]) -> list[dict[st
 
 async def fleet_pending() -> dict[str, Any]:
     """Pending decisions and waiting tasks for every roster member. Read-only; a member that
-    cannot be read is a ``status: "unreachable"`` row, never a failed call."""
+    cannot be read is a ``status: "unreachable"`` row, never a failed call.
+    Use ``fleet_dismiss`` when the operator asks to clear a stale item."""
     roster = await asyncio.to_thread(fd._roster)
 
     async def one(entry: dict[str, Any]) -> dict[str, Any]:
@@ -271,10 +274,9 @@ async def fleet_status() -> dict[str, Any]:
 
 
 def build_fleet_supervision_tools() -> list:
-    """Bind ``fleet_status`` and ``fleet_pending`` (``tools.fleet_diagnostics.enabled``, hub only).
+    """Bind fleet reads and dismissals (``tools.fleet_diagnostics.enabled``, hub only).
 
-    Thin adapters over the two reads above. Neither takes an argument, so there is no host, URL
-    or member name for the model to point anywhere: both answer for the configured roster.
+    Reads cover the configured roster; dismissals resolve immutable member ids.
     """
 
     @tool("fleet_status")
@@ -298,10 +300,84 @@ def build_fleet_supervision_tools() -> list:
 
         Read-only: it cannot answer a decision or change a task. A member that cannot be read is
         reported with ``status: "unreachable"`` (or ``"stopped"``) and the others still answer.
+        Use fleet_dismiss with a reason when the operator asks to clear a stale item.
         """
         return await fleet_pending()
 
-    return [fleet_status_tool, fleet_pending_tool]
+    @tool("fleet_dismiss")
+    async def fleet_dismiss_tool(
+        member: str, kind: str, item_id: str, reason: str,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> dict:
+        """Dismiss a stale decision or waiting task when the operator asks in chat.
+
+        Supply the immutable member id from fleet_pending, kind (decision or task),
+        item_id and a non-empty reason. Cancels decisions without choosing an answer;
+        closes tasks with outcome dismissed. Unattended and subagent turns are refused.
+        """
+        from graph.fleet import member_read
+        from graph.middleware.knowledge import _restrict_prior_session_memory
+        from graph.middleware.redaction import redact
+        from observability.audit import audit_logger
+        from tools.directive_tools import _operator_chat_turn
+
+        began = time.monotonic()
+        result = {"ok": False, "error": "unreachable"}
+        try:
+            if not _operator_chat_turn(state):
+                result = {"ok": False, "error": "operator_turn_required"}
+            elif _restrict_prior_session_memory():
+                result = {"ok": False, "error": "operator_only"}
+            elif not reason.strip():
+                result = {"ok": False, "error": "reason_required"}
+            elif kind not in ("decision", "task"):
+                result = {"ok": False, "error": "invalid_kind"}
+            elif not item_id.strip() or item_id in (".", ".."):
+                result = {"ok": False, "error": "invalid_item_id"}
+            else:
+                roster = await asyncio.to_thread(fd._roster)
+                matches = [e for e in roster if e.get("id") == member]
+                if len(matches) != 1:
+                    result = {"ok": False, "error": "ambiguous_member" if matches else "unknown_member"}
+                elif _readable(matches[0]):
+                    encoded = quote(item_id, safe="")
+                    path = (f"api/decisions/{encoded}/cancel" if kind == "decision"
+                            else f"api/tasks/issues/{encoded}/close")
+                    payload = {"reason": reason}
+                    if kind == "task":
+                        # Read the member's authoritative tasks, not the bounded pending preview.
+                        body = await member_read._fetch_member_json(fd._slug_for(matches[0]), _TASKS_PATH)
+                        if body is None or not isinstance(body.get("issues"), list):
+                            return result
+                        task = next((t for t in body["issues"] if t.get("id") == item_id), None)
+                        if task is None:
+                            result = {"ok": False, "error": "not_found"}
+                            return result
+                        if task.get("status") != "waiting":
+                            result = {"ok": False, "error": "task_not_waiting"}
+                            return result
+                        payload["outcome"] = "dismissed"
+                        # The member rechecks under its write lock if the task resumes meanwhile.
+                        payload["expected_status"] = "waiting"
+                    result = await member_read._post_member_json(fd._slug_for(matches[0]), path, payload)
+                    if not result["ok"] and "status_code" in result:
+                        result = {**result, "error": "not_found" if result["status_code"] == 404 else "member_error"}
+            return result
+        except Exception:  # noqa: BLE001
+            result = {"ok": False, "error": "unreachable"}
+            return result
+        finally:
+            await asyncio.to_thread(
+                audit_logger.log,
+                session_id=state.get("session_id", "") if isinstance(state, dict) else "",
+                tool="fleet_dismiss",
+                args=redact({"member": member, "kind": kind, "id": item_id, "reason": reason}),
+                result_summary=str(result),
+                duration_ms=int((time.monotonic() - began) * 1000),
+                success=result["ok"],
+            )
+
+    return [fleet_status_tool, fleet_pending_tool, fleet_dismiss_tool]
 
 
 def _restart_target(member: str) -> dict[str, Any]:

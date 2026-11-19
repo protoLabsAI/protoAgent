@@ -77,7 +77,7 @@ TURN_PROJECTION_KEY = "protoagent_turn_projection"
 # the operator's own fleet and what is waiting on the operator, which a federation peer or an
 # unclassified remote caller has no business reading. ``fleet_member_restart`` uses the
 # same fence for member lifecycle mutations.
-_FEDERATION_DENIED_TOOLS = frozenset({"recall_session", "session_search", "fleet_status", "fleet_pending", "fleet_member_restart"})
+_FEDERATION_DENIED_TOOLS = frozenset({"recall_session", "session_search", "fleet_status", "fleet_pending", "fleet_dismiss", "fleet_member_restart"})
 
 
 def _restrict_prior_session_memory() -> bool:
@@ -749,7 +749,7 @@ class KnowledgeMiddleware(AgentMiddleware):
     @staticmethod
     def _scrub_federation_tools(request):
         """Drop ``recall_session``/``session_search`` and the fleet supervision tools
-        (``fleet_status``/``fleet_pending``/``fleet_member_restart``) from a federation peer's model request
+        (``fleet_status``/``fleet_pending``/``fleet_dismiss``/``fleet_member_restart``) from a federation peer's model request
         (ADR 0066 / ADR 0131 / ADR 0135 D8).
 
         The session tools read the operator's OWN prior conversations and the fleet tools
