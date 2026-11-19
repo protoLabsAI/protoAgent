@@ -88,6 +88,9 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "croniter>=2.0",
   "filelock>=3.12",
+  # P-256 for the per-instance VAPID push keyring (security/push_keys.py, ADR 0135 W2).
+  # Already locked transitively (google-auth); declared because core now imports it.
+  "cryptography>=42",
   "zeroconf>=0.131",
   # Document ingestion engine (ADR 0021) — light pure-Python extractors:
   # Security floor: pypdf grew per-filter output limits for decompression bombs across

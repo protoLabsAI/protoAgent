@@ -88,6 +88,8 @@ croniter>=2.0
 # fleet.json process registry, ADR 0042). The full tier got this transitively
 # via Gradio → huggingface_hub; the lean tiers must declare it (the #426 class).
 filelock>=3.12
+# P-256 for the per-instance VAPID push keyring (security/push_keys.py, ADR 0135 W2).
+cryptography>=42
 zeroconf>=0.131  # mDNS fleet discovery (ADR 0042 §I)
 
 # Document ingestion engine (ADR 0021) — light pure-Python extractors. Declared

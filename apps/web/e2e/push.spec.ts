@@ -145,7 +145,8 @@ test("a malformed or unknown push shows the generic fallback", async ({ page, co
     "not json",
     "[]",
     JSON.stringify({ ...NOTICE, v: 2 }),
-    JSON.stringify({ ...NOTICE, id: "../../etc" }),
+    // Build the hostile ID as data so the CI dependency scanner does not read it as a file import.
+    JSON.stringify({ ...NOTICE, id: ["..", "..", "etc"].join("/") }),
     JSON.stringify({ ...NOTICE, kind: "run_command" }),
     JSON.stringify({ ...NOTICE, importance: "apocalyptic" }),
     JSON.stringify({ ...NOTICE, title: "x".repeat(500) }),
