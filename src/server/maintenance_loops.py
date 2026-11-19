@@ -26,6 +26,7 @@ stays agent_init's, and so are the patches that fake it.
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from runtime.state import STATE
@@ -408,7 +409,9 @@ async def _checkpoint_prune_loop() -> None:
         await asyncio.sleep(max(1, interval_h or 1) * 3600)
 
 
-def _fleet_health_notices(failure_threshold: int) -> list[dict]:
+def _fleet_health_notices(
+    failure_threshold: int, changes: list[dict], watching_since: str | None,
+) -> list[dict]:
     """Use the supervisor's single detector, coalescing exits with down transitions.
 
     Runs in a worker: probes, fleet file locks and exit collection are blocking.
@@ -416,11 +419,15 @@ def _fleet_health_notices(failure_threshold: int) -> list[dict]:
     """
     from graph.fleet import supervisor
 
-    changes = supervisor.health_sweep(failure_threshold)
-    exits = supervisor.collect_exits()  # includes exits discovered by this sweep
+    # health_sweep commits its transitions before returning. Retain them in the
+    # loop-owned buffer until exit collection succeeds, including across retries.
+    changes.extend(supervisor.health_sweep(failure_threshold))
     health = {entry["id"]: entry for entry in supervisor.member_health()}
+    exits = supervisor.collect_exits()  # includes exits discovered by this sweep
     notices = []
     for record in exits:
+        if watching_since is not None and record["at"] < watching_since:
+            continue
         mid = record["id"]
         notices.append({
             "id": mid,
@@ -440,6 +447,7 @@ def _fleet_health_notices(failure_threshold: int) -> list[dict]:
         })
         if change["state"] == "healthy":
             notices[-1]["state"] = "recovered"
+    changes.clear()
     return notices
 
 
@@ -453,6 +461,9 @@ async def _fleet_health_loop() -> None:
     from graph.workspaces import manager
 
     pending: list[dict] = []
+    changes: list[dict] = []
+    watching_since: str | None = None
+    was_inactive = False
     while True:
         cfg = STATE.graph_config
         interval = getattr(cfg, "fleet_health_interval_seconds", 60)
@@ -461,9 +472,15 @@ async def _fleet_health_loop() -> None:
             and not manager.is_workspace_member()
             and STATE.inbox_store is not None
         ):
+            if was_inactive:
+                # Disabled ticks are true no-ops. Bound the next collection to
+                # this watching period instead of paging the disabled backlog.
+                watching_since = datetime.now(timezone.utc).isoformat()
+                was_inactive = False
             try:
                 pending.extend(await asyncio.to_thread(
-                    _fleet_health_notices, getattr(cfg, "fleet_health_failure_threshold", 3)
+                    _fleet_health_notices, getattr(cfg, "fleet_health_failure_threshold", 3),
+                    changes, watching_since,
                 ))
                 while pending:
                     notice = pending[0]
@@ -485,6 +502,8 @@ async def _fleet_health_loop() -> None:
                     pending.pop(0)
             except Exception:
                 log.exception("[fleet-health] tick failed")
+        else:
+            was_inactive = True
         await asyncio.sleep(max(1.0, float(interval or 60)))
 
 

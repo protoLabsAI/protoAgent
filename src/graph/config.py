@@ -2941,7 +2941,7 @@ class LangGraphConfig:
             device_idle_ttl_days=_non_negative_int(
                 devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),
-            fleet_health_enabled=health.get("enabled", cls.fleet_health_enabled),
+            fleet_health_enabled=not _falsey(health.get("enabled"), default=True),
             fleet_health_interval_seconds=health.get("interval_seconds", cls.fleet_health_interval_seconds),
             fleet_health_failure_threshold=health.get("failure_threshold", cls.fleet_health_failure_threshold),
             fleet_port_base=fleet.get("port_base", cls.fleet_port_base),

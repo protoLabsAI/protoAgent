@@ -1441,3 +1441,9 @@ def test_fleet_health_settings_round_trip(tmp_path):
     save_yaml_doc(apply_updates_to_yaml({}, serialized), out)
     loaded = LangGraphConfig.from_yaml(str(out))
     assert config_to_dict(loaded)["fleet"]["health"] == health
+
+
+@pytest.mark.parametrize("enabled", [False, "false", "off", "no", None])
+def test_fleet_health_false_values_remain_disabled(enabled):
+    cfg = LangGraphConfig.from_dict({"fleet": {"health": {"enabled": enabled}}})
+    assert cfg.fleet_health_enabled is False

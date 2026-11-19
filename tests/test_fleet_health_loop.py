@@ -146,3 +146,61 @@ async def test_pending_exit_retries_inbox_off_loop_and_reads_live_config(member,
     assert len(health_loop.inbox.list()) == len(events(health_loop)) == 1
     assert len(attempts) == 2
     assert all(tid != main_thread for tid in attempts)
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("previously_enabled", [False, True])
+async def test_enabling_does_not_page_exits_recorded_while_disabled(member, health_loop, previously_enabled):
+    _, _, pids = member
+    if previously_enabled:
+        await health_loop.tick()
+    health_loop.cfg.fleet_health_enabled = False
+    await health_loop.tick()
+    await asyncio.to_thread(_kill, pids[0])
+    await asyncio.to_thread(supervisor.status)  # a console reader records the disabled exit
+    await health_loop.tick()
+    health_loop.cfg.fleet_health_enabled = True
+    await health_loop.tick()
+    await health_loop.tick()
+    assert health_loop.inbox.list() == events(health_loop) == []
+
+    # A new exit while watching still pages, even for the same member.
+    pids.append((await asyncio.to_thread(supervisor.start, "m"))["pid"])
+    await asyncio.to_thread(_kill, pids[-1])
+    await health_loop.tick()
+    await health_loop.tick()
+    assert len(health_loop.inbox.list()) == len(events(health_loop)) == 1
+    assert events(health_loop)[0]["data"]["pid"] == pids[-1]
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("state", ["wedged", "down", "recovered"])
+async def test_collection_timeout_retains_committed_transition(member, health_loop, monkeypatch, state):
+    from filelock import Timeout
+
+    _, flag, pids = member
+    health_loop.cfg.fleet_health_failure_threshold = 1
+    await health_loop.tick()
+    if state == "recovered":
+        flag.touch()
+        await health_loop.tick()
+        flag.unlink()
+    elif state == "wedged":
+        flag.touch()
+    else:
+        await asyncio.to_thread(_kill, pids[0])
+    before = len(events(health_loop))
+    collect = supervisor.collect_exits
+
+    def unavailable():
+        raise Timeout("fleet.lock")
+
+    monkeypatch.setattr(supervisor, "collect_exits", unavailable)
+    await health_loop.tick()
+    assert supervisor.member_health()[0]["state"] == ("healthy" if state == "recovered" else state)
+    assert len(events(health_loop)) == before
+    monkeypatch.setattr(supervisor, "collect_exits", collect)
+    await health_loop.tick()
+    await health_loop.tick()
+    assert len(health_loop.inbox.list()) == len(events(health_loop)) == before + 1
+    assert events(health_loop)[-1]["event"] == f"fleet.health.{state}"
