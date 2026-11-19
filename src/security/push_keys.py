@@ -3,7 +3,8 @@ endpoint validation.
 
 Two halves, both consumed by later W2 cards (enrollment serves the active public key and
 validates endpoints; the sender signs VAPID tokens with the key a binding was enrolled
-under). Nothing here sends a push, reads config or touches the device registry.
+under; the device registry asks `usable_versions` which bindings a rotation or retirement
+has stranded). Nothing here sends a push, reads config or touches the device registry.
 
 **The keyring.** Web Push authenticates the SENDER with VAPID (RFC 8292): an ES256 token
 signed by a P-256 key whose public half the browser was given when it subscribed. That key
@@ -568,6 +569,25 @@ def validate_subscription_keys(p256dh: object, auth: object) -> tuple[str, str]:
     except ValueError:
         raise PushSubscriptionError("keys.p256dh is not a valid P-256 public key") from None
     return point_text, auth_text
+
+
+def usable_versions() -> frozenset[int] | None:
+    """The key versions a binding can still be sent with: the active one and any rotated-out
+    one still inside its migration window. A binding naming any OTHER version was enrolled
+    under a key that was retired or has left its window — it can never be sent to again and
+    the device must enroll anew (``security.devices.reconcile_push_bindings``).
+
+    ``None`` when there is no keyring: with bindings present that is a LOST keyring, which
+    must not read as "every version is gone". Never creates a keyring; a corrupt one raises
+    `PushKeyringError`.
+    """
+    path = _keyring_path()
+    with _LOCK:
+        keyring = _read(path)
+    if keyring is None:
+        return None
+    now = _now()
+    return frozenset(k.version for k in keyring.keys if not k.expired(now))
 
 
 def enrollable_version(version: object) -> bool:

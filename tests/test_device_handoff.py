@@ -512,3 +512,79 @@ def test_legacy_rows_load_without_the_handoff_field(devices):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps([{"id": "a", "name": "old", "token_sha256": "x" * 64, "created_at": 1.0}]), "utf-8")
     assert devices.get_device("a").prev_handed_off is False
+
+
+# ── The push binding does not move with the phone (ADR 0135 W2) ──────────────────────────
+
+PUSH_OLD = "https://fcm.googleapis.com/fcm/send/old-origin"
+PUSH_NEW = "https://fcm.googleapis.com/fcm/send/new-origin"
+
+
+def _enroll(devices, device_id, token, endpoint):
+    return devices.set_push_binding(device_id, token, endpoint=endpoint, p256dh="p", auth="a", vapid_version=1)
+
+
+def _moved(api, devices, endpoint=PUSH_OLD):
+    """A phone enrolled at its old origin whose handoff code has been claimed at the new one."""
+    dev, old = _phone(devices)
+    assert _enroll(devices, dev["id"], old, endpoint)["generation"] == 1
+    code = _handoff(api, old, LAN).json()["code"]
+    new = _claim(_claimer(), code).json()["token"]
+    return dev, old, new
+
+
+def test_a_handoff_clears_the_binding_when_it_retires_the_old_token(api, reach, devices, clock):
+    dev, old, new = _moved(api, devices)
+    # Claimed but not yet used: the old origin still holds the phone, and its binding.
+    row = devices.get_device(dev["id"])
+    assert row.push.endpoint == PUSH_OLD and row.push.generation == 1
+    assert devices.verify_token(old) is not None
+    assert devices.get_device(dev["id"]).push is not None
+    # The new origin's token is presented: the old token is retired, and the binding with it.
+    assert devices.verify_token(new) is not None
+    assert devices.get_device(dev["id"]).push is None
+    assert devices.push_renewal(dev["id"]) == devices.PUSH_CLEARED_HANDOFF
+    assert PUSH_OLD not in devices._registry_path().read_text("utf-8")
+    # The old origin, inside its grace, can't put it back; the new origin enrolls its own.
+    assert _enroll(devices, dev["id"], old, PUSH_OLD) is None
+    assert _enroll(devices, dev["id"], new, PUSH_NEW)["generation"] == 2
+    assert devices.push_renewal(dev["id"]) is None
+    clock.advance(devices.ROTATION_GRACE_SECONDS + 1)
+    assert devices.verify_token(old) is None  # refused as handed off, the row untouched
+    assert devices.get_device(dev["id"]).push.endpoint == PUSH_NEW
+
+
+def test_an_abandoned_handoff_leaves_the_old_origins_binding_alone(api, reach, devices, clock):
+    dev, old = _phone(devices)
+    _enroll(devices, dev["id"], old, PUSH_OLD)
+    assert _handoff(api, old, LAN).status_code == 200  # offered, never claimed
+    clock.advance(devices.HANDOFF_TTL_SECONDS + 1)
+    assert devices.verify_token(old) is not None
+    assert devices.push_status(dev["id"])["generation"] == 1 and devices.push_renewal(dev["id"]) is None
+
+
+def test_a_claimed_handoff_whose_token_was_never_stored_keeps_the_binding(api, reach, devices, clock):
+    """The new origin failed to store its token, so the old origin rotates on with the token
+    it still holds: an ordinary rotation — the binding stays, under the next generation."""
+    dev, old, _lost = _moved(api, devices)
+    clock.advance(devices.ROTATION_SETTLE_SECONDS + 1)
+    assert devices.rotate_device(dev["id"], old) is not None
+    binding = devices.get_device(dev["id"]).push
+    assert binding.endpoint == PUSH_OLD and binding.generation == 2
+
+
+def test_the_new_origin_enrolling_first_replaces_the_old_binding_for_good(api, reach, devices, clock):
+    """Enrolling IS the new token's first presentation: it retires the handed-off token, so
+    the confirmation that follows can't clear the binding the new origin just made."""
+    dev, old, new = _moved(api, devices)
+    assert _enroll(devices, dev["id"], new, PUSH_NEW)["generation"] == 2
+    assert devices.verify_token(new) is not None
+    assert devices.get_device(dev["id"]).push.endpoint == PUSH_NEW
+    assert _enroll(devices, dev["id"], old, PUSH_OLD) is None  # the old origin is in its grace now
+
+
+def test_rotating_at_the_new_origin_before_any_request_drops_the_old_binding(api, reach, devices, clock):
+    dev, _old, new = _moved(api, devices)
+    assert devices.rotate_device(dev["id"], new) is not None  # the handed-off token is dropped here
+    assert devices.get_device(dev["id"]).push is None
+    assert devices.push_renewal(dev["id"]) == "handoff"

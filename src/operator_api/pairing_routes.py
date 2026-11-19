@@ -1035,6 +1035,11 @@ def register_pairing_routes(app, agent_name=None) -> None:
         browser passes to ``PushManager.subscribe`` — plus the safe status of the caller's
         OWN push binding (``binding``: version, generation and times, or null).
 
+        ``renew`` is why this agent removed the caller's binding, or null: ``vapid_key`` (its
+        key version was retired or left its migration window), ``handoff`` (the phone moved
+        to this origin) or ``idle``. The console subscribes again and PUTs the result.
+        Bindings the device lifecycle no longer allows are cleared before this answers.
+
         Self-only (ADR 0135 W2): the device is the one the caller's token resolves to. Any
         other credential is ``403 not_a_device``. Never returns an endpoint or client key."""
         from security import devices, push_keys
@@ -1048,12 +1053,15 @@ def register_pairing_routes(app, agent_name=None) -> None:
         except push_keys.PushKeyringError as exc:
             log.error("[pairing] push keyring unusable: %s", exc)
             return _push_refusal(503, "push_keyring_unavailable", PUSH_KEYRING_UNAVAILABLE)
+        # Key migration (and idle expiry) is applied on the visit that would report it.
+        await asyncio.to_thread(devices.reconcile_push_bindings)
         return JSONResponse(
             {
                 "ok": True,
                 "public_key": key.public_key,
                 "version": key.version,
                 "binding": devices.push_status(caller[0]),
+                "renew": devices.push_renewal(caller[0]),
             },
             headers={"Cache-Control": "no-store"},
         )
