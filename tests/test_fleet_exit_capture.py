@@ -27,6 +27,7 @@ pytestmark = pytest.mark.platform_sensitive
 def isolate_health_sweeps(monkeypatch):
     monkeypatch.setattr(supervisor, "_last_sweep", None)
     monkeypatch.setattr(supervisor, "_unclaimed_changes", [])
+    monkeypatch.setattr(supervisor, "_sweep_threshold", None)
 
 # A stand-in member: binds its port, answers /healthz 200 (503 while the flag file
 # exists), and writes one line to its log.

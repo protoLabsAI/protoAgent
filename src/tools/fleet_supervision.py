@@ -5,8 +5,8 @@ Two read-only answers to "what is the fleet doing", built only from seams that a
 * **The roster and its health.** Members come from ``graph.fleet.supervisor.status()`` (through
   ``tools.fleet_diagnostics._roster``, the same tolerant read ``fleet_diagnostics`` resolves
   against) and their health from ``supervisor.member_health()``, the record ``health_sweep``
-  keeps. Status refreshes that record through the supervisor's sweep; the supervisor
-  owns all probing and health classification.
+  keeps. Status refreshes that record through ``supervisor.fresh_member_health``; the
+  supervisor owns all probing, the failure threshold and health classification.
 * **Reading a member.** Pending decisions (``/api/decisions``), waiting tasks
   (``/api/tasks/issues``) and the model (``/api/runtime/status``) are read through
   ``graph.fleet.member_read._fetch_member_json``: its auth swap, its timeout and its failure
@@ -53,15 +53,38 @@ def _roster_and_health() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]
 
     try:
         # An on-demand observation must populate the record even before a background
-        # health loop exists. One failed probe reports unhealthy for this read; there
-        # is no restart or paging policy here. Sweep before status so remote running
-        # and version fields see the same refreshed probe cache.
-        supervisor.health_sweep(failure_threshold=1)
+        # health loop exists, so sweep now (max_age 0). The records are shared with the
+        # health loop and the ``fleet:member_health`` watch check, so this read does not
+        # bring a threshold of its own: the supervisor counts this pass against the one
+        # threshold every sweep uses, and the changes it finds stay claimable by the
+        # loop. A first failed check is shown from the record's ``failures`` count
+        # (``_health_view``), without reclassifying the member for anyone else. Sweep
+        # before status so remote running and version fields see the same refreshed
+        # probe cache.
+        supervisor.fresh_member_health(0)
         health = {str(h.get("id") or ""): h for h in supervisor.member_health() if isinstance(h, dict)}
     except Exception:  # noqa: BLE001 — a health read failure must not fail the roster answer
         log.exception("[fleet-supervision] health read failed")
         health = {}
     return fd._roster(), health
+
+
+def _health_view(record: dict[str, Any] | None) -> tuple[str, bool | None, int | None]:
+    """``(health, healthy, failed_checks)`` for one member's supervisor health record.
+
+    ``health`` is the supervisor's state verbatim, with one addition: a member the supervisor
+    still holds ``healthy`` whose latest check failed is ``failing`` (and not ``healthy``), so
+    one failed probe shows in this read while the supervisor's own threshold still decides
+    ``wedged`` / ``down``. No record (not swept yet, the host itself, or a member stopped on
+    purpose) is ``unknown`` with ``healthy`` None; it is never inferred from ``running``."""
+    if not record:
+        return "unknown", None, None
+    state = str(record.get("state") or "unknown")
+    failures = record.get("failures")
+    failures = failures if isinstance(failures, int) and not isinstance(failures, bool) and failures > 0 else 0
+    if state == "healthy" and failures:
+        state = "failing"
+    return state, state == "healthy", failures
 
 
 def _kind(entry: dict[str, Any]) -> str:
@@ -214,10 +237,7 @@ async def fleet_status() -> dict[str, Any]:
     async def one(entry: dict[str, Any]) -> dict[str, Any]:
         row = _base_row(entry)
         record = health.get(row["id"])
-        # The supervisor's health record, verbatim. No record (not swept yet, the host itself,
-        # or a member stopped on purpose) is "unknown" — never inferred from ``running``.
-        row["health"] = str(record.get("state") or "unknown") if record else "unknown"
-        row["healthy"] = (row["health"] == "healthy") if record else None
+        row["health"], row["healthy"], row["failed_checks"] = _health_view(record)
         row["health_changed_at"] = record.get("changed_at") if record else None
         row["version"] = str(entry.get("version") or "")
         row["model"] = None
@@ -259,8 +279,11 @@ def build_fleet_supervision_tools() -> list:
         last changed, and how many decisions and waiting tasks it has pending.
 
         Read-only. Members are listed by their unique ``id``, so two members with the same name
-        are separate rows. ``healthy`` is null when the supervisor has no health record yet, and
-        the counts are null for a member that is stopped or could not be read.
+        are separate rows. ``health`` is ``healthy``, ``failing`` (its latest health check
+        failed, but not yet enough in a row to count as ``wedged`` or ``down``), ``wedged``,
+        ``down`` or ``unknown``; ``failed_checks`` is how many checks in a row have failed.
+        ``healthy`` is null when the supervisor has no health record yet, and the counts are
+        null for a member that is stopped or could not be read.
         """
         return await fleet_status()
 

@@ -24,6 +24,32 @@ pytestmark = pytest.mark.platform_sensitive
 
 
 @pytest.fixture(autouse=True)
+def _graph_config_unchanged():
+    """Every test here must hand back the SAME ``STATE.graph_config`` object it started with."""
+    from runtime.state import STATE
+
+    before = STATE.graph_config
+    yield
+    assert STATE.graph_config is before, "a reload leaked STATE.graph_config into later tests"
+
+
+@pytest.fixture(autouse=True)
+def _restore_graph_config(_graph_config_unchanged):
+    """A committed reload assigns ``STATE.graph_config = new_config``; put the old one back.
+
+    Left in place, the reloaded config (private steering ON by default) leaks into every later
+    test in the process that reads the flag off ``STATE.graph_config``. Restored here rather
+    than through ``monkeypatch`` so the order is fixed: this fixture depends on the guard above,
+    so its teardown always runs BEFORE the guard checks the object.
+    """
+    from runtime.state import STATE
+
+    before = STATE.graph_config
+    yield
+    STATE.graph_config = before
+
+
+@pytest.fixture(autouse=True)
 def _reset_denylist():
     """The reload syncs the module-global denylist from the temp config; clear it."""
     from tools.lg_tools import set_disabled_tools

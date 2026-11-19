@@ -1204,12 +1204,18 @@ def _record_remote_version(rid: str, version: str) -> None:
 # One health record per member, kept in this process (like the probe caches) and fed by
 # the probes above. ``health_sweep`` is a single pass: whoever runs it owns the cadence
 # and the threshold, and acts on the changes it returns. ``fresh_member_health`` is the
-# reader's side of that: it runs the same pass only when nobody has lately, and leaves
-# the changes it found for the next ``health_sweep`` caller.
+# reader's side of that: it runs the same pass only when nobody has lately, with the
+# owner's threshold, and leaves the changes it found for the next ``health_sweep`` caller.
+#
+# The records are shared, so every pass over them must count failures against ONE
+# threshold. A reader that swept with its own lower one would mark a member wedged
+# for every other reader after fewer failed checks than the owner asked for.
+DEFAULT_HEALTH_FAILURE_THRESHOLD = 3
 _health: dict[str, dict] = {}
 _health_lock = threading.Lock()
 _sweep_lock = threading.Lock()  # serialize background and on-demand sweeps
 _last_sweep: float | None = None  # monotonic time the last pass finished
+_sweep_threshold: int | None = None  # the last ``health_sweep`` caller's; guarded by _sweep_lock
 _UNCLAIMED_KEEP = 200
 _unclaimed_changes: list[dict] = []  # found by an on-demand sweep; guarded by _health_lock
 
@@ -1227,19 +1233,28 @@ def member_health() -> list[dict]:
         return [_public_health(e) for e in _health.values()]
 
 
-def fresh_member_health(max_age: float, failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
+def fresh_member_health(max_age: float, *, timeout: float = 1.0) -> list[dict]:
     """``member_health()``, after one sweep when no pass finished in the last ``max_age``
-    seconds. This is what keeps the records current for a reader (the built-in
-    ``fleet:member_health`` watch check, #5534) when nothing else is sweeping; while a
-    loop sweeps more often than ``max_age`` it is a plain read.
+    seconds (``0`` always sweeps). This is what keeps the records current for a reader
+    (the built-in ``fleet:member_health`` watch check and the ``fleet_status`` tool,
+    #5534) when nothing else is sweeping; while a loop sweeps more often than
+    ``max_age`` it is a plain read.
 
-    The changes an on-demand pass finds are not dropped: the next ``health_sweep`` call
-    returns them first, so a loop acting on changes still sees each one once.
+    A reader does not choose a failure threshold. Its pass counts against the one the
+    last ``health_sweep`` caller set, or ``DEFAULT_HEALTH_FAILURE_THRESHOLD`` when no
+    one has called it, so on-demand reads never reclassify a member under a different
+    rule than the loop's. A reader that wants to show an early failure reads the
+    record's ``failures`` count instead.
+
+    The changes an on-demand pass finds are kept for the next ``health_sweep`` call,
+    which returns them first. Only the newest ``_UNCLAIMED_KEEP`` are kept while nothing
+    claims them.
 
     Blocking like ``health_sweep``. Call it off the event loop."""
     with _sweep_lock:
         if _last_sweep is None or time.monotonic() - _last_sweep >= max(0.0, float(max_age)):
-            changes = _sweep_once(failure_threshold, timeout)
+            threshold = _sweep_threshold or DEFAULT_HEALTH_FAILURE_THRESHOLD
+            changes = _sweep_once(threshold, timeout)
             with _health_lock:
                 _unclaimed_changes.extend(changes)
                 del _unclaimed_changes[:-_UNCLAIMED_KEEP]
@@ -1264,12 +1279,17 @@ def health_sweep(failure_threshold: int, *, timeout: float = 1.0) -> list[dict]:
     down, wedged and recovered (``healthy`` after either) are each reported once.
 
     Changes found by ``fresh_member_health`` since the last call come first, in order.
+    The caller owns the threshold: ``fresh_member_health`` passes reuse it from here on.
+    This is for the one caller that acts on the changes; a reader that only wants
+    current records calls ``fresh_member_health``, which leaves the changes claimable.
 
     Blocking: one probe per member, each bounded by ``timeout``. Call it off the event loop.
     """
+    global _sweep_threshold
     with _sweep_lock:
         # Keep draining and probing in the same critical section as on-demand reads:
         # otherwise concurrent passes can apply stale probe results out of order.
+        _sweep_threshold = max(1, int(failure_threshold))
         changes = _sweep_once(failure_threshold, timeout)
         with _health_lock:
             earlier = list(_unclaimed_changes)

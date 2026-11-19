@@ -371,8 +371,6 @@ _MEMBER_HEALTH_STATES = ("healthy", "down", "wedged")
 # supervisor sweep first (its existing probes, off the event loop). Several watches ticking
 # together share one sweep, and a sweep loop running more often than this makes it a plain read.
 _MEMBER_HEALTH_MAX_AGE = 15.0
-# Consecutive failed checks before a live member counts as wedged, or a remote as down.
-_MEMBER_HEALTH_FAILURE_THRESHOLD = 3
 
 
 async def _verify_fleet_member_health(spec: dict, ctx: VerifyContext) -> VerifyResult:
@@ -382,8 +380,8 @@ async def _verify_fleet_member_health(spec: dict, ctx: VerifyContext) -> VerifyR
     or a list of them; default ``down``). Reads the supervisor's health records through
     ``supervisor.fresh_member_health``, which runs the supervisor's own sweep first when no
     sweep ran in the last ``_MEMBER_HEALTH_MAX_AGE`` seconds, so the records are written
-    whether or not anything else is sweeping. No second prober: the probes, the states and
-    the records are the supervisor's. A member with no record (stopped on purpose, not in
+    whether or not anything else is sweeping. No second prober: the probes, the states, the
+    failure threshold and the records are the supervisor's. A member with no record (stopped on purpose, not in
     this fleet, or already down when first checked) is in no state, so the check is not met.
 
     ``reason`` and ``evidence`` change only when the member's state does, so an
@@ -406,9 +404,7 @@ async def _verify_fleet_member_health(spec: dict, ctx: VerifyContext) -> VerifyR
         )
     from graph.fleet import supervisor
 
-    records = await asyncio.to_thread(
-        supervisor.fresh_member_health, _MEMBER_HEALTH_MAX_AGE, _MEMBER_HEALTH_FAILURE_THRESHOLD
-    )
+    records = await asyncio.to_thread(supervisor.fresh_member_health, _MEMBER_HEALTH_MAX_AGE)
     folded = member.casefold()
     rec = (
         next((r for r in records if r.get("id") == member), None)

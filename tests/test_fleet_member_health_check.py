@@ -22,6 +22,7 @@ def sweeps(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(supervisor, "_last_sweep", None)
     monkeypatch.setattr(supervisor, "_unclaimed_changes", [])
+    monkeypatch.setattr(supervisor, "_sweep_threshold", None)
 
     def _pass(threshold, timeout):
         calls.append((threshold, timeout))
@@ -125,6 +126,50 @@ async def test_a_stale_read_runs_the_supervisors_sweep_and_a_fresh_one_does_not(
     monkeypatch.setattr(supervisor, "_last_sweep", supervisor.time.monotonic() - 16)
     await _check(member="ws-1")
     assert len(sweeps) == 2
+    # The check brings no threshold of its own: the supervisor's default, until a
+    # health_sweep caller (the loop) sets one, which every later on-demand pass reuses.
+    assert {t for t, _ in sweeps} == {supervisor.DEFAULT_HEALTH_FAILURE_THRESHOLD}
+    supervisor.health_sweep(5)
+    monkeypatch.setattr(supervisor, "_last_sweep", None)
+    await _check(member="ws-1")
+    supervisor.fresh_member_health(0)  # what the fleet_status roster read runs
+    assert [t for t, _ in sweeps[2:]] == [5, 5, 5]
+
+
+@pytest.mark.asyncio
+async def test_a_roster_read_does_not_wedge_a_member_before_three_failed_checks(monkeypatch):
+    """The fleet_status read and this check share the supervisor's records. One failed
+    /healthz seen by a roster read must not mark a live member wedged for the watch."""
+    from graph.workspaces import manager
+    from tools import fleet_supervision
+
+    monkeypatch.undo()  # the real sweep pass, not the autouse stub
+    for name, value in (("_last_sweep", None), ("_sweep_threshold", None), ("_unclaimed_changes", []), ("_health", {})):
+        monkeypatch.setattr(supervisor, name, value)
+    state = {"ws-1": {"pid": 123, "port": 7879}}
+    monkeypatch.setattr(supervisor, "_load_state", lambda: dict(state))
+    monkeypatch.setattr(supervisor, "_prune_dead_records", lambda state, **kw: [])
+    monkeypatch.setattr(supervisor, "_load_exits", lambda: [])
+    monkeypatch.setattr(supervisor, "refresh_remote_probes", lambda timeout: None)
+    monkeypatch.setattr(supervisor, "list_remotes", lambda: [])
+    monkeypatch.setattr(manager, "list_workspaces", lambda: [{"id": "ws-1", "name": "Scout"}])
+    monkeypatch.setattr(fleet_supervision.fd, "_roster", lambda: [])
+    ok = [True]
+    monkeypatch.setattr(supervisor, "_probe_one", lambda rec, timeout, **kw: (ok[0], ""))
+
+    fleet_supervision._roster_and_health()  # baseline: healthy
+    ok[0] = False
+    _, health = fleet_supervision._roster_and_health()  # one failed probe during a roster read
+    assert (health["ws-1"]["state"], health["ws-1"]["failures"]) == ("healthy", 1)
+    assert fleet_supervision._health_view(health["ws-1"]) == ("failing", False, 1)
+    assert (await _check(member="ws-1", state="wedged")).met is False  # inside the 15s window: a read
+    fleet_supervision._roster_and_health()  # second failed check in a row
+    assert (await _check(member="ws-1", state="wedged")).met is False
+    fleet_supervision._roster_and_health()  # third: the shared threshold
+    res = await _check(member="ws-1", state="wedged")
+    assert res.met is True and res.reason == "member Scout is wedged"
+    # Found by a roster read, still claimable by the loop that acts on changes.
+    assert [(c["previous"], c["state"]) for c in supervisor.health_sweep(3)] == [("healthy", "wedged")]
 
 
 @pytest.mark.asyncio
@@ -143,7 +188,7 @@ def test_failed_background_sweep_retains_watch_discovered_changes(monkeypatch):
     change = {"id": "ws-1", "previous": "healthy", "state": "down"}
     monkeypatch.setattr(supervisor, "_sweep_once", lambda threshold, timeout: [change])
     _health(monkeypatch, _rec("down"))
-    supervisor.fresh_member_health(15, 3)
+    supervisor.fresh_member_health(15)
 
     def fail(threshold, timeout):
         raise OSError("unavailable")
@@ -179,7 +224,7 @@ def test_background_sweep_waits_for_watch_sweep_and_claims_its_changes(monkeypat
     monkeypatch.setattr(supervisor, "_sweep_once", sweep)
     _health(monkeypatch, _rec("down"))
     with ThreadPoolExecutor(max_workers=2) as pool:
-        watch = pool.submit(supervisor.fresh_member_health, 15, 3)
+        watch = pool.submit(supervisor.fresh_member_health, 15)
         try:
             assert started.wait(5)
             loop = pool.submit(background)
