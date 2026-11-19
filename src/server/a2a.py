@@ -2002,6 +2002,42 @@ async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULE
     return _is_recent(latest, datetime.now(UTC), window_s)
 
 
+# Importance of a scheduled-result notice (ADR 0135 D11): fixed here by the code path
+# that raises it, never chosen by the model or read from the run's answer.
+_SCHEDULED_NOTICE_IMPORTANCE = "normal"
+
+
+def _notify_scheduled_card(payload: dict) -> None:
+    """Tell the operator, through the one notice seam (ADR 0135 D8, #5537), that a
+    scheduled result card just posted to its owner chat. Called only from
+    ``_post_scheduled_card`` — so the card's own guards (empty, ``NO_UPDATE``, repeat,
+    stale chat) are the notice's guards, with no second skip logic. Best-effort: a
+    notice failure never affects the card that already published."""
+    try:
+        from graph.decisions import _console_link  # the same chat link a decision notice carries
+        from graph.plugins.chat_surface import notify_chat_surfaces
+
+        status = str(payload.get("status") or "completed")
+        lead = f"Scheduled run {payload['job_id']} {status}"
+        summary = str(payload.get("summary") or "").strip()
+        notify_chat_surfaces(
+            f"{lead}: {summary}" if summary else f"{lead}.",
+            _console_link(payload["origin_session"]),
+            kind="review",
+            importance=_SCHEDULED_NOTICE_IMPORTANCE,
+        )
+    except Exception:  # noqa: BLE001 — delivery of the card must never fail on the notice
+        log.exception("[scheduler] could not queue the result notice for job %s", payload.get("job_id"))
+
+
+def _post_scheduled_card(payload: dict, fingerprint: dict | None) -> None:
+    """The single point where a scheduled result card IS posted: publish the card,
+    record its fingerprint for the repeat guard, and send exactly one typed notice."""
+    _event_bus.publish("scheduler.completed", payload)
+    _remember_scheduled_card(fingerprint)
+    _notify_scheduled_card(payload)
+
+
 async def _deliver_scheduled(payload: dict) -> bool:
     """Publish a scheduled fire's result card unless the origin session is stale (#2990
     r3). Returns whether it published. Best-effort — never raises. A published card's
@@ -2024,8 +2060,7 @@ async def _deliver_scheduled(payload: dict) -> bool:
             current = getter(payload["job_id"]) if callable(getter) else None
             if current and _job_generation(current) == fingerprint["generation"] and current.expiry_notice_sent:
                 return False
-        _event_bus.publish("scheduler.completed", payload)
-        _remember_scheduled_card(fingerprint)
+        _post_scheduled_card(payload, fingerprint)
         log.info(
             "[scheduler] delivered %s result card for job %s → session %s",
             payload.get("status") or "completed",
@@ -2067,8 +2102,7 @@ def _handle_scheduled_delivery(outcome) -> None:
         # is a best-effort refinement layered on top of the always-safe bus publish
         # (an unconsumed event creates no ghost session).
         fingerprint = payload.pop("card_fingerprint", None)
-        _event_bus.publish("scheduler.completed", payload)
-        _remember_scheduled_card(fingerprint)
+        _post_scheduled_card(payload, fingerprint)
         return
     t = loop.create_task(_deliver_scheduled(payload))
     _BG_WAKE_TASKS.add(t)
