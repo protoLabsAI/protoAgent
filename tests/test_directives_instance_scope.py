@@ -14,6 +14,10 @@ from fastapi.testclient import TestClient
 from graph.directives import (
     INSTANCE_LEDGER,
     INSTANCE_TAG,
+    MAX_NOTE_CHARS,
+    MAX_QUOTE_CHARS,
+    WS_DIRECTIVE_CAP,
+    WS_DIRECTIVES_MAX_CHARS,
     DirectiveError,
     DirectiveStore,
     directives_command_reply,
@@ -82,6 +86,40 @@ def test_order_renders_ahead_of_the_sessions_own_directives(store):
     assert section.index(ORDER) < section.index("Hold the launch.")
     assert section.count(INSTANCE_TAG + " (recorded") == 1
     assert "Hold the launch." not in working_state_section("chat-c")
+
+
+
+@pytest.mark.parametrize("pressure", ["count", "chars", "oversized"])
+def test_each_scope_keeps_its_allowance_when_both_overflow(store, pressure):
+    # Refs #5542: shared orders must not consume the chat's rendering allowance.
+    quotes = {
+        "count": "short order",
+        "chars": "x" * 1500,
+        "oversized": "x" * (MAX_QUOTE_CHARS - 30),
+    }
+    notes = {"conditions": "y" * MAX_NOTE_CHARS, "scope": "z" * MAX_NOTE_CHARS} if pressure == "oversized" else {}
+    local = [
+        store.record("chat-b", f"Local {i}: {quotes[pressure]}", **notes)
+        for i in range(WS_DIRECTIVE_CAP + 1)
+    ]
+    baseline = working_state_section("chat-b").split("\n", 1)[1].split("\nThese are", 1)[0]
+    shared = [
+        store.record("chat-a", f"Shared {i}: {quotes[pressure]}", instance_wide=True, **notes)
+        for i in range(WS_DIRECTIVE_CAP + 1)
+    ]
+
+    section = working_state_section("chat-b")
+    assert baseline in section  # Preserve every local entry and its overflow pointer.
+    assert section.index(shared[0].id) < section.index(local[0].id)
+    assert shared[-1].id not in section and local[-1].id not in section
+    assert section.count("…+") == 2  # Each scope reports its own omitted entries.
+    assert len(section) < 2 * WS_DIRECTIVES_MAX_CHARS + 1500
+    if pressure == "count":
+        assert shared[WS_DIRECTIVE_CAP - 1].id in section
+        assert local[WS_DIRECTIVE_CAP - 1].id in section
+    else:
+        assert shared[4].id not in section
+    assert section.count("…[clipped,") == (2 if pressure == "oversized" else 0)
 
 
 def test_no_orders_leaves_the_section_unchanged(store):

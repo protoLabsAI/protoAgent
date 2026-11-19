@@ -63,9 +63,9 @@ CLOSED_BY_SYSTEM = "system"
 #: whole pasted message. Generous, but bounded: every in-force one renders every turn.
 MAX_QUOTE_CHARS = 4000
 MAX_NOTE_CHARS = 2000
-#: In-force directives rendered in ``<working_state>``; more point at ``list_directives``.
+#: In-force directives per scope rendered in ``<working_state>``; more point at ``list_directives``.
 WS_DIRECTIVE_CAP = 20
-#: Total character budget for the ``STANDING DIRECTIVES`` section's entry text, in line with
+#: Per-scope character budget for the ``STANDING DIRECTIVES`` entry text, in line with
 #: the other ``<working_state>`` caps (``graph.projection``). The entry cap alone could still
 #: let the section reach ~160K chars (20 maximum-size directives) that never shed; this bounds
 #: it so a few large directives can't crowd out the rest of ``<working_state>`` every turn.
@@ -616,24 +616,8 @@ def render_entry(d: Directive, *, closed_detail: bool = False) -> str:
     return "\n".join(lines)
 
 
-def working_state_section(session_id: str) -> str:
-    """The ``STANDING DIRECTIVES`` section of ``<working_state>`` for this chat, or "".
-
-    Instance-wide directives (ADR 0135 D13) render for EVERY session — another chat, a
-    scheduled or watch turn, a turn with no session id at all — ahead of the session's
-    own, tagged :data:`INSTANCE_TAG`. Both kinds share the caps below.
-
-    Bounded two ways so the section can't grow without limit and crowd out the rest of
-    ``<working_state>`` every turn: at most :data:`WS_DIRECTIVE_CAP` entries, and at most
-    :data:`WS_DIRECTIVES_MAX_CHARS` characters of entry text. Whole entries render oldest
-    first until the next one would push the body over budget; the first entry always renders,
-    clipped with an explicit marker if it alone is over budget. Either overflow ends with a
-    ``…+N more`` pointer to the full ledger."""
-    store = directive_store()
-    shared = store.in_force("", instance_wide=True)
-    items = shared + (store.in_force(session_id) if session_id else [])
-    if not items:
-        return ""
+def _working_state_entries(items: list[Directive]) -> str:
+    """Render one scope with its own entry and character allowance."""
     capped = items[:WS_DIRECTIVE_CAP]
     rendered: list[str] = []
     used = 0
@@ -657,6 +641,30 @@ def working_state_section(session_id: str) -> str:
         body += f"\n…+{len(items) - len(rendered)} more (/directives to list them)"
     elif len(items) > len(capped):
         body += f"\n…+{len(items) - len(capped)} more (list_directives shows them all)"
+    return body
+
+
+def working_state_section(session_id: str) -> str:
+    """The ``STANDING DIRECTIVES`` section of ``<working_state>`` for this chat, or "".
+
+    Instance-wide directives (ADR 0135 D13) render for EVERY session — another chat, a
+    scheduled or watch turn, a turn with no session id at all — ahead of the session's
+    own, tagged :data:`INSTANCE_TAG`.
+
+    Each scope gets its own :data:`WS_DIRECTIVE_CAP` entries and
+    :data:`WS_DIRECTIVES_MAX_CHARS` characters of entry text, so instance orders cannot
+    displace the chat's existing allowance (and vice versa). The combined body is bounded
+    by twice those limits, plus clipping and overflow markers. Within each scope, whole
+    entries render oldest first until the next would exceed the budget; the first always
+    renders, clipped with an explicit marker if needed. Overflow ends with a ``…+N more``
+    pointer to the full ledger.
+    """
+    store = directive_store()
+    shared = store.in_force("", instance_wide=True)
+    local = store.in_force(session_id) if session_id else []
+    if not shared and not local:
+        return ""
+    body = "\n".join(_working_state_entries(items) for items in (shared, local) if items)
     return (
         f"{WS_HEADING}:\n{body}\n"
         'These are the operator\'s words, recorded when given. Act on them; close one with fulfil_directive("<id>", '
