@@ -1,6 +1,6 @@
 """File opening uses a version-bound media grant, never an operator bearer."""
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -21,6 +21,44 @@ def artifact(monkeypatch, tmp_path):
 
 def _url(reply):
     return re.search(r"\]\(([^)]+)\)", reply)[1]
+
+
+@pytest.mark.parametrize("kind", ["file", "html"])
+@pytest.mark.parametrize(
+    "requested,minutes,notice",
+    [
+        (None, 30, ""),
+        (120, 120, ""),
+        (1440, 1440, ""),
+        (3000, 1440, " Requested 3000 minutes; capped at 1440."),
+        (1, 1, ""),
+        (0, 1, " Requested 0 minutes; raised to 1."),
+        (-10, 1, " Requested -10 minutes; raised to 1."),
+    ],
+)
+def test_open_link_lifetime(artifact, tmp_path, monkeypatch, kind, requested, minutes, notice):
+    if kind == "file":
+        aid = _save(artifact, tmp_path, "report.txt", b"first")
+    else:
+        artifact.show_artifact.invoke({"kind": kind, "code": "<p>hello</p>"})
+        aid = artifact._read_store()["artifacts"][0]["id"]
+    now = 1_800_000_000
+    monkeypatch.setattr(artifact._routes.time, "time", lambda: now)
+    args = {"artifact_id": aid}
+    if requested is not None:
+        args["expires_in_minutes"] = requested
+    reply = artifact.open_artifact.invoke(args)
+    url = _url(reply)
+    exp = int(parse_qs(urlsplit(url).query)["exp"][0])
+    assert exp == now + minutes * 60
+    unit = "minute" if minutes == 1 else "minutes"
+    assert reply == f"No console attached. [Open artifact]({url}). This link expires in {minutes} {unit}.{notice}"
+    client = _client(artifact)
+    assert client.get(url).status_code == 200
+    now += 31 * 60
+    assert client.get(url).status_code == (200 if minutes > 31 else 404)
+    now = exp + 1
+    assert client.get(url).status_code == 404
 
 
 def test_open_and_fallback(artifact, tmp_path, monkeypatch):
