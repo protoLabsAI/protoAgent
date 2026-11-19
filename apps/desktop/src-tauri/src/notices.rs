@@ -7,19 +7,29 @@
 //! that depends on WKWebView/WebView2 supporting Web Push or on webview timers staying
 //! alive while the window is hidden.
 //!
-//! * **Replay.** The stream's `id:` is the bus seq. A reconnect sends it back as
-//!   `Last-Event-ID`, so a notice raised while the connection was down is replayed.
+//! * **Replay.** The stream's `id:` is the bus seq. Every connect sends a cursor back as
+//!   `Last-Event-ID`, so a notice raised while the connection was down is replayed. The hub
+//!   is live-only for a connect WITHOUT a cursor, so the first connect asks from 0 (or from
+//!   the cursor the last run saved): a notice raised while the sidecar was still booting,
+//!   or one still pending from before this launch, is shown too. A cursor the hub can no
+//!   longer place (`resync_required`) restarts from the oldest event it still holds.
+//! * **Across launches.** The cursor and the shown ids are saved next to the app's data, so
+//!   a relaunch resumes instead of repeating a day's worth of still-valid notices.
 //! * **Once per notice.** Replay can re-deliver, so presentation is keyed on the notice id.
 //! * **Expiry.** A notice past its `expires_at` (UTC Unix seconds) is skipped: replaying
 //!   an hour-old "needs a decision" after a long sleep helps nobody.
 //! * **Generic text.** The banner never carries the notice's own text; the operator opens
 //!   the console to read it.
+//! * **Click.** A click raises the console at the chat the notice links to. Windows and
+//!   Linux report the click on the notification itself (`toast`); macOS only activates the
+//!   app, which `on_reopen` reads.
 //! * **Presentation ownership.** In the desktop app this receiver owns notice presentation;
 //!   `apps/web/src/lib/notify.ts` stands down for the alerts that mirror a notice.
 //!
 //! Quit ends it (`stop`): the hub cannot wake a terminated shell in this design.
 
 use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -167,6 +177,11 @@ struct Tracker {
     last_seq: Option<u64>,
     seen_order: VecDeque<String>,
     seen: HashSet<String>,
+    /// The hub could not place the cursor and `last_seq` now points at the oldest event it
+    /// still holds: the connection must be reopened to replay from there.
+    rewind: bool,
+    /// Something changed since the last save (`Journal`).
+    dirty: bool,
 }
 
 impl Tracker {
@@ -180,14 +195,20 @@ impl Tracker {
         let seq = frame
             .id
             .or_else(|| value.as_ref().and_then(|v| v.get("seq")).and_then(|s| s.as_u64()));
-        if seq.is_some() {
+        if seq.is_some() && seq != self.last_seq {
             self.last_seq = seq;
+            self.dirty = true;
         }
         let value = value?;
-        if value.get("topic")?.as_str()? != "notice" {
+        let topic = value.get("topic")?.as_str()?;
+        let data = value.get("data")?;
+        if topic == "resync_required" {
+            self.resync(data);
             return None;
         }
-        let data = value.get("data")?;
+        if topic != "notice" {
+            return None;
+        }
         let id = data.get("notice_id")?.as_str()?.trim();
         if id.is_empty() {
             return None; // no identity → no way to keep it to one banner
@@ -205,11 +226,28 @@ impl Tracker {
         Some(notice)
     }
 
+    /// The hub answered the cursor with `resync_required`: the gap reaches past what it
+    /// retains (a long sleep), or the cursor is from another log (a wiped hub). The frame
+    /// moved the cursor to the hub's CURRENT seq, which would skip every notice still in
+    /// the log — so go back to the retention floor instead and replay from there; expiry
+    /// and the shown ids keep that to what is still worth showing. A cursor already AT the
+    /// floor is never rewound again, so this cannot loop.
+    fn resync(&mut self, data: &serde_json::Value) {
+        let field = |key: &str| data.get(key).and_then(|v| v.as_u64());
+        let floor = field("floor").unwrap_or(0);
+        if field("since").is_some_and(|since| since != floor) {
+            self.last_seq = Some(floor);
+            self.rewind = true;
+            self.dirty = true;
+        }
+    }
+
     /// Record `id` as shown; false when it already was.
     fn claim(&mut self, id: &str) -> bool {
         if !self.seen.insert(id.to_string()) {
             return false;
         }
+        self.dirty = true;
         self.seen_order.push_back(id.to_string());
         while self.seen_order.len() > SEEN_CAP {
             if let Some(old) = self.seen_order.pop_front() {
@@ -218,6 +256,66 @@ impl Tracker {
         }
         true
     }
+}
+
+/// The tracker's file: cursor and shown ids, carried across launches. Losing it is
+/// harmless (the next run replays from 0 and may repeat a still-valid notice once), so
+/// every failure here is a log line, never an error.
+struct Journal {
+    path: Option<PathBuf>,
+    warned: bool,
+}
+
+impl Journal {
+    fn new(path: Option<PathBuf>) -> Self {
+        Self { path, warned: false }
+    }
+
+    fn load(&self) -> Tracker {
+        let mut tracker = Tracker::default();
+        let saved: Option<serde_json::Value> = self
+            .path
+            .as_deref()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        if let Some(saved) = saved {
+            tracker.last_seq = saved.get("last_seq").and_then(|v| v.as_u64());
+            let ids = saved.get("seen").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            for id in ids.iter().filter_map(|v| v.as_str()) {
+                tracker.claim(id);
+            }
+        }
+        tracker.dirty = false;
+        tracker
+    }
+
+    fn save(&mut self, tracker: &mut Tracker) {
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        if !std::mem::take(&mut tracker.dirty) {
+            return;
+        }
+        let body = serde_json::json!({ "last_seq": tracker.last_seq, "seen": tracker.seen_order });
+        match write_atomic(path, body.to_string().as_bytes()) {
+            Ok(()) => self.warned = false,
+            Err(e) if !self.warned => {
+                self.warned = true;
+                log::warn!("desktop: could not save the notice cursor ({e}); a relaunch may repeat a notice");
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+/// Write through a sibling temp file so a crash mid-write never leaves half a cursor.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
 }
 
 // ── Presentation ────────────────────────────────────────────────────────────
@@ -232,7 +330,10 @@ pub(crate) trait Presenter: Send {
 trait NotificationBackend: Send {
     fn permission(&self) -> Result<PermissionState, String>;
     fn request_permission(&self) -> Result<PermissionState, String>;
-    fn show(&self, id: i32, title: &str, body: &str) -> Result<(), String>;
+    /// Show one notification; `session` is the chat a click on it should open. `Ok(true)`
+    /// when the backend routes that click itself, `Ok(false)` when the OS only activates
+    /// the app and the route has to be remembered for `on_reopen`.
+    fn show(&self, id: i32, title: &str, body: &str, session: Option<&str>) -> Result<bool, String>;
 }
 
 struct TauriBackend<R: Runtime> {
@@ -248,7 +349,20 @@ impl<R: Runtime> NotificationBackend for TauriBackend<R> {
         self.app.notification().request_permission().map_err(|e| e.to_string())
     }
 
-    fn show(&self, id: i32, title: &str, body: &str) -> Result<(), String> {
+    // Windows and Linux: the notification plugin shows a banner but has no click callback
+    // on desktop, and there the OS does not activate the app either — a click would do
+    // nothing. So the banner goes through the libraries the plugin itself wraps, which do
+    // report the click (`toast`). Neither takes a caller-chosen id.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn show(&self, _id: i32, title: &str, body: &str, session: Option<&str>) -> Result<bool, String> {
+        let app = self.app.clone();
+        let session = session.map(str::to_string);
+        let on_click: toast::OnClick = Box::new(move || open_route(&app, session.as_deref()));
+        toast::show(&self.app.config().identifier, title, body, on_click).map(|()| true)
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    fn show(&self, id: i32, title: &str, body: &str, _session: Option<&str>) -> Result<bool, String> {
         self.app
             .notification()
             .builder()
@@ -256,7 +370,99 @@ impl<R: Runtime> NotificationBackend for TauriBackend<R> {
             .title(title)
             .body(body)
             .show()
+            .map(|()| false)
             .map_err(|e| e.to_string())
+    }
+}
+
+/// Raise the console and, when the notice named a chat, land on it — through the same
+/// `palette:navigate` intent the launcher forwards, which the main window validates
+/// against its own store (an unknown session is ignored there).
+fn open_route<R: Runtime>(app: &AppHandle<R>, session: Option<&str>) {
+    crate::show_main_window(app);
+    if let Some(session) = session {
+        let intent = serde_json::json!({ "kind": "chat", "sessionId": session });
+        let _ = app.emit("palette:navigate", intent);
+    }
+}
+
+/// Notifications that report their own click (Windows toasts, freedesktop notifications).
+/// Free of tauri types on purpose: it is the part of this file no macOS build compiles.
+#[cfg(any(windows, target_os = "linux"))]
+mod toast {
+    pub(super) type OnClick = Box<dyn FnOnce() + Send + 'static>;
+
+    #[cfg(windows)]
+    pub(super) fn show(app_id: &str, title: &str, body: &str, on_click: OnClick) -> Result<(), String> {
+        use tauri_winrt_notification::Toast;
+
+        // The plugin's rule: only an installed app owns its AppUserModelID; a build run
+        // from `target/` borrows PowerShell's, or Windows drops the toast.
+        let from_target = std::env::current_exe().ok().is_some_and(|exe| {
+            exe.parent().is_some_and(|dir| {
+                ["debug", "release"].iter().any(|profile| dir.ends_with(std::path::Path::new("target").join(profile)))
+            })
+        });
+        let app_id = if from_target { Toast::POWERSHELL_APP_ID } else { app_id };
+        // The handler type is FnMut; a banner is clicked once.
+        let mut on_click = Some(on_click);
+        Toast::new(app_id)
+            .title(title)
+            .text1(body)
+            .on_activated(move |_action| {
+                if let Some(on_click) = on_click.take() {
+                    on_click();
+                }
+                Ok(())
+            })
+            .show()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Threads parked on a notification's action signal. A banner left unanswered in the
+    /// notification list keeps its thread; past this many, a new banner is shown without a
+    /// click route instead of growing without bound.
+    #[cfg(target_os = "linux")]
+    const MAX_WAITERS: usize = 32;
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn show(_app_id: &str, title: &str, body: &str, on_click: OnClick) -> Result<(), String> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        static WAITERS: AtomicUsize = AtomicUsize::new(0);
+
+        let (title, body) = (title.to_string(), body.to_string());
+        let clickable = WAITERS.fetch_add(1, Ordering::Relaxed) < MAX_WAITERS;
+        let (shown_tx, shown_rx) = mpsc::channel::<Result<(), String>>();
+        // The handle and its wait stay on one thread: `wait_for_action` blocks until the
+        // banner is clicked or closed.
+        let spawned = std::thread::Builder::new().name("notice-click".into()).spawn(move || {
+            let mut notification = notify_rust::Notification::new();
+            notification.summary(&title).body(&body).auto_icon();
+            if clickable {
+                // "default" is the action a click on the banner body invokes.
+                notification.action("default", "Open");
+            }
+            let shown = notification.show();
+            let _ = shown_tx.send(shown.as_ref().map(|_| ()).map_err(|e| e.to_string()));
+            if let (Ok(handle), true) = (shown, clickable) {
+                handle.wait_for_action(|action| {
+                    if action == "default" {
+                        on_click();
+                    }
+                });
+            }
+            WAITERS.fetch_sub(1, Ordering::Relaxed);
+        });
+        if let Err(e) = spawned {
+            WAITERS.fetch_sub(1, Ordering::Relaxed);
+            return Err(e.to_string());
+        }
+        shown_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| Err("the notification service did not answer".into()))
     }
 }
 
@@ -303,7 +509,9 @@ impl<B: NotificationBackend> NativePresenter<B> {
         Self { backend, click, warned: false }
     }
 
-    fn allowed(&self) -> Result<(), String> {
+    /// Ok when notifications may be shown. NOT a pure check: while the OS has no answer yet
+    /// this raises its permission prompt.
+    fn ensure_permission(&self) -> Result<(), String> {
         let state = match self.backend.permission()? {
             PermissionState::Granted => return Ok(()),
             PermissionState::Denied => PermissionState::Denied,
@@ -326,21 +534,34 @@ impl<B: NotificationBackend> NativePresenter<B> {
 
 impl<B: NotificationBackend> Presenter for NativePresenter<B> {
     fn present(&mut self, notice: &Notice) {
-        let shown = self
-            .allowed()
-            .and_then(|()| self.backend.show(native_id(&notice.id), TITLE, body_for(&notice.kind)));
-        if let Err(reason) = shown {
-            self.warn_once(&reason);
-            return;
-        }
+        let session = session_of(&notice.link);
+        let shown = self.ensure_permission().and_then(|()| {
+            self.backend.show(native_id(&notice.id), TITLE, body_for(&notice.kind), session.as_deref())
+        });
+        let routes_click = match shown {
+            Ok(routes_click) => routes_click,
+            Err(reason) => {
+                self.warn_once(&reason);
+                return;
+            }
+        };
         self.warned = false;
+        if routes_click {
+            return; // the banner carries its own route
+        }
         let now = now_unix();
         let mut valid_until = now + CLICK_WINDOW_SECS;
         if notice.expires_at > 0.0 {
             valid_until = valid_until.min(notice.expires_at);
         }
-        *self.click.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(ClickTarget { session: session_of(&notice.link), valid_until });
+        let mut slot = self.click.lock().unwrap_or_else(|e| e.into_inner());
+        // A notice with nowhere to go (fleet health) must not erase the chat an earlier,
+        // still-clickable banner points at.
+        let keeps_route =
+            session.is_none() && slot.as_ref().is_some_and(|t| t.session.is_some() && now < t.valid_until);
+        if !keeps_route {
+            *slot = Some(ClickTarget { session, valid_until });
+        }
     }
 }
 
@@ -373,6 +594,7 @@ async fn stream_once<P: Presenter>(
     client: &reqwest::Client,
     source: &Source,
     tracker: &mut Tracker,
+    journal: &mut Journal,
     presenter: &mut P,
     stop: &AtomicBool,
 ) -> (bool, String) {
@@ -384,9 +606,10 @@ async fn stream_once<P: Presenter>(
     if let Some(token) = (source.token)().filter(|t| !t.is_empty()) {
         req = req.header("Authorization", format!("Bearer {token}"));
     }
-    if let Some(seq) = tracker.last_seq {
-        req = req.header("Last-Event-ID", seq.to_string());
-    }
+    // Always a cursor: without one the hub streams live only, and a notice raised before
+    // this connect (the sidecar boots before the receiver reaches it) would be lost. 0 asks
+    // for everything the hub still holds.
+    req = req.header("Last-Event-ID", tracker.last_seq.unwrap_or(0).to_string());
     let resp = match req.send().await {
         Ok(resp) => resp,
         Err(e) => return (false, e.to_string()),
@@ -411,6 +634,13 @@ async fn stream_once<P: Presenter>(
         for frame in parser.feed(&text) {
             if let Some(notice) = tracker.accept(&frame, now_unix()) {
                 presenter.present(&notice);
+                // Saved per shown notice, so a crash cannot make the next run repeat it.
+                journal.save(tracker);
+            }
+            if std::mem::take(&mut tracker.rewind) {
+                // Drop the rest of this connection: its live frames would move the cursor
+                // forward again, past what the rewind is about to replay.
+                return (true, "replaying what the hub still holds".into());
             }
         }
     }
@@ -420,18 +650,26 @@ async fn stream_once<P: Presenter>(
 /// Read the hub's event stream until `stop`, reconnecting with backoff. Cursor and
 /// shown-ids live here, across connections, so a reconnect replays the gap without
 /// repeating a banner.
-async fn run<P: Presenter>(source: Source, mut presenter: P, stop: Arc<AtomicBool>, backoff: Backoff) {
+async fn run<P: Presenter>(
+    source: Source,
+    mut journal: Journal,
+    mut presenter: P,
+    stop: Arc<AtomicBool>,
+    backoff: Backoff,
+) {
     let client = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(READ_TIMEOUT)
         .build()
         .unwrap_or_default();
-    let mut tracker = Tracker::default();
+    let mut tracker = journal.load();
     let mut delay = backoff.initial;
     // The last failure logged, so a sidecar that stays down logs one line, not one per try.
     let mut last_reason = String::new();
     while !stop.load(Ordering::Relaxed) {
-        let (opened, reason) = stream_once(&client, &source, &mut tracker, &mut presenter, &stop).await;
+        let (opened, reason) =
+            stream_once(&client, &source, &mut tracker, &mut journal, &mut presenter, &stop).await;
+        journal.save(&mut tracker);
         if stop.load(Ordering::Relaxed) {
             break;
         }
@@ -470,7 +708,9 @@ pub(crate) fn start<R: Runtime>(app: &AppHandle<R>, port: u16) {
         }),
     };
     let presenter = NativePresenter::new(TauriBackend { app: app.clone() }, click.clone());
-    let task = tauri::async_runtime::spawn(run(source, presenter, stop.clone(), Backoff::default()));
+    let journal = Journal::new(app.path().app_data_dir().ok().map(|dir| dir.join("notices.json")));
+    let task =
+        tauri::async_runtime::spawn(run(source, journal, presenter, stop.clone(), Backoff::default()));
     app.manage(NoticeReceiver { stop, task: Mutex::new(Some(task)), click });
 }
 
@@ -487,24 +727,17 @@ pub(crate) fn stop<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// The app was re-activated (macOS `applicationShouldHandleReopen`). The notification
-/// plugin has no click callback on desktop; what a click on one of our banners does is
-/// activate the app, and for a menu-bar app that is what this event reports. So: raise the
-/// console, and when a notice was shown recently, land on the chat it points at — through
-/// the same `palette:navigate` intent the launcher forwards, which the main window
-/// validates against its own store (an unknown session is ignored there).
+/// plugin has no click callback on desktop; on macOS what a click on one of our banners
+/// does is activate the app, and for a menu-bar app that is what this event reports. So:
+/// raise the console, and when a notice was shown recently, land on the chat it points at.
+/// Windows and Linux never get here — their banners route their own click (`toast`).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn on_reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) {
     let target = app
         .try_state::<NoticeReceiver>()
         .and_then(|state| take_click_target(&state.click, now_unix()));
     match target {
-        Some(target) => {
-            crate::show_main_window(app);
-            if let Some(session) = target.session {
-                let intent = serde_json::json!({ "kind": "chat", "sessionId": session });
-                let _ = app.emit("palette:navigate", intent);
-            }
-        }
+        Some(target) => open_route(app, target.session.as_deref()),
         // A banner clicked after its window still has to bring the console back.
         None if !has_visible_windows => crate::show_main_window(app),
         None => {}
@@ -616,6 +849,53 @@ mod tests {
         assert_eq!(tracker.last_seq, Some(11));
     }
 
+    fn resync_frame(seq: u64, since: u64, floor: u64) -> String {
+        let body = serde_json::json!({
+            "topic": "resync_required",
+            "seq": seq,
+            "data": { "since": since, "floor": floor, "last_seq": seq },
+        });
+        format!("id: {seq}\ndata: {body}\n\n")
+    }
+
+    #[test]
+    fn a_cursor_the_hub_cannot_place_rewinds_to_the_retention_floor_once() {
+        let mut tracker = Tracker::default();
+        tracker.last_seq = Some(3);
+        // Cursor 3 is older than the floor (40): the frame names the hub's current seq.
+        assert_eq!(tracker.accept(&frames(&resync_frame(900, 3, 40))[0], 1.0), None);
+        assert_eq!(tracker.last_seq, Some(40), "replay from the oldest retained event, not from now");
+        assert!(std::mem::take(&mut tracker.rewind));
+        // Asked from the floor and still refused: take the hub's seq, do not ask again.
+        assert_eq!(tracker.accept(&frames(&resync_frame(900, 40, 40))[0], 1.0), None);
+        assert_eq!(tracker.last_seq, Some(900));
+        assert!(!tracker.rewind);
+    }
+
+    #[test]
+    fn the_journal_carries_the_cursor_and_shown_ids_across_runs() {
+        let dir = std::env::temp_dir().join(format!("notices-journal-{}-{}", std::process::id(), now_unix()));
+        let mut journal = Journal::new(Some(dir.join("nested").join("notices.json")));
+        let mut tracker = journal.load();
+        assert_eq!(tracker.last_seq, None, "no file yet is an empty tracker");
+        let first = &frames(&notice_frame(12, "abc", "question", "", 0.0))[0];
+        assert!(tracker.accept(first, 1.0).is_some());
+        journal.save(&mut tracker);
+        assert!(!tracker.dirty);
+
+        let mut next = Journal::new(journal.path.clone()).load();
+        assert_eq!(next.last_seq, Some(12));
+        let replayed = &frames(&notice_frame(13, "abc", "question", "", 0.0))[0];
+        assert_eq!(next.accept(replayed, 1.0), None, "shown by the previous run");
+
+        // A corrupt file, or no path at all, is an empty tracker — never a failure.
+        std::fs::write(journal.path.as_deref().unwrap(), b"{not json").unwrap();
+        assert_eq!(Journal::new(journal.path.clone()).load().last_seq, None);
+        let mut nowhere = Journal::new(None);
+        nowhere.save(&mut next);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_seen_set_is_bounded() {
         let mut tracker = Tracker::default();
@@ -632,7 +912,6 @@ mod tests {
         assert_eq!(native_id("abc"), native_id("abc"));
         assert_ne!(native_id("abc"), native_id("abd"));
         assert_eq!(native_id(""), 0x011c_9dc5); // FNV-1a offset basis, folded
-        assert!(native_id("ffffffffffffffffffffffffffffffff") >= 0);
         for kind in ["notify", "question", "review", "something-new"] {
             assert!(!body_for(kind).is_empty());
         }
@@ -665,7 +944,10 @@ mod tests {
         permission: PermissionState,
         after_request: PermissionState,
         fail_show: bool,
+        /// Stands in for a platform whose banners report their own click.
+        routes_click: bool,
         shown: Arc<Mutex<Vec<(i32, String, String)>>>,
+        routes: Arc<Mutex<Vec<Option<String>>>>,
         requests: Arc<Mutex<u32>>,
     }
 
@@ -675,7 +957,9 @@ mod tests {
                 permission,
                 after_request: permission,
                 fail_show: false,
+                routes_click: false,
                 shown: Arc::default(),
+                routes: Arc::default(),
                 requests: Arc::default(),
             }
         }
@@ -689,12 +973,13 @@ mod tests {
             *self.requests.lock().unwrap() += 1;
             Ok(self.after_request)
         }
-        fn show(&self, id: i32, title: &str, body: &str) -> Result<(), String> {
+        fn show(&self, id: i32, title: &str, body: &str, session: Option<&str>) -> Result<bool, String> {
             if self.fail_show {
                 return Err("notification center unavailable".into());
             }
             self.shown.lock().unwrap().push((id, title.into(), body.into()));
-            Ok(())
+            self.routes.lock().unwrap().push(session.map(str::to_string));
+            Ok(self.routes_click)
         }
     }
 
@@ -713,6 +998,33 @@ mod tests {
         assert!(!shown[0].2.contains("secret"));
         let target = take_click_target(&click, now_unix()).expect("a click target is pending");
         assert_eq!(target.session.as_deref(), Some("chat-9"));
+    }
+
+    #[test]
+    fn a_banner_that_routes_its_own_click_gets_the_route_and_leaves_no_pending_target() {
+        let mut backend = FakeBackend::new(PermissionState::Granted);
+        backend.routes_click = true;
+        let click = ClickSlot::default();
+        let mut presenter = NativePresenter::new(backend.clone(), click.clone());
+        presenter.present(&notice("n1", "http://127.0.0.1:7870/app/?session=chat-9"));
+        presenter.present(&notice("n2", "http://127.0.0.1:7870/app/"));
+        // Each banner is handed its own notice's route — nothing is shared between them.
+        assert_eq!(*backend.routes.lock().unwrap(), vec![Some("chat-9".to_string()), None]);
+        assert!(click.lock().unwrap().is_none(), "a later app activation must not re-route");
+    }
+
+    #[test]
+    fn a_notice_without_a_chat_does_not_erase_an_earlier_banners_route() {
+        let click = ClickSlot::default();
+        let mut presenter = NativePresenter::new(FakeBackend::new(PermissionState::Granted), click.clone());
+        presenter.present(&notice("n1", "/app/?session=chat-1"));
+        presenter.present(&notice("n2", "/app/"));
+        assert_eq!(click.lock().unwrap().clone().unwrap().session.as_deref(), Some("chat-1"));
+        // A newer chat does replace it, and a route-less notice fills an empty slot.
+        presenter.present(&notice("n3", "/app/?session=chat-3"));
+        assert_eq!(take_click_target(&click, now_unix()).unwrap().session.as_deref(), Some("chat-3"));
+        presenter.present(&notice("n4", "/app/"));
+        assert_eq!(take_click_target(&click, now_unix()).map(|t| t.session), Some(None));
     }
 
     #[test]
@@ -836,15 +1148,58 @@ mod tests {
         let presenter = Collect { got: got.clone(), stop: stop.clone(), stop_after: "B".into() };
         let source = Source { url, token: Box::new(|| Some("tok-123".into())) };
         let backoff = Backoff { initial: Duration::from_millis(10), max: Duration::from_millis(20) };
-        tauri::async_runtime::block_on(run(source, presenter, stop, backoff));
+        tauri::async_runtime::block_on(run(source, Journal::new(None), presenter, stop, backoff));
 
         let heads = hub.join().unwrap();
         assert_eq!(*got.lock().unwrap(), vec!["A".to_string(), "B".to_string()]);
         assert_eq!(heads.len(), 2);
         assert!(heads[0].contains("authorization: bearer tok-123"), "{}", heads[0]);
         assert!(heads[0].contains("accept: text/event-stream"));
-        assert!(!heads[0].contains("last-event-id"), "a first connect has no cursor");
-        assert!(heads[1].contains("last-event-id: 5"), "{}", heads[1]);
+        // The hub is live-only without a cursor, so even the first connect asks for replay.
+        assert!(heads[0].contains("last-event-id: 0\r\n"), "{}", heads[0]);
+        assert!(heads[1].contains("last-event-id: 5\r\n"), "{}", heads[1]);
+    }
+
+    #[test]
+    fn a_relaunch_resumes_from_the_saved_cursor_and_replays_past_a_resync() {
+        let later = now_unix() + 3600.0;
+        let dir = std::env::temp_dir().join(format!("notices-relaunch-{}-{}", std::process::id(), now_unix()));
+        let path = dir.join("notices.json");
+        let backoff = Backoff { initial: Duration::from_millis(10), max: Duration::from_millis(20) };
+        let launch = |bodies: Vec<String>, stop_after: &str| {
+            let (url, hub) = fake_hub(bodies);
+            let got = Arc::new(Mutex::new(Vec::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let presenter = Collect { got: got.clone(), stop: stop.clone(), stop_after: stop_after.into() };
+            let source = Source { url, token: Box::new(|| None) };
+            tauri::async_runtime::block_on(run(source, Journal::new(Some(path.clone())), presenter, stop, backoff));
+            let shown = got.lock().unwrap().clone();
+            (shown, hub.join().unwrap())
+        };
+
+        // First launch: P was raised while the sidecar booted, before the receiver's first
+        // connect — the replay from 0 delivers it.
+        let (shown, heads) = launch(vec![notice_frame(7, "P", "question", "/app/?session=s", later)], "P");
+        assert_eq!(shown, vec!["P".to_string()]);
+        assert!(heads[0].contains("last-event-id: 0\r\n"), "{}", heads[0]);
+
+        // Second launch: resumes from 7. The hub can no longer place that cursor, so the
+        // receiver goes back to the floor and replays — P again (not shown twice) and Q.
+        let (shown, heads) = launch(
+            vec![
+                format!("{}{}", resync_frame(500, 7, 90), notice_frame(501, "live-skipped", "notify", "", later)),
+                format!(
+                    "{}{}",
+                    notice_frame(95, "P", "question", "/app/?session=s", later),
+                    notice_frame(96, "Q", "review", "", later),
+                ),
+            ],
+            "Q",
+        );
+        assert_eq!(shown, vec!["Q".to_string()]);
+        assert!(heads[0].contains("last-event-id: 7\r\n"), "{}", heads[0]);
+        assert!(heads[1].contains("last-event-id: 90\r\n"), "{}", heads[1]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -874,7 +1229,7 @@ mod tests {
         let presenter = Collect { got: got.clone(), stop: stop.clone(), stop_after: "N".into() };
         let source = Source { url, token: Box::new(|| None) };
         let backoff = Backoff { initial: Duration::from_millis(10), max: Duration::from_millis(20) };
-        tauri::async_runtime::block_on(run(source, presenter, stop, backoff));
+        tauri::async_runtime::block_on(run(source, Journal::new(None), presenter, stop, backoff));
         hub.join().unwrap();
         assert_eq!(*got.lock().unwrap(), vec!["N".to_string()]);
     }

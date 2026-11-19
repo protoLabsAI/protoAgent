@@ -23,7 +23,9 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
  *  (ADR 0135 W2, "one presentation owner per surface"). The shell reads its OWN hub's
  *  event stream (`/api/events` on the local sidecar) and shows every `notice` as an OS
  *  notification, window open or closed to the tray — so a console window on that same
- *  stream must not raise a second banner for the same thing. A window focused on a fleet
+ *  stream must not raise a second banner for the same thing. Standing down loses nothing:
+ *  the shell asks the hub to replay from its saved cursor (from the start on a first run),
+ *  so a notice raised before it connected, or still pending at launch, is shown as well. A window focused on a fleet
  *  member (its events come through `/agents/<slug>/…`) or pointed at another machine is
  *  reading a stream the shell does not watch, so it keeps its own notifications. */
 export function nativeOwnsNotices(): boolean {

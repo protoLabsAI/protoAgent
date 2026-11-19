@@ -30,7 +30,7 @@ Each channel has one job:
 |---|---|---|
 | **Utility-bar "Decisions" pill** (≥ 768 px) | The always-available place to see and answer every pending decision, from every fleet member. | Always rendered. Quiet with nothing pending; carries a count while something is pending (§2.1). |
 | **Header "Decisions" button** (< 768 px) | The same, on the phone, where there is no utility bar. | Only while something is pending (§2.2). |
-| **Desktop notification** | Reach Josh when the console window is hidden or in the background. | Once per new decision, through the existing `notifyIfHidden` (`apps/web/src/lib/notify.ts`). Unchanged. |
+| **Desktop notification** | Reach Josh when the console window is hidden or in the background. | Once per new decision. In a browser: through the existing `notifyIfHidden` (`apps/web/src/lib/notify.ts`), unchanged. In the desktop app: the shell's native notice receiver shows the decision's hub notice instead (ADR 0135 W2, `apps/desktop/src-tauri/src/notices.rs`) and `notifyIfHidden` stands down for it, so there is one banner; its click opens the chat the decision is parked in. |
 | **The decision in its own chat** (context) | Show the decision where the agent stopped, so reading the chat explains itself. | Always, as the last item of the parked turn. Unchanged. |
 
 The hub sees every fleet member, so the count is fleet-wide. A standalone agent window shows only its own decisions.

@@ -881,7 +881,8 @@ pub fn run() {
                 // System woke to the foreground (ADR 0074) — debounced system.wake.
                 maybe_signal_wake(app_handle);
             }
-            // A click on a native notice activates the app; land on what it points at.
+            // macOS: a click on a native notice only activates the app; land on what it
+            // points at. Windows and Linux banners route their own click (notices.rs `toast`).
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { has_visible_windows, .. } = &event {
                 notices::on_reopen(app_handle, *has_visible_windows);

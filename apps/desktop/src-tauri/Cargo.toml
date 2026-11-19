@@ -45,6 +45,16 @@ futures-util = "0.3"
 # through tauri and reqwest; named here only because the shell now calls it directly.
 tokio = { version = "1", features = ["time"] }
 
+# A notice banner that reports its own click (notices.rs `toast`). tauri-plugin-notification
+# shows banners through these two but exposes no click callback on desktop, and on Windows
+# and Linux a click does not activate the app either. Both are already locked through the
+# plugin; these lines only let the shell call them directly.
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.7"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4.11"
+
 # SIGTERM for the sidecar on quit and before an update's restart (#3503): the PyInstaller
 # onefile bootloader forwards it to the server, unlike the SIGKILL `CommandChild::kill` sends.
 [target.'cfg(unix)'.dependencies]

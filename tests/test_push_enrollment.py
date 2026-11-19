@@ -5,7 +5,8 @@ Pinned here:
 * a paired phone fetches the instance's VAPID public key and stores, renews and deletes its
   OWN push binding through ``/api/devices/self/push``;
 * the binding lives on the device's row in ``devices.json`` — no second store — so a token
-  rotation keeps it and revoking the device deletes it in the same write;
+  rotation keeps it (under the next generation) and revoking the device deletes it in the
+  same write;
 * another device's token, the shared operator token, an agent pairing and an
   unauthenticated caller are refused;
 * an endpoint that fails ``validate_push_endpoint``, unusable client keys and a key version
@@ -146,7 +147,13 @@ def test_a_paired_device_fetches_the_active_public_key_and_version(devices, keys
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-store"
     active = keys.active_public_key()
-    assert r.json() == {"ok": True, "public_key": active.public_key, "version": active.version, "binding": None}
+    assert r.json() == {
+        "ok": True,
+        "public_key": active.public_key,
+        "version": active.version,
+        "binding": None,
+        "renew": None,
+    }
     # Exactly what `PushManager.subscribe` takes: an uncompressed P-256 point.
     raw = base64.urlsafe_b64decode(active.public_key + "=" * (-len(active.public_key) % 4))
     assert len(raw) == 65 and raw[0] == 4
@@ -260,7 +267,8 @@ def test_the_binding_survives_a_token_rotation_and_a_reload(devices, api):
     _view, new_token = devices.rotate_device(dev["id"], token)
     importlib.reload(devices)
     assert devices.get_device(dev["id"]).push.endpoint == ENDPOINT
-    assert api.get(URL, headers=_hdr(new_token)).json()["binding"]["generation"] == 1
+    # W2a3: the rotation moved it to the next generation, so sends queued under 1 are dropped.
+    assert api.get(URL, headers=_hdr(new_token)).json()["binding"]["generation"] == 2
 
 
 def test_a_replaced_token_in_its_grace_cannot_change_the_binding(devices, clock_free_now, api):
@@ -600,3 +608,22 @@ def clock_free_now(devices, monkeypatch):
     c = Clock()
     monkeypatch.setattr(devices, "_now", c)
     return c
+
+
+# ── Key migration is reported on the device's next visit (W2a3) ──────────────────────────
+
+
+def test_a_binding_stranded_by_a_retired_key_is_cleared_and_reported_on_the_next_get(devices, keys, api):
+    dev, token = _phone(devices)
+    body = _subscription(api, token)
+    api.put(URL, headers=_hdr(token), json=body)
+    assert api.get(URL, headers=_hdr(token)).json()["renew"] is None
+    assert keys.retire(body["vapid_version"]) is True
+    r = api.get(URL, headers=_hdr(token))
+    assert r.json()["binding"] is None and r.json()["renew"] == "vapid_key"
+    assert r.json()["version"] == body["vapid_version"] + 1  # the key to subscribe again with
+    _assert_no_secrets(r, body)
+    assert "push" in _row(devices, dev["id"]) and _row(devices, dev["id"])["push"] is None
+    again = api.put(URL, headers=_hdr(token), json=_subscription(api, token))
+    assert again.json()["binding"]["generation"] == 2
+    assert api.get(URL, headers=_hdr(token)).json()["renew"] is None
