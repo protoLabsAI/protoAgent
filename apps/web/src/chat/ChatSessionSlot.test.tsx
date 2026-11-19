@@ -2,7 +2,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PromptInput } from "@protolabsai/ui/ai";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { chatStore, registerGoalKickoff } from "./chat-store";
 import { ChatSessionSlot } from "./ChatSessionSlot";
 import { ChatTranscript } from "./ChatTranscript";
@@ -113,4 +113,50 @@ it("leaves continuation context for the composer when an automatic kickoff sends
   expect(loadDraftContext(sessionId)).toBe(reference);
   await send("Continue the conversation");
   expect(stream.mock.calls[1][0]).toBe(`Continue the conversation\n\n${reference}`);
+});
+
+// #5477: the task parked, but the send stream never delivered its park frame.
+it.each([
+  "input-required", "auth-required", "failed", "working", "read-fails", "http-error", "api-error", "no-task", "post-park", "stop-during-read",
+])("settles a dropped send from the durable task (%s)", async (state) => {
+  const question = { question: "Which fruit?" };
+  const error = state === "http-error" ? new Error("502 network error")
+    : state === "api-error" ? new ApiError(502, "network error") : new TypeError("network error");
+  let stopStream: AbortSignal | undefined;
+  const getTask = vi.spyOn(api, "getTask").mockImplementation(async () => {
+    if (state === "stop-during-read") await view.composer!.onStop!();
+    if (state === "read-fails") throw new Error("task unavailable");
+    return { state, text: "" };
+  });
+  vi.spyOn(api, "cancelTask").mockResolvedValue({});
+  const resume = vi.spyOn(api, "resumeTask").mockImplementation(async (_task, _session, handlers) => {
+    handlers?.onInputRequired?.(question);
+    handlers?.onTaskState?.(state);
+  });
+  vi.spyOn(api, "streamChat").mockImplementation(async (_text, _session, callbacks) => {
+    stopStream = callbacks?.signal;
+    if (state !== "no-task") callbacks?.onTaskId?.("parked-task");
+    if (state === "post-park") {
+      callbacks?.onInputRequired?.(question);
+      callbacks?.onTaskState?.("input-required");
+    }
+    throw error;
+  });
+  await send("Ask me a question");
+  const messages = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.messages;
+  const bubble = messages[messages.length - 1];
+  if (["input-required", "auth-required", "post-park"].includes(state)) {
+    expect(host.textContent).toContain("Which fruit?");
+    expect(bubble).toMatchObject({ status: "streaming", paused: true, taskId: "parked-task" });
+    expect(bubble.content).not.toContain("network error");
+    expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("idle");
+  } else if (state === "stop-during-read") {
+    expect(stopStream?.aborted).toBe(true);
+    expect(bubble.status).toBe("done");
+    expect(resume).not.toHaveBeenCalled();
+  } else {
+    expect(bubble).toMatchObject({ status: "error", content: error.message });
+    expect(resume).not.toHaveBeenCalled();
+  }
+  expect(getTask).toHaveBeenCalledTimes(["http-error", "api-error", "no-task", "post-park"].includes(state) ? 0 : 1);
 });
