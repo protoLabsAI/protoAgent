@@ -153,10 +153,10 @@ def parked(ledger, monkeypatch, request):
     return graph, config, resume, received
 
 
-async def park(graph, config):
+async def park(graph, config, session_id="s"):
     result = await graph.ainvoke({}, config)
     payload = result["__interrupt__"][0].value
-    return await turn_control.record_decision_pause("s", payload, config)
+    return await turn_control.record_decision_pause(session_id, payload, config)
 
 
 @pytest.mark.asyncio
@@ -450,15 +450,23 @@ def test_lost_response_after_consumption_still_reports_success(ledger, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_agent_can_withdraw_its_decision_from_another_session(ledger, monkeypatch):
+@pytest.mark.parametrize("other_session,other_agent", [
+    ("parked-other", "other-agent"), ("job:other", "other-agent"),
+    ("legacy-chat", ""), ("job:legacy", ""),
+])
+async def test_agent_can_withdraw_its_decision_from_another_session(
+    ledger, monkeypatch, other_session, other_agent
+):
     resume = AsyncMock(return_value=True)
     monkeypatch.setattr(decision_resume, "resume_parked_turn", resume)
     store, _ = ledger
     monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(identity_name="release-agent"))
     own = store.create("parked", "Release?", OPTIONS, agent="release-agent")
-    other = store.create("parked-other", "Release?", OPTIONS, agent="other-agent")
+    other = store.create(other_session, "Release?", OPTIONS, agent=other_agent)
     args = {"state": {"session_id": "working"}, "reason": "Release abandoned"}
-    assert (await withdraw_decision.ainvoke({"decision_id": other.id, **args})).startswith("Error:")
+    assert await withdraw_decision.ainvoke({"decision_id": other.id, **args}) == (
+        "Error: decision does not belong to this agent or session"
+    )
     assert "withdrawn" in await withdraw_decision.ainvoke({"decision_id": own.id, **args})
     assert store.get(own.id).withdraw_reason == "Release abandoned"
     assert store.get(other.id).pending
@@ -466,16 +474,22 @@ async def test_agent_can_withdraw_its_decision_from_another_session(ledger, monk
 
 
 @pytest.mark.asyncio
-async def test_withdraw_from_another_session_clears_real_checkpoint(ledger, parked, monkeypatch):
+@pytest.mark.parametrize("session_id", ["s", "job:release"])
+@pytest.mark.parametrize("agent", ["release-agent", "protoagent"])
+async def test_withdraw_from_another_session_clears_real_checkpoint(
+    ledger, parked, monkeypatch, session_id, agent
+):
     from graph.config import LangGraphConfig
 
     store, _ = ledger
     graph, config, _, _received = parked
-    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(identity_name="release-agent"))
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(identity_name=agent))
     monkeypatch.setattr(STATE, "goal_controller", None)
     monkeypatch.setattr(STATE, "active_port", 7871)
-    config["configurable"]["thread_id"] = turn_control._resolve_thread_id(None, "s")
-    rec = await park(graph, config)
+    config["configurable"]["thread_id"] = turn_control._resolve_thread_id(None, session_id)
+    # Refs #5602: exercise actual creation, including jobs with the default identity.
+    rec = await park(graph, config, session_id)
+    assert rec.agent == agent
     assert await chat._pending_interrupt_value(config) is not None
     posted = []
 
@@ -506,12 +520,12 @@ async def test_withdraw_from_another_session_clears_real_checkpoint(ledger, park
         "state": {"session_id": "working"},
     })
     assert result == f"Decision {rec.id} withdrawn: Release abandoned"
-    assert posted[0]["contextId"] == "s"
+    assert posted[0]["contextId"] == session_id
     assert posted[0]["metadata"] == {"hitl_resume": True}
     assert (await graph.aget_state(config)).values["result"] == decision_resume.CANCELLED_RESUME
     assert await chat._pending_interrupt_value(config) is None
     assert await turn_control._hold_if_hitl_pending(
-        "Next task", "s", config, request_metadata={}
+        "Next task", session_id, config, request_metadata={}
     ) is None
     assert store.get(rec.id).withdraw_reason == "Release abandoned"
 
@@ -539,6 +553,27 @@ async def test_withdraw_of_restart_recovery_record_never_resumes(ledger, monkeyp
     assert result == f"Decision {rec.id} withdrawn: obsolete"
     assert store.get(rec.id).state == "withdrawn"
     resume.assert_not_awaited()
+
+
+@pytest.mark.parametrize("agent", ["release-agent", "protoagent"])
+def test_job_spend_cap_decision_records_owner(ledger, monkeypatch, agent):
+    from graph.config import LangGraphConfig
+
+    store, clock = ledger
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(identity_name=agent, spend_cap_enabled=True))
+    status = {
+        "paused": True, "decision_id": None, "day": clock.now.date().isoformat(),
+        "cost_usd": 2, "total_tokens": 100, "daily_cost_hard_limit": 2,
+        "daily_token_hard_limit": 100,
+    }
+    monkeypatch.setattr(turn_control, "spend_cap_status", lambda: status.copy())
+    assert turn_control.autonomous_admission_error("scheduler", "job:release")
+    rec = store.spend_cap_decision(status["day"])
+    assert rec.agent == agent
+    assert rec.session_id == "job:release"
+    # A repeated admission keeps the original durable handle and owner.
+    assert turn_control.autonomous_admission_error("scheduler", "job:another")
+    assert store.spend_cap_decision(status["day"]).id == rec.id
 
 
 @pytest.mark.asyncio

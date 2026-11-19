@@ -1,0 +1,1 @@
+- **Agents can withdraw their own job decisions from chat.** Preserve the default agent identity on new decisions and stamp spend-cap decisions with their owner, so the existing withdrawal tool can record the reason and clear the parked checkpoint across sessions. Ownership checks still refuse other agents and unnamed legacy records from other sessions. Refs #5602.
