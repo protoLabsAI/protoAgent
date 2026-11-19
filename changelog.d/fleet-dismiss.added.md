@@ -1,0 +1,1 @@
+- **Dismiss stale fleet items from operator chat.** The hub can cancel a member’s pending decision or close a waiting task as dismissed through existing operator routes, with a required reason and an audit entry for every attempt. Unattended and subagent turns are refused. Refs #5602.
