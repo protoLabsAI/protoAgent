@@ -95,11 +95,11 @@ def test_a_new_job_generation_posts_the_same_text_again(_sched, _events):
 
 
 async def test_delivery_bookkeeping_feeds_the_guard_only_after_a_publish(_sched, _events, monkeypatch):
-    # The production async path (_deliver_scheduled): a stale-session skip delivers and
+    # The production async path (_deliver_scheduled): a one-shot stale-session skip delivers and
     # records nothing, so the same result still posts once the chat wakes; a publish pops
     # the bookkeeping fingerprint off the event and records it AFTER the publish, so only
     # then does the next identical run read as a repeat.
-    _sched(_Job())
+    _sched(_Job(schedule="2026-11-20T09:00:00Z"))
     monkeypatch.setattr(a2a, "_session_recently_active", _liveness(False))
     assert await a2a._deliver_scheduled(a2a._scheduled_delivery_payload(_Outcome(text="All green."))) is False
     assert _cards(_events) == []
@@ -110,6 +110,24 @@ async def test_delivery_bookkeeping_feeds_the_guard_only_after_a_publish(_sched,
     (card,) = _cards(_events)
     assert "card_fingerprint" not in card
     assert a2a._scheduled_delivery_payload(_Outcome(text="All green.")) is None  # a repeat now
+
+
+async def test_idle_recurring_job_keeps_quiet_and_repeat_guards(_sched, _events, monkeypatch):
+    # #5601: exempting cron from the idle guard must still record delivered fingerprints.
+    _sched(_Job())
+    monkeypatch.setattr(a2a, "_session_recently_active", _liveness(False))
+    for text, expected in [
+        ("NO_UPDATE", 0),
+        ("As of 09:10: CI green.", 1),
+        ("As of 11:48: CI green.", 1),
+        ("Nothing changed.\nNO_UPDATE", 1),
+        ("One new review landed.", 2),
+    ]:
+        payload = a2a._scheduled_delivery_payload(_Outcome(text=text))
+        if payload is not None:
+            assert await a2a._deliver_scheduled(payload) is True
+        assert len(_cards(_events)) == expected
+    assert [c["collapse"] for c in _cards(_events)] == [False, True]
 
 
 def test_first_delivered_card_is_full_even_after_quiet_fires(_sched, _events):
