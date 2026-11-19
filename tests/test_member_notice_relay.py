@@ -93,7 +93,8 @@ async def test_hub_pushes_a_members_notice_and_remembers_who_raised_it(box):
 
 @pytest.mark.parametrize("over", [
     {"member": "someone-else"}, {"member": ""}, {"member": 7},
-    {"notice_id": "../etc"}, {"notice_id": ""}, {"kind": "shout"}, {"importance": "urgent"},
+    {"notice_id": "../etc"}, {"notice_id": ""}, {"notice_id": ["x"]}, {"kind": "shout"}, {"kind": ["question"]},
+    {"kind": {"a": 1}}, {"importance": "urgent"}, {"importance": ["high"]},
     {"expires_at": 5.0}, {"expires_at": "soon"}, {"created_at": float("nan")},
 ])
 async def test_hub_refuses_what_is_not_its_members_well_formed_notice(box, over):

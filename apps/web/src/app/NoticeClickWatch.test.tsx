@@ -100,3 +100,14 @@ it("opens the decision here when the hub can't say who raised it", async () => {
   expect(await openNotice("decision-dec-8")).toBe(true);
   expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-8");
 });
+
+it("the latest click wins when an earlier lookup answers late", async () => {
+  let answerFirst!: (r: Response) => void;
+  fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { answerFirst = resolve; }));
+  const first = openNotice("decision-dec-a");
+  expect(await openNotice("decision-dec-b")).toBe(true);
+  answerFirst(new Response(JSON.stringify({ ok: true, agent: "someone-else" })));
+  expect(await first).toBe(false);
+  expect(openWorkGroup).toHaveBeenCalledTimes(1);
+  expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-b");
+});

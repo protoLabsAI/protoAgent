@@ -12,6 +12,7 @@ import { useUI } from "../state/uiStore";
 const CLICK_MESSAGE = "protoagent:notice-click"; // sw.js CLICK_MESSAGE
 const NOTICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/; // sw.js NOTICE_ID
 const DECISION_PREFIX = "decision-"; // graph/decisions.py: notice_id = f"decision-{rec.id}"
+let latestClick = 0;
 
 /** The fleet member that raised a notice, or null for this hub's own. The push payload names
  *  no agent, so the hub is asked after authentication (`GET /api/notices/<id>`, #5614). Any
@@ -36,7 +37,10 @@ export async function openNotice(id: unknown, go: (href: string) => void = (href
   if (typeof id !== "string" || !NOTICE_ID.test(id) || !id.startsWith(DECISION_PREFIX)) return false;
   const decisionId = id.slice(DECISION_PREFIX.length);
   if (!decisionId) return false;
+  // The latest click wins: a slower lookup for an earlier click must not replace it.
+  const mine = ++latestClick;
   const agent = await agentOf(id);
+  if (mine !== latestClick) return false;
   if (agent && agent !== currentSlug()) {
     go(`${agentHref(agent)}?notice=${encodeURIComponent(id)}`);
     return true;

@@ -71,7 +71,8 @@ def hub_url() -> str:
 
 
 def member_id() -> str | None:
-    """This process's workspace id when it runs as a fleet member, else None."""
+    """This process's workspace id, read from its instance root's ``workspace.yaml``; None
+    when there is no record (a hub or standalone instance has none, ADR 0042)."""
     from graph.workspaces import manager
     from infra.paths import instance_paths
 
@@ -141,7 +142,8 @@ async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
     notice_id, kind, importance = payload.get("notice_id"), payload.get("kind"), payload.get("importance")
     if not isinstance(notice_id, str) or not _NOTICE_ID.fullmatch(notice_id):
         raise NoticeRefused("notice_id is not an opaque identifier")
-    if kind not in _NOTICE_LIFETIMES or importance not in _IMPORTANCES:
+    # isinstance first: a JSON list or object is unhashable, and `in` on the dict would raise.
+    if not isinstance(kind, str) or kind not in _NOTICE_LIFETIMES or importance not in _IMPORTANCES:
         raise NoticeRefused("unknown notice kind or importance")
     now = clock()
     try:

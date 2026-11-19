@@ -10,8 +10,9 @@ fleet service token alone (ADR 0089): the credential every member of this hub al
 holds, and nothing outside the box does.
 
 The read is for the console: a push payload names no member (ADR 0135, "What leaves the
-machine"), so after a click the console asks, authenticated, which agent's console holds
-the decision.
+machine"), so after a click the console asks which agent's console holds the decision.
+Like the decision routes it has no check of its own: the global auth middleware gates
+it, and any operator credential (a paired phone included) may read it.
 """
 
 from __future__ import annotations
