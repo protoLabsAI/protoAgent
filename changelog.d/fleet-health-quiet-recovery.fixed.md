@@ -1,0 +1,1 @@
+- **Fleet recovery records no longer wake the hub agent.** Restarted and recovered members are recorded at the background inbox tier, avoiding unnecessary model turns while down, wedged, and exhausted-restart alerts still wake the agent. Chat notices are unchanged. Fixes #5585.
