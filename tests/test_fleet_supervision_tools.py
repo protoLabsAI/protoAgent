@@ -390,8 +390,15 @@ async def test_dismiss_uses_member_operator_routes_and_removes_pending_items(dis
     monkeypatch.setattr("graph.decision_reconcile.interrupt_parked", not_parked)
     app = FastAPI()
     register_decision_routes(app)
+    notices = []
+
+    async def inbox_add(payload):
+        assert tasks.get(task["id"])["status"] == "closed"
+        notices.append(payload)
+
     register_operator_routes(app, runtime_status=lambda: {}, subagent_list=lambda: [],
-                             subagent_run=lambda req: "", subagent_batch=lambda req: "", tasks_store=tasks)
+                             subagent_run=lambda req: "", subagent_batch=lambda req: "",
+                             tasks_store=tasks, inbox_add=inbox_add)
     sent = []
 
     async def capture(request):
@@ -407,6 +414,7 @@ async def test_dismiss_uses_member_operator_routes_and_removes_pending_items(dis
         assert (await _dismiss(dismiss_env, kind="task", item_id=task["id"]))["ok"] is True
         after = _by_id(await fs.fleet_pending())[_ALPHA["id"]]
         assert after["pending_decisions"] == after["waiting_tasks"] == 0
+    assert len(notices) == 1 and "Outcome: dismissed" in notices[0]["text"]
     assert decisions.get(decision.id).state == "withdrawn"
     closed = tasks.get(task["id"])
     assert closed["status"] == "closed" and closed["close_reason"] == "dismissed: No longer needed"
@@ -510,10 +518,21 @@ async def test_dismiss_preserves_non_waiting_tasks(dismiss_env, monkeypatch, tmp
         tasks.delete(task["id"])
     preserved = tasks.get(task["id"])
 
+    notices = []
+
     async def inbox_add(payload):
-        # Resume after the route's read but before the store's close (#5602).
+        notices.append(payload)
+
+    original_close = tasks.close
+
+    def resume_before_close(*args, **kwargs):
+        # Resume after the route's read but before its atomic close (#5602).
         nonlocal preserved
         preserved = tasks.update(task["id"], status="in_progress")
+        return original_close(*args, **kwargs)
+
+    if status == "resumed":
+        monkeypatch.setattr(tasks, "close", resume_before_close)
 
     app = FastAPI()
     register_operator_routes(app, runtime_status=lambda: {}, subagent_list=lambda: [],
@@ -533,6 +552,7 @@ async def test_dismiss_preserves_non_waiting_tasks(dismiss_env, monkeypatch, tmp
     if status == "resumed":
         assert result["status_code"] == 409
     assert tasks.get(task["id"]) == preserved
+    assert notices == []
     entries = dismiss_env.audit.get_recent()
     assert len(entries) == 1 and not entries[0]["success"]
     assert expected in entries[0]["result_summary"]

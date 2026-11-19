@@ -1006,14 +1006,13 @@ def register_operator_routes(
     async def _tasks_close(issue_id: str, req: TaskCloseRequest):
         _require_tasks()
         try:
+            outcome_notice = None
             if inbox_add is not None or req.expected_status is not None:
                 previous = await asyncio.to_thread(task_svc.get, issue_id)
                 if req.expected_status is not None and previous["status"] != req.expected_status:
                     raise ConflictError(f"Task {issue_id!r} is no longer {req.expected_status}.")
                 if inbox_add is not None and previous["status"] == "waiting":
-                    # Queue before closing: a failed inbox write leaves the task waiting
-                    # so the operator can retry. Dedup covers a retry after enqueue.
-                    await inbox_add({
+                    outcome_notice = {
                         "text": (
                             f"Operator closed waiting task {issue_id}: {previous['title']}\n"
                             f"Outcome: {req.outcome}\nReason: {req.reason or '(none provided)'}"
@@ -1023,7 +1022,11 @@ def register_operator_routes(
                         "source": "task-outcome",
                         "origin_session": previous.get("session_id") or None,
                         "dedup_key": f"task-outcome:{issue_id}:{previous['updated_at']}",
-                    })
+                    }
+                    if req.expected_status is None:
+                        # Preserve ordinary closes: enqueue failure leaves the task
+                        # waiting for retry. Dedup covers a retry after enqueue.
+                        await inbox_add(outcome_notice)
             # The self-improvement review is queued from the store's ``task.changed`` close
             # event (``tasks.autoclose``), the one path every close takes.
             # Keep the outcome in the existing durable close reason; legacy/done closes
@@ -1032,6 +1035,10 @@ def register_operator_routes(
             issue = await asyncio.to_thread(
                 task_svc.close, req.project_path, issue_id, reason, expected_status=req.expected_status,
             )
+            if outcome_notice is not None and req.expected_status is not None:
+                # Conditional closes can lose a race to resumed work. Announce the
+                # outcome only after the store's atomic status check succeeds.
+                await inbox_add(outcome_notice)
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc
