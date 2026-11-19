@@ -193,3 +193,15 @@ async def test_sync_hook_runs_off_loop_and_reload_removes_notification(wire):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert len(threads) == 1
+
+
+def test_console_row_and_transport_share_notice_identity(monkeypatch):
+    from graph.plugins import chat_surface
+
+    notices = []
+    monkeypatch.setattr(chat_surface, "_notifiers", {"test": notices.append})
+    monkeypatch.setattr("graph.decisions._console_link", lambda _: "/app/")
+    store = DecisionStore(":memory:")
+    rec = store.create("session", "Continue?", ["Yes"])
+    assert rec.to_dict()["notice_id"] == notices[0].notice_id
+    assert store.get(rec.id).to_dict()["notice_id"] == notices[0].notice_id

@@ -146,7 +146,7 @@ export function createDecisionsStore() {
             if (notified.has(d.id)) continue;
             notified.add(d.id);
             // A new decision is also a hub notice — in the desktop app the shell shows it.
-            notifyIfHidden(`${d.agent || "An agent"} needs a decision`, d.question, openPanel, { notice: true });
+            notifyIfHidden(`${d.agent || "An agent"} needs a decision`, d.question, openPanel, { notice: true, noticeId: d.notice_id });
           }
         } catch {
           result = null;

@@ -17,6 +17,7 @@
  * The bearer is sent explicitly and to the HUB (`host: true`), like rotation: it is the hub's
  * registry that knows this device, whichever fleet member is focused. */
 
+import { removeLocalPushSubscription } from "./push";
 import { apiUrl } from "./api/routing";
 import { deviceToken, markDeviceMoved } from "./credentials";
 
@@ -102,4 +103,9 @@ export async function probeOrigin(origin: string, timeoutMs = 3000): Promise<boo
   } catch {
     return false;
   }
+}
+
+/** Called only after the existing self check confirms arrival at the new home. */
+export async function finishPushHandoff(token: string): Promise<void> {
+  await removeLocalPushSubscription(token);
 }

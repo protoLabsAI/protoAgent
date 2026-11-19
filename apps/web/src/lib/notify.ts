@@ -15,6 +15,8 @@ export type NotifyOptions = {
    *  `notify_chat_surfaces`, so it is on the event stream as a `notice` event. Set it only
    *  for those — today a new decision and a scheduled result card. */
   notice?: boolean;
+  /** The hub notice identity, shared with the push worker notification tag. */
+  noticeId?: string;
 };
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -57,7 +59,7 @@ export function notifyIfHidden(
 
   const fire = () => {
     try {
-      const notification = new Notification(title, { body: body?.slice(0, 240) });
+      const notification = new Notification(title, { body: body?.slice(0, 240), ...(opts?.noticeId ? { tag: opts.noticeId } : {}) });
       if (onClick) {
         notification.onclick = () => {
           try {

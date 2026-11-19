@@ -18,6 +18,7 @@
  * learns from its device list, but the phone otherwise just… opened. */
 
 import { AGENT_CODE_LENGTH, formatAgentCode, isCompleteAgentCode, normalizeAgentCode } from "./agentPairing";
+import { renewPush } from "./push";
 import { apiUrl } from "./api/routing";
 import { announceCredentialChange, storeDeviceAddresses, storeDeviceCredential } from "./credentials";
 
@@ -163,6 +164,7 @@ export async function claimPairingCode(code: string): Promise<ClaimResult> {
     const name = typeof data?.device?.name === "string" && data.device.name ? data.device.name : deviceName();
     announcePaired({ id: id ?? "", name, ...(data?.moved === true ? { moved: true } : {}) });
 
+    void renewPush().catch(() => {});
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "pairing failed" };

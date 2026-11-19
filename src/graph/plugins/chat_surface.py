@@ -104,7 +104,7 @@ def unregister_notice_adapter(key: object) -> None:
 
 def notify_chat_surfaces(
     text: str, link: str, *, kind: NoticeKind = "notify", importance: NoticeImportance = "normal",
-    ttl_seconds: float | None = None,
+    ttl_seconds: float | None = None, notice_id: str | None = None,
 ) -> str:
     """Queue optional adapter notifications without waiting for network delivery.
 
@@ -115,7 +115,8 @@ def notify_chat_surfaces(
     The two-argument calling form remains supported for existing plugins. Returns
     the opaque id shared by transports and the retained bus event. Times are UTC
     Unix seconds; ``ttl_seconds`` can shorten, but never extend, the kind's default
-    lifetime (notify/review: one hour; question: one day).
+    lifetime (notify/review: one hour; question: one day). A producer may supply
+    its stable notice id to share identity with its console event.
     """
     lifetime = _NOTICE_LIFETIMES[kind]
     if ttl_seconds is not None:
@@ -125,7 +126,7 @@ def notify_chat_surfaces(
     created_at = time.time()
     notice = ChatNotice(
         kind=kind, importance=importance, text=text, link=link,
-        notice_id=uuid.uuid4().hex, created_at=created_at, expires_at=created_at + lifetime,
+        notice_id=notice_id or uuid.uuid4().hex, created_at=created_at, expires_at=created_at + lifetime,
     )
     # The server wires HOST even without chat plugins; publish retains by default.
     from graph.plugins.host import HOST

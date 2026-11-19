@@ -24,7 +24,8 @@ import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
 import { migrateLegacyDeviceToken, redeemPairingFromUrl } from "./lib/pairing";
-import { startDeviceTokenRotation } from "./lib/deviceRotation";
+import { startPush } from "./lib/push";
+import { rotateDeviceTokenIfDue, startDeviceTokenRotation } from "./lib/deviceRotation";
 import { installStorageEviction } from "./lib/storageEviction";
 import { initTranscriptBackend, transcriptStoreIfOpen } from "./chat/chat-store";
 import { initPaletteThreads } from "./app/paletteChatStore";
@@ -109,5 +110,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 // A paired phone rotates its token weekly (ADR 0121 D5): asked on boot — after any `#pair=`
 // claim above has stored the token — and daily while open. Not in the launcher window.
-if (!launcher) startDeviceTokenRotation();
+if (!launcher) {
+  startDeviceTokenRotation();
+  // Register immediately, but reconcile credentials before enrolling the subscription.
+  void startPush(rotateDeviceTokenIfDue());
+}
 });

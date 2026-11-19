@@ -28,6 +28,7 @@ export type DecisionState = "pending" | "answered" | "expired" | "cancelled" | "
  *  Every server field is carried, including the two it computes (`default_action_text`,
  *  `answer_label`) and the agent/session link (`agent`, `session_id`, `thread_id`). */
 export type DecisionRow = {
+  notice_id?: string;
   id: string;
   session_id: string;
   agent: string;

@@ -14,6 +14,8 @@
  * (`replaceDeviceToken`). The bearer is sent explicitly and to the HUB (`host: true`): it is
  * the hub's registry that knows this device, whichever fleet member is focused. */
 
+import { renewPush } from "./push";
+import { finishPushHandoff } from "./deviceHandoff";
 import { apiUrl } from "./api/routing";
 import {
   cancelDeviceMove,
@@ -59,8 +61,11 @@ async function call(method: "GET" | "POST", path: string, token: string): Promis
 /** The phone's move away from this origin completed (ADR 0121 D1): forget `token` here —
  *  only if it is still the stored one (another tab may have re-paired meanwhile) — and, when
  *  no operator token is left to keep this console signed in, send it to the AuthGate. */
-function finishMove(token: string): RotationOutcome {
-  if (deviceToken() === token && !completeDeviceMove()) notifyAuthRequired();
+async function finishMove(token: string): Promise<RotationOutcome> {
+  if (deviceToken() === token) {
+    await finishPushHandoff(token).catch(() => {});
+    if (deviceToken() === token && !completeDeviceMove()) notifyAuthRequired();
+  }
   return "moved";
 }
 
@@ -96,7 +101,10 @@ async function rotateOnce(): Promise<RotationOutcome> {
   const next = (rotated.body as { token?: unknown } | null)?.token;
   if (rotated.status !== 200 || typeof next !== "string" || !next) return "error";
   const stored = replaceDeviceToken(token, next);
-  if (stored === "replaced") return "rotated";
+  if (stored === "replaced") {
+    await renewPush().catch(() => {});
+    return "rotated";
+  }
   return stored === "store-failed" ? "store-failed" : "busy";
 }
 

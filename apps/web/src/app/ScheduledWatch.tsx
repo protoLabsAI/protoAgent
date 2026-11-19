@@ -89,7 +89,7 @@ export function ScheduledWatch() {
           failed ? "Scheduled task failed" : "Scheduled task ran",
           `Job ${scheduled.jobId}`,
           undefined,
-          { notice: true },
+          { notice: true, noticeId: typeof data.notice_id === "string" ? data.notice_id : undefined },
         );
       }
     });

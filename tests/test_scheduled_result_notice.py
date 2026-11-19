@@ -52,6 +52,7 @@ def test_a_posted_card_sends_exactly_one_typed_notice_linking_its_chat(cards, no
     assert len(cards) == 1
     (notice,) = notices
     assert (notice.kind, notice.importance) == ("review", "normal")
+    assert cards[0]["notice_id"] == notice.notice_id
     assert "job-1" in notice.text and "Swept the inbox: 3 new threads." in notice.text
     assert notice.link.endswith("/app/?session=chat-42")
 
