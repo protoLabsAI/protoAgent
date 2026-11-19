@@ -476,6 +476,7 @@ def autonomous_admission_error(origin: object, session_id: str) -> str | None:
                 session_id or "system:activity",
                 "Unattended work is paused at the daily spend cap. Resume for the rest of today (UTC)?",
                 [{"id": "resume", "label": "Resume unattended work for today"}],
+                agent=_current_agent_name(),
                 interrupt_id=SPEND_CAP_PREFIX + status["day"],
                 context=f"Autonomous spend: ${status['cost_usd']}; tokens: {status['total_tokens']}. "
                         f"Daily limits: ${status['daily_cost_hard_limit']}; {status['daily_token_hard_limit']} tokens. "
@@ -649,14 +650,15 @@ async def _decision_interrupt_pending(config: dict) -> bool:
 
 
 def _current_agent_name() -> str:
-    """The active agent's display name for a decision record, best-effort (blank when unknown
-    or still the placeholder). Read from the graph config's identity so neither ``graph`` nor
-    the ``server`` package is imported here."""
+    """The active agent's identity for decision ownership, blank only when unknown.
+
+    Keep the default identity too: dropping it prevents another session of this instance
+    from withdrawing its own decision. The ledger is scoped to this instance.
+    """
     try:
         from runtime.state import STATE
 
-        name = str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
-        return "" if name == "protoagent" else name
+        return str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
     except Exception:  # noqa: BLE001 — a missing name must never break a park
         return ""
 
