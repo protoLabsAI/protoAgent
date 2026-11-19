@@ -201,8 +201,14 @@ def _rotate_log(log_path: Path, *, max_bytes: int = LOG_ROTATE_BYTES, keep: int 
 
 
 def is_running(ident: str) -> bool:
-    rec = _load_state().get(_resolve_key(ident))
-    return bool(rec) and _alive(rec.get("pid"))
+    with _state_lock():
+        key = _resolve_key(ident)
+        rec = _load_state().get(key)
+        if rec and _alive(rec.get("pid")):
+            # Autostart skips live survivors here without calling start().
+            _seen_alive.add((key, rec.get("pid")))
+            return True
+        return False
 
 
 def _port_listening(port: int | None, timeout: float = 0.25) -> bool:
@@ -235,6 +241,17 @@ def _log_tail_since(log_path: Path, offset: int, limit: int = 500) -> str:
 # stop(), warm-cap eviction and shutdown_all remove a member's record BEFORE its process
 # dies, so a record whose pid is dead is an exit nobody asked for. Every place that drops
 # such a record goes through ``_prune_dead_records``, which writes the evidence first.
+
+# A dead record left by a previous hub run is NOT such an exit (#5584): a relaunch
+# after an app update finds the old run's members dead. Drop it unrecorded.
+
+#: When this hub process loaded the supervisor: a record started before it belongs to
+#: a previous hub run. Same clock and format as a record's ``started_at``.
+_HUB_STARTED_AT = datetime.now(timezone.utc).isoformat()
+#: ``(member id, pid)`` this process spawned or saw alive. A member that outlived the
+#: previous hub (``PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT``) is adopted on first sight,
+#: so its later death is this run's exit. Guarded by ``_state_lock()``.
+_seen_alive: set[tuple[str, object]] = set()
 
 #: Exit records kept beside fleet.json (oldest dropped first), collected or not.
 _EXITS_KEEP = 50
@@ -293,6 +310,14 @@ def _exit_log_tail(rec: dict) -> str:
         return ""
 
 
+def _is_boot_leftover(key: str, rec: dict) -> bool:
+    """Whether a dead record was left by a previous hub run: it started before this
+    process did, and this process never saw it alive. A record with no ``started_at``
+    cannot be dated, so it is treated as this run's."""
+    started = str(rec.get("started_at") or "")
+    return bool(started) and started < _HUB_STARTED_AT and (key, rec.get("pid")) not in _seen_alive
+
+
 def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None = None) -> list[dict]:
     """THE dead-record prune: for every record in ``state`` (or just ``keys``) whose pid
     is dead, append an exit record to ``fleet-exits.json``, then drop the record and save
@@ -302,14 +327,30 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
     dead member yields exactly one exit record however many readers race to notice it.
     ``detected_by`` names the caller (``status``, ``start``, ``boot``, ...): a ``boot``
     exit was already raised to whoever called ``start()``.
+
+    A dead record that is not an unexpected exit is dropped WITHOUT an exit record,
+    whichever caller sees it first, so nothing pages or restarts it (#5584): a previous
+    hub run's leftover (``_is_boot_leftover``). Shutdown uses the same rule: a member
+    already dead before teardown still needs this run's crash evidence preserved.
     """
-    dead = [k for k in (list(state) if keys is None else keys) if k in state and not _alive(state[k].get("pid"))]
+    dead = []
+    for k in list(state) if keys is None else keys:
+        if k not in state:
+            continue
+        if _alive(state[k].get("pid")):
+            _seen_alive.add((k, state[k].get("pid")))
+        else:
+            dead.append(k)
     if not dead:
         return []
     now = datetime.now(timezone.utc).isoformat()
     recorded = []
     for key in dead:
         rec = state[key]
+        if _is_boot_leftover(key, rec):
+            log.info("[fleet] dropped the stale record of member %s (pid %s): it did not exit "
+                     "under this hub run (seen by %s)", key, rec.get("pid"), detected_by)
+            continue
         recorded.append(
             {
                 "id": key,
@@ -320,11 +361,12 @@ def _prune_dead_records(state: dict, *, detected_by: str, keys: list[str] | None
                 "log_tail": _exit_log_tail(rec),
             }
         )
-    try:
-        _save_exits([*_load_exits(), *recorded])
-    except OSError as e:
-        # Still prune: a record we could not write must not leave a dead member "running".
-        log.error("[fleet] could not record %d member exit(s): %s", len(recorded), e)
+    if recorded:
+        try:
+            _save_exits([*_load_exits(), *recorded])
+        except OSError as e:
+            # Still prune: a record we could not write must not leave a dead member "running".
+            log.error("[fleet] could not record %d member exit(s): %s", len(recorded), e)
     for key in dead:
         state.pop(key, None)
     _save_state(state)
@@ -630,6 +672,8 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
         state = _load_state()
         rec = state.get(wid)
         if rec and _alive(rec.get("pid")):
+            # Adopt survivors even when no full-state reader has run yet.
+            _seen_alive.add((wid, rec.get("pid")))
             return {**rec, "name": name, "running": True, "already": True}
         # A dead record is about to be replaced: record that exit first (before the log
         # is rotated below), so a restart doesn't erase the evidence.
@@ -766,6 +810,7 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
             "version": package_version(),
         }
         state[wid] = rec
+        _seen_alive.add((wid, proc.pid))  # ours: its death is this run's exit
         _save_state(state)
 
     # Boot watch — OUTSIDE the lock (like stop()'s kill) so other state ops can't freeze
@@ -2477,6 +2522,10 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
         except Exception:  # noqa: BLE001 — teardown proceeds on the registry alone
             known = set(state)
         _record_stop_intent(sorted(known), shutdown=True)
+        # The live-only stop sweep leaves already-dead records behind (#5584).
+        # Prune through the helper, preserving current-run crash evidence before
+        # removing the record; only previous-run leftovers are discarded silently.
+        _prune_dead_records(state, detected_by="shutdown")
         # PID-reuse guard (#10): only ours; reserve all stops under the lock.
         live = [(k, int(r["pid"])) for k, r in state.items() if _alive(r.get("pid")) and _is_our_agent(int(r["pid"]))]
         if not live:
@@ -2650,21 +2699,25 @@ def version_skew_warning() -> str | None:
         names = {ws["id"]: ws["name"] for ws in manager.list_workspaces()}
         stale: list[str] = []
         dead = False
+        seen_alive = set()
         for wid, rec in state.items():
             if not _alive(rec.get("pid")):
                 dead = True
                 continue
+            seen_alive.add((wid, rec.get("pid")))
             v = str(rec.get("version", "") or "")
             if v != current:
                 label = names.get(wid, wid)
                 stale.append(f"{label} (v{v})" if v else f"{label} (version unknown)")
-        if dead:
-            # This scan read fleet.json unlocked; prune what it skipped through the one
-            # helper, on a fresh read under the lock. A busy lock leaves it for the next
-            # reader and never costs the warning.
+        if dead or seen_alive:
+            # Adopt the live snapshot even if nobody was dead. Preserve that observation
+            # if a survivor dies before the fresh, locked prune reads its record.
+            # A busy lock leaves pruning for the next reader and never costs the warning.
             try:
                 with _state_lock():
-                    _prune_dead_records(_load_state(), detected_by="version_skew")
+                    _seen_alive.update(seen_alive)
+                    if dead:
+                        _prune_dead_records(_load_state(), detected_by="version_skew")
             except Exception:  # noqa: BLE001
                 log.debug("[fleet] version-skew scan could not prune dead records", exc_info=True)
         if not stale:

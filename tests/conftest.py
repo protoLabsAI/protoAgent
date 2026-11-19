@@ -510,3 +510,9 @@ def _reset_primary_breakers():
     reset_primary_breakers()
     yield
     reset_primary_breakers()
+
+
+@pytest.fixture(autouse=True)
+def _reset_fleet_seen_alive(monkeypatch):
+    """Member adoption belongs to one hub run, never a previous test's run."""
+    monkeypatch.setattr("graph.fleet.supervisor._seen_alive", set())
