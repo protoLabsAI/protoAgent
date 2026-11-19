@@ -49,3 +49,13 @@ test("mobile: a tap while the console sits on Settings closes Settings and opens
   await expect(page.getByRole("button", { name: /Settings sections/ })).toBeHidden();
   await expectAnswerForm(page);
 });
+
+test("mobile: a decision another agent asked for opens in that agent's console", async ({ page }) => {
+  await seed(page);
+  // The hub knows which member raised the notice (`GET /api/notices/<id>`, #5614).
+  await page.route("**/api/notices/*", (route) => route.fulfill({ json: { ok: true, agent: "protoengineer" } }));
+  await page.goto("/app/?notice=decision-dec-4ba15c14", { waitUntil: "load" });
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/app/agent/protoengineer/");
+  await expectAnswerForm(page);
+  expect(new URL(page.url()).searchParams.has("notice")).toBe(false);
+});

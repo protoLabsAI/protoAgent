@@ -5,6 +5,9 @@ The hub registers ``accept`` with the notice seam and one maintenance loop calls
 ``WebPushProvider`` is the one sender behind ``PushProvider`` (D8): it encrypts a
 generic payload for the device (RFC 8291) and signs it with VAPID (RFC 8292).
 Only transport metadata is retained: no notice text, target, or binding secrets.
+For a notice a fleet member handed over (``graph.fleet.notice_relay``) the hub also
+keeps which agent raised it, until the notice expires, so a click can be routed after
+authentication without the payload naming a member.
 Accepted/terminal rows remain until expiry to suppress replay. A crash during a
 send leaves an inflight row quarantined until expiry: service acceptance cannot
 be inferred after restart. This is not an exactly-once presentation guarantee.
@@ -99,6 +102,9 @@ class PushTransport:
                 next_at REAL NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
                 PRIMARY KEY (notice_id, device_id, generation))""")
             db.execute("DELETE FROM attempts WHERE expires_at <= ?", (self.clock(),))
+            db.execute("""CREATE TABLE IF NOT EXISTS origins (
+                notice_id TEXT PRIMARY KEY, agent TEXT NOT NULL, expires_at REAL NOT NULL)""")
+            db.execute("DELETE FROM origins WHERE expires_at <= ?", (self.clock(),))
         self.path.chmod(0o600)
 
     @contextmanager
@@ -110,6 +116,23 @@ class PushTransport:
                 yield db
         finally:
             db.close()
+
+    def remember_origin(self, notice_id: str, agent: str, expires_at: float) -> None:
+        """Record which fleet member raised a notice, for as long as the notice lives."""
+        with self._db() as db:
+            db.execute("DELETE FROM origins WHERE expires_at <= ?", (self.clock(),))
+            db.execute(
+                "INSERT OR REPLACE INTO origins (notice_id, agent, expires_at) VALUES (?, ?, ?)",
+                (notice_id, agent, expires_at),
+            )
+
+    def origin_of(self, notice_id: str) -> str | None:
+        """The member that raised ``notice_id``, or None for the hub's own or an unknown notice."""
+        with self._db() as db:
+            row = db.execute(
+                "SELECT agent FROM origins WHERE notice_id = ? AND expires_at > ?", (notice_id, self.clock()),
+            ).fetchone()
+        return row["agent"] if row else None
 
     def enqueue(self, notice: ChatNotice) -> int:
         """Snapshot enrolled recipients once; repeated enqueue is idempotent per key."""
@@ -240,6 +263,19 @@ class PushTransport:
                     logger.warning("[push] delivery status could not be persisted")
             with self._db() as db:
                 db.execute(f"UPDATE attempts SET state = ?, next_at = ? WHERE {where}", (state, next_at, *key))
+
+
+# The hub's running transport, for the routes that feed and read it (a member's handed-over
+# notice, a clicked notice's origin). None inside a member and before startup.
+_ACTIVE: list["PushTransport | None"] = [None]
+
+
+def set_active_transport(transport: "PushTransport | None") -> None:
+    _ACTIVE[0] = transport
+
+
+def active_transport() -> "PushTransport | None":
+    return _ACTIVE[0]
 
 
 # ── The Web Push sender (ADR 0135 W2, "What leaves the machine") ─────────────────────────

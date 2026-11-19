@@ -862,17 +862,26 @@ def _start_push_delivery(provider: Any = None) -> Any:
     Push is one adapter behind ``notify_chat_surfaces`` (ADR 0135 D8), registered by the
     hub itself so notices reach enrolled devices with no chat plugin installed. There is
     no setting: a device that enrolled is the opt-in, and with none enrolled every notice
-    is a no-op. A workspace member registers nothing — the hub owns the operator's
-    devices. Call on the server loop; returns the transport, or None inside a member.
+    is a no-op. A workspace member runs no sender — the hub owns the operator's devices —
+    so it hands each notice to its hub instead (``graph.fleet.notice_relay``, #5614), when
+    the hub told it where it is. Call on the server loop; returns the transport, or None
+    inside a member.
     """
+    from graph.plugins.chat_surface import register_notice_adapter
     from graph.workspaces import manager
 
     if manager.is_workspace_member():
+        from graph.fleet import notice_relay
+
+        if notice_relay.hub_url() and notice_relay.member_id():
+            register_notice_adapter(notice_relay.ADAPTER_KEY, notice_relay.hand_to_hub)
+        else:
+            log.info("[push] no hub address at spawn: this member's notices stay local until it restarts")
         return None
-    from graph.plugins.chat_surface import register_notice_adapter
-    from graph.push_transport import NOTICE_ADAPTER_KEY, PushTransport, WebPushProvider
+    from graph.push_transport import NOTICE_ADAPTER_KEY, PushTransport, WebPushProvider, set_active_transport
 
     transport = PushTransport(provider if provider is not None else WebPushProvider())
+    set_active_transport(transport)
     register_notice_adapter(NOTICE_ADAPTER_KEY, transport.accept)
     STATE.push_delivery_task = asyncio.create_task(_push_delivery_loop(transport))
     return transport
@@ -880,10 +889,13 @@ def _start_push_delivery(provider: Any = None) -> Any:
 
 async def _stop_push_delivery() -> None:
     """Leave the notice seam and stop the drain loop; unsent rows stay in the ledger."""
+    from graph.fleet.notice_relay import ADAPTER_KEY as RELAY_ADAPTER_KEY
     from graph.plugins.chat_surface import unregister_notice_adapter
-    from graph.push_transport import NOTICE_ADAPTER_KEY
+    from graph.push_transport import NOTICE_ADAPTER_KEY, set_active_transport
 
     unregister_notice_adapter(NOTICE_ADAPTER_KEY)
+    unregister_notice_adapter(RELAY_ADAPTER_KEY)
+    set_active_transport(None)
     task, STATE.push_delivery_task = STATE.push_delivery_task, None
     if task is not None:
         task.cancel()
