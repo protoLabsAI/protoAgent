@@ -111,6 +111,7 @@ CEILING: tuple[CeilingRule, ...] = (
     # The device registry — except the caller's OWN id on the bare path (rename / unpair
     # yourself). Promotion (``{"scope": …}``) is refused at the route for non-full callers.
     _rule({"PATCH", "DELETE"}, "/api/devices/{id}", "change another paired device", self_ok=True),
+    _rule({"POST"}, "/api/push/keys/rotate", "rotate the push signing key"),
     # Plugin lifecycle — runs host code that would outlive a revoke.
     _rule({"POST"}, "/api/plugins/install", "install a plugin"),
     _rule({"POST"}, "/api/plugins/sync", "sync plugins"),

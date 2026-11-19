@@ -176,6 +176,7 @@ def test_reads_and_the_rest_of_the_product_stay_open_to_a_device(echo, devices):
     _, token = _phone(devices)
     for method, path in [
         ("GET", "/api/devices"),
+        ("GET", "/api/push/keys"),
         ("GET", "/api/pairing/reach"),
         ("GET", "/api/plugins/installed"),
         ("GET", "/api/config/oauth-status"),
@@ -1456,3 +1457,9 @@ def test_a_device_cannot_create_or_import_an_agent(echo, devices):
     for path in ("/api/fleet/alice/start", "/api/fleet/alice/stop", "/api/fleet/alice/activate", "/api/agent/export"):
         assert echo.post(path, headers=_hdr(token)).status_code == 200, path
     assert echo.get("/api/fleet", headers=_hdr(token)).status_code == 200
+
+
+def test_push_key_rotation_is_full_access_only():
+    from a2a_impl.credential_scope import CEILING
+
+    assert any(rule.path == "/api/push/keys/rotate" and rule.methods == {"POST"} for rule in CEILING)

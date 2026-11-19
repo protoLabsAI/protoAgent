@@ -1029,6 +1029,43 @@ def register_pairing_routes(app, agent_name=None) -> None:
         device, token = result
         return JSONResponse({"ok": True, "device": device, "token": token}, headers={"Cache-Control": "no-store"})
 
+    @router.get("/api/push/keys")
+    async def _push_keys_get():  # noqa: ANN202
+        """Public keyring status for any operator credential; never enables push."""
+        from security import devices, push_keys
+
+        try:
+            keys = await asyncio.to_thread(push_keys.public_keys)
+        except push_keys.PushKeyringError as exc:
+            log.error("[pairing] push keyring unusable: %s", exc)
+            return _push_refusal(503, "push_keyring_unavailable", PUSH_KEYRING_UNAVAILABLE)
+        counts = await asyncio.to_thread(devices.push_bindings_by_version)
+        return JSONResponse(
+            {
+                "keys": [key.public() for key in keys],
+                "rotation_window_seconds": push_keys.ROTATION_WINDOW_SECONDS,
+                "bindings_by_version": {**{key.version: 0 for key in keys}, **counts},
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @router.post("/api/push/keys/rotate")
+    async def _push_keys_rotate(request: Request):  # noqa: ANN202
+        """Rotate the signing key; full-access only via the credential-scope ceiling."""
+        from security import devices, push_keys
+
+        try:
+            bindings_exist = await asyncio.to_thread(devices.push_bindings_exist)
+            key = await asyncio.to_thread(push_keys.rotate, bindings_exist=bindings_exist)
+        except push_keys.PushKeyringError as exc:
+            log.error("[pairing] push keyring unusable: %s", exc)
+            return _push_refusal(503, "push_keyring_unavailable", PUSH_KEYRING_UNAVAILABLE)
+        log.info(
+            "[pairing] push key rotated to version %d by device %s",
+            key.version, getattr(request.state, "device_id", None),
+        )
+        return JSONResponse(key.public(), headers={"Cache-Control": "no-store"})
+
     @router.get("/api/devices/self/push")
     async def _push_get(request: Request):  # noqa: ANN202
         """This instance's active VAPID public key and its version — what the caller's

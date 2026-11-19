@@ -605,6 +605,19 @@ def push_bindings_exist() -> bool:
     return any(d.push is not None for d in _load())
 
 
+def push_bindings_by_version() -> dict[int, int]:
+    """Count stored bindings by signing version without exposing subscription secrets.
+
+    Includes bindings awaiting lifecycle cleanup so stranded subscriptions remain visible.
+    """
+    counts: dict[int, int] = {}
+    for device in _load():
+        if device.push is not None:
+            version = device.push.vapid_version
+            counts[version] = counts.get(version, 0) + 1
+    return counts
+
+
 def set_push_binding(
     device_id: str | None, presented_token: str, *, endpoint: str, p256dh: str, auth: str, vapid_version: int
 ) -> dict | None:
