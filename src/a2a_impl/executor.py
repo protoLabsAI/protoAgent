@@ -1661,6 +1661,19 @@ class ProtoAgentExecutor(AgentExecutor):
                     _notify_terminal(_outcome("completed", final_text))
                     return
 
+                elif event_type == "refused":
+                    # An admission refusal (ADR 0135 D12 spend cap): the turn never ran.
+                    # CANCELED, not FAILED — a failed task counts toward a scheduled job's
+                    # failure streak and backs it off, but a paused instance is not a
+                    # broken job; the scheduler records no outcome for a canceled fire.
+                    if _private():
+                        _discard_private_buffers()
+                        await updater.cancel()
+                    else:
+                        await updater.cancel(message=updater.new_agent_message([_text_part(str(payload))]))
+                    _notify_terminal(_outcome("canceled", accumulated))
+                    return
+
                 elif event_type == "error":
                     if _private():
                         # A private segment's error text never reaches the peer (#5400): discard

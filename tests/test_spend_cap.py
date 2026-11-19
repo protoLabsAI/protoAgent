@@ -172,3 +172,33 @@ async def test_agent_cannot_withdraw_instance_pause(cap):
     result = await withdraw_decision.ainvoke({"decision_id": rec.id, "state": {"session_id": "job"}})
     assert result.startswith("Error:")
     assert decisions.get(rec.id).pending
+
+
+@pytest.mark.asyncio
+async def test_refused_scheduled_fire_is_canceled_not_a_job_failure(cap):
+    from a2a.server.agent_execution import RequestContext
+    from a2a.server.context import ServerCallContext
+    from a2a.server.events.event_queue import EventQueueLegacy
+    from a2a.types import Message, Part, Role, SendMessageRequest, TaskState
+
+    from a2a_impl.executor import ProtoAgentExecutor
+    from scheduler.local import _a2a_turn_canceled, _a2a_turn_failure
+
+    record(cap[1], tokens=100)
+    states = []
+
+    class Queue(EventQueueLegacy):
+        async def enqueue_event(self, event):
+            states.append((event.status.state, " ".join(p.text for p in event.status.message.parts)))
+
+    request = SendMessageRequest(message=Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="go")],
+                                                 metadata={"origin": "scheduler"}))
+    context = RequestContext(call_context=ServerCallContext(), request=request, task_id="t", context_id="job")
+    await ProtoAgentExecutor(chat._chat_langgraph_stream,
+                             server_fired_origin=turn_control.is_autonomous_origin).execute(context, Queue())
+    assert states[-1][0] == TaskState.TASK_STATE_CANCELED and "spend cap" in states[-1][1]
+    assert TaskState.TASK_STATE_FAILED not in [state for state, _ in states]
+    # What the scheduler reads back: no failure (no streak, no backoff), a canceled fire.
+    payload = {"result": {"task": {"id": "t", "status": {"state": TaskState.Name(states[-1][0])}}}}
+    assert _a2a_turn_failure(payload) == "" and _a2a_turn_canceled(payload)
+    assert len(cap[2].list(state="pending")) == 1

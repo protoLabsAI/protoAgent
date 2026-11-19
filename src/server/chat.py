@@ -2381,7 +2381,9 @@ async def _chat_langgraph_stream(
     lifetime — including early ``aclose()`` and errors — then delegate. Keeps the
     public name/signature so every caller (A2A executor, console) is unchanged."""
     if refusal := _turn_control.autonomous_admission_error((request_metadata or {}).get("origin"), session_id):
-        yield ("error", refusal)
+        # "refused", not "error": the executor ends the task CANCELED, so a scheduled
+        # fire refused by the pause records no failure and never backs its job off.
+        yield ("refused", refusal)
         return
     _turn_control._turn_started(session_id)
     # ADR 0074 — idle→active lifecycle event (debounced). Emitted inside the triggering
