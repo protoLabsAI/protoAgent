@@ -1,1 +1,0 @@
-- **Recurring job results still reach quiet chats.** Scheduled cron results now post their card and typed notice even when the owner chat has been idle for more than 24 hours. One-shot idle skips, NO_UPDATE suppression, repeat suppression, expiry-notice deduplication, and follow-up backoff are preserved. Refs #5601.

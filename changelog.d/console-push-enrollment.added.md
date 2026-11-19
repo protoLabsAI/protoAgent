@@ -1,1 +1,0 @@
-- **Keep paired consoles enrolled for push.** Register the console worker without prompting, expose enrollment helpers, renew subscriptions after key and token rotation, and clean up completed origin handoffs. Share notice tags with browser notifications without adding a console surface. Refs #5539.

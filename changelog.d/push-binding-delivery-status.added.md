@@ -1,1 +1,0 @@
-- **Device push delivery status.** Push bindings now retain the last attempt, service acceptance, and bounded failure category and time, exposed safely in device responses. Late results cannot alter replacement subscriptions. Refs #5539.
