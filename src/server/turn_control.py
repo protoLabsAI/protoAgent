@@ -403,6 +403,57 @@ def spend_cap_status() -> dict:
             "paused": enabled and (bool(rec and rec.pending) or (not approved and (reached or store is None)))}
 
 
+# ADR 0135 D11: importance belongs to the notice type, fixed here by the raising code path.
+_SPEND_SOFT_NOTICE_IMPORTANCE = "normal"
+_SPEND_SOFT_NOTICE_KIND = "spend-cap-soft"
+
+
+def _notify_spend_soft_limit(status: dict) -> None:
+    """Warn the operator once per UTC day that unattended spend passed a soft limit.
+
+    Called only from the admission gate on an ADMITTED turn with the cap enabled, off
+    the same meter reading (``status``) the hard limit uses — no second meter. The
+    once-a-day marker is claimed in the meter's store BEFORE sending, so a restart or
+    a concurrent admission cannot repeat it. Silent once the operator has answered the
+    day's hard-limit decision: they already know. Best-effort: a failure here never
+    changes admission.
+    """
+    try:
+        from runtime.state import STATE
+
+        config, store = STATE.graph_config, STATE.telemetry_store
+        cost_soft = float(getattr(config, "spend_cap_daily_cost_soft_limit", 0) or 0)
+        token_soft = int(getattr(config, "spend_cap_daily_token_soft_limit", 0) or 0)
+        if store is None or status.get("approved_today"):
+            return
+        cost, tokens = status["cost_usd"] or 0, status["total_tokens"] or 0
+        over_cost = cost_soft > 0 and cost >= cost_soft
+        over_tokens = token_soft > 0 and tokens >= token_soft
+        if not (over_cost or over_tokens) or not store.claim_daily_notice(status["day"], _SPEND_SOFT_NOTICE_KIND):
+            return
+
+        from graph.plugins.chat_surface import notify_chat_surfaces
+        from graph.sdk import console_url
+        from security.public_console import public_origin
+
+        try:
+            base = (public_origin() or console_url() or "").rstrip("/")
+        except Exception:  # noqa: BLE001 — a link lookup must never suppress the text
+            log.exception("[spend-cap] could not resolve the console origin for the soft-limit notice")
+            base = ""
+        passed = (f"${cost_soft:g} cost" if over_cost else f"{token_soft:,} token")
+        notify_chat_surfaces(
+            f"Unattended work has passed today's {passed} soft limit and is still running. "
+            f"Spent so far today (UTC): ${cost:.2f} and {tokens:,} tokens. It will pause at "
+            f"${status['daily_cost_hard_limit']:g} or {status['daily_token_hard_limit']:,} tokens. "
+            "To change that, open Settings > Spend cap in the console and adjust the limits.",
+            f"{base}/app/" if base else "",
+            kind="notify", importance=_SPEND_SOFT_NOTICE_IMPORTANCE,
+        )
+    except Exception:  # noqa: BLE001 — the soft notice is advisory; admission must not depend on it
+        log.exception("[spend-cap] could not send the soft-limit notice")
+
+
 def autonomous_admission_error(origin: object, session_id: str) -> str | None:
     """One instance admission gate for both drivers, before any model/dispatch work.
 
@@ -418,6 +469,7 @@ def autonomous_admission_error(origin: object, session_id: str) -> str | None:
     try:
         status = spend_cap_status()
         if not status["paused"]:
+            _notify_spend_soft_limit(status)
             return None
         if not status["decision_id"]:
             rec = decision_store().create(

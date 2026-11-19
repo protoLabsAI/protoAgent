@@ -223,6 +223,12 @@ class TelemetryStore:
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_tool_calls_ts ON tool_calls(ts)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_tool_calls_tool ON tool_calls(tool)")
+            # Once-per-UTC-day markers for notices raised off the daily meter (ADR 0135
+            # D12 soft limit). Durable so a restart cannot repeat the day's notice.
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS daily_notices ("
+                "day TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY (day, kind))"
+            )
             db.commit()
         finally:
             db.close()
@@ -379,6 +385,20 @@ class TelemetryStore:
                 (start.isoformat(), end.isoformat(), *origins),
             ).fetchone()
             return {"day": start.date().isoformat(), **dict(row)}
+        finally:
+            db.close()
+
+    def claim_daily_notice(self, day: str, kind: str) -> bool:
+        """Atomically mark ``kind`` as sent for UTC ``day``; True only for the first caller.
+
+        The marker sits beside the meter it is raised from, so it survives a restart
+        and is safe across processes sharing the file.
+        """
+        db = self._connect()
+        try:
+            cur = db.execute("INSERT OR IGNORE INTO daily_notices (day, kind) VALUES (?, ?)", (day, kind))
+            db.commit()
+            return cur.rowcount == 1
         finally:
             db.close()
 
@@ -775,6 +795,7 @@ class TelemetryStore:
         try:
             cur = db.execute("DELETE FROM turns WHERE ended_at < ?", (cutoff,))
             tools = db.execute("DELETE FROM tool_calls WHERE ts < ?", (cutoff,))
+            db.execute("DELETE FROM daily_notices WHERE day < ?", (cutoff[:10],))
             db.commit()
             return cur.rowcount + tools.rowcount
         finally:

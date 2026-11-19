@@ -1505,6 +1505,14 @@ FIELDS: list[Field] = [
     Field("spend_cap.daily_token_hard_limit", "spend_cap_daily_token_hard_limit", "Daily token hard limit",
           "number", "Spend cap", minimum=0,
           description="Autonomous tokens per UTC day, including subscription turns. Zero pauses immediately."),
+    Field("spend_cap.daily_cost_soft_limit", "spend_cap_daily_cost_soft_limit", "Daily cost soft limit (USD)",
+          "number", "Spend cap", minimum=0,
+          description="Sends one notice a day when unattended cost passes this, before the hard limit pauses "
+                      "work. Zero sends no notice."),
+    Field("spend_cap.daily_token_soft_limit", "spend_cap_daily_token_soft_limit", "Daily token soft limit",
+          "number", "Spend cap", minimum=0,
+          description="Sends one notice a day when unattended tokens pass this, before the hard limit pauses "
+                      "work. Zero sends no notice."),
     Field("middleware.scheduler", "scheduler_enabled", "Scheduler", "bool", "Middleware"),
     # Enforcement is a code/YAML fork seam (deny-list + rate-limits + a pluggable
     # predicate), not a console feature: the bare on/off toggle is a no-op until a

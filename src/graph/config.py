@@ -1730,6 +1730,10 @@ class LangGraphConfig:
     spend_cap_enabled: bool = False
     spend_cap_daily_cost_hard_limit: float = 10.0
     spend_cap_daily_token_hard_limit: int = 1_000_000
+    # Soft limits: one operator notice per UTC day when today's unattended spend first
+    # passes either one, before the hard limit pauses work. 0 (or unset) = no notice.
+    spend_cap_daily_cost_soft_limit: float = 0.0
+    spend_cap_daily_token_soft_limit: int = 0
 
     # Local telemetry store (ADR 0006 Slice 2) — one per-turn cost/latency row
     # per terminal A2A turn, queryable via /api/telemetry/*. ON by default
@@ -2748,6 +2752,11 @@ class LangGraphConfig:
                 "daily_cost_hard_limit", cls.spend_cap_daily_cost_hard_limit)),
             spend_cap_daily_token_hard_limit=int(data.get("spend_cap", {}).get(
                 "daily_token_hard_limit", cls.spend_cap_daily_token_hard_limit)),
+            # ``or``: a YAML ``null`` (key present, no value) means unset, same as absent.
+            spend_cap_daily_cost_soft_limit=float(data.get("spend_cap", {}).get(
+                "daily_cost_soft_limit") or cls.spend_cap_daily_cost_soft_limit),
+            spend_cap_daily_token_soft_limit=int(data.get("spend_cap", {}).get(
+                "daily_token_soft_limit") or cls.spend_cap_daily_token_soft_limit),
             telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
             telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
             telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),
