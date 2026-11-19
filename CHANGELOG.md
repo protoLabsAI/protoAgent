@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.253.0] - 2026-11-19
+
+### Added
+- **A fleet member's decision reaches your phone, and the tap opens that agent (#5615).** Push notifications only fired for decisions the hub itself asked for; one from a member (protoEngineer, say) never left the member. A member now hands each notice to its hub, which sends the push to your paired devices. Tapping it opens the decision's answer form in that agent's console. The notification still carries no agent name or decision text. A member picks this up the next time the hub starts it. Fixes #5614.
+
 ## [0.252.1] - 2026-11-19
 
 ### Fixed
