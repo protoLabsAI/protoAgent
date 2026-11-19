@@ -1065,9 +1065,9 @@ HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input", "request_decisio
 # approval-type) would fail opaquely mid-delegation — graph.agent hard-denies these from every
 # subagent's tool set (``_subagent_tools`` / ``_subagent_tool_names``) and tool_access excludes
 # them from read inheritance, regardless of a SubagentConfig.tools allowlist. This is the
-# superset of HITL_TOOL_NAMES plus the approval-type ``self_restart``. Keep it in sync when a
+# superset of HITL_TOOL_NAMES plus approval-type restart tools. Keep it in sync when a
 # new interrupt-based lead tool is added.
-SUBAGENT_DENIED_TOOLS = HITL_TOOL_NAMES | frozenset({"self_restart"})
+SUBAGENT_DENIED_TOOLS = HITL_TOOL_NAMES | frozenset({"self_restart", "fleet_member_restart"})
 
 
 def get_all_tools(
@@ -1233,6 +1233,9 @@ def get_all_tools(
             from tools.fleet_supervision import build_fleet_supervision_tools
 
             tools.extend(build_fleet_supervision_tools())
+    from tools.fleet_supervision import build_fleet_member_restart_tools
+
+    tools.extend(build_fleet_member_restart_tools(graph_config))
     if getattr(graph_config, "tools_fleet_demo_enabled", False):
         # Demo-agent tools (#4609), default off (the setting lands in part 3 — read absent-safe).
         # create / configure / chat / delete / list, every op routed through the demo-stamp guard

@@ -2086,6 +2086,7 @@ class LangGraphConfig:
     # Full-scope and legacy device rows never expire. Read per request by
     # ``security.devices`` (hot-reloads with the config). No env fallback.
     device_idle_ttl_days: int = 30
+    fleet_member_restart_enabled: bool = False
     fleet_health_enabled: bool = False
     fleet_health_interval_seconds: int = 60
     fleet_health_failure_threshold: int = 3
@@ -2947,6 +2948,7 @@ class LangGraphConfig:
             device_idle_ttl_days=_non_negative_int(
                 devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),
+            fleet_member_restart_enabled=not _falsey(fleet.get("member_restart_enabled"), default=True),
             fleet_health_enabled=not _falsey(health.get("enabled"), default=True),
             fleet_health_interval_seconds=health.get("interval_seconds", cls.fleet_health_interval_seconds),
             fleet_health_failure_threshold=health.get("failure_threshold", cls.fleet_health_failure_threshold),

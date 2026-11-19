@@ -1,4 +1,4 @@
-"""Fleet read tools for the hub agent: ``fleet_status`` and ``fleet_pending`` (ADR 0135 D8, #5534).
+"""Fleet supervision tools for the hub agent: ``fleet_status`` and ``fleet_pending`` (ADR 0135 D8, #5534).
 
 Two read-only answers to "what is the fleet doing", built only from seams that already exist:
 
@@ -18,17 +18,21 @@ Two read-only answers to "what is the fleet doing", built only from seams that a
   output. A trim on this side is signalled with ``tool_truncated``.
 
 Members are reported as a list keyed by their immutable roster ``id``, so two members that share
-a display name stay two rows. Both tools are read-only: there is no start, stop, answer or
-config path here.
+a display name stay two rows. The two read tools never mutate members. The independently
+opt-in restart tool uses approval interrupts and the shared fleet lifecycle ops.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import time
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.errors import GraphBubbleUp
+from langgraph.prebuilt import InjectedState
+from langgraph.types import interrupt
 
 from tools import fleet_diagnostics as fd
 
@@ -275,3 +279,107 @@ def build_fleet_supervision_tools() -> list:
         return await fleet_pending()
 
     return [fleet_status_tool, fleet_pending_tool]
+
+
+def _restart_target(member: str) -> dict[str, Any]:
+    """Resolve one local member and read durable operator intent off the event loop."""
+    from graph.fleet import supervisor
+
+    # Immutable ids keep checkpoint replay from approving a different same-named member.
+    matches = [entry for entry in fd._roster() if entry.get("id") == member]
+    if len(matches) != 1:
+        return {"ok": False, "error": "ambiguous_member" if matches else "unknown_member"}
+    entry = matches[0]
+    if _kind(entry) != "local" or not fd._slug_for(entry):
+        return {"ok": False, "error": "local_member_required"}
+    refusal = supervisor.recovery_refusal(entry["id"])
+    if refusal:
+        return {"ok": False, "error": refusal}
+    return {"ok": True, "id": entry["id"], "running": bool(entry.get("running"))}
+
+
+def build_fleet_member_restart_tools(graph_config) -> list:
+    """Bind the independently opt-in, hub-only member recovery tool."""
+    from graph.workspaces.manager import is_workspace_member
+
+    if not getattr(graph_config, "fleet_member_restart_enabled", False) or is_workspace_member():
+        return []
+
+    @tool("fleet_member_restart")
+    async def fleet_member_restart_tool(
+        member: str, reason: str, state: Annotated[Any, InjectedState] = None,
+    ) -> dict:
+        """Request approval to start one down local fleet member, or restart it when idle.
+
+        Supply its immutable roster id (from fleet_status) and a reason. Never overrides an
+        operator's deliberate stop. Busy or unreachable running members are not restarted.
+        """
+        from graph.middleware.knowledge import _restrict_prior_session_memory
+        from graph.middleware.redaction import redact
+        from observability.audit import audit_logger
+        from ops import fleet
+        from tools.fs_tools import _approved
+
+        began = time.monotonic()
+        result = {"ok": False, "error": "approval_required"}
+        try:
+            if _restrict_prior_session_memory():
+                result = {"ok": False, "error": "operator_only"}
+                return result
+            if not graph_config.fleet_member_restart_enabled or is_workspace_member():
+                result = {"ok": False, "error": "disabled"}
+                return result
+            if not reason.strip():
+                result = {"ok": False, "error": "reason_required"}
+                return result
+            target = await asyncio.to_thread(_restart_target, member)
+            if not target["ok"]:
+                result = target
+                return result
+            slug = target["id"]
+            decision = interrupt({
+                "kind": "approval",
+                "title": "Approve fleet member start / restart when idle?",
+                "detail": f"Member: {slug}\nReason: {reason}",
+                "session_allow": False,
+            })
+            if not _approved(decision):
+                result = {"ok": False, "error": "approval_denied"}
+                return result
+            # Approval may have waited while the member stopped, disappeared or became busy.
+            # Re-read by immutable id; never resolve an approved display name to another member.
+            target = await asyncio.to_thread(_restart_target, slug)
+            if not target["ok"]:
+                result = target
+                return result
+            if target["running"]:
+                stopped = await fleet.stop(slug, when_idle=True)
+                if stopped.get("stopped") is not True:
+                    result = {"ok": False, "error": "stop_failed"}
+                    return result
+            started = await fleet.start(slug)
+            result = {"ok": bool(started.get("running")), "id": slug, "running": bool(started.get("running"))}
+            return result
+        except GraphBubbleUp:
+            raise
+        except fleet.RestartNotReady:
+            result = {"ok": False, "error": "not_ready"}
+            return result
+        except Exception:
+            log.exception("[fleet-supervision] member recovery failed")
+            result = {"ok": False, "error": "restart_failed"}
+            return result
+        finally:
+            # Also records refused calls and approval interrupts. Bubble-up exceptions
+            # propagate so the existing unattended runner can answer the approval.
+            await asyncio.to_thread(
+                audit_logger.log,
+                session_id=(state or {}).get("session_id", ""),
+                tool="fleet_member_restart",
+                args=redact({"member": member, "reason": reason}),
+                result_summary=str(result),
+                duration_ms=int((time.monotonic() - began) * 1000),
+                success=result["ok"],
+            )
+
+    return [fleet_member_restart_tool]

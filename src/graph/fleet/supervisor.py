@@ -420,10 +420,23 @@ def stopped_on_purpose(ident: str) -> bool:
     return bool(records.get("shutdown") or records.get("members", {}).get(wid, {}).get("stopped"))
 
 
+def recovery_refusal(ident: str) -> str | None:
+    """Shared recovery guard: unknown stop intent must fail closed, too.
+
+    Unlike ``stopped_on_purpose``, this also refuses unreadable restart history
+    without reporting it as a deliberate operator stop.
+    """
+    if _load_restarts().get("disabled"):
+        return "restart_history_unreadable"
+    if stopped_on_purpose(ident):
+        return "stopped_on_purpose"
+    return None
+
+
 def _restart_allowed(exit_record: dict) -> bool:
     wid = exit_record["id"]
     records = _load_restarts()
-    if records.get("disabled") or stopped_on_purpose(wid):
+    if records.get("disabled") or recovery_refusal(wid):
         return False
     return exit_record["at"] > records.get("members", {}).get(wid, {}).get("manual_start", "")
 
