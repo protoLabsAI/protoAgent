@@ -331,6 +331,20 @@ requires the design-system spec and preview approval already required above.
 | W2d — Native desktop receiver while the hub runs | New `apps/desktop/src-tauri/src/notices.rs`, `apps/desktop/src-tauri/src/lib.rs`, `apps/desktop/src-tauri/Cargo.toml`, `apps/web/src/lib/notify.ts`, W1 event/replay seam; focused Rust and web bridge tests | W1a/W2a; agree presentation ownership with W2c. Test tray/window-close, reconnect/replay, permission denial and Quit boundaries on macOS, Windows and Linux, without assuming WebView Push API support. |
 | W2e — Device reachability, privacy and renewal controls | `apps/web/src/settings/sections.ts`, `apps/web/src/settings/devices.css`, `apps/web/src/settings/devicesSection.test.ts`, `apps/web/e2e/devices.spec.ts`; `src/graph/settings_schema.py` and config/golden files if fields are added; `docs/guides/phone-access.md`, `docs/guides/pairing.md`, `docs/explanation/security-and-trust.md` | W2a–W2d and approved Wave B spec/preview. Show per-device unsupported/denied/renewal/service-accepted states, provider disclosure, rotation effects and HTTPS/install instructions; never label service acceptance as read. |
 
+### Fleet members (added 2026-11-19, #5614)
+
+A member runs no push sender: the hub owns the operator's devices. A member's notice
+reaches a phone by being handed to its hub. The member posts the notice's identity (id,
+kind, importance, times; no text, no link) to the hub's `POST /api/fleet/notices` over
+loopback with the fleet service token it already holds (ADR 0089); the hub tells its
+members where it is by environment at spawn. The hub queues the notice on the same
+ledger as its own and remembers which member raised it until the notice expires.
+
+The payload is unchanged and still names no member. After a click the console asks the
+hub, authenticated, which agent raised the notice (`GET /api/notices/<id>`) and opens the
+decision in that agent's console. A member started without the hub's address (one adopted
+from an earlier hub process) hands nothing over until the hub restarts it.
+
 ## Consequences
 
 - The hub gains standing work, so its cost is no longer zero when idle. D5 and the spend cap bound it.

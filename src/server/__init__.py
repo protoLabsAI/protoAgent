@@ -622,6 +622,14 @@ def _main():
             "instance's config, secrets, and data stores instead."
         )
     STATE.active_port = args.port
+    # Tell the members this hub spawns where it is (#5614): they inherit the environment,
+    # and hand their notices to the hub that owns the operator's devices. A member leaves
+    # the value its own hub gave it alone.
+    from graph.fleet import notice_relay
+    from graph.workspaces import manager as _workspaces
+
+    if not _workspaces.is_workspace_member():
+        os.environ[notice_relay.HUB_URL_ENV] = notice_relay.loopback_hub_url(args.port)
 
     # Resolve the UI tier: explicit --ui/PROTOAGENT_UI wins; else the deprecated
     # --headless/PROTOAGENT_HEADLESS maps to 'console'; else default 'console' (the
@@ -1352,6 +1360,9 @@ def _main():
     from operator_api.decision_routes import register_decision_routes
 
     register_decision_routes(fastapi_app)
+    from operator_api.notice_routes import register_notice_routes
+
+    register_notice_routes(fastapi_app)
 
     # System-prompt snapshots (#2243) — /api/prompts/*: the exact prompt any
     # captured model call received, behind the console's "View prompt".
