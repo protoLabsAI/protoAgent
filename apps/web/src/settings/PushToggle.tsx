@@ -25,7 +25,7 @@ export function pushBlocker(): string | null {
   return null;
 }
 
-const DESKTOP_APP = "The desktop app shows notifications itself whenever it's running, so there's nothing to turn on here. To get them on a phone or in a browser, open the console there and turn them on.";
+const DESKTOP_APP = "The desktop app shows notifications itself whenever it's running, as long as your system settings allow notifications for protoAgent. To get them on a phone or in a browser, open the console there and turn them on.";
 const UNSUPPORTED = "This browser can't receive notifications while the console is closed.";
 const UNKNOWN = "Couldn't check whether notifications are on for this device. The agent didn't answer.";
 const DENIED = "Notifications are blocked for this console. Allow them in your browser or system settings, then come back here.";
