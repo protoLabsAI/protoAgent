@@ -83,7 +83,7 @@ Phase 0 goes first because it costs nothing and shows which gaps hurt before cor
 
 Josh reviewed phases 2–4 and decided:
 
-- **D9. Home conversation.** Amend ADR 0129 D6: results are shown in one pinned home chat while each job keeps its own session. The amendment is written with the design spec for #5545.
+- **D9. Home conversation.** Amend ADR 0129 D6: results are shown in one pinned home chat while each job keeps its own session. The amendment is recorded at the end of [ADR 0129 D6](./0129-work-consolidation.md#d6--background-job-sessions-s0-refs-5110).
 - **D10. Push is a requirement.** Notices reach every operator device and do not depend on a chat plugin. The console has no service worker or web manifest today, so #5539 starts with a design slice that settles the transport per device class.
 - **D11. Urgency is not a model judgment.** Importance is a fixed property of the notice type, set by the code path that raises it.
 - **D12. Spend cap.** At the hard limit, all unattended work on the instance pauses and one decision is raised. The cap counts tokens as well as cost.

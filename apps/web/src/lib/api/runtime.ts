@@ -85,6 +85,18 @@ export type PairedDevice = {
   /** When it expires if left idle (epoch seconds); null = never (full access, or ttl 0). */
   expires_at?: number | null;
   rotated_at?: number | null;
+  push?: {
+    vapid_version: number;
+    generation: number;
+    created_at: number;
+    renewed_at: number;
+    provider: "apple" | "google" | "mozilla" | string;
+    last_attempt_at: number | null;
+    last_accepted_at: number | null;
+    last_error: string | null;
+    last_error_at: number | null;
+  } | null;
+  push_renew?: "idle" | "vapid_key" | "handoff" | null;
 };
 /** `GET /api/devices/self` — the caller's own device, or null for a non-device credential. */
 export type DeviceSelf = PairedDevice & {

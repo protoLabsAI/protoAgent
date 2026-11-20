@@ -248,7 +248,7 @@
   margin: var(--pl-space-1) 0 0;
   font-size: var(--pl-font-size-xs);
   line-height: 1.45;
-  color: var(--pl-color-fg-subtle);
+  color: color-mix(in srgb, var(--pl-color-fg-muted) 65%, var(--pl-color-fg));
 }
 /* ADR 0047 inheritance row — the source Badge + reset-to-inherited link aligned. */
 .setting-inheritance {
