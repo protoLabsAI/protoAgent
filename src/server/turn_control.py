@@ -448,7 +448,7 @@ def _notify_spend_soft_limit(status: dict) -> None:
             f"${status['daily_cost_hard_limit']:g} or {status['daily_token_hard_limit']:,} tokens. "
             "To change that, open Settings > Spend cap in the console and adjust the limits.",
             f"{base}/app/" if base else "",
-            kind="notify", importance=_SPEND_SOFT_NOTICE_IMPORTANCE,
+            kind="notify", importance=_SPEND_SOFT_NOTICE_IMPORTANCE, source="spend-cap",
         )
     except Exception:  # noqa: BLE001 — the soft notice is advisory; admission must not depend on it
         log.exception("[spend-cap] could not send the soft-limit notice")

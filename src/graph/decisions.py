@@ -239,9 +239,15 @@ def _notify_created(rec: Decision) -> None:
             action = rec.default_action or "carry on without this step"
             lines.append(f"If nobody answers by {rec.expires_at}, {agent} will {action}")
         lines.append("Open this decision in the console to answer.")
+        from graph.home_entries import is_operator_chat
+
         notify_chat_surfaces(
             "\n".join(lines), _console_link(rec.session_id), kind="question", importance="high",
-            notice_id=f"decision-{rec.id}"
+            notice_id=f"decision-{rec.id}",
+            # Home gets a pointer that opens the decision (its ``decision-<id>`` notice id),
+            # not the options. A decision raised in an operator chat is already in front of
+            # the operator there, so it gets no Home entry.
+            source="decision", home_title=lines[0], home_entry=not is_operator_chat(rec.session_id),
         )
     except Exception:  # noqa: BLE001 — delivery must never fail a committed insert
         log.exception("Could not queue notification for decision %s", rec.id)

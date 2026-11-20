@@ -990,6 +990,13 @@ def _main():
 
         DELIVERY.start()
 
+        # Home entries (ADR 0135 D9) are appended under the same per-thread lock a turn
+        # holds; ``graph`` cannot import it, so hand it in.
+        from graph import home_entries
+        from server.turn_control import _thread_lock
+
+        home_entries.set_thread_lock(_thread_lock)
+
         # Priority-now inbox backlog recovery (#3351): run one bounded recovery pass
         # only after the accepted self-A2A route is mounted and startup has started
         # plugin surfaces. This owns pre-existing backlog recovery; newly posted now

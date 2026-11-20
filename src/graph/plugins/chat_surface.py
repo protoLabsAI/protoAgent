@@ -105,6 +105,7 @@ def unregister_notice_adapter(key: object) -> None:
 def notify_chat_surfaces(
     text: str, link: str, *, kind: NoticeKind = "notify", importance: NoticeImportance = "normal",
     ttl_seconds: float | None = None, notice_id: str | None = None,
+    source: str = "notice", home_title: str | None = None, home_entry: bool = True,
 ) -> str:
     """Queue optional adapter notifications without waiting for network delivery.
 
@@ -117,6 +118,14 @@ def notify_chat_surfaces(
     Unix seconds; ``ttl_seconds`` can shorten, but never extend, the kind's default
     lifetime (notify/review: one hour; question: one day). A producer may supply
     its stable notice id to share identity with its console event.
+
+    Each notice is also written into the Home conversation's thread as a reference
+    entry (ADR 0135 D9; ``graph.home_entries``) while the ``home_conversation`` flag
+    is on. ``source`` names the raising code path there. The entry is written at
+    once even when quiet hours hold the notice: the hold is about interrupting the
+    operator, and Home is in-app. ``home_title`` makes the entry a short pointer
+    (that title, no body) instead of the full text; ``home_entry=False`` skips it
+    for a notice already in front of the operator in their own chat.
     """
     lifetime = _NOTICE_LIFETIMES[kind]
     if ttl_seconds is not None:
@@ -136,11 +145,32 @@ def notify_chat_surfaces(
             HOST.publish("notice", asdict(notice))
     except Exception:  # noqa: BLE001 — a bus failure must not suppress adapters
         log.exception("Could not publish notice event")
+    if home_entry:
+        _post_home_entry(notice, source, home_title)
     from graph.notice_hold import DELIVERY
 
     if not DELIVERY.hold(notice):
         _dispatch_notice(notice)
     return notice.notice_id
+
+
+def _post_home_entry(notice: ChatNotice, source: str, home_title: str | None) -> None:
+    """Queue the notice's Home entry. Best-effort: a failure is logged and never
+    stops the adapter dispatch that follows."""
+    try:
+        from graph.home_entries import post_home_entry
+
+        lines = notice.text.strip().splitlines() or [""]
+        body = None
+        if home_title is None:
+            rest = "\n".join(lines[1:]).strip()
+            body = "\n\n".join(part for part in (rest, notice.link) if part) or None
+        post_home_entry(
+            notice.kind, notice.importance, home_title or lines[0], source,
+            notice_id=notice.notice_id, body=body,
+        )
+    except Exception:  # noqa: BLE001 — Home is one more place to read it, never a gate
+        log.exception("Could not queue the Home entry for notice %s", notice.notice_id)
 
 
 def _dispatch_notice(notice: ChatNotice) -> bool:

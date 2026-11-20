@@ -2026,6 +2026,7 @@ def _notify_scheduled_card(payload: dict) -> None:
             kind="review",
             importance=_SCHEDULED_NOTICE_IMPORTANCE,
             notice_id=payload.get("notice_id"),
+            source="scheduler",
         )
     except Exception:  # noqa: BLE001 — delivery of the card must never fail on the notice
         log.exception("[scheduler] could not queue the result notice for job %s", payload.get("job_id"))
