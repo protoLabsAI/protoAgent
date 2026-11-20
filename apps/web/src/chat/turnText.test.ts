@@ -13,6 +13,7 @@ import {
   settleTurnBubbles,
   turnAnsweredByParticipants,
   turnBubbleIndexes,
+  unplacedSteerIndex,
 } from "./turnText";
 
 const TASK = "task-1";
@@ -47,6 +48,29 @@ const rendered = (messages: ChatMessage[]): string =>
     .filter((message) => message.role === "assistant")
     .map((message) => (message.parts?.length ? text(message) : message.content))
     .join("|");
+
+describe("unplacedSteerIndex", () => {
+  it("is above the reply for an un-split turn, and -1 when the anchor is gone", () => {
+    expect(unplacedSteerIndex([user("hi"), live({ content: "hello" })], "A")).toBe(1);
+    expect(unplacedSteerIndex([user("hi")], "A")).toBe(-1);
+  });
+
+  it("is above the first bubble when no operator message cut the turn", () => {
+    const ask: ChatMessage = { id: "ask", role: "assistant", content: "ping", addressedTo: "ava" };
+    expect(unplacedSteerIndex([user("hi"), frozen(), ask, live()], "A")).toBe(1);
+  });
+
+  it("is below the last operator message already inside the turn, from either half's id", () => {
+    const messages = [user("hi"), frozen(), user("one", "s0"), frozen({ id: "F2" }), user("two", "s1"), live()];
+    expect(unplacedSteerIndex(messages, "A")).toBe(5);
+    expect(unplacedSteerIndex(messages, "F")).toBe(5);
+  });
+
+  it("is below the trailing operator messages when the continuation was folded away", () => {
+    expect(unplacedSteerIndex([user("hi"), frozen(), user("one", "s0")], "A")).toBe(3);
+    expect(unplacedSteerIndex([user("hi"), frozen()], "A")).toBe(1);
+  });
+});
 
 describe("turnBubbleIndexes", () => {
   it("is just the anchor for an ordinary un-split turn", () => {

@@ -240,6 +240,27 @@ describe("HomeAlertCard — View full result", () => {
     expect(turns).not.toHaveBeenCalled();
   });
 
+  it("falls back to the heading when a one-line summary left the card no body", async () => {
+    // What the server writes for a one-line summary: the whole notice is the title, and the
+    // body is only the console link, which the card lifts out as its source link.
+    const ONE_LINE = "Scheduled digest completed: nothing new today.";
+    const text = `${HEAD("review", "scheduler", "normal")}\n${ONE_LINE}\n\nhttp://localhost:7870/`;
+    const turns = vi.spyOn(api, "chatSessionTurns").mockRejectedValue(new Error("503"));
+    render(digest, text);
+    expect(container.querySelector(".pl-home-alert-body")).toBeNull();
+    const doc = openedDocument();
+    expect(doc.title).toBe(ONE_LINE);
+    await expect(doc.load()).resolves.toBe(ONE_LINE);
+    // Same when the run is outside the turns the read returns.
+    turns.mockResolvedValue({ turns: [turn("task-1", "another run")] } as Turns);
+    await expect(doc.load()).resolves.toBe(ONE_LINE);
+    // The subtitle names the entry; it never promises text the load may not have.
+    expect(String(doc.subtitle)).not.toMatch(/full turn/i);
+    // A readable turn still wins over the fallback.
+    turns.mockResolvedValue({ turns: [turn("task-2", FULL_TEXT)] } as Turns);
+    await expect(doc.load()).resolves.toBe(FULL_TEXT);
+  });
+
   it("shows no button on a scheduler entry without an activity context, or on any other source", () => {
     for (const activity_context of [undefined, null, "", "  "]) {
       render({ ...digest, activity_context }, DIGEST_TEXT);
