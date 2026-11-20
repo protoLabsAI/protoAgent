@@ -419,6 +419,83 @@ describe("ChatTranscript render isolation", () => {
     expect(host.querySelectorAll('[aria-label="Cancel queued message"]')).toHaveLength(1);
     expect(host.textContent).toContain("and the resume too");
   });
+
+  // Home dividers + announcer (#5545) are wired for the Home session ONLY.
+  const day = (d: number, hour: number) => new Date(2026, 10, d, hour).getTime();
+  const spanningDays: ChatMessage[] = [
+    { id: "d1", role: "assistant", content: "First brief", status: "done", createdAt: day(1, 9) },
+    { id: "d2", role: "user", content: "Thanks", status: "done", createdAt: day(1, 10) },
+    { id: "d3", role: "assistant", content: "Second brief", status: "done", createdAt: day(2, 9) },
+    { id: "d4", role: "assistant", content: "Third brief", status: "done", createdAt: day(3, 9) },
+  ];
+  const incognitoActions = { incognito: true };
+  const transcript = (extra: Record<string, unknown>, list: ChatMessage[] = spanningDays) =>
+    createElement(ChatTranscript, {
+      sessionId: "days",
+      messages: list,
+      dismissedToolCalls,
+      // Incognito: no feedback read, so the markup below is the transcript's alone.
+      actions: incognitoActions,
+      steerQueue,
+      serverTurnLabel: null,
+      status: "idle",
+      onCancelDelegation: noop,
+      onDismissToolCall: noop,
+      onCancelSteer: noop,
+      ...extra,
+    });
+
+  it("renders a non-Home session exactly as before: no dividers, no announcer, same markup", async () => {
+    await act(async () => root.render(transcript({})));
+    const plain = host.innerHTML;
+    expect(host.querySelector(".pl-home-divider")).toBeNull();
+    expect(host.querySelector("[aria-live]")).toBeNull();
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    // Exactly the message rows, in order, and nothing else.
+    expect(plain).toBe(spanningDays.map((message) => `<div>${message.content}</div>`).join(""));
+    expect(messageRender.mock.calls.map(([id]) => id)).toEqual(["d1", "d2", "d3", "d4"]);
+
+    // Home-only props reaching a non-Home transcript change nothing either.
+    await act(async () => root.render(transcript({ homeOpen: true, homeLastReadAt: new Date(day(1, 12)).toISOString() })));
+    expect(host.innerHTML).toBe(plain);
+  });
+
+  it("gives the Home session day dividers, an 'N new' line and one announcer — and no live transcript", async () => {
+    const lastRead = new Date(day(1, 12)).toISOString();
+    await act(async () => root.render(transcript({ home: true, homeOpen: true, homeLastReadAt: lastRead })));
+    const lines = [...host.querySelectorAll(".pl-home-divider")].map((el) => el.textContent);
+    expect(lines).toHaveLength(4); // three days + "2 new"
+    expect(lines[2]).toBe("2 new");
+    // "2 new" sits directly above the first entry newer than last_read_at (d3), under its day.
+    const fresh = host.querySelector(".pl-home-divider--new")!;
+    expect(fresh.previousElementSibling?.className).toBe("pl-home-divider");
+    expect(fresh.nextElementSibling?.textContent).toBe("Second brief");
+    // The one live region is the announcer; rows and dividers are not inside it.
+    const live = host.querySelectorAll("[aria-live]");
+    expect(live).toHaveLength(1);
+    expect(live[0].getAttribute("role")).toBe("status");
+    expect(live[0].textContent).toBe("");
+    expect(host.querySelector('[role="separator"]')).toBeNull();
+    messageRender.mockClear();
+
+    // Marking Home read (last_read_at moves on) while it stays open keeps "2 new" in place, and
+    // re-renders no settled row.
+    await act(async () => root.render(transcript({ home: true, homeOpen: true, homeLastReadAt: new Date(day(4, 0)).toISOString() })));
+    expect(host.querySelector(".pl-home-divider--new")?.textContent).toBe("2 new");
+    expect(messageRender).not.toHaveBeenCalled();
+
+    // A divider appearing or going away never remounts the rows around it.
+    await act(async () => root.render(transcript({ home: true, homeOpen: false, homeLastReadAt: new Date(day(4, 0)).toISOString() })));
+    expect(host.querySelector(".pl-home-divider--new")).toBeNull();
+    expect(messageRender).not.toHaveBeenCalled();
+  });
+
+  it("announces a Home entry that arrives while Home is open, once", async () => {
+    await act(async () => root.render(transcript({ home: true, homeOpen: true, homeLastReadAt: null })));
+    const arrived: ChatMessage = { id: "d5", role: "assistant", content: "Deploy finished", status: "done", createdAt: Date.now() + 1000 };
+    await act(async () => root.render(transcript({ home: true, homeOpen: true, homeLastReadAt: null }, [...spanningDays, arrived])));
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("New in Home: Deploy finished");
+  });
 });
 
 // The sent-timestamp footer widget (#3458) lives in the SHARED ChatMessageView renderer, so

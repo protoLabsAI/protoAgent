@@ -284,6 +284,17 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Home dividers (#5545) — "Today" / "Yesterday" / the date, and "N new" above the first unread
+   entry. Plain muted text a reader skims past: not a system row, not a rule. */
+.pl-home-divider {
+  margin: 0;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+  text-align: center;
+}
+.pl-home-divider--new {
+  font-weight: 600;
+}
 .pl-home-alert-actions {
   display: flex;
   align-items: center;
@@ -1292,7 +1303,8 @@
    (both would drop the live region from the a11y tree and silence it). The console ships no
    sr-only utility, so it is defined here. */
 .conversations-tab__sr,
-.conversations-announce {
+.conversations-announce,
+.pl-home-announce {
   position: absolute;
   width: 1px;
   height: 1px;

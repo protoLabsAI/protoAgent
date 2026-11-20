@@ -9,12 +9,18 @@ import type { ChatMessage, QueuedSteer, RuntimeStatus } from "../lib/types";
 import type { SessionStatus } from "./chat-store";
 import { ChatMessageView, type ChatMessageActions } from "./ChatMessageView";
 import { hideDismissedToolCalls } from "./dismissedToolCalls";
+import { HomeAnnouncer, HomeDivider, homeDividers, useHomeNewAnchor, useHomeToday } from "./HomeDividers";
 import { useStreamFollow } from "./streamFollow";
 import { useSessionFeedback } from "./useSessionFeedback";
 import { STARTER_PROMPTS } from "./starterPrompts";
 
 type ChatTranscriptProps = {
   home?: boolean;
+  /** Home only: this pane is the one the operator is looking at. Gates the announcer and
+   *  freezes the "N new" divider while it stays open. */
+  homeOpen?: boolean;
+  /** Home only: `last_read_at` from `GET /api/home` (null = never read). */
+  homeLastReadAt?: string | null;
   sessionId: string;
   messages: ChatMessage[];
   dismissedToolCalls: Set<string>;
@@ -96,6 +102,8 @@ export function liveServerTurnMessageId(messages: ChatMessage[], serverTurnLabel
 
 export const ChatTranscript = memo(function ChatTranscript({
   home = false,
+  homeOpen = false,
+  homeLastReadAt,
   sessionId,
   messages,
   dismissedToolCalls,
@@ -129,11 +137,20 @@ export const ChatTranscript = memo(function ChatTranscript({
   // that message's spinner and the standalone indicator below stands down. (The indicator
   // predates the live preview, when such a turn showed nothing else at all.)
   const liveId = liveServerTurnMessageId(messages, serverTurnLabel);
+  // Home only (#5545): day labels and the "N new" line above the first unread entry. Every
+  // other session gets `null` here and renders exactly the rows it always did.
+  const today = useHomeToday(home);
+  const newAnchor = useHomeNewAnchor(home && homeOpen, homeLastReadAt);
+  const dividers = useMemo(
+    () => (home ? homeDividers(messages, { lastReadAt: newAnchor, now: today }) : null),
+    [home, messages, newAnchor, today],
+  );
   return (
     // autoScroll off: the DS follower unpinned itself when a card grew right after its own
     // follow scroll (B6) — `useStreamFollow` owns following and the jump button instead.
     <Conversation id={rootId} autoScroll={false}>
       {home && <h2 className="conversations-tab__sr">Home</h2>}
+      {home && <HomeAnnouncer messages={messages} open={homeOpen} />}
       {feedback.error ? <p role="alert">{feedback.error}</p> : null}
       {messages.length === 0 && home ? (
         <Empty>Your agent posts briefs, alerts and results here. Reply any time.</Empty>
@@ -171,19 +188,25 @@ export const ChatTranscript = memo(function ChatTranscript({
           ) : null}
         </Empty>
       ) : (
-        messages.map((message) => (
-          <TranscriptMessageRow
-            key={message.id || `${message.role}-${message.createdAt}`}
-            // Dismissed cards are stripped only for this client's view; the store and
-            // backend history retain the complete turn.
-            message={message}
-            dismissedToolCalls={dismissedToolCalls}
-            onCancelDelegation={onCancelDelegation}
-            onDismissToolCall={onDismissToolCall}
-            actions={feedbackActions}
-            activityLabel={liveId && message.id === liveId ? serverTurnLabel : null}
-          />
-        ))
+        messages.flatMap((message, index) => {
+          const row = (
+            <TranscriptMessageRow
+              key={message.id || `${message.role}-${message.createdAt}`}
+              // Dismissed cards are stripped only for this client's view; the store and
+              // backend history retain the complete turn.
+              message={message}
+              dismissedToolCalls={dismissedToolCalls}
+              onCancelDelegation={onCancelDelegation}
+              onDismissToolCall={onDismissToolCall}
+              actions={feedbackActions}
+              activityLabel={liveId && message.id === liveId ? serverTurnLabel : null}
+            />
+          );
+          const divider = dividers?.[index];
+          // One flat keyed list: a divider is its row's sibling, so adding or dropping one
+          // never remounts the message below it.
+          return divider ? [<HomeDivider key={`divider-${row.key}`} slot={divider} />, row] : [row];
+        })
       )}
       {pending.map((queued) => (
         /* Optimistic queued bubble: cancellation either removes it before consumption or

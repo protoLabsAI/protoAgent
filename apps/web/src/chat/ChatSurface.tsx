@@ -34,6 +34,7 @@ import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSessi
 import { pushClose, pushRename } from "./sessionListSync";
 import { messagesFromDurableTurns, SESSION_TURN_LIMIT } from "./sessionHydration";
 import { ChatSessionSlot } from "./ChatSessionSlot";
+import { homeUnreadCount } from "./HomeDividers";
 import { homeQueryKey } from "./homeTab";
 import { ConversationsPane } from "./ConversationsPane";
 import {
@@ -96,9 +97,9 @@ export function ChatSurface({
   const homeId = homeState.data?.session_id;
   const homeSession = chat.sessions.find((session) => session.id === homeId);
   const lastRead = homeState.data?.last_read_at;
-  const unread = homeSession?.messages.filter((message) =>
-    message.role === "assistant" && (message.createdAt ?? 0) > (lastRead ? Date.parse(lastRead) : 0),
-  ).length ?? 0;
+  // Counted by the same rule as the transcript's "N new" divider (HomeDividers), so the tab
+  // and the divider agree — alert cards the server wrote into Home count too.
+  const unread = homeSession ? homeUnreadCount(homeSession.messages, lastRead) : 0;
   const homeLatest = homeSession?.messages[homeSession.messages.length - 1]?.createdAt;
   useEffect(() => {
     if (!homeId) return;
@@ -650,6 +651,9 @@ export function ChatSurface({
             key={sessionId}
             sessionId={sessionId}
             home={sessionId === homeId}
+            // The same "Home is on screen" test that marks it read above.
+            homeOpen={sessionId === homeId && active && chat.currentSessionId === homeId && conv.stage !== "conversations"}
+            homeLastReadAt={sessionId === homeId ? lastRead : undefined}
             visible={sessionId === currentSession?.id}
             surfaceActive={active}
             onError={onError}
