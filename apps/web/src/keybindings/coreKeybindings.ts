@@ -15,6 +15,7 @@ import { chatStore } from "../chat/chat-store";
 // changes, so without this a new/switched chat would be created but stay hidden behind the
 // Conversations list pane (the chat pool sits at display:none while that stage is selected).
 import { openChat as leaveConversationsForChat } from "../chat/conversations-store";
+import { inTabOrder } from "../chat/homeTab";
 import { runChatEscape } from "../chat/escapeStop";
 import { toggleLatestToolBlock } from "../chat/toolCollapse";
 import { useUI } from "../state/uiStore";
@@ -22,7 +23,10 @@ import { registerKeybinding } from "../ext/keybindingRegistry";
 import { useKbIntents } from "./intents";
 
 function switchByOffset(delta: number): void {
-  const { sessions, currentSessionId } = chatStore.getSnapshot();
+  // Walk the tabs in the order the strip SHOWS them: the pinned Home tab is first there even
+  // though the store appends it (H-U1), so cycling must not follow raw store order.
+  const { sessions: stored, currentSessionId } = chatStore.getSnapshot();
+  const sessions = inTabOrder(stored);
   if (sessions.length === 0) return;
   const cur = sessions.findIndex((s) => s.id === currentSessionId);
   const base = cur < 0 ? 0 : cur;
@@ -34,7 +38,8 @@ function switchByOffset(delta: number): void {
 }
 
 function switchToIndex(i: number): void {
-  const target = chatStore.getSnapshot().sessions[i];
+  // Same visible order as the strip: with a Home tab, ⌘1 is Home and ⌘2 the first chat.
+  const target = inTabOrder(chatStore.getSnapshot().sessions)[i];
   if (target) {
     leaveConversationsForChat();
     chatStore.switchSession(target.id);

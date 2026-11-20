@@ -9,7 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
 import { useIsMobile } from "../lib/useIsMobile";
-import { api, ApiError, currentSlug } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
@@ -34,6 +34,7 @@ import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSessi
 import { pushClose, pushRename } from "./sessionListSync";
 import { messagesFromDurableTurns, SESSION_TURN_LIMIT } from "./sessionHydration";
 import { ChatSessionSlot } from "./ChatSessionSlot";
+import { homeQueryKey } from "./homeTab";
 import { ConversationsPane } from "./ConversationsPane";
 import {
   CONVERSATIONS_STAGE_ID,
@@ -80,7 +81,7 @@ export function ChatSurface({
   // once the list has loaded rows) and, while that tab is selected, the read-only list pane that
   // replaces the chat in the main pane — `currentSessionId` is never touched (§4.7).
   const conv = useConversations();
-  const homeKey = [currentSlug(), "home"] as const;
+  const homeKey = homeQueryKey();
   const homeState = useQuery({
     queryKey: homeKey,
     queryFn: async () => {
