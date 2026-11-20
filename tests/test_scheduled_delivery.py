@@ -40,6 +40,7 @@ class _Job:
     origin_session: str | None = "chat-42"
     fire_count: int = 0
     schedule: str = "0 9 * * *"
+    result_destination: str = "origin"
 
 
 class _Scheduler:
@@ -438,3 +439,60 @@ def test_home_lookup_failure_keeps_result_in_activity(_sched, monkeypatch, missi
 
     monkeypatch.setattr(home_session, "home_session_id", unavailable)
     assert a2a._scheduled_delivery_payload(_Outcome()) is None
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("destination", ["origin", "home"])
+def test_result_destination_home_routes_an_origin_chat_job_to_home(_sched, monkeypatch, enabled, destination):
+    from runtime.home_session import home_session_id
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on" if enabled else "off")
+    job = _Job(result_destination=destination)
+    _sched(job)
+    outcome = _Outcome(context_id="job:job-1")
+    payload = a2a._scheduled_delivery_payload(outcome)
+    expected = home_session_id() if enabled and destination == "home" else "chat-42"
+    assert payload["origin_session"] == expected
+    # Only the card moves: the fire ran on (and stays on) the job's own session.
+    assert payload["activity_context"] == "job:job-1"
+    assert outcome.context_id == "job:job-1"
+    assert (job.origin_session, job.result_destination) == ("chat-42", destination)
+
+
+def test_result_destination_home_falls_back_to_origin_when_home_is_unavailable(_sched, monkeypatch):
+    from runtime import home_session
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on")
+    _sched(_Job(result_destination="home"))
+
+    def unavailable():
+        raise OSError("unavailable")
+
+    monkeypatch.setattr(home_session, "home_session_id", unavailable)
+    assert a2a._scheduled_delivery_payload(_Outcome(context_id="job:job-1"))["origin_session"] == "chat-42"
+
+
+def test_result_destination_home_keeps_quiet_and_repeat_guards(_sched, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on")
+    _sched(_Job(result_destination="home"))
+    assert a2a._scheduled_delivery_payload(_Outcome(context_id="job:job-1", text="NO_UPDATE")) is None
+    first = a2a._scheduled_delivery_payload(_Outcome(context_id="job:job-1"))
+    a2a._remember_scheduled_card(first["card_fingerprint"])
+    assert a2a._scheduled_delivery_payload(_Outcome(context_id="job:job-1")) is None
+
+
+@pytest.mark.asyncio
+async def test_result_destination_home_one_shot_skips_the_idle_rule(_sched, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on")
+    _sched(_Job(result_destination="home", schedule="2026-11-20T09:00:00Z"))
+    events = []
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda topic, data: events.append((topic, data)))
+    monkeypatch.setattr(a2a, "_notify_scheduled_card", lambda _: None)
+
+    async def stale(session_id):
+        return False
+
+    monkeypatch.setattr(a2a, "_session_recently_active", stale)
+    payload = a2a._scheduled_delivery_payload(_Outcome(context_id="job:job-1"))
+    assert await a2a._deliver_scheduled(payload) is True
+    assert len(events) == 1

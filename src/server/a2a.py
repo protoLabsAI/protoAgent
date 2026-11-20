@@ -1650,6 +1650,21 @@ def _scheduled_home_session() -> str:
         return ""
 
 
+def _scheduled_result_session(job) -> str:
+    """The session a job's result card targets, or "" when it has none.
+
+    A job whose ``result_destination`` is ``"home"`` targets Home even when a chat
+    created it; with Home disabled or unavailable it keeps its origin chat. Any other
+    job targets its origin chat, falling back to Home only when it has none. Only the
+    card's destination moves — the job still runs on its own ``job:`` session."""
+    if job is None:
+        return ""
+    origin = (getattr(job, "origin_session", "") or "").strip()
+    if not origin or getattr(job, "result_destination", "origin") == "home":
+        return _scheduled_home_session() or origin
+    return origin
+
+
 def _scheduled_delivery_payload(outcome) -> dict | None:
     """Build the ``scheduler.completed`` event payload for a scheduled fire whose
     result should surface in the chat that created it (#2990), or ``None`` when this
@@ -1659,7 +1674,8 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
     Returns ``None`` (no delivery) when: the turn isn't a ``scheduler`` fire; it's a
     ``wait:`` resume (already runs IN its chat — or, for a background wait, on its
     owning job session — surfaced by chat.resumed / the Activity feed); the job has
-    no ``origin_session`` and Home is disabled or unavailable; the origin
+    no ``origin_session`` and Home is disabled or unavailable; the destination (the
+    origin chat, or Home for a job whose ``result_destination`` is ``"home"``)
     is the Activity thread itself or another job's execution session (ADR 0129 — no
     chat reads those; the feed carries the result); or the fire already ran IN
     the origin session (a one-shot resume — chat.resumed covers it, no double-delivery).
@@ -1682,9 +1698,7 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
             job = getter(job_id)
         except Exception:  # noqa: BLE001 — a lookup failure just means no card
             job = None
-    origin = (getattr(job, "origin_session", "") or "").strip() if job else ""
-    if job is not None and not origin:
-        origin = _scheduled_home_session()
+    origin = _scheduled_result_session(job)
     if not origin or origin == ACTIVITY_CONTEXT or origin.startswith(JOB_CONTEXT_PREFIX):
         return None
     context_id = str(getattr(outcome, "context_id", "") or "")
@@ -1901,7 +1915,11 @@ def _apply_followup_backoff(outcome, payload):
     if already is not None:
         return None
     log.info("[scheduler] job %s is quiet and its chat is waiting on you — backing off to hourly", job.id)
-    return _followup_waiting_card(job, origin, generation, task_id=getattr(outcome, "task_id", "") or "")
+    # The waiting test above reads the chat that created the follow-up; the card itself
+    # goes wherever the job's results go (Home for ``result_destination`` "home").
+    return _followup_waiting_card(
+        job, _scheduled_result_session(job) or origin, generation, task_id=getattr(outcome, "task_id", "") or ""
+    )
 
 
 def _is_recent(last_updated, now, window_s: int) -> bool:

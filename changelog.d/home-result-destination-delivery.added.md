@@ -1,0 +1,1 @@
+- **Scheduled jobs set to show results in Home deliver there.** A job created in a chat with `result_destination` `home` now posts its result card to Home while Home is enabled; with Home disabled or unavailable, or with `origin`, it posts to its origin chat as before. The job still runs in its own session, and quiet-result and repeat suppression are unchanged. Refs #5545.
