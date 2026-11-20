@@ -829,7 +829,7 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   void homeRead.then(mergeHomeEntries).catch(() => {});
 }
 
-type HomeEntriesRead = Awaited<ReturnType<typeof api.homeEntries>>;
+export type HomeEntriesRead = Awaited<ReturnType<typeof api.homeEntries>>;
 
 /** Place Home entries the transcript does not hold yet by the time they were written, so a
  *  notice lands between the turns around it instead of below a later one. A message with no
@@ -851,8 +851,8 @@ export function placeHomeEntries(messages: ChatMessage[], entries: ChatMessage[]
 
 /** Merge a Home-entries read into Home's transcript. Reads the store at merge time, so live
  *  streaming work and anything hydrated while the read was out survive. */
-function mergeHomeEntries(home: HomeEntriesRead | null): void {
-  if (!home?.entries.length) return;
+export function mergeHomeEntries(home: HomeEntriesRead | null): void {
+  if (!home?.entries?.length) return;
   const session = chatStore.getSnapshot().sessions.find((item) => item.id === home.session_id);
   if (!session) return;
   const entries: ChatMessage[] = home.entries.map((entry) => ({
