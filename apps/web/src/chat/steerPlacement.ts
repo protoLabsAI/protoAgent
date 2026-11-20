@@ -1,6 +1,6 @@
 import type { ChatMessage, ConsumedSteer } from "../lib/types";
 import { insertConversationBubbles } from "./roomBubble";
-import { turnBubbleIndexes } from "./turnText";
+import { turnBubbleIndexes, unplacedSteerIndex } from "./turnText";
 
 function settledBubbles(consumed: ConsumedSteer[], createdAt: number): ChatMessage[] {
   return consumed.map((item, index) => ({
@@ -16,9 +16,10 @@ function settledBubbles(consumed: ConsumedSteer[], createdAt: number): ChatMessa
  *
  * With a live assistant id, split at the exact streamed boundary. Without one
  * (poll/turn-end compatibility fallback), retain the legacy conservative placement
- * immediately before the current assistant turn (its first bubble, when the turn was
- * split): the fallback knows the steer shaped that reply, but has no honest
- * finer-grained position. */
+ * immediately before the current assistant message: the fallback knows the steer
+ * shaped that reply, but has no honest finer-grained position. A turn that was split
+ * into several bubbles takes the steer above its first bubble — or, when earlier steers
+ * already sit inside the turn, directly below the last of them (`unplacedSteerIndex`). */
 export function placeConsumedSteers(
   messages: ChatMessage[],
   consumed: ConsumedSteer[],
@@ -43,9 +44,13 @@ export function placeConsumedSteers(
     }
   }
   // A turn an earlier steer or delegation split renders as several bubbles (`splitOf`):
-  // the unknown boundary may sit in any of them, so land above the turn's FIRST bubble.
-  // Before its last one, the steer could read as sent after text it shaped.
-  if (at < next.length) at = Math.min(at, ...turnBubbleIndexes(next, next[at].id ?? ""));
+  // the unknown boundary may sit in any of them. Land above the turn's reply, but below
+  // any steer already shown inside it — that one was sent (and consumed) first, and
+  // before the turn's first bubble this steer would read as sent ahead of it.
+  if (at < next.length) {
+    const placed = unplacedSteerIndex(next, next[at].id ?? "");
+    if (placed !== -1) at = placed;
+  }
   next.splice(at, 0, ...settled);
   return next;
 }

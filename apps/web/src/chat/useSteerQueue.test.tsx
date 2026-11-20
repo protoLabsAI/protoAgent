@@ -283,7 +283,7 @@ describe("useSteerQueue — queueing", () => {
     },
   );
 
-  it("lands above the FIRST bubble of a split task, and attaching the same id twice adds no duplicate", async () => {
+  it("lands below an earlier steer inside a split task, and attaching the same id twice adds no duplicate", async () => {
     chatStore.updateMessages(sessionId, [
       { id: "u0", role: "user", content: "hello", createdAt: 1, status: "done" },
       { id: "a0", role: "assistant", content: "hi", createdAt: 2, status: "done", taskId: "task-prior" },
@@ -296,7 +296,8 @@ describe("useSteerQueue — queueing", () => {
     await act(() => r.current.queueSteer());
     await flush();
     const steerId = steerChat.mock.calls[0][1];
-    const placed = ["u0", "a0", steerId, "frozen", "s0", "aT"];
+    // Sent after "earlier steer", so below it — and still above the reply that follows.
+    const placed = ["u0", "a0", "frozen", "s0", steerId, "aT"];
     expect(messagesOf().map((m) => m.id)).toEqual(placed);
     // The turn-end reconcile can name the same message for the same task again.
     saveSteers(sessionId, [{ id: steerId, text: "at knapsack" }]);

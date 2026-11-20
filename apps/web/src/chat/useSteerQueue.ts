@@ -17,7 +17,7 @@ import {
   staleInterjections,
   type ServerTurnPhase,
 } from "./serverInterjections";
-import { turnBubbleIndexes } from "./turnText";
+import { unplacedSteerIndex } from "./turnText";
 
 // Steer-queue ref initializer — mirrors the lazy state init (a useRef can't take
 // an initializer function, and re-reading storage per render would be wasteful).
@@ -226,10 +226,12 @@ export function useSteerQueue({
       (m) => m.role === "assistant" && !m.author && !m.addressedTo && m.taskId === taskId,
     );
     if (followed !== -1) {
-      // These messages STARTED (or joined) that task, so they read above its reply — the
-      // first bubble of it, when a steer or delegation split the turn. Appending them put
-      // the operator's words under the answer they caused, as if sent afterwards.
-      const at = Math.min(followed, ...turnBubbleIndexes(snap.messages, snap.messages[followed].id ?? ""));
+      // These messages STARTED (or joined) that task, so they read above its reply.
+      // Appending them put the operator's words under the answer they caused, as if sent
+      // afterwards. When an earlier steer already split the turn, they land below that
+      // steer — it was sent first — and above the turn bubble that follows it.
+      const placed = unplacedSteerIndex(snap.messages, snap.messages[followed].id ?? "");
+      const at = placed === -1 ? followed : placed;
       if (userMessages.length) {
         chatStore.updateMessages(session.id, [...snap.messages.slice(0, at), ...userMessages, ...snap.messages.slice(at)]);
       }
