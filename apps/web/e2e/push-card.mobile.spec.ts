@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 // Settings ▸ Devices ▸ "Notifications on this device" at phone width (ADR 0135 W2e, first
-// control). The `mobile` projects are an iPhone in a browser tab — the one place iOS never
-// delivers Web Push — so the row must send the operator to the Home Screen instead of
-// offering a button that can't work, and it must fit the phone.
+// card). The `mobile` projects are an iPhone in a browser tab, where iOS has no Web Push, so
+// the card must send the operator to the Home Screen instead of offering a button that can't
+// work, keep its "What leaves this machine" disclosure closed, and fit the phone.
 
-const scope = (testInfo) => `push-toggle-mobile-${testInfo.parallelIndex}`;
+const scope = (testInfo) => `push-card-mobile-${testInfo.parallelIndex}`;
 
 test.beforeEach(async ({ page }, testInfo) => {
   await page.setExtraHTTPHeaders({ "x-e2e-fleet": scope(testInfo) });
@@ -20,11 +20,14 @@ test("mobile: a paired iPhone browser tab is sent to the Home Screen, with no de
   await page.getByRole("button", { name: /Settings sections/ }).tap();
   await page.getByRole("menuitemradio", { name: "Devices", exact: true }).tap();
 
-  const row = page.getByTestId("push-toggle");
-  await row.scrollIntoViewIfNeeded();
-  await expect(row.getByText("Notifications on this device")).toBeVisible();
-  await expect(row.getByTestId("push-note")).toContainText("add this console to your Home Screen");
-  await expect(row.getByRole("button")).toHaveCount(0);
+  const card = page.getByTestId("push-card");
+  await card.scrollIntoViewIfNeeded();
+  await expect(card.getByRole("heading", { name: "Notifications on this device" })).toBeVisible();
+  await expect(card.getByTestId("push-state")).toContainText("On iPhone, notifications work only from the Home Screen app.");
+  await expect(card.getByRole("listitem")).toHaveCount(4);
+  await expect(card.getByRole("button")).toHaveCount(0);
+  await expect(card.getByText("What leaves this machine")).toBeVisible();
+  await expect(card.getByText("No protoAgent server sits in between")).toBeHidden();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
