@@ -135,7 +135,8 @@ def fake_gateway():
 @pytest.fixture
 def fleet(tmp_path_factory, fake_gateway):
     """Factory that boots isolated real servers and tears them (and any members
-    they spawned) down. Returns ``boot(name=..., instance=..., ui=...)`` → ``Server``."""
+    they spawned) down. Returns ``boot(name=..., instance=..., ui=...)`` → ``Server``;
+    ``extra_config`` appends YAML sections to its config and ``extra_env`` adds to its environment."""
     servers: list[Server] = []
 
     def boot(
@@ -145,6 +146,8 @@ def fleet(tmp_path_factory, fake_gateway):
         ui: str = "none",
         timeout: float = 120.0,
         auth_token: str = "",
+        extra_config: str = "",
+        extra_env: dict[str, str] | None = None,
     ) -> Server:
         data_root = tmp_path_factory.mktemp(f"{name}-data")
         home = tmp_path_factory.mktemp(f"{name}-home")
@@ -154,6 +157,8 @@ def fleet(tmp_path_factory, fake_gateway):
             "  name: protolabs/reasoning\n"
             f"  api_base: http://127.0.0.1:{fake_gateway}/v1\n"
             "middleware:\n  knowledge: false\n  scheduler: false\n"
+            # Further top-level YAML sections for this server's config (e.g. quiet_hours).
+            + extra_config
         )
         port = free_port()
         env = {
@@ -175,6 +180,7 @@ def fleet(tmp_path_factory, fake_gateway):
         # (ADR 0089 D5 overwrites the inherited A2A_AUTH_TOKEN), so its bearer differs from the hub's.
         if auth_token:
             env["A2A_AUTH_TOKEN"] = auth_token
+        env.update(extra_env or {})
         proc = subprocess.Popen([PY, "-m", "server", "--ui", ui, "--port", str(port)], cwd=str(ROOT), env=env)
         s = Server(name=name, port=port, home=home, data_root=data_root, proc=proc)
         servers.append(s)

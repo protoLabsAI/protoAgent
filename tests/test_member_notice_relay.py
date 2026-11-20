@@ -3,12 +3,14 @@ import asyncio
 import json
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from graph import push_transport
+from graph import notice_hold, push_transport
 from graph.fleet import notice_relay, service_token
 from graph.plugins import chat_surface
 from graph.plugins.chat_surface import ChatNotice, notify_chat_surfaces
@@ -160,6 +162,77 @@ async def test_route_takes_a_notice_only_from_the_fleet_token(box):
             assert origin.json() == {"ok": True, "agent": MEMBER}
             assert origin.headers["cache-control"] == "no-store"
             assert (await http.get("/api/notices/unknown-notice")).json() == {"ok": True, "agent": None}
+    finally:
+        await loops._stop_push_delivery()
+
+
+# ── the hub's quiet hours (#5648) ────────────────────────────────────────────────────
+
+
+def window_around_now(hours=2):
+    """A (start, end) HH:MM pair in UTC with the current time well inside it."""
+    now = datetime.now(timezone.utc)
+    return tuple((now + timedelta(hours=h)).strftime("%H:%M") for h in (-hours, hours))
+
+
+@pytest.fixture
+def hub_hold(box, monkeypatch):
+    """The hub's live config (every notice pushes, quiet hours covering now) and its hold."""
+    start, end = window_around_now()
+    config = SimpleNamespace(
+        push_all_notices=True, quiet_hours_enabled=True,
+        quiet_hours_start=start, quiet_hours_end=end, quiet_hours_timezone="UTC",
+    )
+    monkeypatch.setattr("graph.plugins.host.HOST.config", lambda: config)
+    delivery = notice_hold.QuietHoursDelivery()
+    monkeypatch.setattr(notice_hold, "DELIVERY", delivery)
+    return SimpleNamespace(config=config, held=lambda: [text for _, text in delivery._store().rows()])
+
+
+async def test_hub_quiet_hours_hold_a_members_routine_notice(hub_hold):
+    transport = loops._start_push_delivery(Provider())
+    try:
+        async with client() as http:
+            body = notice_body(notice_id="job-1", kind="notify", importance="normal")
+            held = await http.post("/api/fleet/notices", json=body, headers={"Authorization": f"Bearer {TOKEN}"})
+        # 2xx, so the member does not retry a notice the hub is holding.
+        assert held.status_code == 200 and held.json() == {"ok": True, "queued": True}
+        # The held text is the hub's wording and the member's name: nothing the member sent.
+        assert hub_hold.held() == ["A notice from protoEngineer"]
+        assert rows(transport) == []
+        assert transport.origin_of("job-1") == MEMBER
+    finally:
+        await loops._stop_push_delivery()
+
+
+@pytest.mark.parametrize("kind,importance", [("question", "normal"), ("notify", "high"), ("review", "high")])
+async def test_hub_quiet_hours_never_hold_a_members_question_or_urgent_notice(hub_hold, kind, importance):
+    transport = loops._start_push_delivery(Provider())
+    try:
+        body = notice_body(notice_id="urgent-1", kind=kind, importance=importance)
+        assert await notice_relay.accept_member_notice(body) is True
+        await settle(lambda: rows(transport) == [("urgent-1", kind, importance, "accepted")])
+        assert hub_hold.held() == []
+    finally:
+        await loops._stop_push_delivery()
+
+
+async def test_outside_quiet_hours_a_members_routine_notice_is_pushed(hub_hold, monkeypatch):
+    transport = loops._start_push_delivery(Provider())
+    try:
+        hub_hold.config.quiet_hours_enabled = False
+        assert await notice_relay.accept_member_notice(notice_body(notice_id="job-2", kind="notify", importance="normal"))
+        # On, but the window is elsewhere in the day.
+        hub_hold.config.quiet_hours_enabled = True
+        hub_hold.config.quiet_hours_start, hub_hold.config.quiet_hours_end = window_around_now(-2)
+        assert await notice_relay.accept_member_notice(notice_body(notice_id="job-3", kind="notify", importance="normal"))
+        await settle(lambda: sorted(r[0] for r in rows(transport) if r[3] == "accepted") == ["job-2", "job-3"])
+        assert hub_hold.held() == []
+        # A member the registry lists without a name is called by its id.
+        monkeypatch.setattr("graph.workspaces.manager._find", lambda ident: {"id": MEMBER})
+        hub_hold.config.quiet_hours_start, hub_hold.config.quiet_hours_end = window_around_now()
+        assert await notice_relay.accept_member_notice(notice_body(notice_id="job-4", kind="notify", importance="normal"))
+        assert hub_hold.held() == [f"A notice from {MEMBER}"]
     finally:
         await loops._stop_push_delivery()
 
