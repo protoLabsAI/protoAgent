@@ -195,6 +195,8 @@ export function resolveComposerStopTarget(
 
 export function ChatSessionSlot({
   home = false,
+  homeOpen = false,
+  homeLastReadAt,
   sessionId,
   visible,
   surfaceActive,
@@ -202,6 +204,10 @@ export function ChatSessionSlot({
 }: {
   sessionId: string;
   home?: boolean;
+  /** Home only: Home is the pane on screen right now (not just the selected chat tab). */
+  homeOpen?: boolean;
+  /** Home only: `last_read_at` from `GET /api/home`, for the "N new" divider. */
+  homeLastReadAt?: string | null;
   visible: boolean;
   // The chat SURFACE is the active rail surface (not just: this is the active session
   // tab). Both must be true for the composer to grab focus.
@@ -1988,6 +1994,8 @@ export function ChatSessionSlot({
             <DecisionTranscriptContext.Provider value={decisionTranscript}>
               <ChatTranscript
                 home={home}
+                homeOpen={homeOpen}
+                homeLastReadAt={homeLastReadAt}
                 sessionId={sessionId}
                 messages={messages}
                 dismissedToolCalls={dismissedToolCalls}
