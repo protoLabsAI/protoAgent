@@ -136,14 +136,25 @@ def notify_chat_surfaces(
             HOST.publish("notice", asdict(notice))
     except Exception:  # noqa: BLE001 — a bus failure must not suppress adapters
         log.exception("Could not publish notice event")
+    from graph.notice_hold import DELIVERY
+
+    if not DELIVERY.hold(notice):
+        _dispatch_notice(notice)
+    return notice.notice_id
+
+
+def _dispatch_notice(notice: ChatNotice) -> bool:
+    """Queue a notice directly; digest flushes must never enter the hold again."""
     with _notify_lock:
         dispatchers = list(_notifiers.values())
+    queued = False
     for dispatch in dispatchers:
         try:
             dispatch(notice)
+            queued = True
         except Exception:  # noqa: BLE001 — one stopped loop cannot block another surface
             log.exception("Could not queue chat surface notification")
-    return notice.notice_id
+    return queued
 
 
 @dataclass

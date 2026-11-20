@@ -343,6 +343,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "room_max_rounds": 3,
     "routing_fallback_models": [],
     "scheduler_enabled": True,
+    "quiet_hours_enabled": False,
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "07:00",
+    "quiet_hours_timezone": "UTC",
     "spend_cap_enabled": False,
     "spend_cap_daily_cost_hard_limit": 10.0,
     "spend_cap_daily_token_hard_limit": 1_000_000,
@@ -1491,3 +1495,15 @@ def test_fleet_member_restart_setting_round_trip(tmp_path, enabled, expected):
     out = tmp_path / "restart.yaml"
     save_yaml_doc(apply_updates_to_yaml({}, config_to_dict(cfg)), out)
     assert LangGraphConfig.from_yaml(str(out)).fleet_member_restart_enabled is expected
+
+
+def test_quiet_hours_settings_roundtrip(tmp_path):
+    values = {"enabled": True, "start": "23:15", "end": "08:30", "timezone": "America/Los_Angeles"}
+    config = LangGraphConfig.from_dict({"quiet_hours": values})
+    assert config_to_dict(config)["quiet_hours"] == values
+    path = tmp_path / "quiet.yaml"
+    save_yaml_doc(config_to_dict(config), path)
+    assert config_to_dict(LangGraphConfig.from_yaml(str(path)))["quiet_hours"] == values
+    fields = [f for f in FIELDS if f.key.startswith("quiet_hours.")]
+    assert len(fields) == 4
+    assert all(f.section == "Quiet hours" and not f.ui_hidden for f in fields)

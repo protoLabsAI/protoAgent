@@ -1497,6 +1497,12 @@ FIELDS: list[Field] = [
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
     Field("middleware.audit", "audit_middleware", "Audit middleware", "bool", "Middleware"),
+    Field("quiet_hours.enabled", "quiet_hours_enabled", "Enable quiet hours", "bool", "Quiet hours",
+          description="Hold routine notices for one digest. Urgent notices and questions still arrive immediately."),
+    Field("quiet_hours.start", "quiet_hours_start", "Start (HH:MM)", "string", "Quiet hours"),
+    Field("quiet_hours.end", "quiet_hours_end", "End (HH:MM)", "string", "Quiet hours"),
+    Field("quiet_hours.timezone", "quiet_hours_timezone", "Timezone", "string", "Quiet hours",
+          description="IANA timezone, for example America/Los_Angeles. Invalid settings deliver notices normally."),
     Field("spend_cap.enabled", "spend_cap_enabled", "Cap unattended spend", "bool", "Spend cap",
           description="Pause all unattended turns at either daily hard limit until an operator answers the decision."),
     Field("spend_cap.daily_cost_hard_limit", "spend_cap_daily_cost_hard_limit", "Daily cost hard limit (USD)",
@@ -2665,6 +2671,7 @@ _SECTION_CATEGORY = {
     # box-wide SQL rollup (`telemetry.*`) stays under Box.
     "Tracing": "Observability",
     "Spend cap": "Behavior",
+    "Quiet hours": "Behavior",
     # Secrets — the external secrets manager (ADR 0080); the console renders this
     # category as its own sidenav section with a status/test/sync card.
     "Secrets manager": "Secrets",
