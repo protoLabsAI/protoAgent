@@ -1,1 +1,0 @@
-- **Watch fires notify connected chat and push surfaces.** Met conditions and value changes send one normal-importance notice with a console link; flapping fires stay quiet, and notification failures do not interrupt watch reactions. Refs #5619.

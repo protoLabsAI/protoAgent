@@ -1,1 +1,0 @@
-- **Quiet hours for routine notices.** Settings can hold low and normal notices overnight and deliver one durable morning digest, while urgent notices and questions arrive immediately. Refs #5538.
