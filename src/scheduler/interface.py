@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 
 @dataclass
@@ -64,6 +64,9 @@ class Job:
     # Unresolved legacy continuation ownership; visible but not dispatchable.
     execution_hold: str | None = None
 
+    # Preferred result destination; independent of execution and origin provenance.
+    result_destination: Literal["origin", "home"] = "origin"
+
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -90,6 +93,7 @@ class SchedulerBackend(Protocol):
         max_fires: int | None = None,
         restore_state: Job | None = None,
         enqueue_key: str | None = None,
+        result_destination: Literal["origin", "home"] = "origin",
     ) -> Job:
         """Persist a new job. Returns the stored ``Job`` (with
         backend-assigned id and next_fire if the caller didn't set them).
@@ -115,6 +119,9 @@ class SchedulerBackend(Protocol):
         distinct from ``context_id`` (where the fire runs): the host delivers the
         fire's RESULT back to this session as a ScheduledReportCard. None → no
         delivery. Backends that can't deliver may ignore it.
+
+        ``result_destination`` selects the origin chat (default) or Home for results.
+        Values other than "origin" or "home" raise ``ValueError``.
 
         ``ttl`` / ``max_fires`` auto-expire the job (#2992): after
         ``created_at + ttl`` elapses, or after ``max_fires`` firings, the

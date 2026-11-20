@@ -39,7 +39,7 @@ import uuid
 from contextlib import closing, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 from croniter import croniter
@@ -376,6 +376,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     timezone    TEXT,
     context_id  TEXT,
     origin_session TEXT,
+    result_destination TEXT NOT NULL DEFAULT 'origin',
     ttl         TEXT,
     max_fires   INTEGER,
     fire_count  INTEGER NOT NULL DEFAULT 0,
@@ -691,6 +692,7 @@ class LocalScheduler:
                 ("timezone", "TEXT"),  # per-job timezone
                 ("context_id", "TEXT"),  # ADR 0053 same-session resume
                 ("origin_session", "TEXT"),  # #2990 deliver-result-to-origin-chat
+                ("result_destination", "TEXT NOT NULL DEFAULT 'origin'"),
                 ("ttl", "TEXT"),  # #2992 auto-expiry
                 ("max_fires", "INTEGER"),
                 ("fire_count", "INTEGER NOT NULL DEFAULT 0"),
@@ -739,6 +741,7 @@ class LocalScheduler:
         max_fires: int | None = None,
         restore_state: Job | None = None,
         enqueue_key: str | None = None,
+        result_destination: Literal["origin", "home"] = "origin",
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
@@ -763,6 +766,7 @@ class LocalScheduler:
             timezone=timezone,
             context_id=context_id,
             origin_session=origin_session,
+            result_destination=result_destination,
             ttl=ttl,
             max_fires=max_fires,
             # The creating turn's tool fence, read from the calling tool's scope: a
@@ -775,9 +779,11 @@ class LocalScheduler:
             # a restored paused or fenced job, even briefly.
             for field in (
                 "fence", "enabled", "created_at", "next_fire", "last_fire",
-                "fire_count", "consecutive_failures", "last_error", "last_ok", "expiry_notice_sent",
+                "fire_count", "consecutive_failures", "last_error", "last_ok", "expiry_notice_sent", "result_destination",
             ):
                 setattr(job, field, getattr(restore_state, field))
+        if job.result_destination not in ("origin", "home"):
+            raise ValueError('scheduler: result_destination must be "origin" or "home"')
         if not self._schema_ready:
             # The constructor deferred to a live owner (or the store was briefly
             # unreadable): make sure job_sessions/execution_hold exist before
@@ -808,9 +814,9 @@ class LocalScheduler:
                 )
                 db.execute(
                     "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
-                    "last_fire, enabled, created_at, timezone, context_id, origin_session, "
+                    "last_fire, enabled, created_at, timezone, context_id, origin_session, result_destination, "
                     "ttl, max_fires, fire_count, fence, consecutive_failures, last_error, last_ok, execution_hold, expiry_notice_sent) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         job.id,
                         job.prompt,
@@ -823,6 +829,7 @@ class LocalScheduler:
                         job.timezone,
                         job.context_id,
                         job.origin_session,
+                        job.result_destination,
                         job.ttl,
                         job.max_fires,
                         job.fire_count,
@@ -2790,6 +2797,7 @@ def _row_to_job(row: Any) -> Job:
         context_id=row["context_id"] if "context_id" in keys else None,
         execution_hold=row["execution_hold"] if "execution_hold" in keys else None,
         origin_session=row["origin_session"] if "origin_session" in keys else None,
+        result_destination=row["result_destination"] if "result_destination" in keys else "origin",
         ttl=row["ttl"] if "ttl" in keys else None,
         expiry_notice_sent=bool(row["expiry_notice_sent"]) if "expiry_notice_sent" in keys else False,
         max_fires=row["max_fires"] if "max_fires" in keys else None,
