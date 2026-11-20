@@ -1,0 +1,1 @@
+- **Scheduled jobs store a preferred result destination.** `schedule_task` accepts `origin` (the default) or `home`, with migration support for existing jobs. This adds storage support; delivery routing follows separately. Refs #5545.

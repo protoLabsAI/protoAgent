@@ -136,6 +136,7 @@ def _build_scheduler_tools(scheduler) -> list:
         ttl: str | None = None,
         max_fires: int | None = None,
         state: Annotated[Any, InjectedState] = None,
+        result_destination: str = "origin",
     ) -> str:
         # Recurring (cron) schedules get a default 7-day TTL unless ``ttl``/``max_fires`` say
         # otherwise, so a forgotten schedule doesn't run forever; one-shot ISO schedules fire
@@ -156,12 +157,16 @@ def _build_scheduler_tools(scheduler) -> list:
             ttl: recurring lifetime, e.g. ``"7d"``, ``"24h"``, ``"P7D"``. Cron jobs default to 7d —
                 set longer for long-lived work, or ``"none"`` for no TTL only in an operator chat turn.
             max_fires: auto-cancel after this many fires.
+            result_destination: where results should go: "origin" for the originating chat
+                (default), or "home" for Home.
 
         For "check back in N seconds" use ``wait``.
 
         Before you end the turn, tell the user what you scheduled — and if it follows a failure,
         what failed and what will run when it fires; never reply with only "I'll pick this back up".
         """
+        if result_destination not in ("origin", "home"):
+            return 'Error: result_destination must be "origin" or "home".'
         if problem := cron_ambiguity_problem(when):
             return f"Error: {problem}"
         # Validate expiry knobs up front — a clean error string beats a
@@ -198,6 +203,7 @@ def _build_scheduler_tools(scheduler) -> list:
                     getattr(j, "enabled", True)
                     and (j.prompt or "").strip() == prompt.strip()
                     and j.schedule == when
+                    and getattr(j, "result_destination", "origin") == result_destination
                     and (getattr(j, "timezone", None) or None) == (timezone or None)
                 ):
                     return (
@@ -237,6 +243,8 @@ def _build_scheduler_tools(scheduler) -> list:
                 origin_session=origin_session,
                 ttl=ttl,
                 max_fires=max_fires,
+                # Preserve compatibility with backends using the default destination.
+                **({"result_destination": result_destination} if result_destination != "origin" else {}),
             )
         except ValueError as exc:
             return f"Error: {exc}"
