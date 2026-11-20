@@ -55,6 +55,17 @@ FLAGS: list[Flag] = [
         owner="kj",
         remove_by="2027-02-01",
     ),
+    Flag(
+        id="home_conversation",
+        description=(
+            "Home conversation (ADR 0135 D9) — one pinned chat per instance where job "
+            "results and owner notices are shown. Off while the slices land: with it off, "
+            "`/api/home` answers 404 (#5545)."
+        ),
+        tier="off",
+        owner="kj",
+        remove_by="2027-03-01",
+    ),
 ]
 
 
