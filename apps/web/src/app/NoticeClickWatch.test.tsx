@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { agentHref } from "../lib/api/routing";
 import { useUI } from "../state/uiStore";
-import { NoticeClickWatch, openNotice, takeNoticeFromUrl } from "./NoticeClickWatch";
+import { NoticeClickWatch, openNotice, takeClickedNotice, takeNoticeFromUrl } from "./NoticeClickWatch";
 
 const openWorkGroup = vi.hoisted(() => vi.fn());
 vi.mock("../chat/ChatStatusRail", () => ({ openWorkGroup }));
@@ -110,4 +110,57 @@ it("the latest click wins when an earlier lookup answers late", async () => {
   expect(await first).toBe(false);
   expect(openWorkGroup).toHaveBeenCalledTimes(1);
   expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-b");
+});
+
+// ── the click the push worker left behind (iOS: no URL, no message) ──────────────────
+function stubClickCache(entry: unknown | null) {
+  let stored: unknown | null = entry;
+  const cache = { match: vi.fn(async () => (stored === null ? undefined : new Response(JSON.stringify(stored)))) };
+  const storage = {
+    has: vi.fn(async () => stored !== null),
+    open: vi.fn(async () => cache),
+    delete: vi.fn(async () => { stored = null; return true; }),
+  };
+  vi.stubGlobal("caches", storage);
+  return storage;
+}
+
+it("takes a recent click once, then it is gone", async () => {
+  const cache = stubClickCache({ v: 1, id: "decision-dec-5", at: 1_000 });
+  expect(await takeClickedNotice(1_500)).toBe("decision-dec-5");
+  expect(cache.delete).toHaveBeenCalledOnce();
+  expect(await takeClickedNotice(1_600)).toBeNull();
+});
+
+it.each([
+  ["stale", { v: 1, id: "decision-dec-5", at: 0 }, 6 * 60_000],
+  ["from the future", { v: 1, id: "decision-dec-5", at: 9_000 }, 1_000],
+  ["malformed", { v: 1, id: 5 }, 1_000],
+])("ignores a %s click and still clears it", async (_name, entry, now) => {
+  const cache = stubClickCache(entry);
+  expect(await takeClickedNotice(now)).toBeNull();
+  expect(cache.delete).toHaveBeenCalledOnce();
+});
+
+it("looking for a click creates nothing", async () => {
+  const storage = stubClickCache(null);
+  expect(await takeClickedNotice()).toBeNull();
+  expect(storage.open).not.toHaveBeenCalled();
+});
+
+it("is quiet without Cache Storage", async () => {
+  vi.stubGlobal("caches", undefined);
+  expect(await takeClickedNotice()).toBeNull();
+});
+
+it("coming to the front opens the decision the worker remembered", async () => {
+  stubClickCache(null);
+  await act(async () => root.render(<NoticeClickWatch />));
+  await flush();
+  expect(openWorkGroup).not.toHaveBeenCalled();
+  stubClickCache({ v: 1, id: "decision-dec-6", at: Date.now() });
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await flush();
+  await flush();
+  expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-6");
 });

@@ -30,6 +30,10 @@ var FALLBACK_TAG = "protoagent-notice";
 var CONSOLE_ROOT = "/app/";
 var ICON = "/app/icons/icon-192.png";
 var CLICK_MESSAGE = "protoagent:notice-click";
+// Where the last clicked notice waits for the console (see `rememberClick`). Not an offline
+// cache: one small entry, no request is ever served from it.
+var CLICK_CACHE = "protoagent-notice-click";
+var CLICK_KEY = "/app/__notice-click";
 var KINDS = ["notify", "question", "review"];
 var IMPORTANCES = ["low", "normal", "high"];
 var NOTICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -143,11 +147,38 @@ function onPush(event) {
   event.waitUntil(showNotice(event.data));
 }
 
+/** Leave the clicked notice's id where the console will find it when it next comes to the
+ *  front. Opening a window on a route and messaging an open one both depend on the platform
+ *  handing the click over; an installed iOS web app can come to the front on whatever page it
+ *  was left on, with neither. One entry, the opaque id and a time only; the console deletes
+ *  it on read (`NoticeClickWatch`). Never rejects: the click must still open the console. */
+function rememberClick(id) {
+  if (!id || !NOTICE_ID.test(id) || typeof caches === "undefined") return Promise.resolve();
+  var body = JSON.stringify({ v: PAYLOAD_VERSION, id: id, at: Date.now() });
+  return caches
+    .open(CLICK_CACHE)
+    .then(function (cache) {
+      return cache.put(CLICK_KEY, new Response(body, { headers: { "Content-Type": "application/json" } }));
+    })
+    .catch(function () {});
+}
+
 function onNotificationClick(event) {
   var data = event.notification.data;
+  var id = data && typeof data.id === "string" ? data.id : "";
   event.notification.close();
-  event.waitUntil(openConsole(clickRoute(data), data && typeof data.id === "string" ? data.id : ""));
+  event.waitUntil(
+    rememberClick(id).then(function () {
+      return openConsole(clickRoute(data), id);
+    }),
+  );
 }
 
 self.addEventListener("push", onPush);
 self.addEventListener("notificationclick", onNotificationClick);
+
+// A new version of this worker takes over at once instead of waiting for every console
+// window to close: an installed phone console can stay open for days, and it would keep
+// answering clicks with the old handler. Safe here because there is no `fetch` handler, so
+// no open page depends on which version is active.
+self.skipWaiting();

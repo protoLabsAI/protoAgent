@@ -197,3 +197,21 @@ test("a click focuses the open console window, or opens a known console route", 
     expect((await click(worker, data)).focused).toEqual([`${origin}/app/`]);
   }
 });
+
+test("a click leaves the notice id where a console that got no URL and no message will find it", async ({ page, context }) => {
+  // An installed iOS console can come to the front on the page it was left on: the route is
+  // not followed and the message is not delivered. The worker's note is the third way in.
+  const { worker } = await startWorker(page, context);
+  const before = Date.now();
+  await click(worker, { v: 1, id: NOTICE.id, route: NOTICE.route });
+  const left = await page.evaluate(async () => {
+    const hit = await (await caches.open("protoagent-notice-click")).match("/app/__notice-click");
+    return hit ? await hit.json() : null;
+  });
+  expect(left).toMatchObject({ v: 1, id: NOTICE.id });
+  expect(left.at).toBeGreaterThanOrEqual(before);
+  // Nothing is left for a click with no usable id.
+  await page.evaluate(() => caches.delete("protoagent-notice-click"));
+  await click(worker, { v: 1, id: "../nope", route: "/app/" });
+  expect(await page.evaluate(() => caches.keys())).toEqual([]);
+});
