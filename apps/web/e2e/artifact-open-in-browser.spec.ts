@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { CHAIN_STORE } from "./artifactPanel";
 
-// The Artifact panel's "Open in browser" button (#4939). It opens the version on screen as the
+// The Artifact panel's "Open in browser" action (#4939), in the toolbar's ⋯ menu at every width. It opens the version on screen as the
 // same signed standalone page `open_artifact` hands the agent. The shell mints the link from the
 // gated `POST …/artifact/{id}/page-link` AHEAD of the click, so the button is a real
 // <a target=_blank>: a plain link click opens the tab in every host (the console's plugin iframe,
@@ -24,11 +24,21 @@ async function mintRoute(page: Page, exp = () => 1_900_000_000) {
   return minted;
 }
 
+// The actions live in the ⋯ menu at every width: open it to reach one. Picking an action closes it.
+async function openMenu(page: Page) {
+  if ((await page.locator("#more").getAttribute("aria-expanded")) !== "true") await page.locator("#more").click();
+  await expect(page.locator("#moremenu")).toBeVisible();
+}
+
 test("the button is a real link to the signed page for the version on screen", async ({ page, context }) => {
   const minted = await mintRoute(page);
   await page.goto(VIEW);
-  const open = page.locator("#open");
+  const open = page.locator("#moremenu #open");
+  await expect(page.locator("#more")).toBeVisible();
+  await expect(open).toBeHidden(); // in the ⋯ menu, not on the bar
+  await openMenu(page);
   await expect(open).toBeVisible();
+  await expect(open).toHaveAttribute("role", "menuitem");
   await expect(open).toHaveText("Open in browser");
   await expect(open).toHaveAttribute("href", new RegExp(`${pagePath("art-doc", 1).replace(/[?]/g, "\\?")}$`));
   await expect(open).toHaveAttribute("target", "_blank");
@@ -47,14 +57,71 @@ test("the button is a real link to the signed page for the version on screen", a
   expect(tab.url()).not.toContain("token=");
   expect(await tab.evaluate(() => window.opener)).toBeNull();
 
-  // A narrow dock folds it into the ⋯ menu with the other actions, still the armed link.
+  // Picking it closed the menu. A narrow dock is the same layout, still the armed link.
+  await expect(page.locator("#moremenu")).toBeHidden();
   await page.setViewportSize({ width: 420, height: 700 });
-  await page.locator("#more").click();
-  const item = page.locator("#moremenu #open");
-  await expect(item).toBeVisible();
-  await expect(item).toHaveAttribute("role", "menuitem");
-  await expect(item).toHaveAttribute("href", /art-doc\/page/);
+  await openMenu(page);
+  await expect(open).toBeVisible();
+  await expect(open).toHaveAttribute("role", "menuitem");
+  await expect(open).toHaveAttribute("href", /art-doc\/page/);
 });
+
+for (const width of [1280, 420]) {
+  test(`at ${width}px the toolbar is picker, version nav and ⋯, with every action in the menu`, async ({ page }) => {
+    await mintRoute(page);
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto(VIEW);
+    await expect(page.locator("#art")).toBeVisible();
+    await expect(page.locator("#vnav")).toBeVisible();
+    const more = page.locator("#more");
+    await expect(more).toBeVisible();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    // No action sits on the bar: all four are inside the (closed) menu, and the fold is gone.
+    for (const id of ["edit", "open", "dl", "del"]) {
+      await expect(page.locator(`#moremenu #${id}`)).toHaveCount(1);
+      await expect(page.locator(`#${id}`)).toBeHidden();
+      await expect(page.locator(`#${id}`)).toHaveAttribute("role", "menuitem");
+    }
+    await expect(page.locator("#acts")).toHaveCount(0);
+    await expect(page.locator("#bar")).not.toHaveClass(/compact/);
+    const rows = await page.evaluate(() => new Set([...document.querySelectorAll("#bar > *")]
+      .filter((e) => (e as HTMLElement).offsetParent !== null)
+      .map((e) => { const r = e.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 4); })).size);
+    expect(rows).toBe(1);
+
+    // ⋯ opens the menu on its first applicable item; the arrows walk the visible items and wrap.
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#dl")).toBeVisible();
+    await expect(page.locator("#del")).toBeVisible();
+    const visible = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("#moremenu [role=menuitem]")]
+      .filter((e) => e.style.display !== "none").map((e) => e.id));
+    expect(visible.length).toBeGreaterThanOrEqual(2);
+    const focused = () => page.evaluate(() => document.activeElement?.id);
+    expect(await focused()).toBe(visible[0]);
+    await page.keyboard.press("ArrowDown");
+    expect(await focused()).toBe(visible[1]);
+    await page.keyboard.press("ArrowUp");
+    expect(await focused()).toBe(visible[0]);
+    await page.keyboard.press("ArrowUp");
+    expect(await focused()).toBe(visible[visible.length - 1]);
+
+    // The first Delete click arms "Confirm?" and keeps the menu open; Escape closes onto ⋯.
+    await page.locator("#del").click();
+    await expect(page.locator("#del")).toHaveText("Confirm?");
+    await expect(page.locator("#moremenu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#moremenu")).toBeHidden();
+    await expect(more).toBeFocused();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+
+    // A click outside closes it too.
+    await more.click();
+    await expect(page.locator("#moremenu")).toBeVisible();
+    await page.locator("#vlabel").click();
+    await expect(page.locator("#moremenu")).toBeHidden();
+  });
+}
 
 test("stepping versions re-arms the link for the version now shown", async ({ page }) => {
   await page.route("**/api/plugins/artifact/history", (route) => route.fulfill({ json: CHAIN_STORE }));
@@ -65,6 +132,9 @@ test("stepping versions re-arms the link for the version now shown", async ({ pa
   await page.locator("#vprev").click();
   await expect(open).toHaveAttribute("href", /art-chain\/page\?version=2&/);
   expect(minted).toEqual(["art-chain@3", "art-chain@2"]);
+  await openMenu(page);
+  await expect(open).toBeVisible();
+  await expect(open).toHaveAttribute("role", "menuitem");
 });
 
 test("a stale link is re-minted on click and still opens the tab", async ({ page, context }) => {
@@ -79,6 +149,7 @@ test("a stale link is re-minted on click and still opens the tab", async ({ page
   );
   const before = minted.length;
   const opened = context.waitForEvent("page");
+  await openMenu(page);
   await open.click();
   const tab = await opened;
   await expect(tab.locator("#page")).toHaveText("fresh");
@@ -90,10 +161,12 @@ test("a failed mint leaves no link and says so on the button", async ({ page }) 
   await page.route("**/api/plugins/artifact/artifact/*/page-link?*", (route) => route.fulfill({ status: 404, json: {} }));
   await page.goto(VIEW);
   const open = page.locator("#open");
+  await openMenu(page);
   await expect(open).toBeVisible();
   await expect(open).toHaveAttribute("aria-disabled", "true");
   await expect(open).not.toHaveAttribute("href", /.+/);
-  await open.click();
+  // Playwright won't click an aria-disabled menuitem; a real click still reaches the handler.
+  await open.click({ force: true });
   await expect(open).toHaveText("Unavailable");
   await expect(page.locator("#dlstat")).toHaveText("Couldn't open this version in a browser tab");
 });
