@@ -1503,6 +1503,8 @@ FIELDS: list[Field] = [
     Field("quiet_hours.end", "quiet_hours_end", "End (HH:MM)", "string", "Quiet hours"),
     Field("quiet_hours.timezone", "quiet_hours_timezone", "Timezone", "string", "Quiet hours",
           description="IANA timezone, for example America/Los_Angeles. Invalid settings deliver notices normally."),
+    Field("push.all_notices", "push_all_notices", "Push every notice", "bool", "Notifications",
+          description="Off: only questions and urgent notices reach your devices. On: every notice does."),
     Field("spend_cap.enabled", "spend_cap_enabled", "Cap unattended spend", "bool", "Spend cap",
           description="Pause all unattended turns at either daily hard limit until an operator answers the decision."),
     Field("spend_cap.daily_cost_hard_limit", "spend_cap_daily_cost_hard_limit", "Daily cost hard limit (USD)",
@@ -2672,6 +2674,7 @@ _SECTION_CATEGORY = {
     "Tracing": "Observability",
     "Spend cap": "Behavior",
     "Quiet hours": "Behavior",
+    "Notifications": "Behavior",
     # Secrets — the external secrets manager (ADR 0080); the console renders this
     # category as its own sidenav section with a status/test/sync card.
     "Secrets manager": "Secrets",

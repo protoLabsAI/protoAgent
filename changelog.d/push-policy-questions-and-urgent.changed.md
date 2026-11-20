@@ -1,0 +1,1 @@
+- **Fewer phone pushes by default.** Your phone now gets pushes only for questions and urgent notices. Turn on Settings → Push every notice to get all of them. Before, every notice was pushed, including routine scheduled results. Refs #5648.

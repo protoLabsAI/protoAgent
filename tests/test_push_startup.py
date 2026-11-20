@@ -59,7 +59,7 @@ async def test_notice_reaches_the_push_provider_once_without_a_chat_plugin(hub):
     transport = loops._start_push_delivery(provider)
     try:
         assert list(chat_surface._notifiers) == [NOTICE_ADAPTER_KEY]  # no chat surface
-        notice_id = await asyncio.to_thread(notify_chat_surfaces, "private text", "/private")
+        notice_id = await asyncio.to_thread(notify_chat_surfaces, "private text", "/private", importance="high")
         await settle(lambda: rows(transport) == [(notice_id, "accepted")])
         await transport.drain()  # an idle pass sends nothing more
         assert provider.calls == [notice_id]
@@ -67,6 +67,25 @@ async def test_notice_reaches_the_push_provider_once_without_a_chat_plugin(hub):
         await loops._stop_push_delivery()
     assert NOTICE_ADAPTER_KEY not in chat_surface._notifiers
     assert STATE.push_delivery_task is None
+
+
+async def test_routine_notice_reaches_other_adapters_but_not_push(hub):
+    provider, seen = Provider(), []
+
+    async def desktop(notice):
+        seen.append(notice.notice_id)
+
+    transport = loops._start_push_delivery(provider)
+    chat_surface.register_notice_adapter("desktop", desktop)
+    try:
+        notice_id = notify_chat_surfaces("scheduled result", "", kind="review")  # normal importance
+        await settle(lambda: seen)
+        assert seen == [notice_id]
+        await transport.drain()
+        assert rows(transport) == [] and provider.calls == []
+    finally:
+        chat_surface.unregister_notice_adapter("desktop")
+        await loops._stop_push_delivery()
 
 
 async def test_failing_provider_does_not_stop_another_adapter(hub):
@@ -78,7 +97,7 @@ async def test_failing_provider_does_not_stop_another_adapter(hub):
     transport = loops._start_push_delivery(provider)
     chat_surface.register_notice_adapter("desktop", desktop)
     try:
-        notice_id = notify_chat_surfaces("hello", "")  # returns; nothing raises
+        notice_id = notify_chat_surfaces("hello", "", importance="high")  # returns; nothing raises
         await settle(lambda: provider.calls and seen)
         assert seen == [notice_id]
         await settle(lambda: rows(transport) == [(notice_id, "pending")])  # kept for a retry
@@ -91,7 +110,7 @@ async def test_restart_sends_pending_and_drops_expired(hub):
     now = time.time()
     before = PushTransport(Provider())  # the hub that stopped before sending
     for notice_id in ("live", "stale"):
-        assert before.enqueue(ChatNotice("notify", "normal", "t", "", notice_id, now, now + 600)) == 1
+        assert before.enqueue(ChatNotice("notify", "high", "t", "", notice_id, now, now + 600)) == 1
     with sqlite3.connect(before.path) as db:
         db.execute("UPDATE attempts SET expires_at = ? WHERE notice_id = 'stale'", (now - 1,))
     provider = Provider()

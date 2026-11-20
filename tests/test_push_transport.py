@@ -4,11 +4,13 @@ import json
 import threading
 import sqlite3
 from dataclasses import replace
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from graph.plugins.chat_surface import ChatNotice
+from graph.plugins.host import HOST
 from graph.push_transport import PushResult, PushTransport, WebPushProvider
 from infra.paths import reset_instance_paths
 from security import devices
@@ -57,8 +59,63 @@ def bind(device_id, token, name):
     )
 
 
-def notice(expiry=2000):
-    return ChatNotice("notify", "normal", "private text", "/private/path", "notice-1", 1000, expiry)
+def notice(expiry=2000, kind="notify", importance="high"):
+    # High importance: the delivery tests below need a notice the push policy lets through.
+    return ChatNotice(kind, importance, "private text", "/private/path", "notice-1", 1000, expiry)
+
+
+def attempts(sender):
+    with sqlite3.connect(sender.path) as db:
+        return db.execute("SELECT count(*) FROM attempts").fetchone()[0]
+
+
+@pytest.mark.parametrize("kind,importance", [("notify", "normal"), ("review", "normal"), ("notify", "low")])
+async def test_routine_notice_is_not_pushed_by_default(setup, monkeypatch, kind, importance):
+    _, provider, transport, enroll = setup
+    enroll()
+    monkeypatch.setattr(devices, "list_devices", lambda: pytest.fail("policy must run before devices are read"))
+    sender = transport()
+    assert sender.enqueue(notice(kind=kind, importance=importance)) == 0
+    await sender.accept(notice(kind=kind, importance=importance))
+    assert not sender._wake.is_set()
+    await sender.deliver(notice(kind=kind, importance=importance))
+    assert attempts(sender) == 0 and not provider.calls
+
+
+@pytest.mark.parametrize("kind,importance", [
+    ("question", "normal"), ("question", "low"), ("notify", "high"), ("review", "high"),
+])
+def test_question_and_urgent_notices_are_pushed_by_default(setup, kind, importance):
+    _, _, transport, enroll = setup
+    enroll()
+    sender = transport()
+    assert sender.enqueue(notice(kind=kind, importance=importance)) == 1
+    assert attempts(sender) == 1
+
+
+def test_all_notices_setting_is_read_live(setup, monkeypatch):
+    _, _, transport, enroll = setup
+    enroll()
+    live = SimpleNamespace(push_all_notices=False)
+    monkeypatch.setattr(HOST, "config", lambda: live)
+    sender = transport()
+    routine = notice(kind="review", importance="normal")
+    assert sender.enqueue(routine) == 0
+    live.push_all_notices = True  # the operator flips it; same transport, no restart
+    assert sender.enqueue(routine) == 1
+    assert attempts(sender) == 1
+    live.push_all_notices = False
+    assert sender.enqueue(replace(routine, notice_id="after-off")) == 0
+
+
+@pytest.mark.parametrize("config", [None, lambda: None, lambda: SimpleNamespace(), lambda: 1 / 0])
+def test_missing_or_unreadable_config_means_routine_notices_stay_off(setup, monkeypatch, config):
+    _, _, transport, enroll = setup
+    enroll()
+    monkeypatch.setattr(HOST, "config", config)
+    sender = transport()
+    assert sender.enqueue(notice(kind="review", importance="normal")) == 0
+    assert sender.enqueue(notice(kind="question", importance="low")) == 1
 
 
 async def test_fanout_and_replay_after_restart(setup):
