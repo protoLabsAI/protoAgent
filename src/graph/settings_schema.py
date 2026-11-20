@@ -1502,7 +1502,7 @@ FIELDS: list[Field] = [
     Field("quiet_hours.start", "quiet_hours_start", "Start (HH:MM)", "string", "Quiet hours"),
     Field("quiet_hours.end", "quiet_hours_end", "End (HH:MM)", "string", "Quiet hours"),
     Field("quiet_hours.timezone", "quiet_hours_timezone", "Timezone", "string", "Quiet hours",
-          description="IANA timezone, for example America/Los_Angeles. Invalid settings deliver notices normally."),
+          description="IANA timezone, for example America/Los_Angeles. Leave empty to use this computer's local time."),
     Field("push.all_notices", "push_all_notices", "Push every notice", "bool", "Notifications",
           description="Off: only questions and urgent notices reach your devices. On: every notice does."),
     Field("spend_cap.enabled", "spend_cap_enabled", "Cap unattended spend", "bool", "Spend cap",

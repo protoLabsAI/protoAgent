@@ -32,7 +32,8 @@ def quiet_until(config, now: float) -> float | None:
         if any(not isinstance(v, str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", v) for v in values):
             raise ValueError("expected HH:MM")
         start, end = [int(v[:2]) * 60 + int(v[3:]) for v in values]
-        zone = ZoneInfo(config.quiet_hours_timezone)
+        timezone = config.quiet_hours_timezone
+        zone = None if isinstance(timezone, str) and not timezone.strip() else ZoneInfo(timezone)
     except (ValueError, TypeError, ZoneInfoNotFoundError):
         if not _invalid_logged:
             log.warning("Invalid quiet hours time or timezone; delivering notices normally")
@@ -40,7 +41,7 @@ def quiet_until(config, now: float) -> float | None:
         return None
 
     def inside(stamp):
-        local = datetime.fromtimestamp(stamp, zone)
+        local = datetime.fromtimestamp(stamp) if zone is None else datetime.fromtimestamp(stamp, zone)
         minute = local.hour * 60 + local.minute
         return start <= minute < end if start <= end else minute >= start or minute < end
 

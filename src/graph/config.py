@@ -1730,7 +1730,7 @@ class LangGraphConfig:
     quiet_hours_enabled: bool = False
     quiet_hours_start: str = "22:00"
     quiet_hours_end: str = "07:00"
-    quiet_hours_timezone: str = "UTC"
+    quiet_hours_timezone: str = ""
     # Push policy (ADR 0135 W2, #5648): off = only questions and high-importance
     # notices reach enrolled devices; on = every notice does.
     push_all_notices: bool = False

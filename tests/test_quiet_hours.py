@@ -1,4 +1,5 @@
 """Quiet hours preserve live console events and defer only routine adapters."""
+import time
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -132,3 +133,26 @@ def test_no_adapter_keeps_digest_for_retry(delivery, monkeypatch):
     monkeypatch.setattr(chat_surface, "_notifiers", {"test": d.sent.append})
     d.loop.call_later.call_args.args[1]()
     assert len(d.sent) == 1 and not d.service.store.rows()
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="host timezone requires tzset")
+@pytest.mark.parametrize("timezone", ["", "  ", "UTC"])
+@pytest.mark.parametrize("hour", [23, 15])
+def test_unset_timezone_uses_host_local_time(delivery, monkeypatch, timezone, hour):
+    with monkeypatch.context() as env:
+        env.setenv("TZ", "America/Los_Angeles")
+        time.tzset()
+        try:
+            delivery.cfg.quiet_hours_timezone = timezone
+            delivery.clock[0] = stamp(f"2026-11-19T{hour}:00:00-08:00")
+            until = notice_hold.quiet_until(delivery.cfg, delivery.clock[0])
+            held = hour == 23 if timezone != "UTC" else hour == 15
+            expected = (
+                "2026-11-20T07:00:00-08:00" if timezone != "UTC"
+                else "2026-11-20T07:00:00+00:00"
+            )
+            assert until == (stamp(expected) if held else None)
+        finally:
+            env.undo()
+            time.tzset()
