@@ -54,6 +54,19 @@
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
+/* On Home the title button sits inside the page's <h2> (H-U6). The heading takes the button's
+   place in the header row and adds no type or spacing of its own. */
+.mshell-title-heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  margin: 0;
+  font: inherit;
+}
+/* …and the transcript's visually-hidden "Home" <h2> stands down, so the phone has one. */
+.mshell .chat-home-heading {
+  display: none;
+}
 .mshell-title:active {
   opacity: 0.55;
 }
@@ -260,6 +273,17 @@
 .session-sheet-del {
   min-width: 44px;
   min-height: 44px;
+}
+
+/* The pinned Home row (H-U6): first in the sheet, above "From others". A one-row list that
+   keeps its height while the chat rows below scroll; the pin marker reads as chrome. */
+.session-sheet-pinned {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+.session-sheet-pin {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
 }
 
 /* The pinned Conversations item (§3.7) — the phone's version of the desktop tab, sitting above

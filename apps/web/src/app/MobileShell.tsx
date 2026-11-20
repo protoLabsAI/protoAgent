@@ -11,9 +11,11 @@ import {
   openChat as leaveConversationsForChat,
   useConversations,
 } from "../chat/conversations-store";
+import { fetchHomeState, homeQueryKey, homeSessionId } from "../chat/homeTab";
 import { useKbIntents } from "../keybindings/intents";
 import { brandName } from "../lib/brand";
 import { runtimeStatusQuery } from "../lib/queries";
+import { queryClient } from "../lib/queryClient";
 import { SessionSheet } from "./SessionSheet";
 
 // The shell owns the action; chat places it above its variable-height composer.
@@ -149,6 +151,37 @@ export function MobileShell({
   const blank = unusedSession(chatState);
   const newChatIsNoop = blank != null && blank.id === chatState.currentSessionId;
 
+  // Opening the console on a phone lands in Home (H-U6), so alerts and briefs are the first
+  // thing read — no trip through the session sheet. Decided once, when the shell mounts:
+  //  - only while Home's state has not loaded yet. That is a fresh open; a shell that mounts
+  //    later (a desktop window narrowed to phone width) already has it and keeps its chat.
+  //  - `GET /api/home` answering 404 (feature off) or failing changes nothing.
+  //  - a chat picked, a notice tap or "From others" opened while the read was in flight wins.
+  // The read is ChatSurface's own query (same key and function), so this adds no request.
+  const stage = useRef(conv.stage);
+  useEffect(() => { stage.current = conv.stage; }, [conv.stage]);
+  useEffect(() => {
+    const key = homeQueryKey();
+    if (queryClient.getQueryData(key) !== undefined) return;
+    const openedOn = chatStore.getSnapshot().currentSessionId;
+    let cancelled = false;
+    void queryClient.fetchQuery({ queryKey: key, queryFn: fetchHomeState }).then((home) => {
+      const homeId = home?.session_id;
+      if (cancelled || !homeId) return;
+      if (chatStore.getSnapshot().currentSessionId !== openedOn || stage.current === "conversations") return;
+      // ChatSurface runs the same two calls when the state arrives; both are idempotent, and
+      // doing them here means the switch never targets a session the store does not hold yet.
+      chatStore.restoreDismissedSession(homeId);
+      chatStore.ensureSession(homeId, "Home");
+      chatStore.switchSession(homeId);
+    }).catch(() => {
+      // Home could not be read: stay on the chat that was open. ChatSurface's query owns retry.
+    });
+    return () => { cancelled = true; };
+  }, []);
+  // The visible header title is the page's "Home" heading while Home is the chat on screen.
+  const onHome = current != null && current.id === homeSessionId() && !onConversations;
+
   // Callback identity is not navigation: App and the chat store can rerender while
   // a collection owns the current history entry. Keep the listener fresh without
   // rebuilding the shell's history entry on those renders.
@@ -174,6 +207,26 @@ export function MobileShell({
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [showBack]);
+
+  // The session title IS the switcher — tapping it opens the sheet. Built once so the header
+  // can render it bare or, on Home, inside the heading.
+  const switcher = (
+    <button
+      ref={sessionSheetTriggerRef}
+      type="button"
+      className="mshell-title"
+      onClick={() => onSessionSheetChange(true)}
+      aria-haspopup="dialog"
+      aria-expanded={sessionSheetOpen}
+    >
+      {/* On the Conversations list the title reads "From others" where the chat title
+          would be; the tap still opens the sheet (§3.7). */}
+      <span className="mshell-title-text">
+        {onConversations ? "From others" : (current?.title ?? "New chat")}
+      </span>
+      <ChevronDown size={15} aria-hidden />
+    </button>
+  );
 
   return (
     <div className="mshell">
@@ -232,21 +285,10 @@ export function MobileShell({
             </Button>
             {/* The session title IS the switcher — tapping it opens the sheet. Replaces the
                 DS TabBar's `responsive` <select>, which ChatSurface suppresses on mobile. */}
-            <button
-              ref={sessionSheetTriggerRef}
-              type="button"
-              className="mshell-title"
-              onClick={() => onSessionSheetChange(true)}
-              aria-haspopup="dialog"
-              aria-expanded={sessionSheetOpen}
-            >
-              {/* On the Conversations list the title reads "From others" where the chat title
-                  would be; the tap still opens the sheet (§3.7). */}
-              <span className="mshell-title-text">
-                {onConversations ? "From others" : (current?.title ?? "New chat")}
-              </span>
-              <ChevronDown size={15} aria-hidden />
-            </button>
+            {/* On Home the visible title IS the heading: an <h2> wrapping the switcher (the
+                accordion-header shape — a heading may hold a button, not the reverse). The
+                transcript's visually-hidden <h2> is dropped inside the shell (mobile-shell.css). */}
+            {onHome ? <h2 className="mshell-title-heading">{switcher}</h2> : switcher}
             {/* The palette, on the shell that needs it MOST and had it least. A phone has no
                 keyboard to press the chord with, so without this button every surface behind
                 the drawer, every Settings section, the chat's verbs and live knowledge search

@@ -15,6 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.255.0] - 2026-11-20
+
+### Added
+- **Push status in paired devices (#5628).** Show notification availability, renewal reasons and the latest push-service outcome on each device row, with neutral device badges and wrapping mobile rows. Refs #5539.
+
+- **Typed console push status and refusal codes (#5625).** Expose this device's full push binding and renewal reason, paired-device delivery metadata, and structured HTTP errors so callers can choose card states without parsing error messages. Refs #5539.
+
+- **Automated accessibility checks for console settings (#5626).** Add a reusable Playwright axe helper with scoped scans, optional rule exclusions, and readable violation reports, plus Settings Devices smoke coverage in light and dark themes. Improve contrast for small Settings descriptions, labels and badges exposed by the scan. Refs #5539.
+
+- **Home shows briefs, alerts and decision pointers as one clear card (#5634).** A Home entry (a stopped fleet member, a scheduled result, a decision that waits) renders as a card with an icon, a one-line title, a neutral "Urgent" badge for high importance, the time, and a link to what raised it. A decision pointer has an "Answer" action that opens the decision. The card needs the Home conversation, which is behind the `home_conversation` developer flag. Refs #5545. Home checkpoint entries are fetched during session refresh and mapped into card metadata, including their recorded time.
+
+- **Owner notices are written into Home's own thread (#5631).** With the `home_conversation` developer flag on, each notify, question and review notice is also appended to the Home conversation's thread as one reference message (`graph.home_entries.write_home_entry`), so a reply in Home has the brief or alert in context and the browser is not the only copy. The entry carries `kind`, `importance`, `source` and `notice_id`, and writing it never starts a turn. A decision raised by unattended work gets a short pointer entry; one raised in an operator chat gets none. During quiet hours the entry is written at once and only adapter delivery is held. Refs #5545 (ADR 0135 D9).
+
+- **Pinned Home conversation (#5637).** The console now puts Home first with an unread count, marks it read when viewed, and provides a dedicated empty state and reply hint. Refs #5545.
+
+- **Scheduled jobs set to show results in Home deliver there (#5639).** A job created in a chat with `result_destination` `home` now posts its result card to Home while Home is enabled; with Home disabled or unavailable, or with `origin`, it posts to its origin chat as before. The job still runs in its own session, and quiet-result and repeat suppression are unchanged. Refs #5545.
+
+- **Each instance now has one Home chat with a stable id, behind the `home_conversation` developer flag (#5627).** `GET /api/home` returns `{session_id, last_read_at}` and `POST /api/home/read` marks Home read; both answer 404 while the flag is off, which is the default. The id is generated once, stored in instance state and shaped `chat-home-…`, so Home is listed, retained, compacted and harvested like any other operator chat. Refs #5545 (ADR 0135 D9, ADR 0129 D6 amendment).
+
+- **Notification key card in Settings ▸ Devices (#5635).** Full-access sign-ins now see which notification key version is active, when each rotated-out version retires and how many devices still use it, and can rotate the key behind an inline confirm that states the renewal window. The card shows versions and dates only, never key material, and device-scope sign-ins don't get it. Refs #5539.
+
+- **Scheduled jobs store a preferred result destination (#5636).** `schedule_task` accepts `origin` (the default) or `home`, with migration support for existing jobs. This adds storage support; delivery routing follows separately. Refs #5545.
+
+### Changed
+- **One "Notifications on this device" card in Settings ▸ Devices (#5629).** The card now sits at the top of the page and says in plain words why alerts are on, off, blocked, due for renewal or not possible here (desktop app, plain-http address, iPhone browser tab, shared sign-in), with one action for each case and the agent's refusals shown under the button. It shows the push service and when the device last renewed, moves focus and announces each result for screen readers, and adds a closed "What leaves this machine" section listing what an alert reveals. It replaces the earlier toggle row and its toasts. Refs #5539.
+
+- **Enable design-system tab accessible names (#5632).** Bump the UI and UI CSS dependencies to the first release supporting `TabBarItem.ariaLabel`, allowing Home to include unread counts in its accessible name. Refs #5545.
+
+### Fixed
+- **Scheduled results reach Home (#5633).** Jobs without an origin chat deliver results to Home when enabled, even after days without a turn, and retain the result in Home’s thread. Job execution contexts and quiet-result suppression are unchanged. Refs #5545.
+
+- **A tapped notification keeps being looked for after the console comes to the front, and Settings → Devices shows what happened to the tap (#5630).** On an installed phone console the tap could still land on the hub's chat: the phone can bring the console forward before the tap has been handled, and the console looked only once. It now keeps looking for ten seconds. "Notifications on this device" also gains a folded "What happened to the last notification tap" log with a Copy button, listing each step the notification handler and the console took (step names, notice ids and page paths only), so a wrong landing can be diagnosed from the phone. Refs #5539.
+
+### Docs
+- **Notification settings are documented and tested end to end (#5638).** The phone guide now covers turning on alerts, the iPhone Home Screen steps and the HTTPS requirement; the pairing guide covers the push status on each device row, the renew reasons and notification key rotation; and the security page carries the "What leaves this machine" text. Browser tests cover every state of the "Notifications on this device" card at desktop and phone widths, and they found the "On" badge too faint to read in the light theme, which is fixed. Refs #5539.
+
+- **ADR 0129 D6 now records where job results are shown: one Home conversation per instance (#5624).** Each job still runs in its own `job:` session and Activity stays the provenance feed. A job with no origin chat shows its results in Home, owner notices post an entry there, and showing a result in Home never runs the job there or gives the job Home's context. ADR 0135 D9 links to the amendment. Refs #5545.
+
 ## [0.254.0] - 2026-11-20
 
 ### Added

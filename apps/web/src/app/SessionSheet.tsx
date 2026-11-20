@@ -1,4 +1,4 @@
-import { EyeOff, MessagesSquare, Plus, X } from "lucide-react";
+import { EyeOff, MessagesSquare, Pin, Plus, X } from "lucide-react";
 import { useLayoutEffect, useRef, type RefObject } from "react";
 
 import { StatusDot } from "@protolabsai/ui/data";
@@ -31,7 +31,12 @@ export function SessionSheet({ open, onClose, triggerRef }: {
   const chat = useChatState();
   const blank = unusedSession(chat);
   // The pinned Home tab (H-U1): listed first, as on the desktop strip, and never deletable.
+  // On the phone it is its own row at the very top of the sheet, above "From others", with a
+  // pin marker (H-U6); the chat rows below are every other session in their usual order.
   const homeId = homeSessionId();
+  const ordered = inTabOrder(chat.sessions, homeId);
+  const home = homeId ? chat.sessions.find((session) => session.id === homeId) : undefined;
+  const chats = home ? ordered.filter((session) => session !== home) : ordered;
   // The phone version of the pinned Conversations tab (docs/design/other-conversations.md §3.7):
   // a distinct item at the top of the sheet, under the same C1 store that drives the desktop tab.
   const conv = useConversations();
@@ -67,7 +72,10 @@ export function SessionSheet({ open, onClose, triggerRef }: {
     if (open) {
       openerRef.current = triggerRef?.current ?? document.activeElement as HTMLElement | null;
     } else if (openerRef.current) {
-      const opener = openerRef.current;
+      // Prefer the trigger as it is NOW: picking Home (or leaving it) re-mounts the header
+      // title inside/outside its heading, so the element captured on open may be gone.
+      const live = triggerRef?.current;
+      const opener = live?.isConnected ? live : openerRef.current;
       opener.focus();
       openerRef.current = null;
       // The Drawer dismisses its backdrop on mousedown. The browser's default
@@ -79,6 +87,52 @@ export function SessionSheet({ open, onClose, triggerRef }: {
       return () => cancelAnimationFrame(frame);
     }
   }, [open, triggerRef]);
+
+  const sessionRow = (s: (typeof chat.sessions)[number]) => {
+    const status = chat.sessionStatusMap[s.id] || "idle";
+    const current = s.id === chat.currentSessionId;
+    return (
+      <li key={s.id} className={`session-sheet-row${current ? " is-current" : ""}`}>
+        <Button
+          type="button"
+          variant="ghost"
+          className="session-sheet-pick"
+          aria-current={current || undefined}
+          onClick={() => {
+            leaveConversationsForChat();
+            chatStore.switchSession(s.id);
+            onClose();
+          }}
+        >
+          <span className={`session-dot ${status}`} aria-hidden />
+          <span className="session-sheet-title">{s.title}</span>
+          {s.id === homeId ? <Pin size={13} className="session-sheet-pin" aria-label="pinned" /> : null}
+          {s.incognito ? <EyeOff size={13} aria-label="incognito" /> : null}
+        </Button>
+        {/* Only offer delete while more than one session exists — deleting the last
+            one leaves the chat surface with no session to fall back to. Deleting
+            goes THROUGH the store request so ChatSurface's confirm dialog (harvest
+            opt-in, server purge, goal Stop-vs-Detach) runs — never a direct local
+            deleteSession, which skipped all of that (#2512). The sheet closes first
+            so the dialog isn't buried under it. */}
+        {chat.sessions.length > 1 && s.id !== homeId ? (
+          <Button
+            type="button"
+            icon
+            variant="ghost"
+            className="session-sheet-del"
+            aria-label={`Delete ${s.title}`}
+            onClick={() => {
+              chatStore.requestDeleteSession(s.id);
+              onClose();
+            }}
+          >
+            <X size={15} aria-hidden />
+          </Button>
+        ) : null}
+      </li>
+    );
+  };
 
   return (
     <Drawer open={open} onClose={onClose} side="bottom" title="Chats">
@@ -100,6 +154,12 @@ export function SessionSheet({ open, onClose, triggerRef }: {
           <Plus size={16} aria-hidden /> New
         </Button>
       </div>
+      {/* Home (H-U6): the first row of the sheet, pinned above "From others". Its own one-row
+          list so it stays put while the chat rows scroll. */}
+      {home ? <ul className="session-sheet-list session-sheet-pinned">{sessionRow(home)}</ul> : null}
+      {home && !conv.tabVisible ? (
+        <div className="session-sheet-divider" role="separator" aria-hidden="true" />
+      ) : null}
       {/* The Conversations item (§3.7) — same icon, label, count and status dot as the desktop
           tab, plus muted "Read-only". No delete ✕. It appears and hides under the store's
           `tabVisible` rules (§3.1/§3.2). Tapping it leaves the sheet for the Conversations stage
@@ -158,52 +218,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
           <div className="session-sheet-divider" role="separator" aria-hidden="true" />
         </>
       ) : null}
-      <ul className="session-sheet-list">
-        {inTabOrder(chat.sessions, homeId).map((s) => {
-          const status = chat.sessionStatusMap[s.id] || "idle";
-          const current = s.id === chat.currentSessionId;
-          return (
-            <li key={s.id} className={`session-sheet-row${current ? " is-current" : ""}`}>
-              <Button
-                type="button"
-                variant="ghost"
-                className="session-sheet-pick"
-                aria-current={current || undefined}
-                onClick={() => {
-                  leaveConversationsForChat();
-                  chatStore.switchSession(s.id);
-                  onClose();
-                }}
-              >
-                <span className={`session-dot ${status}`} aria-hidden />
-                <span className="session-sheet-title">{s.title}</span>
-                {s.incognito ? <EyeOff size={13} aria-label="incognito" /> : null}
-              </Button>
-              {/* Only offer delete while more than one session exists — deleting the last
-                  one leaves the chat surface with no session to fall back to. Deleting
-                  goes THROUGH the store request so ChatSurface's confirm dialog (harvest
-                  opt-in, server purge, goal Stop-vs-Detach) runs — never a direct local
-                  deleteSession, which skipped all of that (#2512). The sheet closes first
-                  so the dialog isn't buried under it. */}
-              {chat.sessions.length > 1 && s.id !== homeId ? (
-                <Button
-                  type="button"
-                  icon
-                  variant="ghost"
-                  className="session-sheet-del"
-                  aria-label={`Delete ${s.title}`}
-                  onClick={() => {
-                    chatStore.requestDeleteSession(s.id);
-                    onClose();
-                  }}
-                >
-                  <X size={15} aria-hidden />
-                </Button>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      <ul className="session-sheet-list">{chats.map(sessionRow)}</ul>
     </Drawer>
   );
 }

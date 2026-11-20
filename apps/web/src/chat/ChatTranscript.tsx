@@ -149,7 +149,9 @@ export const ChatTranscript = memo(function ChatTranscript({
     // autoScroll off: the DS follower unpinned itself when a card grew right after its own
     // follow scroll (B6) — `useStreamFollow` owns following and the jump button instead.
     <Conversation id={rootId} autoScroll={false}>
-      {home && <h2 className="conversations-tab__sr">Home</h2>}
+      {/* On the phone the shell header's visible "Home" title is the <h2> (MobileShell), and
+          mobile-shell.css drops this visually-hidden one so the heading is not announced twice. */}
+      {home && <h2 className="conversations-tab__sr chat-home-heading">Home</h2>}
       {home && <HomeAnnouncer messages={messages} open={homeOpen} />}
       {feedback.error ? <p role="alert">{feedback.error}</p> : null}
       {messages.length === 0 && home ? (
