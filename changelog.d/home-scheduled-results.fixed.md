@@ -1,0 +1,1 @@
+- **Scheduled results reach Home.** Jobs without an origin chat deliver results to Home when enabled, even after days without a turn, and retain the result in Home’s thread. Job execution contexts and quiet-result suppression are unchanged. Refs #5545.
