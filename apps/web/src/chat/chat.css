@@ -246,6 +246,48 @@
   gap: var(--pl-space-2);
 }
 
+/* Home alert card (#5545) — a brief, an alert or a decision pointer in Home. It IS the raised
+   .chat-scheduled-card above (no colored stripe); only the head row, the body and the action
+   row are laid out here. Urgency is the icon tone plus a neutral "Urgent" badge. */
+.home-alert-head {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.home-alert-icon {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+}
+.home-alert-icon--urgent {
+  color: var(--pl-color-status-warning);
+}
+.home-alert-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  font-weight: 600;
+  font-size: var(--pl-font-size-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-alert-head > .pl-badge {
+  flex: 0 0 auto;
+}
+.home-alert-body {
+  margin: 0;
+  color: var(--pl-color-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.home-alert-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-2);
+}
+
 /* Recurring re-fire chip (#2990 + #4726) — the compact one-line variant, now EXPANDABLE so a
    repeat fire is readable instead of a dead end. Collapsed it is the raised pill; expanded it
    grows a card body (the shared ScheduledResultBody) under the one-line row. The disclosure
