@@ -15,20 +15,18 @@
   html,body{margin:0;height:100%;background:var(--pl-color-bg,#0a0a0c);color:var(--pl-color-fg-muted,#9aa0aa);
     font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}
   #wrap{display:flex;flex-direction:column;height:100%}
-  /* Toolbar: artifact picker + version nav + download/delete. Hidden until there's one. */
+  /* Toolbar: artifact picker + version nav + the ⋯ actions menu. Hidden until there's one. */
   #bar{display:none;align-items:center;gap:6px;padding:6px 10px;
     border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);font-size:12px}
-  /* One row at any width: the picker shrinks first, and below ~560px the secondary actions
-     (Edit / Open in browser / Download / Delete) fold into a ⋯ menu instead of wrapping or clipping. */
+  /* One row at any width: the picker shrinks first, and the secondary actions (Edit / Open in
+     browser / Download / Delete) always live in the ⋯ menu — a wide panel looks like a narrow dock. */
   #bar .pl-btn{white-space:nowrap;flex:none}
   #art{flex:1 1 90px;min-width:60px}
-  #vnav,#acts{display:flex;align-items:center;gap:2px;flex:none}
-  #acts{gap:6px}
+  #vnav{display:flex;align-items:center;gap:2px;flex:none}
   #links .badge{display:inline-block;min-width:1.4em;padding:0 5px;margin-left:2px;border-radius:999px;
     font-size:11px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums;
     background:rgba(127,127,127,.2);color:var(--pl-color-fg,#ededed)}
-  #morewrap{position:relative;display:none;flex:none}
-  #bar.compact #morewrap{display:inline-flex}
+  #morewrap{position:relative;display:inline-flex;flex:none}
   #moremenu{position:absolute;right:0;top:calc(100% + 4px);z-index:6;display:none;flex-direction:column;gap:2px;
     min-width:140px;padding:4px;border-radius:8px;background:var(--pl-color-bg,#0a0a0c);
     border:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);box-shadow:0 6px 18px rgba(0,0,0,.3)}
@@ -96,15 +94,14 @@
       <button id="vnext" class="pl-btn pl-btn--sm" type="button" title="Next version">›</button>
     </span>
     <button id="links" class="pl-btn pl-btn--sm" type="button" title="Code links in this diagram" aria-haspopup="true" aria-expanded="false" aria-controls="linkpanel" style="display:none">Links <span id="linkn" class="badge"></span></button>
-    <span id="acts">
-      <button id="edit" class="pl-btn pl-btn--sm" type="button" title="Edit the source">Edit</button>
-      <a id="open" class="pl-btn pl-btn--sm" target="_blank" rel="noopener noreferrer" title="Open this version in a browser tab" tabindex="0" aria-disabled="true" style="display:none">Open in browser</a>
-      <button id="dl" class="pl-btn pl-btn--sm" type="button" title="Download this version">Download</button>
-      <button id="del" class="pl-btn pl-btn--sm" type="button" title="Delete this artifact">Delete</button>
-    </span>
     <span id="morewrap">
       <button id="more" class="pl-btn pl-btn--sm" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="moremenu">⋯</button>
-      <span id="moremenu" role="menu" aria-label="Artifact actions"></span>
+      <span id="moremenu" role="menu" aria-label="Artifact actions">
+        <button id="edit" class="pl-btn pl-btn--sm" type="button" role="menuitem" title="Edit the source">Edit</button>
+        <a id="open" class="pl-btn pl-btn--sm" role="menuitem" target="_blank" rel="noopener noreferrer" title="Open this version in a browser tab" tabindex="0" aria-disabled="true" style="display:none">Open in browser</a>
+        <button id="dl" class="pl-btn pl-btn--sm" type="button" role="menuitem" title="Download this version">Download</button>
+        <button id="del" class="pl-btn pl-btn--sm" type="button" role="menuitem" title="Delete this artifact">Delete</button>
+      </span>
     </span>
     <span id="dlstat" class="sr-only" role="status" aria-live="polite"></span>
   </div>

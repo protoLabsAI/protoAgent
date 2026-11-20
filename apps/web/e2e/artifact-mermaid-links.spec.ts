@@ -297,9 +297,9 @@ test("a narrow dock: the diagram opens readable at the top, and the toolbar stay
   await expect.poll(() => viewBox(f)).not.toBe(start);
   await f.getByRole("button", { name: "Reset to the start view (0)" }).click();
   await expect.poll(() => viewBox(f)).toBe(start);
-  // Toolbar: one row; Edit / Download / Delete fold into the ⋯ menu and still work.
-  const bar = shell.locator("#bar");
-  await expect(bar).toHaveClass(/compact/);
+  // Toolbar: one row; Edit / Download / Delete live in the ⋯ menu (as at every width) and still work.
+  await expect(shell.locator("#bar")).not.toHaveClass(/compact/);
+  await expect(shell.locator("#more")).toBeVisible();
   const rows = await shell.evaluate(() => {
     const tops = new Set([...document.querySelectorAll("#bar > *")]
       .filter((e) => (e as HTMLElement).offsetParent !== null)
@@ -316,4 +316,5 @@ test("a narrow dock: the diagram opens readable at the top, and the toolbar stay
   await expect(shell.locator("#moremenu #del")).toHaveText("Confirm?"); // menu stays open to confirm
   await page.keyboard.press("Escape");
   await expect(shell.locator("#moremenu")).toBeHidden();
+  expect(await shell.evaluate(() => document.activeElement?.id)).toBe("more");
 });

@@ -1763,25 +1763,13 @@
       renderLinks(); }
   }
 
-  // ── narrow-dock toolbar ───────────────────────────────────────────────────────────────
-  // Below COMPACT_PX the secondary actions (Edit / Open in browser / Download / Delete) move — the SAME elements,
-  // so their handlers and the delete confirm keep working — into a ⋯ menu, and back when the
-  // dock widens. The bar stays one clean row instead of wrapping or clipping a button.
-  var COMPACT_PX = 560;
-  var $acts=document.getElementById("acts"), $more=document.getElementById("more"), $menu=document.getElementById("moremenu");
-  var ACT_IDS=["edit","open","dl","del"];
+  // ── toolbar actions menu ──────────────────────────────────────────────────────────────
+  // The secondary actions (Edit / Open in browser / Download / Delete) live in the ⋯ menu at every
+  // width (shell.html puts them there, role="menuitem"), so the bar is one clean row whether the
+  // panel is a phone, a narrow dock or a wide window.
+  var $more=document.getElementById("more"), $menu=document.getElementById("moremenu");
   function setMenu(open){ $menu.classList.toggle("open", open); $more.setAttribute("aria-expanded", open?"true":"false");
     if(open){ var f=[].slice.call($menu.querySelectorAll("button,a")).filter(function(b){ return b.style.display!=="none"; })[0]; if(f) f.focus(); } }
-  function layoutBar(){
-    var compact = $bar.getBoundingClientRect().width < COMPACT_PX;
-    if(compact===$bar.classList.contains("compact")) return;
-    $bar.classList.toggle("compact", compact);
-    var dest = compact ? $menu : $acts;
-    ACT_IDS.forEach(function(id){ var b=document.getElementById(id); dest.appendChild(b);
-      if(compact) b.setAttribute("role","menuitem"); else b.removeAttribute("role"); });
-    $acts.style.display = compact ? "none" : "";
-    if(!compact) setMenu(false);
-  }
   $more.addEventListener("click", function(e){ e.stopPropagation(); setMenu(!$menu.classList.contains("open")); });
   // Picking an action closes the menu — except the first Delete click, which arms "Confirm?".
   $menu.addEventListener("click", function(e){ var b=e.target.closest("button,a"); if(b && b.id!=="del") setMenu(false); });
@@ -1792,8 +1780,6 @@
     e.preventDefault(); bs[(i+(e.key==="ArrowDown"?1:bs.length-1))%bs.length].focus();
   });
   document.addEventListener("click", function(e){ if(!$menu.contains(e.target) && e.target!==$more) setMenu(false); });
-  if(window.ResizeObserver) new ResizeObserver(layoutBar).observe($bar);
-  window.addEventListener("resize", layoutBar);
 
   // ── code links (ADR 0038 amendment) ──────────────────────────────────────────────────────
   // A mermaid version may carry `links` {key: {project, path, line, end_line, note}}, validated
