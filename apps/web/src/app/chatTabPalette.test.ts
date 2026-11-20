@@ -16,6 +16,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore, DEFAULT_SESSION_TITLE } from "../chat/chat-store";
+import { homeQueryKey } from "../chat/homeTab";
+import { queryClient } from "../lib/queryClient";
 import {
   hasPaletteSources,
   paletteCommandsVersion,
@@ -93,6 +95,7 @@ const rowFor = (rows: PaletteCommand[], id: string) =>
   rows.find((r) => r.id === `${CHAT_TAB_ID_PREFIX}${id}`);
 
 beforeEach(() => {
+  queryClient.clear();
   resetSessions();
   ctx.close.mockClear();
 });
@@ -203,6 +206,49 @@ describe("chat-tab palette rows", () => {
     expect(rowFor(chatTabPaletteRows(), renamed)!.label).toBe("After");
   });
 
+});
+
+describe("chat-tab palette rows with a pinned Home tab (H-U1)", () => {
+  // The store APPENDS Home (`ensureSession`), the strip draws it FIRST, and ⌘1–9 count the
+  // strip — so a row's advertised `chat.tab.N` must count the strip too.
+  const ids = () => registeredChatRows().map((r) => r.id.slice(CHAT_TAB_ID_PREFIX.length));
+  const binding = (id: string) => rowFor(registeredChatRows(), id)?.keybinding;
+
+  it("numbers rows in strip order: Home is chat.tab.1 though the store holds it last", () => {
+    const a = openTab("Alpha");
+    const b = openTab("Release notes");
+    chatStore.ensureSession("home", "Home");
+    chatStore.switchSession(b);
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual([a, b, "home"]);
+
+    queryClient.setQueryData(homeQueryKey(), { session_id: "home", last_read_at: null });
+    expect(ids()).toEqual(["home", a, b]);
+    expect(binding("home")).toBe("chat.tab.1");
+    expect(binding(a)).toBe("chat.tab.2");
+
+    // The advertised binding really lands on the row's own chat.
+    registeredKeybindings().find((k) => k.id === "chat.tab.1")!.run(new KeyboardEvent("keydown"));
+    expect(chatStore.getSnapshot().currentSessionId).toBe("home");
+    chatStore.deleteSession("home");
+  });
+
+  it("follows the Home state arriving and leaving with no store write", () => {
+    const a = chatStore.getSnapshot().sessions[0].id;
+    chatStore.ensureSession("home", "Home");
+    chatStore.switchSession("home");
+    // No Home state yet (not loaded, or 404 → null): raw store order, as before.
+    expect(ids()).toEqual([a, "home"]);
+    expect(binding(a)).toBe("chat.tab.1");
+
+    queryClient.setQueryData(homeQueryKey(), { session_id: "home", last_read_at: null });
+    expect(ids()).toEqual(["home", a]);
+    expect(binding(a)).toBe("chat.tab.2");
+
+    queryClient.setQueryData(homeQueryKey(), null);
+    expect(ids()).toEqual([a, "home"]);
+    expect(binding(a)).toBe("chat.tab.1");
+    chatStore.deleteSession("home");
+  });
 });
 
 describe("how the rows reach the palette", () => {

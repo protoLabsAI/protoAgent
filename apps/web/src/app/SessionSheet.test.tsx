@@ -20,7 +20,10 @@ vi.mock("../chat/conversations-store", async (importActual) => ({
 // The real registry (the barrel registers the core menus on import) resolves the chat-tab menu the
 // long-press opens — the same path the desktop tab uses, so this proves the phone's label-less call
 // lands on the shared "From others" default (§9 C7a/C7b).
+import { chatStore } from "../chat/chat-store";
+import { homeQueryKey } from "../chat/homeTab";
 import { resolveMenu, useContextMenuStore } from "../contextMenu";
+import { queryClient } from "../lib/queryClient";
 import { SessionSheet } from "./SessionSheet";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -79,5 +82,32 @@ describe("SessionSheet pinned 'From others' item (§9 C7b)", () => {
     const entries = resolveMenu("chat-tab", ctx) as { id: string; label?: string }[];
     expect(entries.map((e) => e.id)).toEqual(["hide-conversations"]);
     expect(entries[0].label).toBe("Hide “From others”");
+  });
+});
+
+describe("SessionSheet pinned Home row (H-U1)", () => {
+  const rows = () => Array.from(document.querySelectorAll<HTMLElement>(".session-sheet-row"));
+  const title = (row: HTMLElement) => row.querySelector(".session-sheet-title")?.textContent;
+
+  beforeEach(() => {
+    queryClient.clear();
+    chatStore.ensureSession("sheet-a", "Chat A");
+    chatStore.ensureSession("home", "Home"); // the store appends Home; the sheet lists it first
+  });
+
+  it("lists Home first with no delete control, and keeps delete on ordinary chats", () => {
+    queryClient.setQueryData(homeQueryKey(), { session_id: "home", last_read_at: null });
+    mount();
+    expect(title(rows()[0])).toBe("Home");
+    expect(rows()[0].querySelector(".session-sheet-del")).toBeNull();
+    const other = rows().find((row) => title(row) === "Chat A")!;
+    expect(other.querySelector(".session-sheet-del")).not.toBeNull();
+  });
+
+  it("with no Home state (flag off) the list keeps store order and every row is deletable", () => {
+    queryClient.setQueryData(homeQueryKey(), null);
+    mount();
+    expect(title(rows()[0])).not.toBe("Home");
+    expect(rows().every((row) => row.querySelector(".session-sheet-del"))).toBe(true);
   });
 });

@@ -6,6 +6,8 @@ import { retireChatSession, NO_MEMORY_CHANGE } from "./sessionRetirement";
 import { noteTurnStarted, resetServerTurns } from "./server-turn-store";
 import { openContextMenu } from "../contextMenu";
 
+import { api, ApiError } from "../lib/api";
+import { queryClient } from "../lib/queryClient";
 import type { ChatMessage } from "../lib/types";
 import {
   ChatSurface,
@@ -218,10 +220,21 @@ const convHarness = vi.hoisted(() => {
   });
   return { def, state: def() };
 });
-vi.mock("@tanstack/react-query", async (original) => ({
-  ...await original<typeof import("@tanstack/react-query")>(),
-  useQuery: () => ({ data: { goals: closeHarness.goals }, refetch: closeHarness.refetch }),
-}));
+vi.mock("@tanstack/react-query", async (original) => {
+  const actual = await original<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQuery: (options: Parameters<typeof actual.useQuery>[0]) =>
+      options.queryKey[options.queryKey.length - 1] === "home"
+        ? actual.useQuery(options, queryClient)
+        : { data: { goals: closeHarness.goals }, refetch: closeHarness.refetch },
+  };
+});
+beforeEach(() => {
+  queryClient.clear();
+  vi.spyOn(api, "home").mockRejectedValue(new ApiError(404, "Not Found"));
+});
+
 vi.mock("./ChatSessionSlot", async (original) => ({
   ...await original<typeof import("./ChatSessionSlot")>(),
   ChatSessionSlot: () => null,
@@ -439,6 +452,66 @@ describe("ChatSurface Conversations tab (other conversations C2)", () => {
     await act(async () => root.render(h(ChatSurface, { onError })));
   }
   const pinnedTab = () => container.querySelector(".pl-tabbar__tab--pinned") as HTMLElement | null;
+
+  it.each([0, 3])("pins Home first with %i unread in both tab pickers", async (unread) => {
+    vi.mocked(api.home).mockResolvedValue({ session_id: "home", last_read_at: "2026-11-19T00:00:00Z" });
+    const readAt = Date.parse("2026-11-19T00:00:00Z");
+    const home: ChatSession = {
+      id: "home", title: "Home", createdAt: 1, updatedAt: 1,
+      messages: Array.from({ length: 3 }, (_, i) => ({
+        id: `brief-${i}`, role: "assistant", content: "Brief", createdAt: readAt + (unread ? 1 : 0),
+      })),
+    };
+    vi.mocked(chatStore.getSnapshot).mockReturnValue({
+      ...chatStore.getSnapshot(), sessions: [...chatStore.getSnapshot().sessions, home],
+    });
+    vi.spyOn(chatStore, "captureHydrationEligibility").mockReturnValue(null);
+    setConv({ tabVisible: true, count: 1, rows: [row()] });
+    await mount();
+    await act(async () => { await vi.waitFor(() => expect(container.querySelector('[role="tab"][aria-label^="Home"]')).not.toBeNull()); });
+    const tabs = container.querySelectorAll('[role="tab"]');
+    const name = unread ? "Home, 3 new" : "Home";
+    expect(tabs[0].getAttribute("aria-label")).toBe(name);
+    expect(tabs[0].querySelector(".pl-tabbar__close")).toBeNull();
+    expect(tabs[0].getAttribute("draggable")).not.toBe("true");
+    expect(tabs[1].textContent).toContain("From others");
+    await act(async () => tabs[0].dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+    const context = vi.mocked(openContextMenu).mock.calls.slice(-1)[0][2] as { onClose?: unknown; onRename?: unknown };
+    expect(context.onClose).toBeUndefined();
+    expect(context.onRename).toBeUndefined();
+    const trigger = container.querySelector(".pl-tabbar__switcher") as HTMLElement;
+    await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    expect(document.body.querySelector(`[role="menuitemradio"][aria-label="${name}"]`)).not.toBeNull();
+  });
+
+  it("marks Home read on selection and clears its unread name", async () => {
+    vi.mocked(api.home).mockResolvedValue({ session_id: "home", last_read_at: null });
+    vi.spyOn(api, "markHomeRead").mockResolvedValue({ session_id: "home", last_read_at: "2026-11-20T00:00:00Z" });
+    vi.spyOn(chatStore, "captureHydrationEligibility").mockReturnValue(null);
+    let snapshot = {
+      ...chatStore.getSnapshot(),
+      sessions: [...chatStore.getSnapshot().sessions, {
+        id: "home", title: "Home", createdAt: 1, updatedAt: 1,
+        messages: [{ id: "brief", role: "assistant" as const, content: "Brief", createdAt: 2 }],
+      }],
+    };
+    vi.mocked(chatStore.getSnapshot).mockImplementation(() => snapshot);
+    vi.mocked(chatStore.switchSession).mockImplementation((id) => { snapshot = { ...snapshot, currentSessionId: id }; });
+    await mount();
+    await act(async () => { await vi.waitFor(() => expect(container.querySelector('[role="tab"][aria-label="Home, 1 new"]')).not.toBeNull()); });
+    await act(async () => (container.querySelector('[role="tab"][aria-label="Home, 1 new"]') as HTMLElement).click());
+    await mount();
+    expect(api.markHomeRead).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.waitFor(() => expect(container.querySelector('[role="tab"][aria-label="Home"]')).not.toBeNull()); });
+  });
+
+  it("leaves existing tabs and selection alone when Home is disabled", async () => {
+    await mount();
+    expect(api.home).toHaveBeenCalled();
+    expect(container.querySelector('[role="tab"][aria-label^="Home"]')).toBeNull();
+    expect(chatStore.switchSession).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="tab"]')!.textContent).toContain("My chat");
+  });
 
   it.each([
     ["while the list is loading", { status: "loading" as const, tabVisible: false }],
