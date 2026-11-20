@@ -394,3 +394,27 @@ it("renders persisted thumbnails and opens a larger preview", async () => {
   act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Preview photo.png"]')!.click());
   expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(message.attachments![0].thumb);
 });
+
+// A Home entry (#5545) is stored as a human message carrying Home metadata. It renders as the
+// HomeAlertCard, never as the operator's bubble showing the model's reference text.
+describe("ChatMessageView — Home entries", () => {
+  const TEXT = "[Home entry: notify from fleet-health, importance high. For reference; not a request.]\nFleet member sol stopped";
+
+  it("renders a message with Home metadata as a HomeAlertCard", () => {
+    render({
+      id: "home-entry-n1", role: "user", content: TEXT, status: "done",
+      home: { kind: "notify", importance: "high", source: "fleet-health", notice_id: "n1" },
+    });
+    const card = container.querySelector("article.pl-home-alert-card")!;
+    expect(card).not.toBeNull();
+    expect(card.querySelector("h3")!.textContent).toBe("Fleet member sol stopped");
+    expect(container.querySelector(".pl-message--user")).toBeNull();
+    expect(container.textContent).not.toContain("[Home entry");
+  });
+
+  it("leaves the same message a plain bubble when it carries no Home metadata", () => {
+    render({ id: "u1", role: "user", content: "Fleet member sol stopped", status: "done" });
+    expect(container.querySelector("article.pl-home-alert-card")).toBeNull();
+    expect(container.querySelector(".pl-message--user")).not.toBeNull();
+  });
+});

@@ -286,6 +286,20 @@ export const chatApi = {
     });
   },
 
+  homeEntries() {
+    return request<{
+      session_id: string;
+      entries: Array<{
+        id: string;
+        content: string;
+        additional_kwargs: {
+          protoagent_home_entry: import("../types").HomeEntry;
+          protoagent_sent_at?: string | null;
+        };
+      }>;
+    }>("/api/home/entries");
+  },
+
   chat(message: string, sessionId: string, model?: string) {
     return request<{ response: string; messages: ChatMessage[] }>("/api/chat", {
       method: "POST",
