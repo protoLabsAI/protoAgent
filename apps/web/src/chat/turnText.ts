@@ -96,6 +96,36 @@ export function turnBubbleIndexes(messages: ChatMessage[], assistantId: string):
   return indexes;
 }
 
+/** Where an operator message that shaped this turn at an UNKNOWN point belongs.
+ *
+ *  Above the turn's reply — but never above a message the operator sent EARLIER. An
+ *  un-split turn has one bubble, so that is simply before it. A split turn already
+ *  shows the operator messages that cut it, between its bubbles: this one was sent
+ *  after them, so it lands below the last of those and above the turn bubble that
+ *  follows it. Above the turn's first bubble would reverse the operator's send order;
+ *  after its last, the message would read as sent once the reply was over.
+ *
+ *  A turn whose empty continuation was folded away (`settleTurnBubbles`) ENDS on the
+ *  rows that cut it, so there the message goes directly below those rows instead.
+ *
+ *  Returns -1 when the anchor is gone, like `turnBubbleIndexes` returning []. */
+export function unplacedSteerIndex(messages: ChatMessage[], assistantId: string): number {
+  const turn = turnBubbleIndexes(messages, assistantId);
+  if (!turn.length) return -1;
+  const operator = (index: number) => messages[index]?.role === "user" && !messages[index].author;
+  const last = turn[turn.length - 1];
+  let at = turn[0];
+  for (let index = turn[0] + 1; index < last; index++) {
+    if (operator(index)) at = turn.find((bubble) => bubble > index) ?? at;
+  }
+  if (messages[last].splitOf) {
+    let end = last + 1;
+    while (operator(end)) end++;
+    if (end > last + 1) at = end;
+  }
+  return at;
+}
+
 /** Was this turn's answer spoken by ADDRESSED PARTICIPANTS rather than by the lead?
  *
  *  An `@<name>`-addressed turn skips the lead entirely: the server publishes each

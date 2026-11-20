@@ -52,6 +52,40 @@ describe("placeConsumedSteers", () => {
     expect(out.map((message) => message.id)).toEqual(["u", "s1", "live"]);
   });
 
+  it("lands a missed marker below the steer that already split the turn, above the reply that follows it", () => {
+    const messages: ChatMessage[] = [
+      { id: "u0", role: "user", content: "earlier", status: "done" },
+      { id: "a0", role: "assistant", content: "earlier answer", status: "done" },
+      { id: "u", role: "user", content: "start", status: "done" },
+      { ...assistant("Working on it."), id: "frozen", status: "done", splitOf: "live" },
+      { id: "s0", role: "user", content: "first steer", status: "done" },
+      { ...assistant("Here you go."), status: "done" },
+    ];
+    const out = placeConsumedSteers(messages, [{ id: "s1", text: "redirect" }], { frozenId: "unused", createdAt: 10 });
+    expect(out.map((message) => message.id)).toEqual(["u0", "a0", "u", "frozen", "s0", "s1", "live"]);
+  });
+
+  it("lands a missed marker above the FIRST bubble of a turn only a delegation split", () => {
+    const messages: ChatMessage[] = [
+      { id: "u", role: "user", content: "start", status: "done" },
+      { ...assistant("Asking Ava."), id: "frozen", status: "done", splitOf: "live" },
+      { id: "ask", role: "assistant", content: "ping", status: "done", addressedTo: "ava" },
+      { ...assistant("Here you go."), status: "done" },
+    ];
+    const out = placeConsumedSteers(messages, [{ id: "s1", text: "redirect" }], { frozenId: "unused", createdAt: 10 });
+    expect(out.map((message) => message.id)).toEqual(["u", "s1", "frozen", "ask", "live"]);
+  });
+
+  it("keeps send order when the split turn's empty continuation was folded away", () => {
+    const messages: ChatMessage[] = [
+      { id: "u", role: "user", content: "start", status: "done" },
+      { ...assistant("Whole answer."), id: "frozen", status: "done", splitOf: "live" },
+      { id: "s0", role: "user", content: "first steer", status: "done" },
+    ];
+    const out = placeConsumedSteers(messages, [{ id: "s1", text: "redirect" }], { frozenId: "unused", createdAt: 10 });
+    expect(out.map((message) => message.id)).toEqual(["u", "frozen", "s0", "s1"]);
+  });
+
   it("does not resurrect a streaming placeholder when a late marker reaches a settled turn", () => {
     const done = { ...assistant("whole answer"), status: "done" as const };
     const out = placeConsumedSteers(

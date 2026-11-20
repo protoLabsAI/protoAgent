@@ -17,6 +17,7 @@ import {
   staleInterjections,
   type ServerTurnPhase,
 } from "./serverInterjections";
+import { unplacedSteerIndex } from "./turnText";
 
 // Steer-queue ref initializer — mirrors the lazy state init (a useRef can't take
 // an initializer function, and re-reading storage per render would be wasteful).
@@ -221,8 +222,19 @@ export function useSteerQueue({
     // A delayed POST/reconcile can name a task already followed by this slot,
     // including a decision resumed on the same task. Keep its producer and state:
     // a second placeholder has no stream, and a completed task must not reopen.
-    if (snap.messages.some((m) => m.role === "assistant" && !m.author && !m.addressedTo && m.taskId === taskId)) {
-      if (userMessages.length) chatStore.updateMessages(session.id, [...snap.messages, ...userMessages]);
+    const followed = snap.messages.findIndex(
+      (m) => m.role === "assistant" && !m.author && !m.addressedTo && m.taskId === taskId,
+    );
+    if (followed !== -1) {
+      // These messages STARTED (or joined) that task, so they read above its reply.
+      // Appending them put the operator's words under the answer they caused, as if sent
+      // afterwards. When an earlier steer already split the turn, they land below that
+      // steer — it was sent first — and above the turn bubble that follows it.
+      const placed = unplacedSteerIndex(snap.messages, snap.messages[followed].id ?? "");
+      const at = placed === -1 ? followed : placed;
+      if (userMessages.length) {
+        chatStore.updateMessages(session.id, [...snap.messages.slice(0, at), ...userMessages, ...snap.messages.slice(at)]);
+      }
       return;
     }
     // Any locally-owned stream is a zombie — the server just said nothing is running.
