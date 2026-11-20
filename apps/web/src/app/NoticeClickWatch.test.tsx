@@ -15,6 +15,7 @@ let listeners: Array<(event: MessageEvent) => void>;
 let origin: string | null;
 const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ ok: true, agent: origin })));
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+const nextLook = () => act(async () => { await new Promise((r) => setTimeout(r, 500)); });
 
 beforeEach(() => {
   openWorkGroup.mockClear();
@@ -158,9 +159,10 @@ it("coming to the front opens the decision the worker remembered", async () => {
   await act(async () => root.render(<NoticeClickWatch />));
   await flush();
   expect(openWorkGroup).not.toHaveBeenCalled();
+  // The note lands AFTER the console came to the front (the worker handled the tap late):
+  // no new event fires, and the console must still find it.
   stubClickCache({ v: 1, id: "decision-dec-6", at: Date.now() });
-  await act(async () => { window.dispatchEvent(new Event("focus")); });
-  await flush();
+  await nextLook();
   await flush();
   expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-6");
 });
@@ -176,6 +178,29 @@ it("a click that arrives by message spends the worker's note, so a later focus d
   expect(storage.delete).toHaveBeenCalledOnce();
   expect(openWorkGroup).toHaveBeenCalledTimes(1);
   await act(async () => { window.dispatchEvent(new Event("focus")); });
-  await flush();
+  await nextLook();
   expect(openWorkGroup).toHaveBeenCalledTimes(1);
+});
+
+it("records the console's half of a tap for Settings", async () => {
+  localStorage.removeItem("protoagent.noticeTapLog");
+  stubClickCache({ v: 1, id: "decision-dec-9", at: Date.now() });
+  await act(async () => root.render(<NoticeClickWatch />));
+  await flush();
+  await flush();
+  const steps = (JSON.parse(localStorage.getItem("protoagent.noticeTapLog") || "[]") as Array<{ step: string; detail: string }>)
+    .map((r) => `${r.step}: ${r.detail}`);
+  expect(steps[0]).toContain("start: /app/"); // the routine line is kept because a tap followed
+  expect(steps).toContain("note: found decision-dec-9");
+  expect(steps.some((line) => line.startsWith("open: decision-dec-9 raised by this agent"))).toBe(true);
+});
+
+it("a launch with no tap leaves no log", async () => {
+  localStorage.removeItem("protoagent.noticeTapLog");
+  stubClickCache(null);
+  await act(async () => root.render(<NoticeClickWatch />));
+  await flush();
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await nextLook();
+  expect(JSON.parse(localStorage.getItem("protoagent.noticeTapLog") || "[]")).toEqual([]);
 });

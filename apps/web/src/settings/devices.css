@@ -298,3 +298,21 @@
     justify-content: flex-start;
   }
 }
+
+/* "What happened to the last notification tap" (PushToggle.tsx TapLog): a diagnostic, so it
+   stays folded and small; the lines scroll sideways instead of widening the phone page. */
+.devices-tap-log {
+  margin-top: var(--pl-space-2);
+  font-size: var(--pl-font-size-sm);
+  min-width: 0;
+}
+.devices-tap-log pre {
+  margin: var(--pl-space-2) 0;
+  padding: var(--pl-space-2);
+  max-height: 16rem;
+  overflow: auto;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-inset);
+  font-size: var(--pl-font-size-2xs);
+}

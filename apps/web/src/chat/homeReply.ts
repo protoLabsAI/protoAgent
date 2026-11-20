@@ -9,7 +9,14 @@
 
 import { useEffect, type RefObject } from "react";
 
-import { loadDraft, loadDraftContext, saveDraft, saveDraftContext } from "./scratchState";
+import {
+  loadDraft,
+  loadDraftContext,
+  loadQuotedDraftContexts,
+  saveDraft,
+  saveDraftContext,
+  saveQuotedDraftContexts,
+} from "./scratchState";
 
 /** Opening of every Home session id (`runtime/home_session.py: HOME_SESSION_PREFIX`). */
 const HOME_SESSION_PREFIX = "chat-home-";
@@ -58,14 +65,45 @@ type Listener = (sessionId: string, reply: HomeReply) => void;
 const listeners = new Set<Listener>();
 
 /** Write a reply to an entry into `sessionId`'s composer draft and hand it to the mounted
- *  composer, which shows it and takes focus. Nothing is sent. */
+ *  composer, which shows it and takes focus. Nothing is sent.
+ *
+ *  The hidden context is recorded against its quote, so `composerDraftContext` can drop it at
+ *  send time if the operator deleted the quote. Context already waiting (another reply, a
+ *  "continue this conversation" reference, one kept for a retry) stays alongside it. */
 export function replyToHomeEntry(sessionId: string, reply: HomeReply): void {
-  const draft = loadDraft(sessionId);
-  // Context left by an earlier reply still in the draft is kept, so both entries stay named.
-  const earlier = draft.trim() ? loadDraftContext(sessionId) : "";
-  saveDraft(sessionId, draftWithQuote(draft, reply.quote));
-  saveDraftContext(sessionId, earlier && !earlier.includes(reply.context) ? `${earlier}\n${reply.context}` : reply.context);
+  saveDraft(sessionId, draftWithQuote(loadDraft(sessionId), reply.quote));
+  const earlier = loadDraftContext(sessionId);
+  saveDraftContext(
+    sessionId,
+    !earlier ? reply.context : earlier.split("\n").includes(reply.context) ? earlier : `${earlier}\n${reply.context}`,
+  );
+  const quoted = loadQuotedDraftContexts(sessionId).filter((q) => q.context !== reply.context);
+  saveQuotedDraftContexts(sessionId, [...quoted, { quote: reply.quote, context: reply.context }]);
   for (const listener of [...listeners]) listener(sessionId, reply);
+}
+
+/** The hidden context to send with the composer text `text`.
+ *
+ *  A Reply reference is sent only while its quote is still in the message: the operator who
+ *  deletes the quote and writes something else must not send "Replying to …" with it. The
+ *  quote's first line (the entry's title) is the test, so a quote trimmed down still counts.
+ *  A reference that is sent stops being tied to its quote: like any other draft context, it
+ *  then stays until the send succeeds, so a failed send can be retried. */
+export function composerDraftContext(sessionId: string, text: string): string {
+  const context = loadDraftContext(sessionId);
+  const quoted = loadQuotedDraftContexts(sessionId);
+  if (!quoted.length) return context;
+  saveQuotedDraftContexts(sessionId, []);
+  const dropped = new Set(
+    quoted.filter((q) => !text.includes(q.quote.split("\n", 1)[0].trim())).map((q) => q.context),
+  );
+  if (!dropped.size) return context;
+  const kept = context
+    .split("\n")
+    .filter((line) => !dropped.has(line))
+    .join("\n");
+  saveDraftContext(sessionId, kept);
+  return kept;
 }
 
 /** The composer side of Reply: adopt a reply aimed at this session into the live draft state
@@ -95,6 +133,8 @@ export function useHomeReplyAdoption(
     return () => {
       listeners.delete(listener);
     };
+    // `setDraft` is a React state setter and `textareaRef` a ref: both are stable for the
+    // slot's life, so the listener is re-registered only when the session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 }

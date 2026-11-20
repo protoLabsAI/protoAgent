@@ -213,5 +213,15 @@ test("a click leaves the notice id where a console that got no URL and no messag
   // Nothing is left for a click with no usable id.
   await page.evaluate(() => caches.delete("protoagent-notice-click"));
   await click(worker, { v: 1, id: "../nope", route: "/app/" });
-  expect(await page.evaluate(() => caches.keys())).toEqual([]);
+  // Only the tap trace remains: what the worker did with each tap, for Settings > Devices.
+  expect(await page.evaluate(() => caches.keys())).toEqual(["protoagent-notice-trace"]);
+  const steps = await page.evaluate(async () => {
+    const hit = await (await caches.open("protoagent-notice-trace")).match("/app/__notice-trace");
+    return ((await hit!.json()) as Array<{ who: string; step: string; detail: string }>).map((r) => `${r.who} ${r.step}: ${r.detail}`);
+  });
+  expect(steps[0]).toBe(`worker tap: ${NOTICE.id} → ${NOTICE.route}`);
+  expect(steps).toContain("worker note: written");
+  expect(steps).toContain("worker note: not written: no usable id");
+  expect(steps.some((line) => line.startsWith("worker windows: "))).toBe(true);
+  expect(steps.join("\n")).not.toMatch(/token|endpoint|Bearer/i);
 });
