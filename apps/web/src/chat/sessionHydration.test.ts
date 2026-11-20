@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, type DurableChatSession, type DurableChatTurn } from "../lib/api";
 import {
@@ -17,6 +17,7 @@ import {
   SESSION_TURN_LIMIT,
   hasStaleStreamingTurn,
   hydrateDurableChatSessions,
+  placeHomeEntries,
   isBehindServer,
   localTurnIds,
   messagesFromDurableTurn,
@@ -69,6 +70,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+beforeEach(() => { vi.spyOn(api, "homeEntries").mockRejectedValue(new Error("Home disabled")); });
 afterEach(() => vi.restoreAllMocks());
 
 describe("server timestamps are UTC, zoned or not (#4145)", () => {
@@ -2166,5 +2168,109 @@ describe("decision identity in durable history", () => {
     });
     expect(assistant.paused).toBe(state === "input-required" ? true : undefined);
     expect(messages.filter((message) => message.decisionId)).toHaveLength(1);
+  });
+});
+
+
+it("hydrates checkpoint-only Home notices and preserves them across refresh failures", async () => {
+  const id = "chat-home-checkpoint";
+  const entry = {
+    id: "home-entry-notice-1", content: "[Home entry: notify]\nFleet member sol stopped",
+    additional_kwargs: {
+      protoagent_home_entry: { kind: "notify", importance: "high", source: "fleet-health", notice_id: "notice-1" },
+      protoagent_sent_at: "2026-11-19T12:00:00Z",
+    },
+  };
+  vi.mocked(api.homeEntries).mockResolvedValue({ session_id: id, entries: [entry] });
+  vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [{ ...summary(id), title: "Home", turn_count: 0 }] });
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  await hydrateDurableChatSessions();
+  const messages = () => chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages;
+  // The Home read is merged when it lands; hydration itself never waits for it.
+  await vi.waitFor(() => expect(messages()).toEqual([expect.objectContaining({
+    id: entry.id, content: entry.content, home: entry.additional_kwargs.protoagent_home_entry,
+    createdAt: Date.parse(entry.additional_kwargs.protoagent_sent_at),
+  })]));
+  await hydrateDurableChatSessions();
+  await Promise.resolve();
+  expect(messages()).toHaveLength(1);
+  vi.mocked(api.homeEntries).mockRejectedValue(new Error("offline"));
+  await hydrateDurableChatSessions({ full: true });
+  await Promise.resolve();
+  expect(messages()).toHaveLength(1);
+});
+
+it("hydrates the session list and transcripts while the Home entries read hangs", async () => {
+  const id = "chat-home-hung";
+  let release!: (value: Awaited<ReturnType<typeof api.homeEntries>>) => void;
+  vi.mocked(api.homeEntries).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  const index = vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [{ ...summary(id), title: "Home", turn_count: 0 }] });
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  // Resolves with the Home read still out: the index request was issued and the tab added.
+  await hydrateDurableChatSessions();
+  expect(index).toHaveBeenCalled();
+  const session = () => chatStore.getSnapshot().sessions.find((s) => s.id === id);
+  expect(session()).toBeDefined();
+  expect(session()!.messages.some((message) => message.home)).toBe(false);
+  // The late answer still merges into the session that hydration added.
+  release({
+    session_id: id,
+    entries: [{
+      id: "home-entry-late", content: "Fleet member sol stopped",
+      additional_kwargs: { protoagent_home_entry: { kind: "notify", importance: "high", source: "fleet-health", notice_id: "late" } },
+    }],
+  });
+  await vi.waitFor(() => expect(session()!.messages.map((m) => m.id)).toContain("home-entry-late"));
+});
+
+it("merges a new Home entry at its own time, above a later message the console already holds", async () => {
+  const id = "chat-home-order";
+  const at = (clock: string) => Date.parse(`2026-11-19T${clock}Z`);
+  vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [{ ...summary(id), title: "Home", turn_count: 0 }] });
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  await hydrateDurableChatSessions();
+  chatStore.updateMessages(id, [
+    { id: "u-early", role: "user", content: "morning", status: "done", createdAt: at("09:00:00") },
+    { id: "u-late", role: "user", content: "what stopped?", status: "done", createdAt: at("10:10:00") },
+  ]);
+  vi.mocked(api.homeEntries).mockResolvedValue({
+    session_id: id,
+    entries: [{
+      id: "home-entry-1005", content: "Fleet member sol stopped",
+      additional_kwargs: {
+        protoagent_home_entry: { kind: "notify", importance: "high", source: "fleet-health", notice_id: "n-1005" },
+        protoagent_sent_at: "2026-11-19T10:05:00Z",
+      },
+    }],
+  });
+  await hydrateDurableChatSessions();
+  const ids = () => chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages.map((m) => m.id);
+  await vi.waitFor(() => expect(ids()).toEqual(["u-early", "home-entry-1005", "u-late"]));
+  // A re-read refreshes the held entry in place: no duplicate and no move.
+  await hydrateDurableChatSessions();
+  await Promise.resolve();
+  expect(ids()).toEqual(["u-early", "home-entry-1005", "u-late"]);
+});
+
+describe("placeHomeEntries", () => {
+  const msg = (id: string, createdAt?: number): ChatMessage => ({ id, role: "user", content: id, status: "done", createdAt });
+  const ids = (list: ChatMessage[]) => list.map((message) => message.id);
+
+  it("orders several new entries by time among the held messages", () => {
+    const held = [msg("a", 10), msg("b", 30), msg("c", 50)];
+    expect(ids(placeHomeEntries(held, [msg("h40", 40), msg("h20", 20), msg("h60", 60)])))
+      .toEqual(["a", "h20", "b", "h40", "c", "h60"]);
+    expect(ids(held)).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps an untimed send with the timed reply below it", () => {
+    // A hydrated operator send carries no time; its reply does. The entry goes above the pair.
+    expect(ids(placeHomeEntries([msg("a", 10), msg("send"), msg("reply", 30)], [msg("h20", 20)])))
+      .toEqual(["a", "h20", "send", "reply"]);
+  });
+
+  it("appends an entry with no recorded time, and one newer than every held message", () => {
+    expect(ids(placeHomeEntries([msg("a", 10), msg("tail")], [msg("untimed"), msg("h20", 20)])))
+      .toEqual(["a", "tail", "h20", "untimed"]);
   });
 });

@@ -1212,6 +1212,18 @@ export type QueuedSteer = ConsumedSteer & {
   unconfirmed?: boolean;
 };
 
+/** What a Home entry is about (ADR 0135 D9, #5545): the `{kind, importance, source,
+ *  notice_id}` the server stamps on an owner notice it writes into Home's thread
+ *  (`graph/home_entries.py`, `additional_kwargs.protoagent_home_entry`). Field names are the
+ *  wire's. `source` names the raising code path ("decision", "fleet-health", "scheduler",
+ *  "watch", "spend-cap", …); a decision's `notice_id` is `decision-<id>`. */
+export type HomeEntry = {
+  kind: "notify" | "question" | "review" | (string & {});
+  importance: "low" | "normal" | "high" | (string & {});
+  source: string;
+  notice_id?: string | null;
+};
+
 export type ChatMessage = {
   /** Hidden reference retained on an outgoing turn so regenerate can resend it. */
   continuationContext?: string;
@@ -1309,6 +1321,10 @@ export type ChatMessage = {
    *  shows the server's preview; this lets the card open the FULL report in the document
    *  viewer (fetched by id) instead of forcing a trip to the Activity/Background panel. */
   report?: { jobId: string; title: string };
+  /** Home entry metadata: this message is a brief, an alert or a decision pointer written
+   *  into Home's thread, and renders as a HomeAlertCard instead of a bubble. Its `content` is
+   *  the entry's stored text (a bracketed reference head, then the title and any body). */
+  home?: HomeEntry;
   /** Scheduled-task result delivered back to the chat that CREATED the schedule (#2990):
    *  a fire runs in Activity, but its outcome surfaces here as a ScheduledReportCard (first
    *  fire) or a compact ScheduledChip (`collapse` — a recurring re-fire). Injected

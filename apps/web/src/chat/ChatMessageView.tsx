@@ -29,6 +29,7 @@ import { DelegateProgressView } from "./DelegateProgressView";
 import { hideDanglingMarker } from "./danglingMarker";
 import { Markdown } from "./LazyMarkdown";
 import { DecisionTranscript } from "./HitlDisplay";
+import { HomeAlertCard } from "./HomeAlertCard";
 import { NoteCard } from "./NoteCard";
 import { openEvalCaseEditor } from "./EvalCaseEditor";
 import { openPromptViewer } from "./PromptViewer";
@@ -143,6 +144,11 @@ export function ChatMessageView({
     ) : (
       <ScheduledReportCard message={message} scheduled={message.scheduled} />
     );
+  }
+  // Home entry (#5545): a brief, an alert or a decision pointer the server wrote into Home's
+  // thread renders as one HomeAlertCard, whatever role the stored message carries.
+  if (message.home?.kind) {
+    return <HomeAlertCard message={message} home={message.home} />;
   }
   // Server-initiated RESULT (#3028): a SETTLED scheduled fire, watch reaction, or autonomous
   // wake carries an `origin` tag (set by ChatResumeWatch — the live streaming preview does NOT,
