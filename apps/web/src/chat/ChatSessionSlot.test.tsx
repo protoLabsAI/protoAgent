@@ -6,6 +6,7 @@ import { api, ApiError } from "../lib/api";
 import { chatStore, registerGoalKickoff } from "./chat-store";
 import { ChatSessionSlot } from "./ChatSessionSlot";
 import { ChatTranscript } from "./ChatTranscript";
+import { quoteEntry, replyContext, replyToHomeEntry } from "./homeReply";
 import { loadDraftContext } from "./scratchState";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -113,6 +114,51 @@ it("leaves continuation context for the composer when an automatic kickoff sends
   expect(loadDraftContext(sessionId)).toBe(reference);
   await send("Continue the conversation");
   expect(stream.mock.calls[1][0]).toBe(`Continue the conversation\n\n${reference}`);
+});
+
+// "Reply" on a Home card (#5545): the hidden reference belongs to the quote it came with.
+it("sends a Reply reference only with a message that still carries its quote", async () => {
+  const continuation = loadDraftContext(sessionId);
+  const reply = { quote: quoteEntry("Fleet member sol stopped", "Check its logs."), context: replyContext("the Home entry \"Fleet member sol stopped\"") };
+  const stream = vi.spyOn(api, "streamChat").mockImplementation(async (_text, _session, callbacks) => {
+    callbacks?.onText?.("Answer", false);
+    callbacks?.onDone?.();
+  });
+
+  // The operator deletes the quote and writes something unrelated: no reference goes with it.
+  await act(async () => replyToHomeEntry(sessionId, reply));
+  expect(view.composer!.value).toContain("> Fleet member sol stopped");
+  expect(loadDraftContext(sessionId)).toContain(reply.context);
+  await send("What is the weather?");
+  expect(stream.mock.calls[0][0]).toBe(`What is the weather?\n\n${continuation}`);
+  expect(loadDraftContext(sessionId)).toBe("");
+
+  // With the quote kept, the reference goes along, and is consumed by the successful send.
+  await act(async () => replyToHomeEntry(sessionId, reply));
+  await send(`${view.composer!.value}restart it`);
+  expect(stream.mock.calls[1][0]).toBe(`${reply.quote}restart it\n\n${reply.context}`);
+  expect(stream.mock.calls[1][3]?.display).toBe(`${reply.quote}restart it`);
+  await send("Thanks");
+  expect(stream.mock.calls[2][0]).toBe("Thanks");
+});
+
+it("keeps a sent Reply reference for the retry after a failed send", async () => {
+  const continuation = loadDraftContext(sessionId);
+  const reply = { quote: quoteEntry("Fleet member sol stopped"), context: replyContext("the Home entry \"Fleet member sol stopped\"") };
+  const stream = vi.spyOn(api, "streamChat").mockImplementationOnce(async (_text, _session, callbacks) => {
+    callbacks?.onFailed?.("model failed");
+  }).mockImplementation(async (_text, _session, callbacks) => {
+    callbacks?.onDone?.();
+  });
+  await act(async () => replyToHomeEntry(sessionId, reply));
+  // The quote sits above the lead this chat's draft already held.
+  const text = `${view.composer!.value} restart it`;
+  expect(text.startsWith(reply.quote)).toBe(true);
+  await send(text);
+  expect(stream.mock.calls[0][0]).toBe(`${text}\n\n${continuation}\n${reply.context}`);
+  await send("Try again");
+  expect(stream.mock.calls[1][0]).toBe(`Try again\n\n${continuation}\n${reply.context}`);
+  expect(loadDraftContext(sessionId)).toBe("");
 });
 
 // #5477: the task parked, but the send stream never delivered its park frame.

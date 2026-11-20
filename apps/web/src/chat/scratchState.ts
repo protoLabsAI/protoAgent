@@ -54,6 +54,27 @@ export function loadDraftContext(sessionId: string): string {
   return read("draft-context", sessionId) ?? "";
 }
 
+/** A hidden context line that belongs to a quote in the visible draft ("Reply" on a Home
+ *  card). The line is sent only while its quote is still in the draft. */
+export type QuotedDraftContext = { quote: string; context: string };
+
+export function loadQuotedDraftContexts(sessionId: string): QuotedDraftContext[] {
+  const raw = read("draft-quotes", sessionId);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((q) => q && typeof q.quote === "string" && typeof q.context === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveQuotedDraftContexts(sessionId: string, quoted: QuotedDraftContext[]): void {
+  write("draft-quotes", sessionId, quoted.length ? JSON.stringify(quoted) : null);
+}
+
 /** Build the agent payload without putting machine notes in the editor or display text.
  *  Keep context until the send succeeds so a failed send can be retried. */
 export function draftPayload(sessionId: string, text: string): string {

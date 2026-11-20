@@ -93,7 +93,8 @@ import {
 } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { watchGoalKickoff, type GoalKickoffWatch } from "./goalKickoffWatch";
-import { loadDraft, loadDraftContext, loadScroll, saveDraft, saveDraftContext, saveScroll } from "./scratchState";
+import { composerDraftContext, useHomeReplyAdoption } from "./homeReply";
+import { loadDraft, loadScroll, saveDraft, saveDraftContext, saveScroll } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { markUserScroll } from "./streamFollow";
 import { composerPlaceholder } from "./composerPlaceholder";
@@ -292,6 +293,9 @@ export function ChatSessionSlot({
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // "Reply" on a Home card (#5545) quotes the entry into THIS session's live draft and focuses
+  // the composer; the card also wrote scratch state, for a slot that is not mounted.
+  useHomeReplyAdoption(sessionId, setDraft, textareaRef);
   // Terminal-style ↑/↓ history nav (#1496): position in the per-chat-session submitted-message ring
   // (null = not navigating), and the live draft stashed when nav began (restored on ↓ past
   // the newest). Refs, not state — they change alongside a setDraft, no separate re-render.
@@ -1133,8 +1137,9 @@ export function ChatSessionSlot({
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
     // is what the user bubble shows.
     // Only the operator composer consumes draft context; regenerate reuses its own turn.
+    // A "Reply" reference (#5545) goes only with a message that still carries its quote.
     const continuationContext = opts.hitlResume ? "" : (opts.continuationContext
-      ?? (opts.composer ? loadDraftContext(session.id) : ""));
+      ?? (opts.composer ? composerDraftContext(session.id, content) : ""));
     const payload = opts.sendAs ?? content;
     const sent = continuationContext ? `${payload}\n\n${continuationContext}` : payload;
     const userMessage: ChatMessage = {
