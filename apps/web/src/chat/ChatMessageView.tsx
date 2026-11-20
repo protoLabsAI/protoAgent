@@ -39,6 +39,7 @@ import { ReasoningCard } from "./ReasoningCard";
 import { useRevealedText } from "./revealText";
 import { ToolCalls } from "./ToolCalls";
 import { WorkBlock, findInlineArtifactRef, inlineArtifactPreview, spotlightToolId } from "./WorkBlock";
+import { loadFullScheduledResult } from "./fullScheduledResult";
 import { foldPlan, toolsForGroup } from "./parts";
 import { plainPreviewText, rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
 import { useBackgroundJob } from "./backgroundJobStore";
@@ -798,7 +799,9 @@ function ScheduledResultBody({
     openDocument({
       title,
       subtitle: `Fired ${fmtFiredAt(scheduled.firedAt)} — full turn in Activity`,
-      load: () => Promise.resolve(summary),
+      // The summary is the server's 500-char cut; the whole answer is the fire's own turn.
+      // Falls back to the summary when that turn can't be read.
+      load: () => loadFullScheduledResult(scheduled.activityContext, scheduled.taskId, summary),
     });
   return (
     <>
