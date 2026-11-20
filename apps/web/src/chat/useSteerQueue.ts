@@ -213,22 +213,30 @@ export function useSteerQueue({
     const attached = new Set(items.map((item) => item.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !attached.has(q.id)));
     if (!session) return;
+    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    if (!snap) return;
+    const userMessages = items
+      .filter((item) => !snap.messages.some((m) => m.id === item.id))
+      .map((item) => ({ id: item.id, role: "user" as const, content: item.text, createdAt: Date.now(), status: "done" as const }));
+    // A delayed POST/reconcile can name a task already followed by this slot,
+    // including a decision resumed on the same task. Keep its producer and state:
+    // a second placeholder has no stream, and a completed task must not reopen.
+    if (snap.messages.some((m) => m.role === "assistant" && !m.author && !m.addressedTo && m.taskId === taskId)) {
+      if (userMessages.length) chatStore.updateMessages(session.id, [...snap.messages, ...userMessages]);
+      return;
+    }
     // Any locally-owned stream is a zombie — the server just said nothing is running.
     // Abort it and release the slot's claim, or the reattach effect (gated on abortRef)
     // never runs and the new turn's bubble would spin unattached.
     abortRef.current?.abort();
     abortRef.current = null;
-    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
-    if (!snap) return;
     let base = snap.messages;
     for (const m of snap.messages) {
       if (m.role === "assistant" && m.status === "streaming") base = settleAnsweredPause(base, m.id);
     }
     chatStore.updateMessages(session.id, [
       ...base,
-      ...items
-        .filter((item) => !base.some((m) => m.id === item.id))
-        .map((item) => ({ id: item.id, role: "user" as const, content: item.text, createdAt: Date.now(), status: "done" as const })),
+      ...userMessages,
       { id: messageId(), role: "assistant", content: "", createdAt: Date.now(), status: "streaming", taskId },
     ]);
     chatStore.setSessionStatus(session.id, "streaming");

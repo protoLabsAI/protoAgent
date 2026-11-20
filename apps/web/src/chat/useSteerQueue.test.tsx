@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { api } from "../lib/api";
 import type { ChatMessage, HitlPayload, QueuedSteer } from "../lib/types";
 import { chatStore } from "./chat-store";
+import { noteParkedTurnResumed, reattachOrReconcile } from "./reattach";
+import { noteTurnFinished } from "./server-turn-store";
 import { loadSteers, saveSteers } from "./scratchState";
 import { useSteerQueue, type UseSteerQueueOptions } from "./useSteerQueue";
 
@@ -208,6 +210,49 @@ describe("useSteerQueue — queueing", () => {
     expect(msgs[2]).toMatchObject({ role: "user", content: "are you there?" });
     expect(msgs[3]).toMatchObject({ role: "assistant", taskId: "task-9", status: "streaming" });
     expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("streaming");
+  });
+
+  it.each(["before", "after"] as const)("keeps the resumed decision's bubble when started_turn arrives %s completion", async (replyTiming) => {
+    // #5467: the steer POST and the resumed task's stream can finish in either order.
+    const taskId = "decision-task";
+    chatStore.updateMessages(sessionId, [{
+      id: "approval", role: "assistant", content: "", status: "streaming",
+      taskId, decisionId: "decision-1", paused: true,
+      toolCalls: [{ id: "d1", name: "request_decision", status: "running", paused: true }],
+    }]);
+    let finish!: () => void;
+    vi.spyOn(api, "resumeTask").mockImplementation(async (_task, _session, handlers) => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      handlers?.onText?.("All done.", false);
+    });
+    vi.spyOn(api, "getTask").mockResolvedValue({ state: "completed", text: "All done." });
+    expect(noteParkedTurnResumed(sessionId, taskId)).toBe(true);
+    const cancel = reattachOrReconcile(sessionId);
+    let reply!: (value: Awaited<ReturnType<typeof api.steerChat>>) => void;
+    steerChat.mockImplementation(() => new Promise((resolve) => { reply = resolve; }));
+    const r = renderHook(baseOpts({ draft: "Approved" }));
+    let queued!: Promise<void>;
+    act(() => { queued = r.current.queueSteer(); });
+    const acknowledge = async () => {
+      reply({ ok: true, id: null, pending: 0, started_turn: taskId });
+      await act(() => queued);
+    };
+    try {
+      if (replyTiming === "before") await acknowledge();
+      noteTurnFinished(sessionId, taskId);
+      finish();
+      await flush();
+      if (replyTiming === "after") await acknowledge();
+      expect(messagesOf().filter((m) => m.role === "assistant" && m.status === "streaming" && !m.content)).toEqual([]);
+      expect(messagesOf().filter((m) => m.role === "assistant")).toMatchObject([
+        { id: "approval", taskId, decisionId: "decision-1", status: "done", content: "All done." },
+      ]);
+      expect(messagesOf().filter((m) => m.role === "user")).toMatchObject([{ content: "Approved" }]);
+      expect(r.current.steerQueue).toEqual([]);
+      expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("idle");
+    } finally {
+      cancel?.();
+    }
   });
 
   it("hands a REFUSED interjection back into the composer (appended), and drops the stale control", async () => {
