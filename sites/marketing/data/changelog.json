@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.256.0",
+    "date": "2026-11-20",
+    "changes": [
+      "Reply on a Home card (#5640).",
+      "Home shows where each day starts and what is new (#5643).",
+      "Tapping a push notification opens Home at that notice (#5642).",
+      "Phone: the console opens on Home, and Home is the first row of the session sheet (#5644).",
+      "A scheduled result that lands in Home while you watch shows once (#5645)."
+    ]
+  },
+  {
     "version": "v0.255.0",
     "date": "2026-11-20",
     "changes": [

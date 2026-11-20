@@ -1,1 +1,0 @@
-- **A scheduled result that lands in Home while you watch shows once.** The live card now takes the id of the Home entry the server stores for the same fire, so loading Home's thread replaces it instead of adding a second card, and a fire whose entry is already on screen adds nothing. Results delivered to any other chat are unchanged. Refs #5545.
