@@ -135,6 +135,23 @@ def test_send_is_encrypted_for_the_device_and_signed_with_the_instance_key(env):
     assert claims == {"aud": "https://fcm.googleapis.com", "exp": int(NOW) + 12 * 3600, "sub": ORIGIN}
 
 
+@pytest.mark.parametrize("kind, body", [
+    ("question", "Open the console to view a decision"),
+    ("review", "Open the console to view an update"),  # a scheduled job result is a review
+    ("notify", "Open the console to view an update"),
+])
+def test_only_a_question_says_view_a_decision(env, kind, body):
+    browser, service = Browser(), Service()
+
+    assert send(service, browser.binding(), payload(kind=kind)) == PushResult("accepted")
+
+    assert browser.decrypt(service.requests[0].content) == {
+        "v": 1, "id": "notice-1", "kind": kind, "importance": "high",
+        "created_at": NOW - 5, "expires_at": NOW + 600, "title": "protoAgent needs your attention",
+        "body": body, "route": "/app/?notice=notice-1",
+    }
+
+
 def test_payload_carries_no_operator_text_or_credentials(env):
     browser, service = Browser(), Service()
     binding = browser.binding()

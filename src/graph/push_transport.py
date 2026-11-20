@@ -352,7 +352,8 @@ def build_push_payload(payload: dict) -> bytes:
     body = json.dumps({
         "v": PAYLOAD_VERSION, "id": notice_id, "kind": kind, "importance": importance,
         "created_at": created_at, "expires_at": expires_at, "title": _TITLE,
-        "body": _BODY_UPDATE if kind == "notify" else _BODY_DECISION,
+        # Only a question asks for an answer; a review (e.g. a job result) is an update.
+        "body": _BODY_DECISION if kind == "question" else _BODY_UPDATE,
         "route": "/app/?notice=" + quote(notice_id, safe=""),
     }, separators=(",", ":")).encode("utf-8")
     if len(body) > MAX_PAYLOAD_BYTES:
