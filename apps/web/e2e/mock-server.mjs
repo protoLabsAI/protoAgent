@@ -1303,6 +1303,9 @@ function handleApiGet(
       return { agents: fleet.agents };
     case "/api/devices":
       return { devices: fleet.devices ?? [] };
+    case "/api/push/keys":
+      // Settings ▸ Devices ▸ "Notification key": push never enabled on the mock agent.
+      return { keys: [], rotation_window_seconds: 30 * 86400, bindings_by_version: {} };
     case "/api/fleet/discover":
       // One discoverable sibling on the LAN (not in the fleet) — candidates for
       // add-as-delegate or add-to-fleet (remote member).

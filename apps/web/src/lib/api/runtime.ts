@@ -108,6 +108,22 @@ export type DeviceSelf = PairedDevice & {
 export type DeviceScope = "full" | "device";
 /** Who is ASKING — the credential this request used, as the server classified it. */
 export type DeviceCaller = { scope: DeviceScope; device_id: string | null };
+/** One version of this agent's notification signing key (ADR 0135). The server also sends
+ *  the public half; the console has no use for it, so it is left untyped and never shown. */
+export type PushKeyVersion = {
+  version: number;
+  created_at: number;
+  active: boolean;
+  /** Epoch seconds at which a rotated-out version stops signing; null while it is active. */
+  retire_after: number | null;
+};
+/** `GET /api/push/keys`. `bindings_by_version` counts paired devices per key version (JSON
+ *  object keys, so the version arrives as a string). */
+export type PushKeys = {
+  keys: PushKeyVersion[];
+  rotation_window_seconds: number;
+  bindings_by_version: Record<string, number>;
+};
 export type PairingStart =
   | {
       ok: true;
@@ -242,6 +258,15 @@ export const runtimeApi = {
   },
   revokeDevice(id: string) {
     return request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+  /** The notification signing-key versions and how many devices sit on each (ADR 0135). */
+  pushKeys() {
+    return request<PushKeys>("/api/push/keys");
+  },
+  /** Activate a new signing key; the previous one keeps working for the rotation window.
+   *  Full-access only: the server answers a device-scope caller 403. */
+  rotatePushKey() {
+    return request<PushKeyVersion>("/api/push/keys/rotate", { method: "POST" });
   },
 
   // Short-lived HMAC token for the SSE EventSource, which can't send an
