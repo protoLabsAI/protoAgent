@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isDesktopWebview } from "../lib/api/desktop";
 import { deviceToken } from "../lib/credentials";
+import { clearTapLog, formatTapLog, readTapLog, type TapStep } from "../lib/noticeTrace";
+import { copyText } from "../lib/clipboard";
 import { enrollPush, pushState, unenrollPush, type PushState } from "../lib/push";
 
 /** Why this console can't be asked yet, in the operator's words — or null when it can. */
@@ -29,6 +31,28 @@ const DESKTOP_APP = "The desktop app shows notifications itself whenever it's ru
 const UNSUPPORTED = "This browser can't receive notifications while the console is closed.";
 const UNKNOWN = "Couldn't check whether notifications are on for this device. The agent didn't answer.";
 const DENIED = "Notifications are blocked for this console. Allow them in your browser or system settings, then come back here.";
+
+/** What happened to the last notification taps on THIS device. A tap on an installed phone
+ *  console can't be watched from anywhere else, so this is how a wrong landing gets diagnosed. */
+function TapLog() {
+  const toast = useToast();
+  const [rows, setRows] = useState<TapStep[]>([]);
+  const load = useCallback(() => { void readTapLog().then(setRows); }, []);
+  useEffect(load, [load]);
+  if (!rows.length) return null;
+  return (
+    <details className="devices-tap-log" data-testid="tap-log" onToggle={load}>
+      <summary>What happened to the last notification tap</summary>
+      <pre>{formatTapLog(rows)}</pre>
+      <Button type="button" variant="ghost" size="sm" onClick={() => void copyText(formatTapLog(rows)).then(() => toast({ tone: "success", title: "Copied", message: "Paste it wherever you're reporting the problem." }))}>
+        Copy
+      </Button>
+      <Button type="button" variant="ghost" size="sm" onClick={() => void clearTapLog().then(load)}>
+        Clear
+      </Button>
+    </details>
+  );
+}
 
 /** The first W2e control (ADR 0135): this device turns its own closed-console notifications
  *  on or off. The click handler calls `enrollPush` first thing — iOS only grants permission
@@ -104,6 +128,7 @@ export function PushToggle() {
       <div className="devices-push-body">
         <strong>Notifications on this device</strong>
         <p className="devices-pair-hint" data-testid="push-note">{note}</p>
+        <TapLog />
       </div>
       {on ? (
         <Button type="button" variant="ghost" onClick={turnOff} loading={busy} disabled={busy}>
