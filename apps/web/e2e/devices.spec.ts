@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectNoAxeViolations } from "./axe";
 
 // Settings ▸ Devices ▸ Pair an agent (ADR 0113) — the REMOTE's half of agent pairing: mint a
 // typeable code, show where this agent is reachable, cancel it scoped to its kind, offer the
@@ -23,6 +24,20 @@ async function openDevices(page) {
   await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Devices", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+}
+
+for (const colorScheme of ["light", "dark"] as const) {
+  test(`Settings Devices has no axe accessibility violations in ${colorScheme} mode`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme });
+    await page.route("**/api/theme", (route) => route.fulfill({
+      json: { theme: { mode: colorScheme, overrides: {} } },
+    }));
+    await openDevices(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
+    await expect(page.getByRole("button", { name: "Remove studio-hub" })).toBeVisible();
+    await expect(page.getByTestId("public-console-hint")).toBeVisible();
+    await expectNoAxeViolations(page, { include: ".settings-overlay" });
+  });
 }
 
 test("the device list badges other agents' hubs apart from phones, and revoke still works", async ({ page }) => {
