@@ -7,11 +7,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useDocViewer } from "../docviewer";
+import { api } from "../lib/api";
 import type { ChatMessage } from "../lib/types";
 import { ChatMessageView } from "./ChatMessageView";
+import { loadFullScheduledResult } from "./fullScheduledResult";
 import { preloadMarkdown } from "./LazyMarkdown";
 import { plainPreviewText, serverResultPreview } from "./server-turn-store";
 
@@ -22,6 +24,10 @@ import { plainPreviewText, serverResultPreview } from "./server-turn-store";
 const SUMMARY =
   "The brand-plan sweep flagged 3 stale assets and refreshed the Q4 messaging deck across all " +
   "six regional variants, with the EMEA cut still pending legal review before it can ship.";
+
+// The run's whole answer — well past the server's 500-char summary cut.
+const FULL_TEXT = "## Brand-plan sweep\n\n" + "Every regional variant was checked line by line. ".repeat(20);
+const turn = (task_id: string, text: string) => ({ task_id, state: "completed", last_updated: null, text });
 
 let container: HTMLElement;
 let root: Root;
@@ -73,6 +79,7 @@ beforeEach(async () => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 describe("ScheduledChip — a collapsed repeat fire expands into the full result (#4726)", () => {
@@ -107,14 +114,21 @@ describe("ScheduledChip — a collapsed repeat fire expands into the full result
     expect(viewFullResult()).toBeTruthy();
   });
 
-  it("View full result opens the document viewer on this fire's turn", () => {
-    render(scheduledMessage());
+  it("View full result opens the document viewer on this fire's turn", async () => {
+    const turns = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({
+      turns: [turn("task-older", "an earlier fire"), turn("task-42", FULL_TEXT)],
+    });
+    render(scheduledMessage({ activityContext: "job:abc", taskId: "task-42" }));
     act(() => toggle().click());
     act(() => viewFullResult()!.click());
     const state = useDocViewer.getState();
     expect(state.open).toBe(true);
     expect(state.doc?.title).toContain("brand-plan-sweep");
     expect(state.doc?.subtitle).toContain("Fired");
+    // The viewer loads the fire's WHOLE turn text from the turns read, not the summary.
+    expect(FULL_TEXT.length).toBeGreaterThan(500);
+    await expect(state.doc?.load?.()).resolves.toBe(FULL_TEXT);
+    expect(turns).toHaveBeenCalledWith("job:abc", 200);
   });
 
   it("collapses again on a second click", () => {
@@ -229,5 +243,41 @@ describe("scheduled result markdown (#4927)", () => {
       .toBe("Failing CI: Fix the build Retry tests");
     expect(serverResultPreview("**" + "x".repeat(121) + "**")).toBe("x".repeat(120) + "…");
     expect(serverResultPreview("**abcdef**", 3)).toBe("abc…");
+  });
+});
+
+describe("loadFullScheduledResult — the run's whole turn text, summary as fallback", () => {
+  it("returns the matching turn's full text, past the 500-char summary cut", async () => {
+    const turns = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({
+      turns: [turn("task-1", "another fire"), turn("task-2", FULL_TEXT)],
+    });
+    expect(FULL_TEXT.length).toBeGreaterThan(500);
+    await expect(loadFullScheduledResult("system:activity", "task-2", SUMMARY)).resolves.toBe(FULL_TEXT);
+    expect(turns).toHaveBeenCalledWith("system:activity", 200);
+  });
+
+  it.each([
+    ["", "task-2"],
+    ["job:abc", ""],
+    [undefined, undefined],
+  ])("returns the fallback without reading when an id is empty (%j, %j)", async (context, task) => {
+    const turns = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [turn("task-2", FULL_TEXT)] });
+    await expect(loadFullScheduledResult(context, task, SUMMARY)).resolves.toBe(SUMMARY);
+    expect(turns).not.toHaveBeenCalled();
+  });
+
+  it("returns the fallback when the read rejects", async () => {
+    vi.spyOn(api, "chatSessionTurns").mockRejectedValue(new Error("403 forbidden"));
+    await expect(loadFullScheduledResult("job:abc", "task-2", SUMMARY)).resolves.toBe(SUMMARY);
+  });
+
+  it("returns the fallback when no turn matches, or the match has no text", async () => {
+    const turns = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [turn("task-1", FULL_TEXT)] });
+    await expect(loadFullScheduledResult("job:abc", "task-2", SUMMARY)).resolves.toBe(SUMMARY);
+    turns.mockResolvedValue({ turns: [turn("task-2", "  ")] });
+    await expect(loadFullScheduledResult("job:abc", "task-2", SUMMARY)).resolves.toBe(SUMMARY);
+    // A degraded read (older server / store not ready) carries no usable rows.
+    turns.mockResolvedValue({ turns: [], reason: "task store not initialized" });
+    await expect(loadFullScheduledResult("job:abc", "task-2", SUMMARY)).resolves.toBe(SUMMARY);
   });
 });
