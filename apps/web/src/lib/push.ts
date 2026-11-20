@@ -6,7 +6,19 @@ import { deviceToken } from "./credentials";
 import { readKey, writeKey } from "./storage";
 
 export type PushState = "unsupported" | "denied" | "not enrolled" | "enrolled";
-type Status = { public_key: string; version: number; binding: { vapid_version: number } | null; renew: string | null };
+type Status = {
+  public_key: string;
+  version: number;
+  binding: { vapid_version: number; generation: number; created_at: number; renewed_at: number } | null;
+  renew: "vapid_key" | "handoff" | "idle" | null;
+};
+
+export class PushError extends Error {
+  constructor(public readonly status: number, public readonly code: string | null) {
+    super(`Push enrollment: HTTP ${status}`);
+    this.name = "PushError";
+  }
+}
 const DISABLED = "protoagent.pushDisabled";
 
 function supported(): boolean {
@@ -37,8 +49,16 @@ async function call(method: string, token: string, body?: unknown): Promise<Stat
     cache: "no-store",
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) throw new Error(`Push enrollment: HTTP ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new PushError(res.status, typeof body?.error === "string" ? body.error : null);
+  }
   return res.json();
+}
+
+/** Read this device's server status, serialized with subscription changes. */
+export function pushStatus(): Promise<Status> {
+  return exclusive(() => call("GET", deviceToken()));
 }
 
 function applicationKey(key: string): Uint8Array<ArrayBuffer> {
