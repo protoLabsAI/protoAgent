@@ -166,6 +166,61 @@ async def test_route_takes_a_notice_only_from_the_fleet_token(box):
         await loops._stop_push_delivery()
 
 
+# ── the hub's push policy (#5648) ────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def default_policy(box, monkeypatch):
+    """The hub's live config as shipped: ``push.all_notices`` off, no quiet hours (so a
+    missing ledger row is the push policy's doing, not a hold)."""
+    config = SimpleNamespace(push_all_notices=False, quiet_hours_enabled=False)
+    monkeypatch.setattr("graph.plugins.host.HOST.config", lambda: config)
+    return config
+
+
+async def relay(http, **over):
+    return await http.post("/api/fleet/notices", json=notice_body(**over), headers={"Authorization": f"Bearer {TOKEN}"})
+
+
+async def test_a_relayed_routine_notice_is_taken_but_never_reaches_the_push_ledger(default_policy):
+    transport = loops._start_push_delivery(Provider())
+    try:
+        async with client() as http:
+            taken = await relay(http, notice_id="job-result-1", kind="review", importance="normal")
+        # 2xx, so the member does not retry a notice the hub's policy keeps off push.
+        assert taken.status_code == 200 and taken.json() == {"ok": True, "queued": True}
+        assert rows(transport) == []
+        assert transport.provider.calls == []
+        # The hub still knows who raised it.
+        assert transport.origin_of("job-result-1") == MEMBER
+    finally:
+        await loops._stop_push_delivery()
+
+
+async def test_a_relayed_question_reaches_the_push_ledger_at_normal_importance(default_policy):
+    transport = loops._start_push_delivery(Provider())
+    try:
+        async with client() as http:
+            taken = await relay(http, notice_id="decision-dec-2", kind="question", importance="normal")
+        assert taken.status_code == 200 and taken.json() == {"ok": True, "queued": True}
+        await settle(lambda: rows(transport) == [("decision-dec-2", "question", "normal", "accepted")])
+        assert transport.origin_of("decision-dec-2") == MEMBER
+    finally:
+        await loops._stop_push_delivery()
+
+
+async def test_all_notices_on_sends_a_relayed_routine_notice_to_the_push_ledger(default_policy):
+    default_policy.push_all_notices = True
+    transport = loops._start_push_delivery(Provider())
+    try:
+        async with client() as http:
+            taken = await relay(http, notice_id="job-result-2", kind="review", importance="normal")
+        assert taken.status_code == 200 and taken.json() == {"ok": True, "queued": True}
+        await settle(lambda: rows(transport) == [("job-result-2", "review", "normal", "accepted")])
+    finally:
+        await loops._stop_push_delivery()
+
+
 # ── the hub's quiet hours (#5648) ────────────────────────────────────────────────────
 
 
