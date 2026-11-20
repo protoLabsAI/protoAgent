@@ -2,9 +2,15 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { chatStore } from "../chat/chat-store";
+import { openDeepLink, snapshotForTest } from "../chat/conversations-store";
+import { HomeAlertCard } from "../chat/HomeAlertCard";
+import { homeQueryKey } from "../chat/homeTab";
 import { agentHref } from "../lib/api/routing";
+import { queryClient } from "../lib/queryClient";
+import type { ChatMessage } from "../lib/types";
 import { useUI } from "../state/uiStore";
-import { NoticeClickWatch, openNotice, takeClickedNotice, takeNoticeFromUrl } from "./NoticeClickWatch";
+import { NoticeClickWatch, openClickedNotice, openNotice, takeClickedNotice, takeNoticeFromUrl } from "./NoticeClickWatch";
 
 const openWorkGroup = vi.hoisted(() => vi.fn());
 vi.mock("../chat/ChatStatusRail", () => ({ openWorkGroup }));
@@ -13,7 +19,11 @@ let root: Root;
 let node: HTMLDivElement;
 let listeners: Array<(event: MessageEvent) => void>;
 let origin: string | null;
-const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ ok: true, agent: origin })));
+// What `GET /api/home/entries` answers; null is a console with Home off (404).
+let homeRead: unknown | null;
+const fetchMock = vi.fn(async (url: string) => String(url).includes("/api/home/entries")
+  ? new Response(JSON.stringify(homeRead ?? { detail: "Not Found" }), { status: homeRead ? 200 : 404 })
+  : new Response(JSON.stringify({ ok: true, agent: origin })));
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 const nextLook = () => act(async () => { await new Promise((r) => setTimeout(r, 500)); });
 
@@ -21,6 +31,8 @@ beforeEach(() => {
   openWorkGroup.mockClear();
   fetchMock.mockClear();
   origin = null;
+  homeRead = null;
+  queryClient.removeQueries({ queryKey: homeQueryKey() });
   vi.stubGlobal("fetch", fetchMock);
   listeners = [];
   vi.stubGlobal("navigator", { serviceWorker: {
@@ -203,4 +215,130 @@ it("a launch with no tap leaves no log", async () => {
   await act(async () => { window.dispatchEvent(new Event("focus")); });
   await nextLook();
   expect(JSON.parse(localStorage.getItem("protoagent.noticeTapLog") || "[]")).toEqual([]);
+});
+
+// ── the notice's entry in Home (#5545) ────────────────────────────────────────────────
+const scrolled = vi.fn();
+let homeCount = 0;
+
+function homeEntry(noticeId: string, source = "fleet-health"): ChatMessage {
+  return {
+    id: `home-entry-${noticeId}`, role: "user", status: "done", createdAt: 1_000,
+    content: `[Home entry: notify]\nprotoEngineer stopped\n\nIt exited with code 1.`,
+    home: { kind: source === "decision" ? "question" : "notify", importance: "high", source, notice_id: noticeId },
+  };
+}
+
+/** A console with Home on: its tab registered, holding `entries`, and its transcript on screen. */
+async function homeWith(entries: ChatMessage[]): Promise<string> {
+  const homeId = `home-${++homeCount}`;
+  queryClient.setQueryData(homeQueryKey(), { session_id: homeId, last_read_at: null });
+  chatStore.ensureSession(homeId, "Home");
+  chatStore.updateMessages(homeId, entries);
+  Element.prototype.scrollIntoView = function (this: Element) { scrolled((this as HTMLElement).dataset.homeNotice); };
+  scrolled.mockClear();
+  await act(async () => root.render(
+    <>
+      <NoticeClickWatch go={go} />
+      <div id={`pl-conv-${homeId}`}>
+        <div className="pl-convo-scroll"><HomeTranscript homeId={homeId} /></div>
+      </div>
+    </>,
+  ));
+  await flush();
+  return homeId;
+}
+
+/** Home's cards, read from the store at click time like the real transcript. */
+function HomeTranscript({ homeId }: { homeId: string }) {
+  const messages = chatStore.getSnapshot().sessions.find((session) => session.id === homeId)?.messages ?? [];
+  return <>{messages.map((message) => message.home ? <HomeAlertCard key={message.id} message={message} home={message.home} /> : null)}</>;
+}
+
+const go = vi.fn();
+const tap = (id: string, route = `/app/?notice=${id}`) =>
+  listeners.forEach((fn) => fn({ data: { type: "protoagent:notice-click", v: 1, id, route } } as MessageEvent));
+const settled = async () => { await flush(); await flush(); await act(async () => { await new Promise((r) => setTimeout(r, 150)); }); };
+
+it("a tap whose id matches a Home entry selects Home and scrolls to that entry", async () => {
+  const homeId = await homeWith([homeEntry("ntc_other"), homeEntry("ntc_7Qm2x")]);
+  const before = chatStore.getSnapshot().currentSessionId;
+  expect(before).not.toBe(homeId);
+  useUI.getState().setSurface("work");
+  useUI.getState().openGlobalSettings("devices");
+  openDeepLink("ctx-1"); // the read-only Conversations pane would hide the chat
+  tap("ntc_7Qm2x");
+  await settled();
+  expect(chatStore.getSnapshot().currentSessionId).toBe(homeId);
+  expect(useUI.getState().surface).toBe("chat");
+  expect(useUI.getState().mobileActive).toBe("chat");
+  expect(useUI.getState().globalSettingsOpen).toBe(false);
+  expect(snapshotForTest().stage).toBe("chat");
+  expect(scrolled).toHaveBeenCalledWith("ntc_7Qm2x");
+  expect(scrolled).not.toHaveBeenCalledWith("ntc_other");
+  expect(fetchMock).not.toHaveBeenCalled(); // the transcript already showed it
+  expect(go).not.toHaveBeenCalled();
+  if (before) chatStore.switchSession(before);
+});
+
+it("a decision's tap lands on its Home entry, not straight on the answer form", async () => {
+  const homeId = await homeWith([homeEntry("decision-dec-21", "decision")]);
+  tap("decision-dec-21");
+  await settled();
+  expect(chatStore.getSnapshot().currentSessionId).toBe(homeId);
+  expect(scrolled).toHaveBeenCalledWith("decision-dec-21");
+  expect(openWorkGroup).not.toHaveBeenCalled();
+});
+
+it("reads Home's entries when the transcript doesn't show the tapped one yet", async () => {
+  const homeId = await homeWith([]);
+  homeRead = { session_id: homeId, entries: [{
+    id: "home-entry-ntc_new", content: "[Home entry: notify]\nDisk is almost full",
+    additional_kwargs: { protoagent_home_entry: { kind: "notify", importance: "normal", source: "watch", notice_id: "ntc_new" } },
+  }] };
+  expect(await openClickedNotice("ntc_new", "/app/?notice=ntc_new", go)).toBe(true);
+  expect(chatStore.getSnapshot().currentSessionId).toBe(homeId);
+  const merged = chatStore.getSnapshot().sessions.find((session) => session.id === homeId)!.messages;
+  expect(merged.map((message) => message.home?.notice_id)).toEqual(["ntc_new"]);
+  await act(async () => root.render(
+    <div id={`pl-conv-${homeId}`}><div className="pl-convo-scroll"><HomeTranscript homeId={homeId} /></div></div>,
+  ));
+  await settled();
+  expect(scrolled).toHaveBeenCalledWith("ntc_new"); // the card rendered after Home was selected
+});
+
+it("an unknown id navigates to the message's route", async () => {
+  const homeId = await homeWith([homeEntry("ntc_other")]);
+  homeRead = { session_id: homeId, entries: [] };
+  go.mockClear();
+  const before = chatStore.getSnapshot().currentSessionId;
+  tap("ntc_unknown", "/app/agent/protoengineer-ba4c/?notice=ntc_unknown");
+  await settled();
+  expect(go).toHaveBeenCalledExactlyOnceWith("/app/agent/protoengineer-ba4c/?notice=ntc_unknown");
+  expect(chatStore.getSnapshot().currentSessionId).toBe(before);
+  expect(scrolled).not.toHaveBeenCalled();
+});
+
+it("an unknown id whose route is this page stays put instead of reloading the console", async () => {
+  await homeWith([]);
+  go.mockClear();
+  tap("ntc_unknown"); // route: /app/?notice=ntc_unknown, and the console is on /app/
+  await settled();
+  expect(go).not.toHaveBeenCalled();
+  expect(openWorkGroup).not.toHaveBeenCalled();
+});
+
+it.each([
+  "https://elsewhere.example/app/", "/app/../etc/", "/app/agent/x/?notice=someone-else", "/app/agent/x/?next=/y", "/app/agent/x/#frag", 7,
+])("never follows %j", async (route) => {
+  go.mockClear();
+  expect(await openClickedNotice("ntc_unknown", route, go)).toBe(false);
+  expect(go).not.toHaveBeenCalled();
+});
+
+it("with Home off a decision's tap opens the answer form without asking for Home's entries", async () => {
+  queryClient.setQueryData(homeQueryKey(), null); // ChatSurface's loaded "404: Home is off"
+  expect(await openClickedNotice("decision-dec-30", "/app/?notice=decision-dec-30", go)).toBe(true);
+  expect(fetchMock.mock.calls.map((call) => String(call[0])).some((url) => url.includes("/api/home"))).toBe(false);
+  expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-30");
 });

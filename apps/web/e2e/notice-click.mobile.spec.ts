@@ -75,3 +75,46 @@ test("mobile: the console comes to the front with no URL and no message, and sti
   await expectAnswerForm(page);
   expect(await page.evaluate(() => caches.keys())).toEqual([]); // read once, nothing left behind
 });
+
+// ── the notice's entry in Home (#5545) ────────────────────────────────────────────────
+const HOME_ID = "home-e2e";
+const homeEntries = Array.from({ length: 30 }, (_, n) => ({
+  id: `home-entry-ntc_${n}`,
+  content: `[Home entry: notify]\nNotice number ${n}\n\nSomething happened that is worth a few lines of text.`,
+  additional_kwargs: {
+    protoagent_home_entry: { kind: "notify", importance: n === 2 ? "high" : "normal", source: "watch", notice_id: `ntc_${n}` },
+    protoagent_sent_at: new Date(Date.UTC(2026, 10, 19, 14, n)).toISOString(),
+  },
+}));
+
+async function seedHome(page: Page) {
+  await seed(page);
+  const state = { session_id: HOME_ID, last_read_at: null };
+  await page.route(/\/api\/home$/, (route) => route.fulfill({ json: state }));
+  await page.route(/\/api\/home\/read$/, (route) => route.fulfill({ json: state }));
+  await page.route(/\/api\/home\/entries$/, (route) => route.fulfill({ json: { session_id: HOME_ID, entries: homeEntries } }));
+}
+
+test("mobile: a tap on a notice Home holds lands on that entry in Home", async ({ page }) => {
+  await seedHome(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Settings sections/ })).toBeVisible();
+  await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new MessageEvent("message", {
+    data: { type: "protoagent:notice-click", v: 1, id: "ntc_2", route: "/app/?notice=ntc_2" },
+  })));
+  await expect(page.getByRole("button", { name: /Settings sections/ })).toBeHidden();
+  // An early entry: the transcript opens at its newest message, so this one starts off screen.
+  const card = page.locator('[data-home-notice="ntc_2"]');
+  await expect(card).toBeInViewport();
+  await expect(card).toContainText("Notice number 2");
+  await expect(page.locator('[data-home-notice="ntc_29"]')).not.toBeInViewport();
+});
+
+test("mobile: a console opened on a Home notice's link lands on that entry", async ({ page }) => {
+  await seedHome(page);
+  await page.goto("/app/?notice=ntc_2", { waitUntil: "load" });
+  await expect(page.locator('[data-home-notice="ntc_2"]')).toBeInViewport();
+  expect(new URL(page.url()).searchParams.has("notice")).toBe(false);
+});
