@@ -1726,6 +1726,12 @@ class LangGraphConfig:
     # blank → in-memory (history cleared on restart). Bound at graph-compile
     # time (see graph/checkpointer.py); changing the path needs a restart.
     checkpoint_db_path: str = "/sandbox/checkpoints.db"
+    # Owner notice delivery window (ADR 0135 D8).
+    quiet_hours_enabled: bool = False
+    quiet_hours_start: str = "22:00"
+    quiet_hours_end: str = "07:00"
+    quiet_hours_timezone: str = "UTC"
+
     # Instance-wide unattended admission budget (ADR 0135 D12), per UTC day.
     spend_cap_enabled: bool = False
     spend_cap_daily_cost_hard_limit: float = 10.0
@@ -2747,6 +2753,10 @@ class LangGraphConfig:
             knowledge_backend=knowledge.get("backend", cls.knowledge_backend),
             knowledge_embedder=knowledge.get("embedder", cls.knowledge_embedder),
             checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
+            quiet_hours_enabled=data.get("quiet_hours", {}).get("enabled", cls.quiet_hours_enabled),
+            quiet_hours_start=data.get("quiet_hours", {}).get("start", cls.quiet_hours_start),
+            quiet_hours_end=data.get("quiet_hours", {}).get("end", cls.quiet_hours_end),
+            quiet_hours_timezone=data.get("quiet_hours", {}).get("timezone", cls.quiet_hours_timezone),
             spend_cap_enabled=data.get("spend_cap", {}).get("enabled", cls.spend_cap_enabled),
             spend_cap_daily_cost_hard_limit=float(data.get("spend_cap", {}).get(
                 "daily_cost_hard_limit", cls.spend_cap_daily_cost_hard_limit)),

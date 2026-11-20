@@ -696,6 +696,16 @@ def save_yaml_doc(doc: Any, path: Path | None = None) -> None:
     resolved = Path(path) if path is not None else config_yaml_path()
     buf = io.StringIO()
     if _HAS_RUAMEL:
+        # PyYAML's YAML 1.1 reader treats unquoted 22:00 as a base-60 integer,
+        # while ruamel's YAML 1.2 writer considers it a plain string.
+        if isinstance(doc, dict) and isinstance(doc.get("quiet_hours"), dict):
+            from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+
+            doc = copy.deepcopy(doc)
+            for key in ("start", "end"):
+                value = doc["quiet_hours"].get(key)
+                if isinstance(value, str):
+                    doc["quiet_hours"][key] = DoubleQuotedScalarString(value)
         _rt_yaml().dump(doc, buf)
     else:
         log.warning(

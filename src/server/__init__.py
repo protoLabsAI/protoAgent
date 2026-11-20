@@ -986,6 +986,10 @@ def _main():
         # surface would start twice (here AND in reconcile). ADR 0018.
         STATE.plugin_surfaces_started = True
 
+        from graph.notice_hold import DELIVERY
+
+        DELIVERY.start()
+
         # Priority-now inbox backlog recovery (#3351): run one bounded recovery pass
         # only after the accepted self-A2A route is mounted and startup has started
         # plugin surfaces. This owns pre-existing backlog recovery; newly posted now
@@ -1185,6 +1189,9 @@ def _main():
         if STATE.a2a_reaper_task is not None:
             STATE.a2a_reaper_task.cancel()
         try:
+            from graph.notice_hold import DELIVERY
+
+            DELIVERY.stop()
             await _stop_push_delivery()
         except Exception:
             log.exception("[push] notice adapter shutdown failed")
