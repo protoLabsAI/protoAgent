@@ -1,0 +1,1 @@
+- **Push status in paired devices.** Show notification availability, renewal reasons and the latest push-service outcome on each device row, with neutral device badges and wrapping mobile rows. Refs #5539.

@@ -2,7 +2,7 @@ import { Spinner } from "@protolabsai/ui/data";
 import { Input } from "@protolabsai/ui/forms";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { ArrowRightLeft, Pencil, ShieldCheck, ShieldMinus, Smartphone, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Bell, CircleCheck, TriangleAlert, Pencil, ShieldCheck, ShieldMinus, Smartphone, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { StatusPill } from "../app/StatusPill";
@@ -52,12 +52,61 @@ export function expiryLabel(
   return `expires in ${days} days if unused`;
 }
 
+/** Push timestamps, like last-seen timestamps, are epoch seconds. Ties prefer outcomes. */
+export function pushLine(device: PairedDevice, now: number): {
+  tone: "neutral" | "success" | "warning"; text: string; detail?: string;
+} | null {
+  if (device.kind === "agent") return null;
+  if (device.push === undefined) return { tone: "neutral", text: "Not reported yet" };
+  const push = device.push;
+  if (!push) {
+    if (device.push_renew) {
+      const reasons = {
+        vapid_key: "This agent changed its notification key.",
+        handoff: "This phone moved to a new address, which needs its own notifications.",
+        idle: "This device went unused for too long.",
+      };
+      return { tone: "warning", text: "Renew needed", detail: reasons[device.push_renew] };
+    }
+    return { tone: "neutral", text: "Push off" };
+  }
+  const provider = ({ apple: "Apple", google: "Google", mozilla: "Mozilla" } as Record<string, string>)[push.provider] ?? push.provider;
+  const prefix = `Push on · ${provider}`;
+  const attempt = push.last_attempt_at;
+  if (attempt == null) return { tone: "neutral", text: prefix };
+  const accepted = push.last_accepted_at;
+  const error = push.last_error_at;
+  const time = (stamp: number) => {
+    const date = new Date(stamp * 1000);
+    return date.toDateString() === new Date(now * 1000).toDateString()
+      ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : date.toLocaleDateString();
+  };
+  if (accepted != null && accepted >= attempt && (error == null || accepted >= error)) {
+    return { tone: "success", text: `${prefix} accepted the last alert at ${time(accepted)}` };
+  }
+  if (error != null && error >= attempt && (accepted == null || error >= accepted)) {
+    const errors: Record<string, string> = {
+      timeout: "The push service took too long to answer.",
+      network: "The alert couldn't reach the push service.",
+      service_retry: "The push service was busy or had a problem.",
+      rejected: "The push service refused this alert. It won't be sent again.",
+      retries_exhausted: "protoAgent stopped trying before the push service took the alert.",
+    };
+    return {
+      tone: "warning", text: `${prefix} didn't accept the last alert`,
+      detail: errors[push.last_error ?? ""] ?? `Error code: ${push.last_error ?? "unknown"}`,
+    };
+  }
+  return { tone: "neutral", text: `Push on · last alert sent at ${time(attempt)}` };
+}
+
 /** The scope badge for a row (ADR 0121 D4), or null when there is none to show: an agent is
  *  always full access (its "Agent" badge says enough), and a pre-ADR-0121 server sends no
  *  scope. */
-export function scopeBadge(d: Pick<PairedDevice, "kind" | "scope">): { label: string; status: "warning" | "neutral" } | null {
+export function scopeBadge(d: Pick<PairedDevice, "kind" | "scope">): { label: string; status: "neutral" } | null {
   if (d.kind === "agent" || !d.scope) return null;
-  return d.scope === "device" ? { label: "Limited", status: "warning" } : { label: "Full access", status: "neutral" };
+  return d.scope === "device" ? { label: "Limited", status: "neutral" } : { label: "Full access", status: "neutral" };
 }
 
 /** The scope action a row offers (Limit a full-access phone, Promote a limited one), or null.
@@ -244,6 +293,8 @@ export function DeviceList({
         const action = scopeAction(d, callerLimited);
         const manage = canManage(d.id, thisId, callerLimited);
         const expiry = expiryLabel(d);
+        const push = pushLine(d, Date.now() / 1000);
+        const PushIcon = push?.tone === "warning" ? TriangleAlert : push?.tone === "success" ? CircleCheck : Bell;
         return (
           <div className={`subagent-row${self ? " devices-row--self" : ""}`} key={d.id} data-testid={`device-row-${d.id}`}>
             <div className="devices-row-main">
@@ -288,16 +339,22 @@ export function DeviceList({
                   {d.name}
                   {/* Which entries are other agents (ADR 0113 D3) — the kind is fixed by the
                       code the client claimed, so this can't be spoofed by the claimer. */}
-                  <Badge status={d.kind === "agent" ? "info" : "neutral"}>{d.kind === "agent" ? "Agent" : "Device"}</Badge>
+                  <Badge>{d.kind === "agent" ? "Agent" : "Device"}</Badge>
                   {badge ? (
-                    <Badge status={badge.status} data-testid={`device-scope-${d.id}`}>
+                    <Badge data-testid={`device-scope-${d.id}`}>
                       {badge.label}
                     </Badge>
                   ) : null}
                   {d.expired ? <Badge status="error">Expired</Badge> : null}
-                  {self ? <Badge status="success">This device</Badge> : null}
+                  {self ? <Badge>This device</Badge> : null}
                   {isActive(d) ? <StatusPill label="active" tone="success" /> : null}
                 </strong>
+              )}
+              {push && (
+                <div className="devices-push-line">
+                  <PushIcon size={14} aria-hidden="true" />
+                  <span>{push.text}{push.detail && <span className="devices-push-detail">{push.detail}</span>}</span>
+                </div>
               )}
               <span>
                 {lastSeenLabel(d)}
@@ -442,6 +499,7 @@ export function DeviceList({
           </div>
         );
       })}
+      <p className="devices-push-note">Accepted means the push service took the alert. It doesn't mean you saw it.</p>
     </div>
   );
 }
