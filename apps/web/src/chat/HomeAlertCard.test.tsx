@@ -33,7 +33,7 @@ const decision: HomeEntry = { kind: "question", importance: "high", source: "dec
 const DECISION_TEXT = `${HEAD("question", "decision", "high")}\nShip the release tonight?`;
 
 const article = () => container.querySelector("article")!;
-const sourceLink = () => container.querySelector<HTMLAnchorElement>("a.home-alert-source");
+const sourceLink = () => container.querySelector<HTMLAnchorElement>("a.pl-link");
 const button = (label: string) => [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === label);
 const click = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })); });
 
@@ -70,7 +70,7 @@ describe("HomeAlertCard", () => {
 
   it("shows the body without the model's reference head or the link line", () => {
     render(fleetDown, FLEET_TEXT);
-    expect(container.querySelector(".home-alert-body")!.textContent).toBe("Open the console to check its logs.");
+    expect(container.querySelector(".pl-home-alert-body")!.textContent).toBe("Open the console to check its logs.");
     expect(container.textContent).not.toContain("[Home entry");
     expect(container.textContent).not.toContain("https://console.example");
   });
@@ -78,7 +78,7 @@ describe("HomeAlertCard", () => {
   it("is never the operator's bubble, though the entry is stored as a human message", () => {
     render(fleetDown, FLEET_TEXT);
     expect(container.querySelector(".pl-message--user")).toBeNull();
-    expect(container.querySelector(".pl-message--system.chat-report")).not.toBeNull();
+    expect(container.querySelector(".pl-message--system.pl-home-alert")).not.toBeNull();
   });
 
   it('shows "Urgent" only for high importance, with the warning tone on the icon', () => {
@@ -87,13 +87,13 @@ describe("HomeAlertCard", () => {
     expect(badge.textContent).toBe("Urgent");
     expect(badge.className).toBe("pl-badge"); // neutral: the icon carries the tone, not the badge
     expect(container.querySelector("h3")!.nextElementSibling).toBe(badge);
-    expect(container.querySelector("svg")!.classList.contains("home-alert-icon--urgent")).toBe(true);
+    expect(container.querySelector("svg")!.classList.contains("pl-home-alert-icon--urgent")).toBe(true);
 
     for (const importance of ["normal", "low"]) {
       render({ ...fleetDown, importance }, FLEET_TEXT);
       expect(container.querySelector(".pl-badge")).toBeNull();
       expect(container.textContent).not.toContain("Urgent");
-      expect(container.querySelector("svg")!.classList.contains("home-alert-icon--urgent")).toBe(false);
+      expect(container.querySelector("svg")!.classList.contains("pl-home-alert-icon--urgent")).toBe(false);
     }
   });
 

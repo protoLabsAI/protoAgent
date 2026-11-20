@@ -80,6 +80,43 @@ def register_home_routes(
         await _ensure_listed(state["session_id"])
         return JSONResponse(state, headers=_NO_STORE)
 
+    @app.get("/api/home/entries")
+    async def _home_entries():
+        """Bounded reference entries from Home's checkpoint, never synthetic turns."""
+        from graph.compaction_engine import HOME_ENTRY_KWARG, SENT_AT_KWARG
+        from graph.message_blocks import text_of
+        from graph.thread_ids import resolve_thread_id
+        from runtime.home_session import home_state
+        from runtime.state import STATE
+
+        _require_flag()
+        state = await _read(home_state)
+        await _ensure_listed(state["session_id"])
+        if STATE.graph is None:
+            raise HTTPException(status_code=503, detail="home graph is unavailable")
+        try:
+            snapshot = await STATE.graph.aget_state({
+                "configurable": {"thread_id": resolve_thread_id(None, state["session_id"])},
+            })
+            entries = []
+            for message in (snapshot.values or {}).get("messages", []):
+                kwargs = getattr(message, "additional_kwargs", {}) or {}
+                metadata = kwargs.get(HOME_ENTRY_KWARG)
+                if not isinstance(metadata, dict) or not metadata.get("kind"):
+                    continue
+                entries.append({
+                    "id": message.id,
+                    "content": text_of(message),
+                    "additional_kwargs": {
+                        HOME_ENTRY_KWARG: metadata,
+                        SENT_AT_KWARG: kwargs.get(SENT_AT_KWARG),
+                    },
+                })
+        except Exception as exc:  # noqa: BLE001 — preserve the client's last good copy
+            log.warning("[home] entries read failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="home entries are unavailable") from exc
+        return JSONResponse({"session_id": state["session_id"], "entries": entries[-200:]}, headers=_NO_STORE)
+
     @app.post("/api/home/read")
     async def _home_read():  # noqa: ANN202
         """Mark Home read now. Returns the new ``{session_id, last_read_at}``."""

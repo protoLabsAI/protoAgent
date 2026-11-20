@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, type DurableChatSession, type DurableChatTurn } from "../lib/api";
 import {
@@ -69,6 +69,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+beforeEach(() => { vi.spyOn(api, "homeEntries").mockRejectedValue(new Error("Home disabled")); });
 afterEach(() => vi.restoreAllMocks());
 
 describe("server timestamps are UTC, zoned or not (#4145)", () => {
@@ -2167,4 +2168,30 @@ describe("decision identity in durable history", () => {
     expect(assistant.paused).toBe(state === "input-required" ? true : undefined);
     expect(messages.filter((message) => message.decisionId)).toHaveLength(1);
   });
+});
+
+
+it("hydrates checkpoint-only Home notices and preserves them across refresh failures", async () => {
+  const id = "chat-home-checkpoint";
+  const entry = {
+    id: "home-entry-notice-1", content: "[Home entry: notify]\nFleet member sol stopped",
+    additional_kwargs: {
+      protoagent_home_entry: { kind: "notify", importance: "high", source: "fleet-health", notice_id: "notice-1" },
+      protoagent_sent_at: "2026-11-19T12:00:00Z",
+    },
+  };
+  vi.mocked(api.homeEntries).mockResolvedValue({ session_id: id, entries: [entry] });
+  vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [{ ...summary(id), title: "Home", turn_count: 0 }] });
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  await hydrateDurableChatSessions();
+  const messages = () => chatStore.getSnapshot().sessions.find((s) => s.id === id)!.messages;
+  expect(messages()).toEqual([expect.objectContaining({
+    id: entry.id, content: entry.content, home: entry.additional_kwargs.protoagent_home_entry,
+    createdAt: Date.parse(entry.additional_kwargs.protoagent_sent_at),
+  })]);
+  await hydrateDurableChatSessions();
+  expect(messages()).toHaveLength(1);
+  vi.mocked(api.homeEntries).mockRejectedValue(new Error("offline"));
+  await hydrateDurableChatSessions({ full: true });
+  expect(messages()).toHaveLength(1);
 });

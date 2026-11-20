@@ -405,7 +405,7 @@ describe("ChatMessageView — Home entries", () => {
       id: "home-entry-n1", role: "user", content: TEXT, status: "done",
       home: { kind: "notify", importance: "high", source: "fleet-health", notice_id: "n1" },
     });
-    const card = container.querySelector("article.home-alert-card")!;
+    const card = container.querySelector("article.pl-home-alert-card")!;
     expect(card).not.toBeNull();
     expect(card.querySelector("h3")!.textContent).toBe("Fleet member sol stopped");
     expect(container.querySelector(".pl-message--user")).toBeNull();
@@ -414,7 +414,7 @@ describe("ChatMessageView — Home entries", () => {
 
   it("leaves the same message a plain bubble when it carries no Home metadata", () => {
     render({ id: "u1", role: "user", content: "Fleet member sol stopped", status: "done" });
-    expect(container.querySelector("article.home-alert-card")).toBeNull();
+    expect(container.querySelector("article.pl-home-alert-card")).toBeNull();
     expect(container.querySelector(".pl-message--user")).not.toBeNull();
   });
 });

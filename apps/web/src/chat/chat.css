@@ -149,11 +149,13 @@
    load order; the .chat-session-slot-anchored variant (0-4-0) also outranks our own
    base system-message rule further down (0-3-0), and the bare variant covers a chip
    rendered outside the chat slot (the shared renderer also serves the ⌘K palette chat). */
-.chat-report.pl-message--system {
+.chat-report.pl-message--system,
+.pl-home-alert.pl-message--system {
   justify-content: stretch;
 }
 .chat-session-slot .pl-message--system.chat-report .pl-message__content,
-.pl-message--system.chat-report .pl-message__content {
+.pl-message--system.chat-report .pl-message__content,
+.pl-message--system.pl-home-alert.pl-home-alert .pl-message__content {
   display: block;
   background: transparent;
   border: none;
@@ -195,7 +197,8 @@
    chat that created it. A full card (not the one-line report chip): calendar/clock head +
    the shared ScheduledResultBody (summary, fire time, "View full result"). Recurring re-fires
    render the expandable .chat-scheduled-chip below, which expands into the SAME body. */
-.chat-scheduled-card {
+.chat-scheduled-card,
+.pl-home-alert-card {
   display: flex;
   flex-direction: column;
   gap: var(--pl-space-2);
@@ -249,20 +252,20 @@
 /* Home alert card (#5545) — a brief, an alert or a decision pointer in Home. It IS the raised
    .chat-scheduled-card above (no colored stripe); only the head row, the body and the action
    row are laid out here. Urgency is the icon tone plus a neutral "Urgent" badge. */
-.home-alert-head {
+.pl-home-alert-head {
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
   min-width: 0;
 }
-.home-alert-icon {
+.pl-home-alert-icon {
   flex: 0 0 auto;
   color: var(--pl-color-fg-muted);
 }
-.home-alert-icon--urgent {
+.pl-home-alert-icon--urgent {
   color: var(--pl-color-status-warning);
 }
-.home-alert-title {
+.pl-home-alert-title {
   min-width: 0;
   flex: 1 1 auto;
   margin: 0;
@@ -272,16 +275,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.home-alert-head > .pl-badge {
+.pl-home-alert-head > .pl-badge {
   flex: 0 0 auto;
 }
-.home-alert-body {
+.pl-home-alert-body {
   margin: 0;
   color: var(--pl-color-fg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.home-alert-actions {
+.pl-home-alert-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;

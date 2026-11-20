@@ -110,15 +110,15 @@ export function HomeAlertCard({ message, home }: { message: ChatMessage; home: H
   return (
     // Always the neutral system row: the entry is stored as a human message so the model
     // reads it as input, but it is not the operator's words and must not render as their bubble.
-    <Message role="system" className="chat-report home-alert">
+    <Message role="system" className="pl-home-alert">
       <article
-        className="chat-scheduled-card home-alert-card"
+        className="pl-home-alert-card"
         data-home-kind={home.kind}
         data-notice-id={home.notice_id || undefined}
       >
-        <div className="home-alert-head">
-          <Icon size={14} aria-hidden className={`home-alert-icon${urgent ? " home-alert-icon--urgent" : ""}`} />
-          <h3 className="home-alert-title" title={heading}>
+        <div className="pl-home-alert-head">
+          <Icon size={14} aria-hidden className={`pl-home-alert-icon${urgent ? " pl-home-alert-icon--urgent" : ""}`} />
+          <h3 className="pl-home-alert-title" title={heading}>
             {heading}
           </h3>
           {urgent ? <Badge>Urgent</Badge> : null}
@@ -128,11 +128,11 @@ export function HomeAlertCard({ message, home }: { message: ChatMessage; home: H
             </time>
           ) : null}
         </div>
-        {body ? <p className="home-alert-body">{body}</p> : null}
+        {body ? <p className="pl-home-alert-body">{body}</p> : null}
         {source || decision ? (
-          <div className="home-alert-actions">
+          <div className="pl-home-alert-actions">
             {source ? (
-              <a className="pl-link home-alert-source" href={source.href} onClick={onSource}>
+              <a className="pl-link" href={source.href} onClick={onSource}>
                 {source.label}
               </a>
             ) : null}

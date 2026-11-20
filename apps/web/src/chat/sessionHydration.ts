@@ -696,6 +696,8 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   // it, and a created event from the server reconciles any device that raced the push.
   void migrateLocalSessionsOnce();
   const startedEpochsAtIssue = serverTurnStartedEpochs();
+  // Checkpoint notices are not A2A turns: refresh even when turn counts are unchanged.
+  const home = await api.homeEntries().catch(() => null);
   let summaries: DurableChatSession[];
   let closedIds: string[] = [];
   // Whether the server's closed list is AUTHORITATIVE this read. The index OMITS `closed` (leaves
@@ -821,6 +823,29 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   markServerKnownSessions(summaries.map((summary) => summary.session_id));
   reconcilePendingListIntents({ summaries, closedIds, closedKnown });
   chatStore.syncServerSessionList({ summaries, closedIds, closedKnown, pending: pendingSessionListIntents() });
+  if (home) {
+    const session = chatStore.getSnapshot().sessions.find((item) => item.id === home.session_id);
+    if (session) {
+      const entries: ChatMessage[] = home.entries.map((entry) => ({
+        id: entry.id,
+        role: "user",
+        content: entry.content,
+        status: "done",
+        home: entry.additional_kwargs.protoagent_home_entry,
+        createdAt: recordedAt(entry.additional_kwargs.protoagent_sent_at ?? null),
+      }));
+      // Stable ids prevent duplicates. Keep older cached entries outside the bounded
+      // checkpoint tail and read the current store so live streaming work survives.
+      const byId = new Map(entries.map((entry) => [entry.id, entry]));
+      const messages = session.messages.map((message) => {
+        const entry = byId.get(message.id);
+        byId.delete(message.id);
+        return entry ?? message;
+      });
+      messages.push(...byId.values());
+      if (entries.length) chatStore.updateMessages(session.id, messages);
+    }
+  }
 }
 
 /** How often a visible console re-reads the session index while it stays open. */

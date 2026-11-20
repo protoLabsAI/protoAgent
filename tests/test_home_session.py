@@ -161,3 +161,40 @@ def test_session_listing_includes_home(monkeypatch, tmp_path):
     listing = client.get("/api/chat/sessions").json()
     assert sid in listing["closed"]
     assert sid not in [s["session_id"] for s in listing["sessions"]]
+
+
+def test_home_entries_exposes_only_bounded_checkpoint_notices(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from langchain_core.messages import HumanMessage
+
+    from graph.home_entries import _message
+    from graph.thread_ids import resolve_thread_id
+    from runtime.state import STATE
+
+    graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(values={
+        "messages": [HumanMessage(content="private operator text")] + [
+            _message("notify", "high", f"Alert {i}", "fleet-health", str(i), None)
+            for i in range(201)
+        ],
+    })))
+    monkeypatch.setattr(STATE, "graph", graph)
+    client = _client()
+    assert client.get("/api/home/entries").status_code == 404
+    monkeypatch.setenv(_FLAG_ENV, "1")
+    response = client.get("/api/home/entries")
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["entries"]) == 200
+    first = payload["entries"][0]
+    assert first["id"] == "home-entry-1"
+    assert first["additional_kwargs"]["protoagent_home_entry"] == {
+        "kind": "notify", "importance": "high", "source": "fleet-health", "notice_id": "1",
+    }
+    assert first["additional_kwargs"]["protoagent_sent_at"]
+    graph.aget_state.assert_awaited_once_with({
+        "configurable": {"thread_id": resolve_thread_id(None, payload["session_id"])},
+    })
+    graph.aget_state.side_effect = RuntimeError("checkpoint unavailable")
+    assert client.get("/api/home/entries").status_code == 503
