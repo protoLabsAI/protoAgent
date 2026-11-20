@@ -696,8 +696,11 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   // it, and a created event from the server reconciles any device that raced the push.
   void migrateLocalSessionsOnce();
   const startedEpochsAtIssue = serverTurnStartedEpochs();
-  // Checkpoint notices are not A2A turns: refresh even when turn counts are unchanged.
-  const home = await api.homeEntries().catch(() => null);
+  // Checkpoint notices are not A2A turns: refresh even when turn counts are unchanged. Issued
+  // alongside the index read and NEVER awaited by it: the route reads Home's whole checkpoint, so
+  // a slow or hung answer must not hold back the session list or the transcript refresh. The
+  // answer is merged whenever it lands, after this hydration added Home's session.
+  const homeRead = api.homeEntries().catch(() => null);
   let summaries: DurableChatSession[];
   let closedIds: string[] = [];
   // Whether the server's closed list is AUTHORITATIVE this read. The index OMITS `closed` (leaves
@@ -823,29 +826,52 @@ export async function hydrateDurableChatSessions(opts: { full?: boolean } = {}):
   markServerKnownSessions(summaries.map((summary) => summary.session_id));
   reconcilePendingListIntents({ summaries, closedIds, closedKnown });
   chatStore.syncServerSessionList({ summaries, closedIds, closedKnown, pending: pendingSessionListIntents() });
-  if (home) {
-    const session = chatStore.getSnapshot().sessions.find((item) => item.id === home.session_id);
-    if (session) {
-      const entries: ChatMessage[] = home.entries.map((entry) => ({
-        id: entry.id,
-        role: "user",
-        content: entry.content,
-        status: "done",
-        home: entry.additional_kwargs.protoagent_home_entry,
-        createdAt: recordedAt(entry.additional_kwargs.protoagent_sent_at ?? null),
-      }));
-      // Stable ids prevent duplicates. Keep older cached entries outside the bounded
-      // checkpoint tail and read the current store so live streaming work survives.
-      const byId = new Map(entries.map((entry) => [entry.id, entry]));
-      const messages = session.messages.map((message) => {
-        const entry = byId.get(message.id);
-        byId.delete(message.id);
-        return entry ?? message;
-      });
-      messages.push(...byId.values());
-      if (entries.length) chatStore.updateMessages(session.id, messages);
-    }
+  void homeRead.then(mergeHomeEntries).catch(() => {});
+}
+
+type HomeEntriesRead = Awaited<ReturnType<typeof api.homeEntries>>;
+
+/** Place Home entries the transcript does not hold yet by the time they were written, so a
+ *  notice lands between the turns around it instead of below a later one. A message with no
+ *  recorded time counts as written with the next timed message after it (a hydrated send sits
+ *  directly above its timed reply). An entry with no time, or newer than everything, goes last. */
+export function placeHomeEntries(messages: ChatMessage[], entries: ChatMessage[]): ChatMessage[] {
+  const out = [...messages];
+  const timed = entries.filter((entry) => entry.createdAt !== undefined);
+  timed.sort((left, right) => left.createdAt! - right.createdAt!);
+  for (const entry of timed) {
+    let at = out.findIndex((message) => message.createdAt !== undefined && message.createdAt > entry.createdAt!);
+    if (at === -1) at = out.length;
+    else while (at > 0 && out[at - 1].createdAt === undefined) at -= 1;
+    out.splice(at, 0, entry);
   }
+  out.push(...entries.filter((entry) => entry.createdAt === undefined));
+  return out;
+}
+
+/** Merge a Home-entries read into Home's transcript. Reads the store at merge time, so live
+ *  streaming work and anything hydrated while the read was out survive. */
+function mergeHomeEntries(home: HomeEntriesRead | null): void {
+  if (!home?.entries.length) return;
+  const session = chatStore.getSnapshot().sessions.find((item) => item.id === home.session_id);
+  if (!session) return;
+  const entries: ChatMessage[] = home.entries.map((entry) => ({
+    id: entry.id,
+    role: "user",
+    content: entry.content,
+    status: "done",
+    home: entry.additional_kwargs.protoagent_home_entry,
+    createdAt: recordedAt(entry.additional_kwargs.protoagent_sent_at ?? null),
+  }));
+  // Stable ids prevent duplicates: an entry the transcript already holds is refreshed in place.
+  // Older cached entries outside the bounded checkpoint tail are kept.
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const messages = session.messages.map((message) => {
+    const entry = byId.get(message.id);
+    byId.delete(message.id);
+    return entry ?? message;
+  });
+  chatStore.updateMessages(session.id, placeHomeEntries(messages, [...byId.values()]));
 }
 
 /** How often a visible console re-reads the session index while it stays open. */

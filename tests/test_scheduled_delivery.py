@@ -84,7 +84,8 @@ def test_payload_built_for_cron_with_origin_session(_sched):
     assert payload["activity_context"] == ACTIVITY_CONTEXT
 
 
-def test_no_delivery_without_origin_session(_sched):
+def test_no_delivery_without_origin_session(_sched, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "off")
     # r6: a schedule created outside a chat carries no origin_session → no delivery.
     _sched(_Job(origin_session=None))
     assert a2a._scheduled_delivery_payload(_Outcome()) is None
@@ -386,3 +387,54 @@ async def test_older_task_settlement_preserves_same_id_wait_chain(tmp_path, monk
         assert scheduler._claim_due_jobs(datetime.now(UTC) + timedelta(hours=2))[0].next_fire == future
     finally:
         await drain_handlers()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("origin", [None, "", "chat-42", ACTIVITY_CONTEXT, "job:other"])
+def test_home_destination_preserves_job_context(_sched, monkeypatch, enabled, origin):
+    from runtime.home_session import home_session_id
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on" if enabled else "off")
+    job = _Job(origin_session=origin)
+    _sched(job)
+    outcome = _Outcome(context_id="job:job-1")
+    payload = a2a._scheduled_delivery_payload(outcome)
+    expected = "chat-42" if origin == "chat-42" else home_session_id() if enabled and not origin else None
+    assert (payload["origin_session"] if payload else None) == expected
+    if payload:
+        assert payload["activity_context"] == "job:job-1"
+    assert outcome.context_id == "job:job-1"
+    assert job.origin_session == origin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled,origin,delivered", [(True, None, True), (True, "chat-42", False), (False, "chat-42", False)])
+async def test_home_receives_one_shot_after_three_idle_days(_sched, monkeypatch, enabled, origin, delivered):
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on" if enabled else "off")
+    _sched(_Job(origin_session=origin, schedule="2026-11-20T09:00:00Z"))
+    events = []
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda topic, data: events.append((topic, data)))
+    monkeypatch.setattr(a2a, "_notify_scheduled_card", lambda _: None)
+
+    async def stale(session_id):
+        now = datetime.now(UTC)
+        return a2a._is_recent(now - timedelta(days=3), now, 24 * 3600)
+
+    monkeypatch.setattr(a2a, "_session_recently_active", stale)
+    payload = a2a._scheduled_delivery_payload(_Outcome(context_id="job:job-1"))
+    assert await a2a._deliver_scheduled(payload) is delivered
+    assert len(events) == int(delivered)
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_home_lookup_failure_keeps_result_in_activity(_sched, monkeypatch, missing):
+    from runtime import home_session
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on")
+    _sched(None if missing else _Job(origin_session=None))
+
+    def unavailable():
+        raise OSError("unavailable")
+
+    monkeypatch.setattr(home_session, "home_session_id", unavailable)
+    assert a2a._scheduled_delivery_payload(_Outcome()) is None

@@ -168,3 +168,38 @@ def test_tool_docstrings_mention_no_update():
     watch_doc = tools["create_watch"].description
     assert "NO_UPDATE" in watch_doc
     assert "do NOT tell" in watch_doc  # warns against the sentinel; never instructs it
+
+
+async def test_home_result_writes_one_reference_entry_and_suppresses_quiet_repeats(_sched, _events, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from graph import home_entries
+    from graph.compaction_engine import HOME_ENTRY_KWARG
+    from graph.thread_ids import resolve_thread_id
+    from runtime.home_session import home_session_id
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on")
+    graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(tasks=())), aupdate_state=AsyncMock())
+    monkeypatch.setattr(server.STATE, "graph", graph)
+    monkeypatch.setattr(server.STATE, "main_loop", None)
+    monkeypatch.setattr(home_entries, "_thread_lock", None)
+    _sched(_Job(origin_session=None))
+    for text in ["", "NO_UPDATE", "Morning brief: all green.", "Morning brief: all green.", "NO_UPDATE"]:
+        payload = a2a._scheduled_delivery_payload(_Outcome(context_id="job:job-1", text=text))
+        if payload is not None:
+            assert await a2a._deliver_scheduled(payload)
+        while home_entries._inflight:
+            await asyncio.gather(*list(home_entries._inflight))
+    [card] = _cards(_events)
+    assert card["origin_session"] == home_session_id()
+    graph.aupdate_state.assert_awaited_once()
+    config, update = graph.aupdate_state.call_args.args
+    assert config["configurable"]["thread_id"] == resolve_thread_id(None, home_session_id())
+    [message] = update["messages"]
+    assert "Morning brief: all green." in message.content
+    assert message.additional_kwargs[HOME_ENTRY_KWARG] == {
+        "kind": "review", "importance": a2a._SCHEDULED_NOTICE_IMPORTANCE,
+        "source": "scheduler", "notice_id": card["notice_id"],
+    }

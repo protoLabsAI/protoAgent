@@ -111,11 +111,7 @@ export function HomeAlertCard({ message, home }: { message: ChatMessage; home: H
     // Always the neutral system row: the entry is stored as a human message so the model
     // reads it as input, but it is not the operator's words and must not render as their bubble.
     <Message role="system" className="pl-home-alert">
-      <article
-        className="pl-home-alert-card"
-        data-home-kind={home.kind}
-        data-notice-id={home.notice_id || undefined}
-      >
+      <article className="pl-home-alert-card">
         <div className="pl-home-alert-head">
           <Icon size={14} aria-hidden className={`pl-home-alert-icon${urgent ? " pl-home-alert-icon--urgent" : ""}`} />
           <h3 className="pl-home-alert-title" title={heading}>

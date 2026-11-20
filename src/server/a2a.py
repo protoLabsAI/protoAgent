@@ -1636,16 +1636,30 @@ def _schedule_expiry_notice(job) -> str:
     return ""
 
 
+def _scheduled_home_session() -> str:
+    """Home's delivery destination while enabled; unavailable storage keeps Activity."""
+    from runtime.flags import flag_enabled
+    from runtime.home_session import FLAG_ID, home_session_id
+
+    if not flag_enabled(FLAG_ID):
+        return ""
+    try:
+        return home_session_id()
+    except OSError:
+        log.warning("[scheduler] Home state unavailable", exc_info=True)
+        return ""
+
+
 def _scheduled_delivery_payload(outcome) -> dict | None:
     """Build the ``scheduler.completed`` event payload for a scheduled fire whose
     result should surface in the chat that created it (#2990), or ``None`` when this
-    turn isn't such a fire. Pure + sync so the guards + shaping are unit-testable
+    turn isn't such a fire. Sync so the guards + shaping are unit-testable
     without a task store or event loop.
 
     Returns ``None`` (no delivery) when: the turn isn't a ``scheduler`` fire; it's a
     ``wait:`` resume (already runs IN its chat — or, for a background wait, on its
     owning job session — surfaced by chat.resumed / the Activity feed); the job has
-    no ``origin_session`` (created outside a chat — r6, backward compatible); the origin
+    no ``origin_session`` and Home is disabled or unavailable; the origin
     is the Activity thread itself or another job's execution session (ADR 0129 — no
     chat reads those; the feed carries the result); or the fire already ran IN
     the origin session (a one-shot resume — chat.resumed covers it, no double-delivery).
@@ -1669,6 +1683,8 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
         except Exception:  # noqa: BLE001 — a lookup failure just means no card
             job = None
     origin = (getattr(job, "origin_session", "") or "").strip() if job else ""
+    if job is not None and not origin:
+        origin = _scheduled_home_session()
     if not origin or origin == ACTIVITY_CONTEXT or origin.startswith(JOB_CONTEXT_PREFIX):
         return None
     context_id = str(getattr(outcome, "context_id", "") or "")
@@ -2012,7 +2028,8 @@ def _notify_scheduled_card(payload: dict) -> None:
     scheduled result card just posted to its owner chat. Called only from
     ``_post_scheduled_card`` — so the card's own guards (empty, ``NO_UPDATE``, repeat,
     stale chat) are the notice's guards, with no second skip logic. Best-effort: a
-    notice failure never affects the card that already published."""
+    notice failure never affects the card that already published. The notice seam also
+    calls write_home_entry once, sharing the card's notice id, kind and importance."""
     try:
         from graph.decisions import _console_link  # the same chat link a decision notice carries
         from graph.plugins.chat_surface import notify_chat_surfaces
@@ -2048,7 +2065,8 @@ async def _deliver_scheduled(payload: dict) -> bool:
     session is stale (#2990 r3). Returns whether it published. Best-effort — never raises.
     A published card's fingerprint feeds the repeat guard (bd-x66jt); a skipped one records
     nothing, so the same result still posts once the chat wakes. Recurring results and expiry notices
-    reach idle owner chats: standing work must not depend on the operator replying."""
+    reach idle owner chats: standing work must not depend on the operator replying.
+    Home receives one-shot results regardless of its last operator turn."""
     from scheduler.interface import is_cron
 
     origin = payload["origin_session"]
@@ -2056,6 +2074,7 @@ async def _deliver_scheduled(payload: dict) -> bool:
     try:
         if (
             not is_cron(str(payload.get("schedule") or ""))
+            and origin != await asyncio.to_thread(_scheduled_home_session)
             and not await _session_recently_active(origin)
             and not (fingerprint and fingerprint.get("expiry_notice"))
         ):
