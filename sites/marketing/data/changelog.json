@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.253.0",
+    "date": "2026-11-19",
+    "changes": [
+      "A fleet member's decision reaches your phone, and the tap opens that agent (#5615)."
+    ]
+  },
+  {
     "version": "v0.252.1",
     "date": "2026-11-19",
     "changes": [
