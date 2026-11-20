@@ -16,8 +16,9 @@ function settledBubbles(consumed: ConsumedSteer[], createdAt: number): ChatMessa
  *
  * With a live assistant id, split at the exact streamed boundary. Without one
  * (poll/turn-end compatibility fallback), retain the legacy conservative placement
- * immediately before the current assistant message: the fallback knows the steer
- * shaped that reply, but has no honest finer-grained position. */
+ * immediately before the current assistant turn (its first bubble, when the turn was
+ * split): the fallback knows the steer shaped that reply, but has no honest
+ * finer-grained position. */
 export function placeConsumedSteers(
   messages: ChatMessage[],
   consumed: ConsumedSteer[],
@@ -41,6 +42,10 @@ export function placeConsumedSteers(
       break;
     }
   }
+  // A turn an earlier steer or delegation split renders as several bubbles (`splitOf`):
+  // the unknown boundary may sit in any of them, so land above the turn's FIRST bubble.
+  // Before its last one, the steer could read as sent after text it shaped.
+  if (at < next.length) at = Math.min(at, ...turnBubbleIndexes(next, next[at].id ?? ""));
   next.splice(at, 0, ...settled);
   return next;
 }

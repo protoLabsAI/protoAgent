@@ -52,6 +52,19 @@ describe("placeConsumedSteers", () => {
     expect(out.map((message) => message.id)).toEqual(["u", "s1", "live"]);
   });
 
+  it("lands a missed marker above the FIRST bubble of a split turn, never between its halves", () => {
+    const messages: ChatMessage[] = [
+      { id: "u0", role: "user", content: "earlier", status: "done" },
+      { id: "a0", role: "assistant", content: "earlier answer", status: "done" },
+      { id: "u", role: "user", content: "start", status: "done" },
+      { ...assistant("Working on it."), id: "frozen", status: "done", splitOf: "live" },
+      { id: "s0", role: "user", content: "first steer", status: "done" },
+      { ...assistant("Here you go."), status: "done" },
+    ];
+    const out = placeConsumedSteers(messages, [{ id: "s1", text: "redirect" }], { frozenId: "unused", createdAt: 10 });
+    expect(out.map((message) => message.id)).toEqual(["u0", "a0", "u", "s1", "frozen", "s0", "live"]);
+  });
+
   it("does not resurrect a streaming placeholder when a late marker reaches a settled turn", () => {
     const done = { ...assistant("whole answer"), status: "done" as const };
     const out = placeConsumedSteers(

@@ -248,11 +248,65 @@ describe("useSteerQueue — queueing", () => {
         { id: "approval", taskId, decisionId: "decision-1", status: "done", content: "All done." },
       ]);
       expect(messagesOf().filter((m) => m.role === "user")).toMatchObject([{ content: "Approved" }]);
+      // The operator's message reads ABOVE the reply it caused, whichever finished first.
+      const order = messagesOf().map((m) => (m.role === "user" ? m.content : m.id));
+      expect(order.indexOf("Approved")).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("Approved")).toBeLessThan(order.indexOf("approval"));
       expect(r.current.steerQueue).toEqual([]);
       expect(chatStore.getSnapshot().sessionStatusMap[sessionId]).toBe("idle");
     } finally {
       cancel?.();
     }
+  });
+
+  it.each(["streaming", "done"] as const)(
+    "lands a steer that started task T between the prior turn and T's %s bubble",
+    async (status) => {
+      // The reattach / live-sync path already rendered T's bubble when the POST answers.
+      chatStore.updateMessages(sessionId, [
+        { id: "u0", role: "user", content: "hello", createdAt: 1, status: "done" },
+        { id: "a0", role: "assistant", content: "hi", createdAt: 2, status: "done", taskId: "task-prior" },
+        { id: "aT", role: "assistant", content: "I saved it.", createdAt: 3, status, taskId: "task-T" },
+      ]);
+      steerChat.mockResolvedValue({ ok: true, id: null, pending: 0, started_turn: "task-T" });
+      const abort = vi.fn();
+      const r = renderHook(baseOpts({ draft: "at knapsack", abortRef: { current: { abort } as unknown as AbortController } }));
+      await act(() => r.current.queueSteer());
+      await flush();
+      const steerId = steerChat.mock.calls[0][1];
+      expect(messagesOf().map((m) => m.id)).toEqual(["u0", "a0", steerId, "aT"]);
+      expect(messagesOf()[2]).toMatchObject({ role: "user", content: "at knapsack", status: "done" });
+      // T's bubble keeps its producer and state: no second placeholder, nothing reopened.
+      expect(messagesOf()[3]).toMatchObject({ id: "aT", content: "I saved it.", status, taskId: "task-T" });
+      expect(abort).not.toHaveBeenCalled();
+      expect(r.current.steerQueue).toEqual([]);
+    },
+  );
+
+  it("lands above the FIRST bubble of a split task, and attaching the same id twice adds no duplicate", async () => {
+    chatStore.updateMessages(sessionId, [
+      { id: "u0", role: "user", content: "hello", createdAt: 1, status: "done" },
+      { id: "a0", role: "assistant", content: "hi", createdAt: 2, status: "done", taskId: "task-prior" },
+      { id: "frozen", role: "assistant", content: "Working.", createdAt: 3, status: "done", taskId: "task-T", splitOf: "aT" },
+      { id: "s0", role: "user", content: "earlier steer", createdAt: 4, status: "done" },
+      { id: "aT", role: "assistant", content: "Done.", createdAt: 5, status: "done", taskId: "task-T" },
+    ]);
+    steerChat.mockResolvedValue({ ok: true, id: null, pending: 0, started_turn: "task-T" });
+    const r = renderHook(baseOpts({ draft: "at knapsack", status: "idle" }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    const steerId = steerChat.mock.calls[0][1];
+    const placed = ["u0", "a0", steerId, "frozen", "s0", "aT"];
+    expect(messagesOf().map((m) => m.id)).toEqual(placed);
+    // The turn-end reconcile can name the same message for the same task again.
+    saveSteers(sessionId, [{ id: steerId, text: "at knapsack" }]);
+    act(() => root.unmount());
+    root = createRoot(container);
+    pendingSteer.mockResolvedValue({ pending: [], drained: [], started: { [steerId]: "task-T" } });
+    const again = renderHook(baseOpts({ status: "idle" }));
+    await flush();
+    expect(again.current.steerQueue).toEqual([]);
+    expect(messagesOf().map((m) => m.id)).toEqual(placed);
   });
 
   it("hands a REFUSED interjection back into the composer (appended), and drops the stale control", async () => {
