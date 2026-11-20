@@ -104,7 +104,11 @@ export function NoticeClickWatch() {
     if (!worker) return stop;
     const onMessage = (event: MessageEvent) => {
       const data = event.data as { type?: unknown; id?: unknown } | null;
-      if (data && data.type === CLICK_MESSAGE) void openNotice(data.id);
+      if (!data || data.type !== CLICK_MESSAGE) return;
+      // This click arrived by message, so the note the worker left for it is spent: drop it,
+      // or the next time the console comes to the front it would open the same decision again.
+      void takeClickedNotice();
+      void openNotice(data.id);
     };
     worker.addEventListener("message", onMessage);
     return () => { stop(); worker.removeEventListener("message", onMessage); };

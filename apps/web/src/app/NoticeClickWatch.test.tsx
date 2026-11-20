@@ -164,3 +164,18 @@ it("coming to the front opens the decision the worker remembered", async () => {
   await flush();
   expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-6");
 });
+
+it("a click that arrives by message spends the worker's note, so a later focus doesn't reopen it", async () => {
+  stubClickCache(null);
+  await act(async () => root.render(<NoticeClickWatch />));
+  await flush();
+  const storage = stubClickCache({ v: 1, id: "decision-dec-3", at: Date.now() });
+  listeners.forEach((fn) => fn({ data: { type: "protoagent:notice-click", v: 1, id: "decision-dec-3", route: "/app/" } } as MessageEvent));
+  await flush();
+  await flush();
+  expect(storage.delete).toHaveBeenCalledOnce();
+  expect(openWorkGroup).toHaveBeenCalledTimes(1);
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await flush();
+  expect(openWorkGroup).toHaveBeenCalledTimes(1);
+});
