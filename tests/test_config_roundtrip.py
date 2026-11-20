@@ -346,7 +346,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "quiet_hours_enabled": False,
     "quiet_hours_start": "22:00",
     "quiet_hours_end": "07:00",
-    "quiet_hours_timezone": "UTC",
+    "quiet_hours_timezone": "",
     "push_all_notices": False,
     "spend_cap_enabled": False,
     "spend_cap_daily_cost_hard_limit": 10.0,

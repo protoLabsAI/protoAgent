@@ -1,0 +1,1 @@
+- **Quiet hours use local time by default.** Quiet hours now follow this computer's local time unless you set a timezone. Before, they used UTC. Refs #5648.
