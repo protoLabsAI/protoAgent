@@ -2047,7 +2047,9 @@ def _notify_scheduled_card(payload: dict) -> None:
     ``_post_scheduled_card`` — so the card's own guards (empty, ``NO_UPDATE``, repeat,
     stale chat) are the notice's guards, with no second skip logic. Best-effort: a
     notice failure never affects the card that already published. The notice seam also
-    calls write_home_entry once, sharing the card's notice id, kind and importance."""
+    calls write_home_entry once, sharing the card's notice id, kind and importance. The
+    Home entry also carries the run's ``activity_context`` and ``task_id``, so the console
+    can open the run's full answer from the entry (the notice text is the capped summary)."""
     try:
         from graph.decisions import _console_link  # the same chat link a decision notice carries
         from graph.plugins.chat_surface import notify_chat_surfaces
@@ -2062,6 +2064,10 @@ def _notify_scheduled_card(payload: dict) -> None:
             importance=_SCHEDULED_NOTICE_IMPORTANCE,
             notice_id=payload.get("notice_id"),
             source="scheduler",
+            home_meta={
+                "activity_context": payload.get("activity_context") or None,
+                "task_id": payload.get("task_id") or None,
+            },
         )
     except Exception:  # noqa: BLE001 — delivery of the card must never fail on the notice
         log.exception("[scheduler] could not queue the result notice for job %s", payload.get("job_id"))
