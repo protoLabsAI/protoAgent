@@ -27,6 +27,9 @@ from graph.watches.types import (
 
 log = logging.getLogger(__name__)
 
+# Fixed by the watch fire path, never by the verifier or reaction model.
+_WATCH_NOTICE_IMPORTANCE = "normal"
+
 # Verifier types safe to create PROGRAMMATICALLY (agent tool / plugin / SDK). Only `plugin`
 # — command/test/ci shell out and `data` eval()s a spec expr; those stay operator-only (the
 # /api/watches channel, gated to operator-tier by the ADR 0066 path ceiling). Mirrors
@@ -625,6 +628,26 @@ class WatchController:
         else:
             await fire_watch_hook("on_met", watch)
             self._publish("watch.met", watch, reason)
+
+        if not flapping:
+            try:
+                from graph.decisions import _console_link
+                from graph.plugins.chat_surface import notify_chat_surfaces
+
+                link = _console_link(watch.run_session)
+                if not watch.run_session:
+                    link = link.partition("?")[0]
+                event = "changed" if watch.trigger == "change" else "met"
+                # run_in_session has no origin_session, so its completion does not
+                # post a scheduled-result card/notice. This is the sole sender.
+                notify_chat_surfaces(
+                    f"Watch {watch.id} {event}: {reason}",
+                    link,
+                    kind="notify",
+                    importance=_WATCH_NOTICE_IMPORTANCE,
+                )
+            except Exception:  # noqa: BLE001 — notice delivery must never break a reaction
+                log.exception("[watch] could not queue the notice for %s", watch.id)
 
     async def _finish(
         self, watch: Watch, status: str, reason: str, evidence: str = "", *, gen: int | None = None
