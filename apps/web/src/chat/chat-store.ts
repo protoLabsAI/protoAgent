@@ -1562,6 +1562,16 @@ export const chatStore = {
     return state;
   },
 
+  /** Register a server-owned chat, including one with no turns yet, without changing selection. */
+  ensureSession(sessionId: string, title: string) {
+    if (state.sessions.some((session) => session.id === sessionId)) return;
+    const now = Date.now();
+    setState((current) => ({
+      ...current,
+      sessions: [...current.sessions, { id: sessionId, title, messages: [], createdAt: now, updatedAt: now }],
+    }));
+  },
+
   createSession(opts: { incognito?: boolean } = {}) {
     // Don't pile up blanks. A pristine session is byte-for-byte what this call would
     // produce, so hand it back instead — otherwise tapping "+" repeatedly (easy to do

@@ -44,6 +44,8 @@
 // Building the rows stays CHEAP and SYNCHRONOUS regardless: one `chatStore.getSnapshot()`
 // read and a map over ≤50 sessions, run from a store notification, never from a render.
 import { chatStore, DEFAULT_SESSION_TITLE } from "../chat/chat-store";
+import { inTabOrder } from "../chat/homeTab";
+import { queryClient } from "../lib/queryClient";
 import { registerPaletteCommands } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import { navigate } from "./usePaletteRegistry";
@@ -105,7 +107,10 @@ const INCOGNITO_KEYWORDS = [...CHAT_KEYWORDS, "incognito", "private"];
  *  typed query is exactly when the operator wants every match, capped by nothing. */
 export function chatTabPaletteRows(): PaletteCommand[] {
   const { sessions, currentSessionId } = chatStore.getSnapshot();
-  return sessions.map((session, i) => {
+  // STRIP order, not raw store order: the pinned Home tab (H-U1) is drawn first while the
+  // store appends it, and ⌘1–9 count the strip (`switchToIndex`, coreKeybindings.ts) — so the
+  // `chat.tab.N` a row advertises has to count the same way or it names the wrong tab.
+  return inTabOrder(sessions).map((session, i) => {
     // A blank title would render an unreadable empty row, so an unnamed chat needs a
     // fallback — but NOT `DEFAULT_SESSION_TITLE`. That string is "New chat", which is also
     // the label of the keyboard row that CREATES one, so mirroring the tab strip here puts
@@ -181,7 +186,9 @@ export function chatTabPaletteRows(): PaletteCommand[] {
 function tabSignature(): string {
   const { sessions, currentSessionId } = chatStore.getSnapshot();
   let sig = currentSessionId ?? "";
-  for (const s of sessions) {
+  // In strip order (Home first, H-U1) — the order the rows and their ⌘N are built in — so the
+  // Home state loading or going away re-registers the rows even though the store never moved.
+  for (const s of inTabOrder(sessions)) {
     sig += `\u0001${s.id}\u0000${s.title?.trim() ?? ""}\u0000${s.incognito ? "1" : ""}`;
   }
   return sig;
@@ -234,3 +241,8 @@ export function syncChatTabPalette(): void {
 // evict an entry it no longer owns, so the newest registration always wins.
 syncChatTabPalette();
 chatStore.subscribe(syncChatTabPalette);
+// The strip order also depends on which session is Home, and that comes from the query cache
+// (`GET /api/home`), not the chat store: on a reload the Home session is already persisted in
+// the store, so the state landing moves Home to the front without any store write. The
+// signature check keeps every unrelated cache event a no-op.
+queryClient.getQueryCache().subscribe(syncChatTabPalette);

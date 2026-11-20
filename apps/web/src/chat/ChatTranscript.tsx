@@ -14,6 +14,7 @@ import { useSessionFeedback } from "./useSessionFeedback";
 import { STARTER_PROMPTS } from "./starterPrompts";
 
 type ChatTranscriptProps = {
+  home?: boolean;
   sessionId: string;
   messages: ChatMessage[];
   dismissedToolCalls: Set<string>;
@@ -94,6 +95,7 @@ export function liveServerTurnMessageId(messages: ChatMessage[], serverTurnLabel
 }
 
 export const ChatTranscript = memo(function ChatTranscript({
+  home = false,
   sessionId,
   messages,
   dismissedToolCalls,
@@ -131,8 +133,11 @@ export const ChatTranscript = memo(function ChatTranscript({
     // autoScroll off: the DS follower unpinned itself when a card grew right after its own
     // follow scroll (B6) — `useStreamFollow` owns following and the jump button instead.
     <Conversation id={rootId} autoScroll={false}>
+      {home && <h2 className="conversations-tab__sr">Home</h2>}
       {feedback.error ? <p role="alert">{feedback.error}</p> : null}
-      {messages.length === 0 ? (
+      {messages.length === 0 && home ? (
+        <Empty>Your agent posts briefs, alerts and results here. Reply any time.</Empty>
+      ) : messages.length === 0 ? (
         <Empty icon={<TerminalSquare />} title={starterPrompts.length ? "Try one of these" : undefined}>
           {starterPrompts.length ? (
             <>

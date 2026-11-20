@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   bootLiveTurns,
+  chatStore,
   dedupeMessages,
   ensureActiveSessions,
   mergeHydratedSessions,
@@ -1097,5 +1098,21 @@ describe("continueConversation (other-conversations C4)", () => {
     // No turn is run: the tab opens empty and idle; the operator edits and sends.
     expect(created.messages).toEqual([]);
     expect(snap.sessionStatusMap[session.id]).toBeUndefined();
+  });
+});
+
+describe("server-owned empty sessions", () => {
+  it("registers an empty Home without replacing selection or duplicating a live transcript", () => {
+    const selected = chatStore.getSnapshot().currentSessionId;
+    const id = "empty-home-registration";
+    chatStore.ensureSession(id, "Home");
+    expect(chatStore.getSnapshot().currentSessionId).toBe(selected);
+    expect(chatStore.getSnapshot().sessions.find((s) => s.id === id)?.messages).toEqual([]);
+    chatStore.updateMessages(id, [{ id: "brief", role: "assistant", content: "Hello" }]);
+    chatStore.ensureSession(id, "Home");
+    const matches = chatStore.getSnapshot().sessions.filter((s) => s.id === id);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].messages[0].content).toBe("Hello");
+    chatStore.deleteSession(id);
   });
 });

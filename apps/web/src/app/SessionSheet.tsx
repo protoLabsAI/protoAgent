@@ -12,6 +12,7 @@ import {
   setStage as setConversationsStage,
   useConversations,
 } from "../chat/conversations-store";
+import { homeSessionId, inTabOrder } from "../chat/homeTab";
 import { useContextMenuStore } from "../contextMenu";
 
 // The mobile session switcher. Replaces the DS TabBar's `responsive` <select> collapse,
@@ -29,6 +30,8 @@ export function SessionSheet({ open, onClose, triggerRef }: {
 }) {
   const chat = useChatState();
   const blank = unusedSession(chat);
+  // The pinned Home tab (H-U1): listed first, as on the desktop strip, and never deletable.
+  const homeId = homeSessionId();
   // The phone version of the pinned Conversations tab (docs/design/other-conversations.md §3.7):
   // a distinct item at the top of the sheet, under the same C1 store that drives the desktop tab.
   const conv = useConversations();
@@ -156,7 +159,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
         </>
       ) : null}
       <ul className="session-sheet-list">
-        {chat.sessions.map((s) => {
+        {inTabOrder(chat.sessions, homeId).map((s) => {
           const status = chat.sessionStatusMap[s.id] || "idle";
           const current = s.id === chat.currentSessionId;
           return (
@@ -182,7 +185,7 @@ export function SessionSheet({ open, onClose, triggerRef }: {
                   opt-in, server purge, goal Stop-vs-Detach) runs — never a direct local
                   deleteSession, which skipped all of that (#2512). The sheet closes first
                   so the dialog isn't buried under it. */}
-              {chat.sessions.length > 1 ? (
+              {chat.sessions.length > 1 && s.id !== homeId ? (
                 <Button
                   type="button"
                   icon

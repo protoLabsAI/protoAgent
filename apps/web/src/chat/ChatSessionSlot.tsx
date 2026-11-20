@@ -194,12 +194,14 @@ export function resolveComposerStopTarget(
 }
 
 export function ChatSessionSlot({
+  home = false,
   sessionId,
   visible,
   surfaceActive,
   onError,
 }: {
   sessionId: string;
+  home?: boolean;
   visible: boolean;
   // The chat SURFACE is the active rail surface (not just: this is the active session
   // tab). Both must be true for the composer to grab focus.
@@ -1985,6 +1987,7 @@ export function ChatSessionSlot({
           <ComponentFrameRegistryContext.Provider value={componentFrameRegistry}>
             <DecisionTranscriptContext.Provider value={decisionTranscript}>
               <ChatTranscript
+                home={home}
                 sessionId={sessionId}
                 messages={messages}
                 dismissedToolCalls={dismissedToolCalls}
@@ -2170,7 +2173,7 @@ export function ChatSessionSlot({
           placeholder={
             serverTurnControl
               ? "Interject into the running server task…"
-              : composerPlaceholder(status, steerQueue.length, chatAgentName)
+              : home && status === "idle" ? "Reply to your agent…" : composerPlaceholder(status, steerQueue.length, chatAgentName)
           }
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
