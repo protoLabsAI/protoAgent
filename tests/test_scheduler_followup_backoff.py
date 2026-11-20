@@ -101,6 +101,21 @@ def test_two_unchanged_runs_while_waiting_back_off_and_post_one_card(monkeypatch
     assert followup_backoff.backoff_until("job-1", "") is not None
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_waiting_card_follows_a_home_result_destination(monkeypatch, _events, enabled):
+    # The waiting test still reads the chat that created the follow-up; the one card goes
+    # where that job's results go — Home when enabled, else its origin chat.
+    from runtime.home_session import home_session_id
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on" if enabled else "off")
+    _setup(monkeypatch, job=_Job(result_destination="home"), tasks=_FakeTasks(waiting_for="chat-42"))
+    _run(text="NO_UPDATE")
+    _run(text="NO_UPDATE")
+    cards = _cards(_events)
+    assert len(cards) == 1
+    assert cards[0]["origin_session"] == (home_session_id() if enabled else "chat-42")
+
+
 def test_pending_decision_also_counts_as_waiting(monkeypatch, _events):
     # The waiting test is satisfied by a pending decision for the session too, not only a
     # waiting task.
