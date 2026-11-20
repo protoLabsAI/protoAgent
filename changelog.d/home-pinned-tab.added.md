@@ -1,1 +1,0 @@
-- **Pinned Home conversation.** The console now puts Home first with an unread count, marks it read when viewed, and provides a dedicated empty state and reply hint. Refs #5545.

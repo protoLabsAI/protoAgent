@@ -1,5 +1,27 @@
 [
   {
+    "version": "v0.255.0",
+    "date": "2026-11-20",
+    "changes": [
+      "Push status in paired devices (#5628).",
+      "Typed console push status and refusal codes (#5625).",
+      "Automated accessibility checks for console settings (#5626).",
+      "Home shows briefs, alerts and decision pointers as one clear card (#5634).",
+      "Owner notices are written into Home's own thread (#5631).",
+      "Pinned Home conversation (#5637).",
+      "Scheduled jobs set to show results in Home deliver there (#5639).",
+      "Each instance now has one Home chat with a stable id, behind the home_conversation developer flag (#5627).",
+      "Notification key card in Settings ▸ Devices (#5635).",
+      "Scheduled jobs store a preferred result destination (#5636).",
+      "One \"Notifications on this device\" card in Settings ▸ Devices (#5629).",
+      "Enable design-system tab accessible names (#5632).",
+      "Scheduled results reach Home (#5633).",
+      "A tapped notification keeps being looked for after the console comes to the front, and Settings → Devices shows what happened to the tap (#5630).",
+      "Notification settings are documented and tested end to end (#5638).",
+      "ADR 0129 D6 now records where job results are shown: one Home conversation per instance (#5624)."
+    ]
+  },
+  {
     "version": "v0.254.0",
     "date": "2026-11-20",
     "changes": [

@@ -1,1 +1,0 @@
-- **Typed console push status and refusal codes.** Expose this device's full push binding and renewal reason, paired-device delivery metadata, and structured HTTP errors so callers can choose card states without parsing error messages. Refs #5539.
