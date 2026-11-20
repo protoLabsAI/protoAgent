@@ -51,7 +51,7 @@ async def test_met_watch_notifies_once_with_console_link(tmp_path, monkeypatch, 
     notices.assert_called_once_with(
         "Watch deploy met: healthy",
         "https://console.example/app/" + ("?session=chat-7" if session else ""),
-        kind="notify", importance="normal",
+        kind="notify", importance="normal", source="watch",
     )
 
 
@@ -103,6 +103,6 @@ async def test_reaction_completes_without_a_second_notice(tmp_path, monkeypatch,
     deliver.assert_not_called()
     await ctrl.tick_all()
     notices.assert_called_once()
-    assert notices.call_args.kwargs == {"kind": "notify", "importance": "normal"}
+    assert notices.call_args.kwargs == {"kind": "notify", "importance": "normal", "source": "watch"}
     if delivery_fails:
         assert "could not queue the notice for deploy" in caplog.text

@@ -645,6 +645,7 @@ class WatchController:
                     link,
                     kind="notify",
                     importance=_WATCH_NOTICE_IMPORTANCE,
+                    source="watch",
                 )
             except Exception:  # noqa: BLE001 — notice delivery must never break a reaction
                 log.exception("[watch] could not queue the notice for %s", watch.id)

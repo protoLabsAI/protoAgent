@@ -156,6 +156,12 @@ _TIMESTAMP_KWARGS = (SENT_AT_KWARG, "timestamp", "created_at", "ts")
 #: ``protoagent_guard_note`` / ``lc_source``, any of which would make compaction drop it.
 DIRECTIVE_WITHDRAWN_KWARG = "protoagent_directive_withdrawn"
 
+#: ``additional_kwargs`` marker on a Home entry (``graph.home_entries``, ADR 0135 D9): an
+#: owner notice the server wrote into Home's thread for reference. Its value is the entry's
+#: ``{kind, importance, source, notice_id}``. :func:`human_kind` classifies it
+#: :data:`SYSTEM`, so a notice's text is never read as the operator's words.
+HOME_ENTRY_KWARG = "protoagent_home_entry"
+
 
 def sent_at_kwargs() -> dict:
     """``additional_kwargs`` stamping a message the operator is sending now."""
@@ -193,6 +199,8 @@ def human_kind(message) -> str:
         return SUMMARY
     kwargs = getattr(message, "additional_kwargs", None) or {}
     if kwargs.get("protoagent_injected_context") or kwargs.get("protoagent_guard_note"):
+        return SYSTEM
+    if kwargs.get(HOME_ENTRY_KWARG):
         return SYSTEM
     if kwargs.get("lc_source"):
         return PEER
