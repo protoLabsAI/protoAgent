@@ -1,0 +1,1 @@
+- **Enable design-system tab accessible names.** Bump the UI and UI CSS dependencies to the first release supporting `TabBarItem.ariaLabel`, allowing Home to include unread counts in its accessible name. Refs #5545.
