@@ -26,12 +26,40 @@ function consoleSteps(): TapStep[] {
   }
 }
 
-/** Record one console-side step. Best effort: a full or blocked store loses the line. */
-export function logTap(step: string, detail = ""): void {
+// Lines every launch and every foreground produce. They only matter around a tap, so they
+// wait here and are kept when a tap turns out to be involved; otherwise they are dropped and
+// the log stays empty (and hidden) for a device nobody tapped a notification on.
+let routine: TapStep[] = [];
+const ROUTINE_MAX = 6;
+const TAP_WINDOW_MS = 60_000;
+
+function persist(rows: TapStep[]): void {
   try {
-    const rows = [...consoleSteps(), { at: Date.now(), who: "console" as const, step, detail: detail.slice(0, 160) }];
-    writeKey("local", KEY, JSON.stringify(rows.slice(-MAX)));
+    writeKey("local", KEY, JSON.stringify([...consoleSteps(), ...rows].slice(-MAX)));
   } catch { /* diagnostics must never break the console */ }
+}
+
+/** Record one console-side step that is about a tap, with the routine lines that led to it. */
+export function logTap(step: string, detail = ""): void {
+  const held = routine;
+  routine = [];
+  persist([...held, { at: Date.now(), who: "console", step, detail: detail.slice(0, 160) }]);
+}
+
+/** Hold a line that is only worth keeping if a tap is involved (see {@link keepIfTapped}). */
+export function noteRoutine(step: string, detail = ""): void {
+  routine = [...routine, { at: Date.now(), who: "console" as const, step, detail: detail.slice(0, 160) }].slice(-ROUTINE_MAX);
+}
+
+/** Keep the held lines when the worker handled a tap in the last minute — the case where the
+ *  console found nothing and would otherwise leave no trace of having looked. */
+export async function keepIfTapped(now: number = Date.now()): Promise<void> {
+  if (!routine.length) return;
+  const tapped = (await workerSteps()).some((r) => r.step === "tap" && now - r.at <= TAP_WINDOW_MS);
+  if (!tapped) return;
+  const held = routine;
+  routine = [];
+  persist(held);
 }
 
 async function workerSteps(): Promise<TapStep[]> {

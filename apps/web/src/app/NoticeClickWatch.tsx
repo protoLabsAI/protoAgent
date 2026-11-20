@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 import { openWorkGroup } from "../chat/ChatStatusRail";
 import { agentHref, apiUrl, applyAuth, currentSlug } from "../lib/api/routing";
-import { logTap } from "../lib/noticeTrace";
+import { keepIfTapped, logTap, noteRoutine } from "../lib/noticeTrace";
 import { useUI } from "../state/uiStore";
 
 // A clicked push notification lands here (ADR 0135 W2, "Clicking fetches the current
@@ -93,7 +93,8 @@ export async function takeClickedNotice(now: number = Date.now()): Promise<strin
 export function NoticeClickWatch() {
   useEffect(() => {
     const fromUrl = takeNoticeFromUrl();
-    logTap("start", `${window.location.pathname}${fromUrl ? ` with notice ${fromUrl}` : ""}`);
+    if (fromUrl) logTap("start", `${window.location.pathname} with notice ${fromUrl}`);
+    else noteRoutine("start", window.location.pathname);
     void openNotice(fromUrl);
     let stopped = false;
     let polling = false;
@@ -101,7 +102,7 @@ export function NoticeClickWatch() {
       if (document.visibilityState !== "visible" || polling) return;
       polling = true;
       const until = Date.now() + POLL_FOR_MS;
-      logTap("front", "looking for a tapped notice");
+      noteRoutine("front", "looking for a tapped notice");
       const look = async () => {
         const id = stopped ? null : await takeClickedNotice();
         if (id) {
@@ -110,7 +111,10 @@ export function NoticeClickWatch() {
           void openNotice(id);
         } else if (stopped || Date.now() >= until) {
           polling = false;
-          if (!stopped) logTap("note", "none found");
+          if (!stopped) {
+            noteRoutine("note", "none found");
+            void keepIfTapped();
+          }
         } else {
           window.setTimeout(() => void look(), POLL_EVERY_MS);
         }

@@ -1288,7 +1288,7 @@ def _notify_scheduler_notice(text: str, link: str, *, kind, importance) -> None:
     except Exception:  # noqa: BLE001 — retain the notice and relative link
         log.exception("[server] could not resolve scheduler notice console origin")
         base = ""
-    notify_chat_surfaces(text, f"{base}{link}", kind=kind, importance=importance)
+    notify_chat_surfaces(text, f"{base}{link}", kind=kind, importance=importance, source="scheduler")
 
 
 def _build_scheduler(config) -> "SchedulerBackend | None":

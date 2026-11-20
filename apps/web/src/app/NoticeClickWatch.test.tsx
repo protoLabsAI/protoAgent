@@ -190,7 +190,17 @@ it("records the console's half of a tap for Settings", async () => {
   await flush();
   const steps = (JSON.parse(localStorage.getItem("protoagent.noticeTapLog") || "[]") as Array<{ step: string; detail: string }>)
     .map((r) => `${r.step}: ${r.detail}`);
-  expect(steps[0]).toContain("start: /app/");
+  expect(steps[0]).toContain("start: /app/"); // the routine line is kept because a tap followed
   expect(steps).toContain("note: found decision-dec-9");
   expect(steps.some((line) => line.startsWith("open: decision-dec-9 raised by this agent"))).toBe(true);
+});
+
+it("a launch with no tap leaves no log", async () => {
+  localStorage.removeItem("protoagent.noticeTapLog");
+  stubClickCache(null);
+  await act(async () => root.render(<NoticeClickWatch />));
+  await flush();
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await nextLook();
+  expect(JSON.parse(localStorage.getItem("protoagent.noticeTapLog") || "[]")).toEqual([]);
 });

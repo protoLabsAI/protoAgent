@@ -9,6 +9,7 @@ import { formatCountdown, hostKindLabel, newlyPaired, secondsLeft, tailnetFirst,
 import { api, DEVICE_SCOPE_MESSAGE } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import { currentSlug } from "../lib/api/routing";
+import { currentDeviceId } from "../lib/credentials";
 import {
   PUBLIC_CONSOLE_DOCS,
   PUBLIC_CONSOLE_WARNING,
@@ -21,7 +22,8 @@ import {
 } from "../lib/deviceReach";
 import { DeviceList, MAX_DEVICE_NAME } from "./DeviceList";
 import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
-import { PushToggle } from "./PushToggle";
+import { NotificationKeyCard } from "./NotificationKeyCard";
+import { PushCard } from "./PushCard";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
@@ -68,6 +70,10 @@ export function DevicesPanel() {
   // dead ones.
   const [limited, setLimited] = useState(false);
   const [callerDeviceId, setCallerDeviceId] = useState<string | null>(null);
+  // The server said, in so many words, that this credential is full access (and the hub
+  // agrees). Unlike `limited`, an answer with no `caller` leaves this false: the
+  // notification key card shows only on a positive answer.
+  const [fullAccess, setFullAccess] = useState(false);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [pairError, setPairError] = useState<string | null>(null);
   const [unreachable, setUnreachable] = useState<Unreachable | null>(null);
@@ -122,6 +128,7 @@ export function DevicesPanel() {
         lim = hub?.caller?.scope === "device";
       }
       setLimited(lim);
+      setFullAccess(res.caller?.scope === "full" && !lim);
       setCallerDeviceId(res.caller?.device_id ?? null);
     } catch {
       /* read-mostly panel; a transient failure just leaves the last list */
@@ -462,6 +469,13 @@ export function DevicesPanel() {
         Phones, tablets and other agents&apos; hubs paired to this agent. Each holds its own
         token, so removing one here doesn&apos;t sign out anything else.
       </p>
+      {/* This device's own closed-console notifications (ADR 0135 D10 / W2e). The push service
+          comes from this device's own row in the list loaded above. */}
+      <PushCard
+        provider={devices.find((d) => d.id === currentDeviceId())?.push?.provider}
+        onPair={limited ? undefined : () => void startPairing("device")}
+        onChanged={() => void refresh()}
+      />
       {publicUrl ? (
         // Persistent while the console is declared public (ADR 0121 D6): the token-only posture
         // is supported, but the operator must know who can reach the sign-in.
@@ -866,11 +880,10 @@ export function DevicesPanel() {
         </section>
       )}
 
-      {/* This device's own closed-console notifications (ADR 0135 W2e, first control). */}
-      <PushToggle />
-
       {/* The paired-devices list — rename, "This device", revoke (DeviceList.tsx). */}
       <DeviceList devices={devices} loading={loading} onChanged={refresh} callerLimited={limited} callerDeviceId={callerDeviceId} />
+      {/* The agent's notification signing key: full-access sign-ins only (NotificationKeyCard.tsx). */}
+      <NotificationKeyCard fullAccess={fullAccess} />
     </SettingsSubPanel>
   );
 }

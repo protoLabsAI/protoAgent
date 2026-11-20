@@ -178,6 +178,17 @@
    what the rule actually means (this dialog's OWN body). These classes ride the
    .pl-dialog itself (cx("pl-dialog", className)), which travels with the portal, so
    the body they target is always a direct child either way. */
+/* Small settings labels need stronger contrast than the DS subtle text token. */
+.settings-overlay .pl-sidenav__group-label,
+.settings-overlay .setting-desc code,
+.settings-overlay .devices-row-main > span,
+.settings-overlay .pl-badge:not([class*="pl-badge--"]) {
+  color: color-mix(in srgb, var(--pl-color-fg-muted) 65%, var(--pl-color-fg));
+}
+.settings-overlay .pl-badge--info,
+.settings-overlay .devices-list .subagent-row .pl-badge--info {
+  color: color-mix(in srgb, var(--pl-color-status-info) 75%, var(--pl-color-fg));
+}
 .settings-overlay > .pl-dialog__body {
   height: 80vh;
   height: 80dvh; /* dvh so the overlay fits the visible viewport on mobile */
@@ -237,7 +248,7 @@
   margin: var(--pl-space-1) 0 0;
   font-size: var(--pl-font-size-xs);
   line-height: 1.45;
-  color: var(--pl-color-fg-subtle);
+  color: color-mix(in srgb, var(--pl-color-fg-muted) 65%, var(--pl-color-fg));
 }
 /* ADR 0047 inheritance row — the source Badge + reset-to-inherited link aligned. */
 .setting-inheritance {

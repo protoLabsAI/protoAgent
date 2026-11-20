@@ -516,7 +516,7 @@ def _fleet_health_notify(notice: dict) -> None:
         base = (public_origin() or console_url() or "").rstrip("/")
         notify_chat_surfaces(
             f"Fleet member {notice['name']} {effect}", f"{base}/app/" if base else "",
-            kind="notify", importance=importance,
+            kind="notify", importance=importance, source="fleet-health",
         )
     except Exception:
         log.exception("[fleet-health] could not queue chat notice for %s", notice.get("id"))

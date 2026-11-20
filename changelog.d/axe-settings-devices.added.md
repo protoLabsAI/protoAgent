@@ -1,0 +1,1 @@
+- **Automated accessibility checks for console settings.** Add a reusable Playwright axe helper with scoped scans, optional rule exclusions, and readable violation reports, plus Settings Devices smoke coverage in light and dark themes. Improve contrast for small Settings descriptions, labels and badges exposed by the scan. Refs #5539.
