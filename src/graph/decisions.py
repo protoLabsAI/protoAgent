@@ -659,3 +659,20 @@ def decision_store() -> DecisionStore:
 
     store = getattr(STATE, "decision_store", None)
     return store if store is not None else DecisionStore()
+
+
+def push_eligible(notice_id: str) -> bool:
+    """Whether a queued phone push for ``notice_id`` should still go out (#5648).
+
+    The push transport asks before each attempt, so a decision answered, withdrawn,
+    cancelled or expired while its push waited (a retry, a quiet-hours hold, a restart)
+    is dropped instead of sent. Only a ``decision-<id>`` notice this store knows can be
+    ineligible: any other notice passes, and so does a decision id with no record here —
+    a member's relayed decision carries the member's id, which the hub's store never
+    holds. A store read error propagates; the transport defers the row on an exception.
+    """
+    prefix = "decision-"
+    if not notice_id.startswith(prefix):
+        return True
+    rec = decision_store().get(notice_id[len(prefix):])
+    return rec is None or rec.pending
