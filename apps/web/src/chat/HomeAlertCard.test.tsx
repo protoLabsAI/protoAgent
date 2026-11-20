@@ -6,10 +6,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage, HomeEntry } from "../lib/types";
+import { api } from "../lib/api";
 import { useUI } from "../state/uiStore";
 
 const openNotice = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("../app/NoticeClickWatch", () => ({ openNotice }));
+const openDocument = vi.hoisted(() => vi.fn());
+vi.mock("../docviewer", () => ({ openDocument }));
 
 // The real scratch state, wrapped so a test can read what Reply wrote and through which call.
 vi.mock("./scratchState", async (original) => {
@@ -72,6 +75,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   openNotice.mockClear();
+  openDocument.mockClear();
   vi.mocked(saveDraft).mockClear();
   vi.mocked(saveDraftContext).mockClear();
   sessionStorage.clear();
@@ -173,6 +177,106 @@ describe("HomeAlertCard", () => {
     render({ kind: "notify", importance: "normal", source: "spend-cap" }, "Soft limit passed\n\n/app/");
     expect(sourceLink()!.textContent).toBe("Spend cap");
     expect(new URL(sourceLink()!.href).pathname).toBe("/app/");
+  });
+});
+
+describe("HomeAlertCard — View full result", () => {
+  const SUMMARY = `${"Proposal one. ".repeat(35)}…`;
+  const FULL_TEXT = `# Morning digest\n\n${"Proposal with every detail. ".repeat(40)}`;
+  const DIGEST_TEXT = `${HEAD("review", "scheduler", "normal")}\nScheduled run digest completed.\n\n${SUMMARY}`;
+  const digest: HomeEntry = {
+    kind: "review",
+    importance: "normal",
+    source: "scheduler",
+    notice_id: "n-2",
+    activity_context: "system:activity",
+    task_id: "task-2",
+  };
+  type Turns = Awaited<ReturnType<typeof api.chatSessionTurns>>;
+  const turn = (task_id: string, text: string) => ({ task_id, state: "completed", text }) as unknown as Turns["turns"][number];
+
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Click the button and hand back the document the card asked the viewer to open. */
+  function openedDocument(): { title: string; subtitle?: unknown; load: () => Promise<string> } {
+    click(button("View full result")!);
+    expect(openDocument).toHaveBeenCalledTimes(1);
+    return openDocument.mock.calls[0][0];
+  }
+
+  it("opens the viewer on the run's whole turn text, read from the entry's activity context", async () => {
+    expect(FULL_TEXT.length).toBeGreaterThan(500);
+    const turns = vi
+      .spyOn(api, "chatSessionTurns")
+      .mockResolvedValue({ turns: [turn("task-1", "another run"), turn("task-2", FULL_TEXT)] } as Turns);
+    renderInHome(digest, DIGEST_TEXT);
+    // The card itself is unchanged: summary body, "Job run" and Reply.
+    expect(container.querySelector(".pl-home-alert-body")!.textContent).toBe(SUMMARY);
+    expect(sourceLink()!.textContent).toBe("Job run");
+    expect(button("Reply")).not.toBeUndefined();
+    const viewButton = button("View full result")!;
+    expect(viewButton.closest(".pl-home-alert-actions")).not.toBeNull();
+    expect(turns).not.toHaveBeenCalled(); // nothing is read until the operator asks
+
+    const doc = openedDocument();
+    expect(doc.title).toBe("Scheduled run digest completed.");
+    expect(doc.subtitle).toBeTruthy();
+    await expect(doc.load()).resolves.toBe(FULL_TEXT);
+    expect(turns.mock.calls[0][0]).toBe("system:activity");
+  });
+
+  it("falls back to the card's body when the turns read rejects, or holds no such turn", async () => {
+    const turns = vi.spyOn(api, "chatSessionTurns").mockRejectedValue(new Error("503"));
+    render(digest, DIGEST_TEXT);
+    const doc = openedDocument();
+    await expect(doc.load()).resolves.toBe(SUMMARY);
+    turns.mockResolvedValue({ turns: [turn("task-1", "another run")] } as Turns);
+    await expect(doc.load()).resolves.toBe(SUMMARY);
+    // An entry that names the context but no task has nothing to look up.
+    turns.mockClear();
+    openDocument.mockClear();
+    render({ ...digest, task_id: null }, DIGEST_TEXT);
+    await expect(openedDocument().load()).resolves.toBe(SUMMARY);
+    expect(turns).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the heading when a one-line summary left the card no body", async () => {
+    // What the server writes for a one-line summary: the whole notice is the title, and the
+    // body is only the console link, which the card lifts out as its source link.
+    const ONE_LINE = "Scheduled digest completed: nothing new today.";
+    const text = `${HEAD("review", "scheduler", "normal")}\n${ONE_LINE}\n\nhttp://localhost:7870/`;
+    const turns = vi.spyOn(api, "chatSessionTurns").mockRejectedValue(new Error("503"));
+    render(digest, text);
+    expect(container.querySelector(".pl-home-alert-body")).toBeNull();
+    const doc = openedDocument();
+    expect(doc.title).toBe(ONE_LINE);
+    await expect(doc.load()).resolves.toBe(ONE_LINE);
+    // Same when the run is outside the turns the read returns.
+    turns.mockResolvedValue({ turns: [turn("task-1", "another run")] } as Turns);
+    await expect(doc.load()).resolves.toBe(ONE_LINE);
+    // The subtitle names the entry; it never promises text the load may not have.
+    expect(String(doc.subtitle)).not.toMatch(/full turn/i);
+    // A readable turn still wins over the fallback.
+    turns.mockResolvedValue({ turns: [turn("task-2", FULL_TEXT)] } as Turns);
+    await expect(doc.load()).resolves.toBe(FULL_TEXT);
+  });
+
+  it("shows no button on a scheduler entry without an activity context, or on any other source", () => {
+    for (const activity_context of [undefined, null, "", "  "]) {
+      render({ ...digest, activity_context }, DIGEST_TEXT);
+      expect(button("View full result")).toBeUndefined();
+      expect(sourceLink()!.textContent).toBe("Job run");
+    }
+    render(fleetDown, FLEET_TEXT);
+    expect(button("View full result")).toBeUndefined();
+    // The run reference only counts on a scheduled result.
+    render({ ...fleetDown, activity_context: "system:activity", task_id: "task-2" }, FLEET_TEXT);
+    expect(button("View full result")).toBeUndefined();
+    render({ kind: "notify", importance: "normal", source: "watch", activity_context: "system:activity", task_id: "task-2" }, "Watch fired");
+    expect(button("View full result")).toBeUndefined();
+    render({ ...decision, activity_context: "system:activity", task_id: "task-2" }, DECISION_TEXT);
+    expect(button("View full result")).toBeUndefined();
+    expect(openDocument).not.toHaveBeenCalled();
   });
 });
 
