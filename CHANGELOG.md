@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.257.0] - 2026-11-20
+
+### Added
+- **Home conversation browser test (#5646).** A new end-to-end spec (`apps/web/e2e/home.spec.ts`) drives Home in a real browser against stubbed routes: a brief and a later fleet-down alert both show up, Home stays the first tab with no close control, the next brief still lands after three quiet days, and a job another chat scheduled reports in that chat and not in Home. It also runs the axe accessibility check on Home's tab, transcript and composer at 1280 px and 390 px. Refs #5545.
+
+### Changed
+- **Artifact panel actions always sit in the ⋯ menu (#5650).** Edit, Open in browser, Download and Delete now live in the toolbar's ⋯ menu at every panel width, the way a narrow dock or phone already showed them, so a wide panel's toolbar is just the picker, the version arrows, Links and ⋯. The menu behaves as before: picking an action closes it, the first Delete click asks "Confirm?", Escape closes it and returns focus to ⋯, and the arrow keys move between the actions.
+
+- **Fewer phone pushes by default (#5649).** Your phone now gets pushes only for questions and urgent notices. Turn on Settings → Push every notice to get all of them. Before, every notice was pushed, including routine scheduled results. Refs #5648.
+
 ## [0.256.0] - 2026-11-20
 
 ### Added
