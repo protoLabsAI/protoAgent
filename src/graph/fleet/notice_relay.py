@@ -15,6 +15,8 @@ Two halves, one per side of the loopback call:
   push ledger its own notices use.
 
 Only the notice's identity crosses: id, kind, importance and times. No text, no link.
+The hub's quiet hours apply to a member's notice as to its own: a routine one is held
+for the hub's digest, under the hub's own wording ("A notice from <member>").
 The origin is kept on the hub and read back after authentication (``GET
 /api/notices/<id>``), so the push payload still names no member (ADR 0135, "What leaves
 the machine").
@@ -122,12 +124,13 @@ class NoticeRefused(ValueError):
 async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
     """Hub side: queue a member's notice for the operator's devices.
 
-    True when it was queued, False when this hub has no push sender running (nothing to
-    do, not an error). Raises :class:`NoticeRefused` for a member this hub does not run
+    True when it was queued or held by the hub's quiet hours (``graph.notice_hold``; a
+    question or high-importance notice is never held), False when this hub has no push
+    sender running (nothing to do, not an error). Raises :class:`NoticeRefused` for a member this hub does not run
     or a notice that is not well formed. Times are clamped to the kind's own lifetime: a
     member can shorten a notice's life, never extend it.
     """
-    from graph import push_transport
+    from graph import notice_hold, push_transport
     from graph.workspaces import manager
 
     member = payload.get("member")
@@ -161,8 +164,16 @@ async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
     if transport is None:
         return False
     await asyncio.to_thread(transport.remember_origin, notice_id, member, expires_at)
-    await transport.accept(ChatNotice(
-        kind=kind, importance=importance, text="", link="",
+    # The text is the hub's own wording and names the member only: nothing the member
+    # sent is in it. The push payload never carries it; the quiet-hours hold keeps it
+    # for the digest the hub sends when the window ends.
+    notice = ChatNotice(
+        kind=kind, importance=importance, text=f"A notice from {workspace.get('name') or member}", link="",
         notice_id=notice_id, created_at=created_at, expires_at=expires_at,
-    ))
+    )
+    # The hub's quiet hours hold a member's routine notice as they hold its own (#5648).
+    # Held is still taken: the member must not retry it.
+    if await asyncio.to_thread(notice_hold.DELIVERY.hold, notice):
+        return True
+    await transport.accept(notice)
     return True
