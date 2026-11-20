@@ -275,6 +275,8 @@ continuation ownership, then state/compaction/result/decision attribution with
 integration validation. Background-session S0 is separate from the console slice
 numbering below.
 
+**Amendment (ADR 0135 D9, #5545).** Each job still runs in its own `job:` session, and Activity stays the provenance feed. What changes is where results are *shown*. Each instance has one Home conversation: an ordinary operator chat with a stable id, pinned in the console. A job with no `origin_session` shows its results in Home. Owner notices (notify, question, review) also post an entry in Home. Home entries are written into Home's own thread as reference messages, so a reply in Home sees them. Showing a result in Home never runs the job there and never gives the job Home's context. A job created from another chat still shows its results in that chat, unless the operator moves it to Home.
+
 ### D7 — A turn interrupted by a restart: resume what's safe, ask about the rest (Josh, 2026-11-12)
 
 **Problem.** When the server stops mid-turn (SIGTERM, crash, desktop relaunch),
