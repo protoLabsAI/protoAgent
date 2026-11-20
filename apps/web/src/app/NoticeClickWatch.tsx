@@ -13,6 +13,11 @@ const CLICK_MESSAGE = "protoagent:notice-click"; // sw.js CLICK_MESSAGE
 const NOTICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/; // sw.js NOTICE_ID
 const DECISION_PREFIX = "decision-"; // graph/decisions.py: notice_id = f"decision-{rec.id}"
 let latestClick = 0;
+// The push worker also leaves the clicked id here (sw.js `rememberClick`): on iOS an installed
+// console can come to the front with neither a `?notice=` URL nor a worker message.
+const CLICK_CACHE = "protoagent-notice-click"; // sw.js CLICK_CACHE
+const CLICK_KEY = "/app/__notice-click"; // sw.js CLICK_KEY
+const CLICK_MAX_AGE_MS = 5 * 60_000; // older than this is not "the tap that brought me here"
 
 /** The fleet member that raised a notice, or null for this hub's own. The push payload names
  *  no agent, so the hub is asked after authentication (`GET /api/notices/<id>`, #5614). Any
@@ -61,17 +66,52 @@ export function takeNoticeFromUrl(): string | null {
   return id;
 }
 
+/** Read and delete the click the push worker left, if it is recent. Null when there is none,
+ *  it is stale, or Cache Storage is unavailable (private mode). */
+export async function takeClickedNotice(now: number = Date.now()): Promise<string | null> {
+  try {
+    // `has` first: opening a cache creates it, and the console must leave nothing behind
+    // just by looking. The whole cache goes once its one entry is read.
+    if (typeof caches === "undefined" || !(await caches.has(CLICK_CACHE))) return null;
+    const hit = await (await caches.open(CLICK_CACHE)).match(CLICK_KEY);
+    await caches.delete(CLICK_CACHE);
+    if (!hit) return null;
+    const body = (await hit.json()) as { id?: unknown; at?: unknown };
+    if (typeof body.id !== "string" || typeof body.at !== "number") return null;
+    return now - body.at >= 0 && now - body.at <= CLICK_MAX_AGE_MS ? body.id : null;
+  } catch {
+    return null;
+  }
+}
+
 export function NoticeClickWatch() {
   useEffect(() => {
     void openNotice(takeNoticeFromUrl());
+    const fromWorker = () => {
+      if (document.visibilityState !== "visible") return;
+      void takeClickedNotice().then((id) => { if (id) void openNotice(id); });
+    };
+    fromWorker();
+    document.addEventListener("visibilitychange", fromWorker);
+    window.addEventListener("focus", fromWorker);
+    window.addEventListener("pageshow", fromWorker);
+    const stop = () => {
+      document.removeEventListener("visibilitychange", fromWorker);
+      window.removeEventListener("focus", fromWorker);
+      window.removeEventListener("pageshow", fromWorker);
+    };
     const worker = typeof navigator !== "undefined" ? navigator.serviceWorker : undefined;
-    if (!worker) return;
+    if (!worker) return stop;
     const onMessage = (event: MessageEvent) => {
       const data = event.data as { type?: unknown; id?: unknown } | null;
-      if (data && data.type === CLICK_MESSAGE) void openNotice(data.id);
+      if (!data || data.type !== CLICK_MESSAGE) return;
+      // This click arrived by message, so the note the worker left for it is spent: drop it,
+      // or the next time the console comes to the front it would open the same decision again.
+      void takeClickedNotice();
+      void openNotice(data.id);
     };
     worker.addEventListener("message", onMessage);
-    return () => worker.removeEventListener("message", onMessage);
+    return () => { stop(); worker.removeEventListener("message", onMessage); };
   }, []);
   return null;
 }

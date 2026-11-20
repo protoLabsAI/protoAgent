@@ -59,3 +59,19 @@ test("mobile: a decision another agent asked for opens in that agent's console",
   await expectAnswerForm(page);
   expect(new URL(page.url()).searchParams.has("notice")).toBe(false);
 });
+
+test("mobile: the console comes to the front with no URL and no message, and still opens the decision", async ({ page }) => {
+  await seed(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Settings sections/ })).toBeVisible();
+  // What public/sw.js leaves on `notificationclick` (`rememberClick`), then the app is foregrounded.
+  await page.evaluate(async () => {
+    const body = JSON.stringify({ v: 1, id: "decision-dec-4ba15c14", at: Date.now() });
+    await (await caches.open("protoagent-notice-click")).put("/app/__notice-click", new Response(body));
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expectAnswerForm(page);
+  expect(await page.evaluate(() => caches.keys())).toEqual([]); // read once, nothing left behind
+});
