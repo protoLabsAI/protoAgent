@@ -9,7 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
 import { useIsMobile } from "../lib/useIsMobile";
-import { api, ApiError } from "../lib/api";
+import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
@@ -34,7 +34,7 @@ import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSessi
 import { pushClose, pushRename } from "./sessionListSync";
 import { messagesFromDurableTurns, SESSION_TURN_LIMIT } from "./sessionHydration";
 import { ChatSessionSlot } from "./ChatSessionSlot";
-import { homeQueryKey } from "./homeTab";
+import { fetchHomeState, homeQueryKey } from "./homeTab";
 import { ConversationsPane } from "./ConversationsPane";
 import {
   CONVERSATIONS_STAGE_ID,
@@ -84,13 +84,7 @@ export function ChatSurface({
   const homeKey = homeQueryKey();
   const homeState = useQuery({
     queryKey: homeKey,
-    queryFn: async () => {
-      try { return await api.home(); }
-      catch (error) {
-        if (error instanceof ApiError && error.status === 404) return null;
-        throw error;
-      }
-    },
+    queryFn: fetchHomeState,
     refetchInterval: 30_000,
   });
   const homeId = homeState.data?.session_id;
