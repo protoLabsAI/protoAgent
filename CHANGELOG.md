@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.254.0] - 2026-11-20
+
+### Added
+- **Quiet hours for routine notices (#5621).** Settings can hold low and normal notices overnight and deliver one durable morning digest, while urgent notices and questions arrive immediately. Refs #5538.
+
+- **Watch fires notify connected chat and push surfaces (#5620).** Met conditions and value changes send one normal-importance notice with a console link; flapping fires stay quiet, and notification failures do not interrupt watch reactions. Refs #5619.
+
+### Fixed
+- **Settle chat spinners after decision answers (#5617).** Reuse the existing task bubble when a mid-turn message receives a delayed steer acknowledgement, preserving the resumed reply and its completion state. Fixes #5467.
+
+- **Tapping a notification on an installed phone console opens the decision even when the phone hands over nothing (#5622).** An installed iOS console can come to the front on the page it was left on, without the link or the message that says which notification was tapped, so the tap did nothing useful. The push worker now also leaves the tapped notice's id for the console, which reads it when it comes to the front and opens the decision, in the right agent's console. An updated worker also takes over without waiting for the console to be closed. Refs #5539.
+
 ## [0.253.0] - 2026-11-19
 
 ### Added

@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.254.0",
+    "date": "2026-11-20",
+    "changes": [
+      "Quiet hours for routine notices (#5621).",
+      "Watch fires notify connected chat and push surfaces (#5620).",
+      "Settle chat spinners after decision answers (#5617).",
+      "Tapping a notification on an installed phone console opens the decision even when the phone hands over nothing (#5622)."
+    ]
+  },
+  {
     "version": "v0.253.0",
     "date": "2026-11-19",
     "changes": [
