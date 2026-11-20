@@ -286,6 +286,52 @@ phone credential. Unknown, expired, replayed or substituted handles fail closed,
 after a hub restart or capacity eviction (mint a fresh ticket). Other plugins' ticket
 protocols still need explicit integration; their proxied ticket sockets are not covered.
 
+## What leaves this machine {#what-leaves-this-machine}
+
+A paired device can get an alert while the console is closed
+([Turn on alerts](../guides/phone-access.md#turn-on-alerts),
+[ADR 0135](../adr/0135-always-on-orchestrator.md)). That is the one place the agent sends
+something about your work to a service you don't run, so the console says exactly what goes.
+**Settings ▸ Devices ▸ Notifications on this device ▸ What leaves this machine** reads:
+
+> Alerts go straight from this machine to your browser's push service: Apple, Google or
+> Mozilla. No protoAgent server sits in between, and you don't need a chat app.
+>
+> The alert says only "protoAgent needs your attention" and "Open the console to view a
+> decision" (or "an update"). It never includes the question, chat text, job output, names or
+> file paths.
+>
+> The push service can see when alerts are sent, how big they are and this machine's public
+> IP address.
+>
+> Opening an alert asks you to sign in to the console. Nothing can be approved from the lock
+> screen.
+
+What that means for trust:
+
+- **The browser picks the push service**, not protoAgent. Safari and iOS Home Screen apps use
+  Apple's, Chrome uses Google's and Firefox uses Mozilla's.
+- **The alert's content is encrypted for the browser**, and it is generic anyway. The push
+  service still sees timing, size and this machine's public IP address. This is not
+  metadata-private delivery.
+- **An alert carries no authority.** It opens the console, which asks for the device's
+  sign-in and then reads the current state from the agent. A decision that was already
+  answered or withdrawn shows as that, with nothing to answer.
+- **The agent signs alerts with its own notification key.** There is no shared protoAgent key
+  and no Apple or Google developer account. A full-access sign-in can
+  [rotate the key](../guides/pairing.md#notification-key). Treat a backup that holds it as a
+  secret.
+- **Turning alerts on changes nothing about who can get in.** A device stores only its own
+  push subscription, so a Limited device can do it.
+
+The device list reports what the push service said about the last alert
+([Push status on each row](../guides/pairing.md#push-status)). Accepted means the push service
+took the alert. It doesn't mean you saw it. The agent can't see whether a phone displayed an
+alert, so the decision or update stays in the console until you act on it there.
+
+The desktop app doesn't use a push service. It shows alerts itself, from its connection to the
+agent, while the app is running.
+
 ## The console page policy {#the-console-page-policy}
 
 The console holds the operator token, and it renders text the model wrote, which can be steered

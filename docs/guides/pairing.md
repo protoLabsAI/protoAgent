@@ -237,6 +237,70 @@ example **expires in 30 days if unused**.
 An expired row stays in the list until you remove it, so you can see which phone it was. To
 use that phone again, remove its row with the trash icon, then pair it again.
 
+### Push status on each row {#push-status}
+
+Each phone or tablet row has one line that says where its alerts stand. An agent hub has no
+such line: it isn't a browser. To turn alerts on for a device, use the device itself
+([Turn on alerts](/guides/phone-access#turn-on-alerts)).
+
+| The row says | What it means |
+| --- | --- |
+| **Push off** | The device hasn't turned alerts on, or turned them off. |
+| **Push on · Apple** (or Google, Mozilla) | Alerts are on through that push service. No alert has been sent yet. |
+| **Push on · Apple accepted the last alert at** &lt;time&gt; | The push service took the last alert. |
+| **Push on · Apple didn't accept the last alert** | The last alert failed. The next line says why. |
+| **Push on · last alert sent at** &lt;time&gt; | An alert was sent and the push service hasn't answered yet. |
+| **Renew needed** | The agent dropped this device's alerts. The next line says why ([Renew needed](#renew-needed)). |
+| **Not reported yet** | The agent sent no push status for this row. An agent from before push status does this. |
+
+Accepted means the push service took the alert. It doesn't mean you saw it. The phone can be
+off, out of signal or in a focus mode.
+
+When the push service didn't accept an alert, the row gives one of these reasons:
+
+- **The push service took too long to answer.**
+- **The alert couldn't reach the push service.** Check this machine's internet connection.
+- **The push service was busy or had a problem.**
+- **The push service refused this alert. It won't be sent again.**
+- **protoAgent stopped trying before the push service took the alert.**
+- **Error code:** &lt;code&gt;, for anything else.
+
+A failed alert doesn't lose the decision or update behind it. It is still in the console.
+
+### Renew needed {#renew-needed}
+
+The agent drops a device's alerts in three cases. The device's row shows **Renew needed**, and
+the device's own **Notifications on this device** card shows **Renew on this device**, each with
+the reason:
+
+| Reason shown | What happened |
+| --- | --- |
+| **This agent changed its notification key.** | The key was [rotated](#notification-key) and this device didn't renew before the old version retired. |
+| **This phone moved to a new address, which needs its own notifications.** | You used [Move this phone to…](/guides/phone-access#move-this-phone). A browser's alerts belong to one address. |
+| **This device went unused for too long.** | The device idled past its limit ([Expired](#expired)). |
+
+To fix it, open the console on that device, go to **Settings ▸ Devices** and select
+**Renew notifications**. Nobody can renew a device from another device.
+
+### Notification key {#notification-key}
+
+The agent signs every alert with its own notification key, so a push service knows the alert
+came from this agent. The agent creates the key when a device first turns on notifications.
+
+A full-access sign-in sees a **Notification key** card in **Settings ▸ Devices**. It shows
+which key version is active, when each older version retires and how many devices still use
+it. It shows versions and dates only, never the key. A Limited device doesn't get the card.
+
+Rotate the key if you think it leaked, for example from a copied backup:
+
+1. Select **Rotate key…**.
+2. Read the confirmation. It says how long devices have to renew (30 days).
+3. Select **Rotate key**. **Cancel** or <kbd>Esc</kbd> backs out and changes nothing.
+
+After a rotation, each device renews on its own the next time you open the console on it. The
+old version keeps working until its retirement date. A device that doesn't open the console
+by then stops getting alerts and shows [Renew needed](#renew-needed).
+
 ### Weekly token rotation
 
 A paired phone swaps its token for a new one about once a week, on its own, while you use
