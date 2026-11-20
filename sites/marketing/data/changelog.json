@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.257.0",
+    "date": "2026-11-20",
+    "changes": [
+      "Home conversation browser test (#5646).",
+      "Artifact panel actions always sit in the ⋯ menu (#5650).",
+      "Fewer phone pushes by default (#5649)."
+    ]
+  },
+  {
     "version": "v0.256.0",
     "date": "2026-11-20",
     "changes": [
