@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { enrollPush, pushState, renewPush, startPush, unenrollPush, removeLocalPushSubscription } from "./push";
+import { enrollPush, PushError, pushStatus, pushState, renewPush, startPush, unenrollPush, removeLocalPushSubscription } from "./push";
 import { rotateDeviceTokenIfDue } from "./deviceRotation";
 import { claimPairingCode } from "./pairing";
 import { requestHandoff } from "./deviceHandoff";
@@ -38,6 +38,61 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it.each(["vapid_key", "handoff", "idle", null] as const)("reads the full self binding with renewal reason %s", async (renew) => {
+  const binding = { vapid_version: 2, generation: 3, created_at: 100, renewed_at: 200 };
+  status = { ...status, binding, renew };
+  expect(await pushStatus()).toEqual({ public_key: "AQID", version: 2, binding, renew });
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/devices/self/push");
+  const init = fetchMock.mock.calls[0][1];
+  expect(init).toMatchObject({ method: "GET", cache: "no-store" });
+  expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer own-token");
+  status.binding = null;
+  expect((await pushStatus()).binding).toBeNull();
+});
+
+it.each([
+  [403, '{"error":"not_a_device"}', "not_a_device"],
+  [503, '{"error":"push_keyring_unavailable"}', "push_keyring_unavailable"],
+  [502, "Bad gateway", null],
+  [500, '{"error":123}', null],
+  [500, "null", null],
+  [500, "{}", null],
+] as const)("preserves HTTP %s and code from %s", async (httpStatus, body, code) => {
+  fetchMock.mockResolvedValueOnce(new Response(body, { status: httpStatus }));
+  const result = pushStatus();
+  await expect(result).rejects.toBeInstanceOf(PushError);
+  await expect(result).rejects.toMatchObject({ status: httpStatus, code, message: `Push enrollment: HTTP ${httpStatus}` });
+  // Failed reads must not poison the serialization queue.
+  expect((await pushStatus()).binding).toBeNull();
+});
+
+it.each([
+  [400, "invalid_endpoint"], [400, "invalid_keys"], [409, "stale_vapid_version"],
+  [409, "endpoint_in_use"], [409, "not_enrollable"],
+] as const)("enrollment surfaces PUT refusal %s %s", async (httpStatus, code) => {
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(status)))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: code }), { status: httpStatus }));
+  const result = enrollPush();
+  await expect(result).rejects.toBeInstanceOf(PushError);
+  await expect(result).rejects.toMatchObject({ status: httpStatus, code });
+  expect(fetchMock.mock.calls[1][1]?.method).toBe("PUT");
+});
+
+it("queues status behind subscription changes and reads the current credential", async () => {
+  let finish!: (response: Response) => void;
+  fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  const removal = unenrollPush();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  const read = pushStatus();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  localStorage.setItem("protoagent.deviceToken", "new-token");
+  finish(new Response(JSON.stringify({ ok: true })));
+  await removal;
+  await read;
+  expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["DELETE", "GET"]);
+  expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get("Authorization")).toBe("Bearer new-token");
+});
+
 it.each(["insecure", "missing PushManager"])("does nothing when %s", async (condition) => {
   if (condition === "insecure") vi.stubGlobal("isSecureContext", false);
   else vi.stubGlobal("PushManager", undefined);
@@ -74,8 +129,10 @@ it("denial stores nothing and a gesture grant PUTs one own binding", async () =>
   expect(fetchMock).not.toHaveBeenCalled();
   expect(localStorage.getItem("protoagent.pushDisabled")).toBeNull();
   permission.permission = "default";
-  expect(await enrollPush()).toBe("enrolled");
+  const enrollment = enrollPush();
   expect(requestPermission).toHaveBeenCalledOnce();
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(await enrollment).toBe("enrolled");
   expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
   status.binding = { vapid_version: 2 };
   expect(await pushState()).toBe("enrolled");
