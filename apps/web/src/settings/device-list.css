@@ -49,3 +49,52 @@
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
+
+.devices-list .subagent-row {
+  flex-wrap: wrap;
+}
+.devices-list .devices-row-main {
+  flex-basis: 16rem;
+}
+.devices-list .subagent-row strong {
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.devices-list .devices-push-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-xs);
+  overflow-wrap: anywhere;
+}
+.devices-push-line > svg {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+.devices-push-detail {
+  display: block;
+}
+.devices-push-note {
+  margin: var(--pl-space-2) var(--pl-space-3);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+.devices-list .issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+.devices-list .issue-actions button {
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+/* Shared row subtitles use fg-subtle; badges and push copy need body-text contrast. */
+.devices-list .subagent-row .pl-badge,
+.devices-list .devices-push-line span {
+  color: var(--pl-color-fg-muted);
+}
+.devices-list .subagent-row .pl-badge--error {
+  color: var(--pl-color-status-error);
+}
