@@ -22,6 +22,7 @@ import {
 } from "../lib/deviceReach";
 import { DeviceList, MAX_DEVICE_NAME } from "./DeviceList";
 import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
+import { NotificationKeyCard } from "./NotificationKeyCard";
 import { PushCard } from "./PushCard";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
@@ -69,6 +70,10 @@ export function DevicesPanel() {
   // dead ones.
   const [limited, setLimited] = useState(false);
   const [callerDeviceId, setCallerDeviceId] = useState<string | null>(null);
+  // The server said, in so many words, that this credential is full access (and the hub
+  // agrees). Unlike `limited`, an answer with no `caller` leaves this false: the
+  // notification key card shows only on a positive answer.
+  const [fullAccess, setFullAccess] = useState(false);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [pairError, setPairError] = useState<string | null>(null);
   const [unreachable, setUnreachable] = useState<Unreachable | null>(null);
@@ -123,6 +128,7 @@ export function DevicesPanel() {
         lim = hub?.caller?.scope === "device";
       }
       setLimited(lim);
+      setFullAccess(res.caller?.scope === "full" && !lim);
       setCallerDeviceId(res.caller?.device_id ?? null);
     } catch {
       /* read-mostly panel; a transient failure just leaves the last list */
@@ -876,6 +882,8 @@ export function DevicesPanel() {
 
       {/* The paired-devices list — rename, "This device", revoke (DeviceList.tsx). */}
       <DeviceList devices={devices} loading={loading} onChanged={refresh} callerLimited={limited} callerDeviceId={callerDeviceId} />
+      {/* The agent's notification signing key: full-access sign-ins only (NotificationKeyCard.tsx). */}
+      <NotificationKeyCard fullAccess={fullAccess} />
     </SettingsSubPanel>
   );
 }
