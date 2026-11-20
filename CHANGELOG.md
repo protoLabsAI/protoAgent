@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.256.0] - 2026-11-20
+
+### Added
+- **Reply on a Home card (#5640).** Alert, brief and scheduled-report cards in Home now have a "Reply" action. It quotes the entry into Home's composer, attaches a hidden reference so the agent knows which entry you mean, and focuses the composer. Delete the quote and the reference is dropped with it, so it never rides along on an unrelated message. The reply is an ordinary Home message: it never resumes or steers the job that raised the entry. Decision cards keep "Answer" and get no Reply. Refs #5545.
+
+- **Home shows where each day starts and what is new (#5643).** The Home transcript now puts a plain "Today", "Yesterday" or dated line above the first entry of each day, and an "N new" line above the first entry newer than the last time Home was read; that line stays put while Home is open instead of vanishing the moment it is marked read. A screen reader hears "New in Home:" and the title once for each entry that arrives while Home is open, never for the operator's own messages, and the transcript itself is not a live region. The Home tab's unread count now uses the same rule as the "N new" line, so alert cards count too. Other chats render as before. Refs #5545.
+
+- **Tapping a push notification opens Home at that notice (#5642).** When Home holds an entry for the tapped notice, the console closes Settings, selects the Home chat and scrolls to that entry's card, including for a decision, whose card has the "Answer" action. A tap usually arrives before the next refresh, so the console reads Home's entries first if the transcript does not show the notice yet. Without a Home entry (or with the `home_conversation` developer flag off) a tap behaves as before: a decision opens its answer form, and any other notice follows the route the push worker named. Refs #5545, #5539.
+
+- **Phone: the console opens on Home, and Home is the first row of the session sheet (#5644).** On a phone, opening the console now lands in Home so alerts and briefs are read first; the session sheet lists Home at the top with a pin marker, above "From others". Home card actions span the card at touch-target height, and the header's visible "Home" title is the page heading. When Home is off (`GET /api/home` answers 404) nothing changes. Refs #5545.
+
+### Fixed
+- **A scheduled result that lands in Home while you watch shows once (#5645).** The live card now takes the id of the Home entry the server stores for the same fire, so loading Home's thread replaces it instead of adding a second card, and a fire whose entry is already on screen adds nothing. Results delivered to any other chat are unchanged. Refs #5545.
+
 ## [0.255.0] - 2026-11-20
 
 ### Added
