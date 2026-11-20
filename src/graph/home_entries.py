@@ -75,7 +75,10 @@ def _clip(text: object, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _message(kind: str, importance: str, title: str, source: str, notice_id: str | None, body: str | None):
+def _message(
+    kind: str, importance: str, title: str, source: str, notice_id: str | None, body: str | None,
+    meta: dict | None = None,
+):
     from langchain_core.messages import HumanMessage
 
     from graph.compaction_engine import HOME_ENTRY_KWARG, sent_at_kwargs
@@ -90,6 +93,8 @@ def _message(kind: str, importance: str, title: str, source: str, notice_id: str
         additional_kwargs={
             **sent_at_kwargs(),
             HOME_ENTRY_KWARG: {
+                # A caller's extra keys first: they never replace the four core keys below.
+                **(meta or {}),
                 "kind": kind,
                 "importance": importance,
                 "source": source,
@@ -171,11 +176,15 @@ async def write_home_entry(
     source: str,
     notice_id: str | None = None,
     body: str | None = None,
+    meta: dict | None = None,
 ) -> bool:
     """Append one reference message to Home's thread; never starts a turn.
 
     The message's ``additional_kwargs[HOME_ENTRY_KWARG]`` is ``{kind, importance, source,
-    notice_id}``; ``notice_id`` is the key a push click uses to find the entry. Returns
+    notice_id}``; ``notice_id`` is the key a push click uses to find the entry. ``meta`` adds
+    the caller's own keys to that dict (a scheduled result's ``activity_context`` and
+    ``task_id``); it cannot replace the four core keys, and without it the dict is exactly
+    those four. Returns
     ``True`` once written. Returns ``False`` when the Home flag is off (nothing happens) or
     when Home is paused for a human, in which case the entry waits and is written, in
     arrival order, after the pause clears. Raises if the write itself fails; callers on the
@@ -183,7 +192,7 @@ async def write_home_entry(
     """
     if not _enabled():
         return False
-    msg = _message(kind, importance, title, source, notice_id, body)
+    msg = _message(kind, importance, title, source, notice_id, body, meta)
     if not _pending and await _append([msg]):
         return True
     _defer(msg)  # behind anything already waiting, so entries keep their order
@@ -204,6 +213,7 @@ def post_home_entry(
     source: str,
     notice_id: str | None = None,
     body: str | None = None,
+    meta: dict | None = None,
 ) -> bool:
     """Queue :func:`write_home_entry` on the server loop without waiting for it.
 
@@ -218,7 +228,7 @@ def post_home_entry(
 
         entry = {
             "kind": kind, "importance": importance, "title": title, "source": source,
-            "notice_id": notice_id, "body": body,
+            "notice_id": notice_id, "body": body, "meta": dict(meta) if meta else None,
         }
         try:
             running = asyncio.get_running_loop()

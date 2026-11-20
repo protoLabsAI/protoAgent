@@ -106,6 +106,7 @@ def notify_chat_surfaces(
     text: str, link: str, *, kind: NoticeKind = "notify", importance: NoticeImportance = "normal",
     ttl_seconds: float | None = None, notice_id: str | None = None,
     source: str = "notice", home_title: str | None = None, home_entry: bool = True,
+    home_meta: dict | None = None,
 ) -> str:
     """Queue optional adapter notifications without waiting for network delivery.
 
@@ -125,7 +126,11 @@ def notify_chat_surfaces(
     once even when quiet hours hold the notice: the hold is about interrupting the
     operator, and Home is in-app. ``home_title`` makes the entry a short pointer
     (that title, no body) instead of the full text; ``home_entry=False`` skips it
-    for a notice already in front of the operator in their own chat.
+    for a notice already in front of the operator in their own chat. ``home_meta``
+    adds the caller's own keys to the entry's metadata (a scheduled result passes its
+    run's ``activity_context`` and ``task_id``); it cannot replace ``kind``,
+    ``importance``, ``source`` or ``notice_id``, and it reaches Home only, never an
+    adapter or the bus event.
     """
     lifetime = _NOTICE_LIFETIMES[kind]
     if ttl_seconds is not None:
@@ -146,7 +151,7 @@ def notify_chat_surfaces(
     except Exception:  # noqa: BLE001 — a bus failure must not suppress adapters
         log.exception("Could not publish notice event")
     if home_entry:
-        _post_home_entry(notice, source, home_title)
+        _post_home_entry(notice, source, home_title, home_meta)
     from graph.notice_hold import DELIVERY
 
     if not DELIVERY.hold(notice):
@@ -154,7 +159,9 @@ def notify_chat_surfaces(
     return notice.notice_id
 
 
-def _post_home_entry(notice: ChatNotice, source: str, home_title: str | None) -> None:
+def _post_home_entry(
+    notice: ChatNotice, source: str, home_title: str | None, home_meta: dict | None = None,
+) -> None:
     """Queue the notice's Home entry. Best-effort: a failure is logged and never
     stops the adapter dispatch that follows."""
     try:
@@ -168,6 +175,7 @@ def _post_home_entry(notice: ChatNotice, source: str, home_title: str | None) ->
         post_home_entry(
             notice.kind, notice.importance, home_title or lines[0], source,
             notice_id=notice.notice_id, body=body,
+            **({"meta": home_meta} if home_meta is not None else {}),
         )
     except Exception:  # noqa: BLE001 — Home is one more place to read it, never a gate
         log.exception("Could not queue the Home entry for notice %s", notice.notice_id)

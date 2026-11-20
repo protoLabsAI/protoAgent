@@ -202,4 +202,40 @@ async def test_home_result_writes_one_reference_entry_and_suppresses_quiet_repea
     assert message.additional_kwargs[HOME_ENTRY_KWARG] == {
         "kind": "review", "importance": a2a._SCHEDULED_NOTICE_IMPORTANCE,
         "source": "scheduler", "notice_id": card["notice_id"],
+        "activity_context": "job:job-1", "task_id": "task-abc",
     }
+    assert (card["activity_context"], card["task_id"]) == ("job:job-1", "task-abc")
+
+
+async def test_home_meta_adds_keys_but_never_replaces_the_core_four(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from graph import home_entries
+    from graph.compaction_engine import HOME_ENTRY_KWARG
+    from graph.plugins.chat_surface import notify_chat_surfaces
+
+    monkeypatch.setenv("PROTOAGENT_FLAG_HOME_CONVERSATION", "on")
+    graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(tasks=())), aupdate_state=AsyncMock())
+    monkeypatch.setattr(server.STATE, "graph", graph)
+    monkeypatch.setattr(server.STATE, "main_loop", None)
+    monkeypatch.setattr(home_entries, "_thread_lock", None)
+
+    async def _entry(**kw):
+        graph.aupdate_state.reset_mock()
+        notify_chat_surfaces("Run done", "", kind="review", source="scheduler", notice_id="n1", **kw)
+        while home_entries._inflight:
+            await asyncio.gather(*list(home_entries._inflight))
+        [message] = graph.aupdate_state.call_args.args[1]["messages"]
+        return message.additional_kwargs[HOME_ENTRY_KWARG]
+
+    core = {"kind": "review", "importance": "normal", "source": "scheduler", "notice_id": "n1"}
+    hostile = {"kind": "question", "importance": "high", "source": "x", "notice_id": "other", "task_id": "t1"}
+    assert await _entry(home_meta=hostile) == {**core, "task_id": "t1"}
+    assert hostile["kind"] == "question"  # the caller's dict is not mutated
+    # A missing value stays an explicit None; no home_meta keeps exactly the four keys.
+    assert await _entry(home_meta={"activity_context": None, "task_id": None}) == {
+        **core, "activity_context": None, "task_id": None,
+    }
+    assert await _entry() == core
