@@ -20,7 +20,6 @@ const refused = (code: string, http = 409) => new push.PushError(http, code);
 
 const TROUBLE = "Couldn't check notifications on this device.";
 const ON = "Notifications are on for this device.";
-const OFF = "Notifications are off for this device.";
 
 let root: Root;
 let node: HTMLDivElement;
@@ -130,11 +129,13 @@ describe("the ten states", () => {
     expect(button("Turn on notifications")).toBeTruthy();
   });
 
-  it("4: a browser without push says so", async () => {
-    mock("unsupported");
+  it.each([
+    ["4: a browser without push says so", "unsupported", ["Not supported", "This browser can't get notifications."]],
+    ["6: a blocked browser gets a hint and is never asked again", "denied", ["Notifications are blocked in this browser's settings.", "allow notifications"]],
+  ] as const)("%s", async (_name, state, texts) => {
+    mock(state);
     await render();
-    expect(stateText()).toContain("Not supported");
-    expect(stateText()).toContain("This browser can't get notifications.");
+    for (const text of texts) expect(stateText()).toContain(text);
     expect(buttons()).toHaveLength(0);
   });
 
@@ -154,14 +155,6 @@ describe("the ten states", () => {
     await render({ onPair: vi.fn() });
     expect(stateText()).toContain("Shared sign-in");
     expect(get).not.toHaveBeenCalled();
-  });
-
-  it("6: a blocked browser gets a hint and is never asked again", async () => {
-    mock("denied");
-    await render();
-    expect(stateText()).toContain("Notifications are blocked in this browser's settings.");
-    expect(stateText()).toContain("allow notifications");
-    expect(buttons()).toHaveLength(0);
   });
 
   it.each([
@@ -210,12 +203,8 @@ describe("the ten states", () => {
     expect(buttons().map((b) => b.textContent?.trim())).toEqual(["Try again"]);
   });
 
-  it("says how long ago in whole units", () => {
-    const now = 1_000_000_000;
-    expect(renewedAgo(now / 1000 - 5, now)).toBe("just now");
-    expect(renewedAgo(now / 1000 - 60, now)).toBe("1 minute ago");
-    expect(renewedAgo(now / 1000 - 3 * 3600, now)).toBe("3 hours ago");
-    expect(renewedAgo(now / 1000 - 86400, now)).toBe("1 day ago");
+  it.each([[5, "just now"], [60, "1 minute ago"], [3 * 3600, "3 hours ago"], [86400, "1 day ago"]])("says %i seconds back as %s", (ago, text) => {
+    expect(renewedAgo(1_000_000 - ago, 1_000_000_000)).toBe(text);
   });
 });
 
@@ -319,25 +308,19 @@ describe("turning on and renewing", () => {
     expect(refusal()).toBeNull();
   });
 
-  it("stale_vapid_version twice lands in couldn't check, on the heading", async () => {
+  it.each([
+    ["stale_vapid_version twice", refused("stale_vapid_version"), 1],
+    ["any other failure", new Error("offline"), 0],
+  ])("%s lands in couldn't check, on the heading", async (_name, failure, retries) => {
     mock("not enrolled");
     await render();
-    const enroll = vi.spyOn(push, "enrollPush").mockRejectedValue(refused("stale_vapid_version"));
-    const renew = vi.spyOn(push, "renewPush").mockRejectedValue(refused("stale_vapid_version"));
+    const enroll = vi.spyOn(push, "enrollPush").mockRejectedValue(failure);
+    const renew = vi.spyOn(push, "renewPush").mockRejectedValue(failure);
     await click("Turn on notifications");
     expect(enroll).toHaveBeenCalledOnce();
-    expect(renew).toHaveBeenCalledOnce();
+    expect(renew).toHaveBeenCalledTimes(retries);
     expect(stateText()).toBe(TROUBLE);
     expect(statusLine().textContent).toBe(TROUBLE);
-    expect(document.activeElement).toBe(heading());
-  });
-
-  it("any other failure lands in couldn't check, on the heading", async () => {
-    mock("not enrolled");
-    await render();
-    vi.spyOn(push, "enrollPush").mockRejectedValue(new Error("offline"));
-    await click("Turn on notifications");
-    expect(stateText()).toBe(TROUBLE);
     expect(button("Try again")).toBeTruthy();
     expect(document.activeElement).toBe(heading());
   });
@@ -381,7 +364,7 @@ describe("turning off, checking again, coming back", () => {
     await click("Turn off on this device");
     expect(unenroll).toHaveBeenCalledOnce();
     expect(stateText()).toContain("Off on this device");
-    expect(statusLine().textContent).toBe(OFF);
+    expect(statusLine().textContent).toBe("Notifications are off for this device.");
     expect(document.activeElement).toBe(button("Turn on notifications"));
     expect(onChanged).toHaveBeenCalledOnce();
   });
