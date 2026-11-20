@@ -2,14 +2,14 @@ import "./chat.css";
 import { StatusDot } from "@protolabsai/ui/data";
 import { Switch } from "@protolabsai/ui/forms";
 import { TabBar, type TabBarItem } from "@protolabsai/ui/navigation";
-import { EyeOff, MessagesSquare } from "lucide-react";
+import { EyeOff, House, MessagesSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
 import { useIsMobile } from "../lib/useIsMobile";
-import { api } from "../lib/api";
+import { api, ApiError, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
@@ -32,6 +32,7 @@ import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { isEmptyChatSession, resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
 import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSession, type ChatMemoryChoice } from "./sessionRetirement";
 import { pushClose, pushRename } from "./sessionListSync";
+import { messagesFromDurableTurns, SESSION_TURN_LIMIT } from "./sessionHydration";
 import { ChatSessionSlot } from "./ChatSessionSlot";
 import { ConversationsPane } from "./ConversationsPane";
 import {
@@ -79,6 +80,58 @@ export function ChatSurface({
   // once the list has loaded rows) and, while that tab is selected, the read-only list pane that
   // replaces the chat in the main pane — `currentSessionId` is never touched (§4.7).
   const conv = useConversations();
+  const homeKey = [currentSlug(), "home"] as const;
+  const homeState = useQuery({
+    queryKey: homeKey,
+    queryFn: async () => {
+      try { return await api.home(); }
+      catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    refetchInterval: 30_000,
+  });
+  const homeId = homeState.data?.session_id;
+  const homeSession = chat.sessions.find((session) => session.id === homeId);
+  const lastRead = homeState.data?.last_read_at;
+  const unread = homeSession?.messages.filter((message) =>
+    message.role === "assistant" && (message.createdAt ?? 0) > (lastRead ? Date.parse(lastRead) : 0),
+  ).length ?? 0;
+  const homeLatest = homeSession?.messages[homeSession.messages.length - 1]?.createdAt;
+  useEffect(() => {
+    if (!homeId) return;
+    let cancelled = false;
+    chatStore.restoreDismissedSession(homeId);
+    chatStore.ensureSession(homeId, "Home");
+    const token = chatStore.captureHydrationEligibility(homeId);
+    if (token) {
+      void api.chatSessionTurns(homeId, SESSION_TURN_LIMIT).then(({ turns, live_task_id }) => {
+        if (cancelled) return;
+        const now = Date.now();
+        chatStore.hydrateSessions([{
+          id: homeId, title: "Home", messages: messagesFromDurableTurns(turns, live_task_id),
+          createdAt: now, updatedAt: now,
+        }], [token]);
+      }).catch((error) => { if (!cancelled) onError(`Couldn't load Home: ${errMsg(error)}`); });
+    }
+    return () => { cancelled = true; };
+  }, [homeId, homeState.dataUpdatedAt]);
+
+  useEffect(() => {
+    if (!homeId || !homeSession || !active || chat.currentSessionId !== homeId || conv.stage === "conversations") return;
+    let cancelled = false;
+    void api.markHomeRead().then((state) => {
+      if (!cancelled) queryClient.setQueryData(homeKey, state);
+    }).catch((error) => { if (!cancelled) onError(`Couldn't mark Home read: ${errMsg(error)}`); });
+    return () => { cancelled = true; };
+  }, [homeId, !!homeSession, active, chat.currentSessionId, conv.stage, homeLatest]);
+  const ordinarySessions = chat.sessions.filter((session) => session.id !== homeId);
+  const tabIds = [
+    ...(homeId ? [homeId] : []),
+    ...(conv.tabVisible ? [CONVERSATIONS_STAGE_ID] : []),
+    ...ordinarySessions.map((session) => session.id),
+  ];
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   // Bulk close (others/left/right): GOAL tabs still waiting for their Stop/Detach confirm AFTER
@@ -258,6 +311,7 @@ export function ChatSurface({
   }, [pendingClose]);
 
   async function closeSession(id: string, memory: ChatMemoryChoice): Promise<boolean> {
+    if (id === homeId) return false;
     try {
       await retireChatSession(id, memory);
       return true;
@@ -277,6 +331,7 @@ export function ChatSurface({
   }
 
   function requestClose(id: string) {
+    if (id === homeId) return;
     if (!chatStore.getSnapshot().sessions.some((session) => session.id === id)) return;
     if (canCloseEmptyChat(id)) void closeAfterGoalCheck(id, true);
     else setPendingClose(id);
@@ -397,12 +452,9 @@ export function ChatSurface({
     if (!closeBtn) return;
     const tabEl = closeBtn.closest(".pl-tabbar__tab") as HTMLElement | null;
     if (!tabEl) return;
-    // The pinned Conversations tab renders first in the strip but is NOT a chat session, so the
-    // DOM tab order is offset by one from `chat.sessions` while it is shown. (It has no ✕, so a
-    // close click never lands on it — only the index map needs the offset.)
+    // Home is a real session; From others is a synthetic stage.
     const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll(".pl-tabbar__tab"));
-    const pinnedOffset = conv.tabVisible ? 1 : 0;
-    const session = chat.sessions[tabs.indexOf(tabEl) - pinnedOffset];
+    const session = chat.sessions.find((candidate) => candidate.id === tabIds[tabs.indexOf(tabEl)]);
     if (!session) return;
     e.preventDefault();
     e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
@@ -448,21 +500,21 @@ export function ChatSurface({
     // Resolve each bulk-close target set up front (index math, anchor excluded). An empty set
     // means the entry is meaningless for this tab (e.g. "Close left" on the leftmost tab), so
     // the closure is passed only when it has something to close — the menu hides the rest.
-    const others = sessionsToClose(chat.sessions, id, "others");
-    const left = sessionsToClose(chat.sessions, id, "left");
-    const right = sessionsToClose(chat.sessions, id, "right");
+    const others = sessionsToClose(ordinarySessions, id, "others");
+    const left = sessionsToClose(ordinarySessions, id, "left");
+    const right = sessionsToClose(ordinarySessions, id, "right");
     openContextMenu("chat-tab", e, {
       sessionId: id,
       incognito: !!target?.incognito,
       onNew: () => createChatSession(),
       onNewIncognito: () => createChatSession({ incognito: true }),
       onToggleIncognito: () => chatStore.setSessionIncognito(id, !target?.incognito),
-      onRename: () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
+      onRename: id === homeId ? undefined : () => tabEl?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
       onExport: () => void exportChatToFile(id),
       // Hidden for incognito chats: a Zed thread would continue them WITHOUT the incognito
       // flag (the shim sends ordinary turns), silently writing the chat to memory.
       onContinueInZed: editorPref === "zed" && !target?.incognito ? () => handOffToZed(id) : undefined,
-      onClose: () => requestClose(id),
+      onClose: id === homeId ? undefined : () => requestClose(id),
       onCloseOthers: others.length ? () => startBulkClose(others) : undefined,
       onCloseLeft: left.length ? () => startBulkClose(left) : undefined,
       onCloseRight: right.length ? () => startBulkClose(right) : undefined,
@@ -512,8 +564,12 @@ export function ChatSurface({
           // chat tabs read unselected. `currentSessionId` still points at the last chat (§4.7).
           activeId={onConversationsStage ? CONVERSATIONS_STAGE_ID : (chat.currentSessionId ?? "")}
           items={[
+            ...(homeId ? [{
+              id: homeId, pinned: true, label: "Home", icon: <House size={14} aria-hidden />,
+              badge: unread || undefined, ariaLabel: unread ? `Home, ${unread} new` : "Home",
+            }] : []),
             ...(conversationsTabItem ? [conversationsTabItem] : []),
-            ...chat.sessions.map((session) => {
+            ...ordinarySessions.map((session) => {
             const fg = chat.sessionStatusMap[session.id] || "idle";
             // Foreground streaming already lights the dot; also surface a background
             // server-turn as a pulsing "processing" dot so an unfocused tab doing work
@@ -556,6 +612,7 @@ export function ChatSurface({
           }}
           onClose={requestClose}
           onRename={(id, label) => {
+            if (id === homeId) return;
             chatStore.renameSession(id, label);
             // ADR 0130 S6: push the rename so the title shows on every device (r3).
             pushRename(id, label);
@@ -591,6 +648,7 @@ export function ChatSurface({
           <ChatSessionSlot
             key={sessionId}
             sessionId={sessionId}
+            home={sessionId === homeId}
             visible={sessionId === currentSession?.id}
             surfaceActive={active}
             onError={onError}

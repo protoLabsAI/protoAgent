@@ -152,7 +152,16 @@ export type PairingStart =
       reach?: PairReach;
     };
 
+export type HomeState = { session_id: string; last_read_at: string | null };
+
 export const runtimeApi = {
+  home() {
+    return request<HomeState>("/api/home");
+  },
+  markHomeRead() {
+    return request<HomeState>("/api/home/read", { method: "POST" });
+  },
+
   runtimeStatus() {
     return request<RuntimeStatus>("/api/runtime/status").then((status) => {
       noteAgentPublicUrl(status?.public_url);
