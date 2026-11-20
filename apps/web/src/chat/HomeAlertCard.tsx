@@ -8,6 +8,7 @@ import { openView } from "../app/palette/nav";
 import type { ChatMessage, HomeEntry } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { openWorkGroup } from "./ChatStatusRail";
+import { quoteEntry, replyContext, replyToHomeEntry, type HomeReply } from "./homeReply";
 
 // A Home entry (ADR 0135 D9, #5545): a brief, an alert or a decision pointer the server wrote
 // into Home's thread (`graph/home_entries.py`). It renders as ONE card — icon, one-line title,
@@ -93,10 +94,39 @@ function entryTime(createdAt?: number): { label: string; full: string; iso: stri
   };
 }
 
-export function HomeAlertCard({ message, home }: { message: ChatMessage; home: HomeEntry }) {
+/** What "Reply" puts in Home's composer for an entry: the visible quote, plus the hidden
+ *  reference that tells the agent which entry the operator is answering. */
+export function homeEntryReply(message: ChatMessage, home: HomeEntry): HomeReply {
+  const { title, body } = homeEntryText(message.content);
+  const time = entryTime(message.createdAt);
+  const facts = [
+    `kind ${home.kind}`,
+    home.source ? `source ${home.source}` : "",
+    home.notice_id ? `notice ${home.notice_id}` : "",
+    time ? `written ${time.iso}` : "",
+  ].filter(Boolean);
+  return {
+    quote: quoteEntry(title || "Notice", body),
+    context: replyContext(`the Home entry "${title || "Notice"}" (${facts.join(", ")})`),
+  };
+}
+
+export function HomeAlertCard({
+  message,
+  home,
+  sessionId,
+}: {
+  message: ChatMessage;
+  home: HomeEntry;
+  /** Home's session — the chat this card sits in. Reply writes into its composer; without it
+   *  (a render outside a chat) the card offers no Reply. */
+  sessionId?: string;
+}) {
   const { title, body, link } = homeEntryText(message.content);
   const urgent = home.importance === "high";
   const decision = isDecisionPointer(home);
+  // A decision is answered on its own card ("Answer"), never by a free-text reply here.
+  const canReply = !decision && Boolean(sessionId);
   const source = sourceTarget(home, link);
   const time = entryTime(message.createdAt);
   const Icon = decision ? MessageCircleQuestion : urgent ? TriangleAlert : home.kind === "review" ? CalendarClock : Bell;
@@ -125,7 +155,7 @@ export function HomeAlertCard({ message, home }: { message: ChatMessage; home: H
           ) : null}
         </div>
         {body ? <p className="pl-home-alert-body">{body}</p> : null}
-        {source || decision ? (
+        {source || decision || canReply ? (
           <div className="pl-home-alert-actions">
             {source ? (
               <a className="pl-link" href={source.href} onClick={onSource}>
@@ -135,6 +165,11 @@ export function HomeAlertCard({ message, home }: { message: ChatMessage; home: H
             {decision ? (
               <Button variant="primary" size="sm" onClick={() => source?.open?.()}>
                 Answer
+              </Button>
+            ) : null}
+            {canReply ? (
+              <Button variant="ghost" size="sm" onClick={() => replyToHomeEntry(sessionId!, homeEntryReply(message, home))}>
+                Reply
               </Button>
             ) : null}
           </div>

@@ -30,6 +30,7 @@ import { hideDanglingMarker } from "./danglingMarker";
 import { Markdown } from "./LazyMarkdown";
 import { DecisionTranscript } from "./HitlDisplay";
 import { HomeAlertCard } from "./HomeAlertCard";
+import { isHomeSessionId, quoteEntry, replyContext, replyToHomeEntry } from "./homeReply";
 import { NoteCard } from "./NoteCard";
 import { openEvalCaseEditor } from "./EvalCaseEditor";
 import { openPromptViewer } from "./PromptViewer";
@@ -139,16 +140,18 @@ export function ChatMessageView({
   // from the background FileText chip); recurring re-fires → a compact one-line ScheduledChip
   // so an hourly check can't fill the thread. Injected display-only, like the report card.
   if (message.scheduled) {
+    // In Home the result offers "Reply" (#5545): it quotes the report into Home's composer.
+    const homeSessionId = isHomeSessionId(actions?.sessionId) ? actions.sessionId : undefined;
     return message.scheduled.collapse ? (
-      <ScheduledChip message={message} scheduled={message.scheduled} />
+      <ScheduledChip message={message} scheduled={message.scheduled} homeSessionId={homeSessionId} />
     ) : (
-      <ScheduledReportCard message={message} scheduled={message.scheduled} />
+      <ScheduledReportCard message={message} scheduled={message.scheduled} homeSessionId={homeSessionId} />
     );
   }
   // Home entry (#5545): a brief, an alert or a decision pointer the server wrote into Home's
   // thread renders as one HomeAlertCard, whatever role the stored message carries.
   if (message.home?.kind) {
-    return <HomeAlertCard message={message} home={message.home} />;
+    return <HomeAlertCard message={message} home={message.home} sessionId={actions?.sessionId} />;
   }
   // Server-initiated RESULT (#3028): a SETTLED scheduled fire, watch reaction, or autonomous
   // wake carries an `origin` tag (set by ChatResumeWatch — the live streaming preview does NOT,
@@ -778,7 +781,16 @@ function oneLine(text: string, max = 90): string {
 // document viewer. Extracted so the first-fire ScheduledReportCard and the expanded recurring
 // ScheduledChip render the SAME body instead of duplicating it. Returns a fragment so each
 // parent (card / chip body) owns its own flex-column wrapper + gap.
-function ScheduledResultBody({ scheduled }: { scheduled: NonNullable<ChatMessage["scheduled"]> }) {
+// In Home (`homeSessionId` set) the body also offers "Reply" (#5545): it quotes the report into
+// Home's composer with a hidden reference to the job and fire, and focuses the composer. The
+// reply is an ordinary Home message; it never resumes or steers the job's own session.
+function ScheduledResultBody({
+  scheduled,
+  homeSessionId,
+}: {
+  scheduled: NonNullable<ChatMessage["scheduled"]>;
+  homeSessionId?: string;
+}) {
   const failed = scheduled.status === "failed";
   const title = `Scheduled task ${scheduled.jobId} ${failed ? "failed" : "ran"}`;
   const summary = scheduled.summary?.trim() || "(no output)";
@@ -798,6 +810,22 @@ function ScheduledResultBody({ scheduled }: { scheduled: NonNullable<ChatMessage
         <Button size="sm" variant="ghost" onClick={open}>
           View full result
         </Button>
+        {homeSessionId ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              replyToHomeEntry(homeSessionId, {
+                quote: quoteEntry(title, plainPreviewText(summary)),
+                context: replyContext(
+                  `the result of scheduled job "${scheduled.jobId}" (${scheduled.status ?? "completed"}, fired ${scheduled.firedAt})`,
+                ),
+              })
+            }
+          >
+            Reply
+          </Button>
+        ) : null}
       </div>
     </>
   );
@@ -811,9 +839,11 @@ function ScheduledResultBody({ scheduled }: { scheduled: NonNullable<ChatMessage
 function ScheduledReportCard({
   message,
   scheduled,
+  homeSessionId,
 }: {
   message: ChatMessage;
   scheduled: NonNullable<ChatMessage["scheduled"]>;
+  homeSessionId?: string;
 }) {
   const { dismissed, dismiss } = useDismissedScheduled();
   const key = `${scheduled.jobId}:${scheduled.firedAt}`;
@@ -839,7 +869,7 @@ function ScheduledReportCard({
             <X size={14} />
           </Button>
         </div>
-        <ScheduledResultBody scheduled={scheduled} />
+        <ScheduledResultBody scheduled={scheduled} homeSessionId={homeSessionId} />
       </div>
     </Message>
   );
@@ -856,9 +886,11 @@ function ScheduledReportCard({
 function ScheduledChip({
   message,
   scheduled,
+  homeSessionId,
 }: {
   message: ChatMessage;
   scheduled: NonNullable<ChatMessage["scheduled"]>;
+  homeSessionId?: string;
 }) {
   const { dismissed, dismiss } = useDismissedScheduled();
   const [expanded, setExpanded] = useState(false);
@@ -908,7 +940,7 @@ function ScheduledChip({
         </div>
         {expanded ? (
           <div className="chat-scheduled-chip-body">
-            <ScheduledResultBody scheduled={scheduled} />
+            <ScheduledResultBody scheduled={scheduled} homeSessionId={homeSessionId} />
           </div>
         ) : null}
       </div>

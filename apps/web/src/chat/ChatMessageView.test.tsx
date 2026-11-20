@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerChatComponent } from "../ext/componentRegistry";
 import type { ChatMessage, ChatPart, ComponentSpec, ToolCall } from "../lib/types";
 import { ChatMessageView } from "./ChatMessageView";
+import { loadDraft, loadDraftContext } from "./scratchState";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -416,5 +417,56 @@ describe("ChatMessageView — Home entries", () => {
     render({ id: "u1", role: "user", content: "Fleet member sol stopped", status: "done" });
     expect(container.querySelector("article.pl-home-alert-card")).toBeNull();
     expect(container.querySelector(".pl-message--user")).not.toBeNull();
+  });
+});
+
+// "Reply" on a Home card (#5545) quotes the entry into Home's composer draft. In any other
+// chat a scheduled result keeps its existing actions and offers no Reply.
+describe("ChatMessageView — Reply on a Home report card", () => {
+  const HOME_ID = "chat-home-reports";
+  const report = (collapse = false): ChatMessage => ({
+    id: "sched-1", role: "system", content: "", status: "done",
+    scheduled: { jobId: "digest", firedAt: "2026-11-19T14:05:00Z", summary: "**3 PRs** merged.\n\nNothing is blocked.", status: "completed", collapse },
+  });
+  const renderIn = (message: ChatMessage, sessionId: string) =>
+    act(() => {
+      root.render(h(QueryClientProvider, { client: qc }, h(ChatMessageView, { message, actions: { sessionId } })));
+    });
+  const button = (label: string) => [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === label);
+  const click = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })); });
+
+  beforeEach(() => sessionStorage.clear());
+
+  it("writes a quote of the report to Home's draft, with the job as its hidden context", () => {
+    renderIn(report(), HOME_ID);
+    click(button("Reply")!);
+    expect(loadDraft(HOME_ID)).toBe("> Scheduled task digest ran\n> 3 PRs merged.\n>\n> Nothing is blocked.\n\n");
+    const context = loadDraftContext(HOME_ID);
+    expect(context).toContain('the result of scheduled job "digest" (completed, fired 2026-11-19T14:05:00Z)');
+    expect(context).toContain("do not resume or steer");
+  });
+
+  it("offers Reply from an expanded recurring chip too", () => {
+    renderIn(report(true), HOME_ID);
+    expect(button("Reply")).toBeUndefined();
+    click(container.querySelector(".chat-scheduled-chip-toggle")!);
+    click(button("Reply")!);
+    expect(loadDraft(HOME_ID)).toContain("> Scheduled task digest ran");
+  });
+
+  it("offers no Reply on a scheduled result outside Home", () => {
+    renderIn(report(), "chat-abc123");
+    expect(button("View full result")).not.toBeUndefined();
+    expect(button("Reply")).toBeUndefined();
+  });
+
+  it("passes Home's session to an alert card, whose Reply writes the draft", () => {
+    renderIn({
+      id: "home-entry-n1", role: "user", status: "done",
+      content: "[Home entry: notify from fleet-health, importance high. For reference; not a request.]\nFleet member sol stopped",
+      home: { kind: "notify", importance: "high", source: "fleet-health", notice_id: "n1" },
+    }, HOME_ID);
+    click(button("Reply")!);
+    expect(loadDraft(HOME_ID)).toBe("> Fleet member sol stopped\n\n");
   });
 });
