@@ -10,7 +10,8 @@ The steps, in order:
    own public URL.
 2. [Pair the phone](#_2-reach-it-from-the-phone): scan a QR or type a code.
 3. [Check what you see after pairing](#after-pairing).
-4. [Add it to the home screen](#_3-add-to-home-screen).
+4. [Add it to the home screen](#_3-add-to-home-screen), then
+   [turn on alerts](#turn-on-alerts).
 5. [Use it on a tablet](#on-a-tablet).
 6. [Move between networks](#move-between-networks).
 7. [Manage access](#expiry-and-rotation), including [a lost phone](#lost-phone).
@@ -236,6 +237,59 @@ Safari, or the menu in Android Chrome. Use the icon to return to the console.
 The icon belongs to the address you added it from. After moving the phone, add the new address
 and remove the old icon.
 
+### Turn on alerts {#turn-on-alerts}
+
+An alert tells you the agent needs you while the console is closed: a decision is waiting, or
+there is an update. Each device turns its own alerts on.
+
+1. On the phone, open **Settings ▸ Devices**.
+2. Under **Notifications on this device**, tap **Turn on notifications**.
+3. When the browser asks, allow notifications.
+
+The card then shows **On**, the push service that delivers to this device (Apple, Google or
+Mozilla) and when the device last renewed. **Turn off on this device** stops alerts for this
+device only.
+
+Alerts need two things first:
+
+- **An HTTPS address.** On a plain `http` address (Wi-Fi, a tailnet name or IP) the card says
+  **Not available on this address** and **Notifications need an HTTPS address.** If the phone
+  knows an HTTPS address for this agent, the card links to it. Otherwise set one up with
+  [Tailscale HTTPS](#https-via-tailscale) or [your own public URL](#without-tailscale), then
+  [move the phone](#move-this-phone) to it.
+- **A paired device.** A browser signed in with the shared operator token shows
+  **Shared sign-in** and **Pair this device**. Alerts belong to a paired device, so pair the
+  browser first.
+
+#### On iPhone and iPad {#alerts-on-iphone}
+
+On iPhone, notifications work only from the Home Screen app. A Safari tab shows
+**Add to Home Screen first** with these steps:
+
+1. Tap **Share**, then **Add to Home Screen**.
+2. Open protoAgent from your Home Screen.
+3. If it asks, pair this phone again there.
+4. Tap **Turn on notifications**.
+
+This needs iOS 16.4 or later.
+
+#### What the card can say {#alert-states}
+
+| The card says | What it means | What to do |
+| --- | --- | --- |
+| **Off on this device** | This device gets no alerts. | Tap **Turn on notifications**. |
+| **On** | Alerts reach this device. | Nothing. |
+| **Renew on this device** | The agent dropped this device's alerts. The card gives the reason ([Renew needed](/guides/pairing#renew-needed)). | Tap **Renew notifications**. |
+| **Blocked** | The browser's settings block notifications for this address. Only the browser can undo that. | Follow the hint under the message, then come back to the console. The card checks again. |
+| **Not supported** | This browser can't get notifications. | Use another browser, or the Home Screen app on iPhone. |
+| **Shared sign-in** | This browser isn't a paired device. | Select **Pair this device**. |
+| **Couldn't check notifications on this device.** | The console couldn't read this device's status. It doesn't mean alerts are off. | Select **Try again**. |
+| **Desktop app** | The desktop app shows alerts itself while it's running, including when its window is closed. | Nothing. Quitting the app stops them. |
+
+**What leaves this machine**, at the bottom of the card, says what an alert reveals. The same
+text, and what it means, is in
+[Security & the trust model](/explanation/security-and-trust#what-leaves-this-machine).
+
 ### No offline mode {#no-offline-mode}
 
 The home-screen icon still connects to the live agent. The console keeps no offline copy, so
@@ -355,6 +409,10 @@ Don't wait for expiry: 30 days unused is a backstop, not a lock.
 | The card says the address is also public through Funnel | `tailscale funnel` exposes the address to the internet. | Turn Funnel off unless you meant that. |
 | **This device can't change pairing or credentials — use a full-access device.** | The phone is [Limited](#after-pairing). | Do it from the desktop app, or Promote the phone there. |
 | **This phone moved to &lt;address&gt;** | You [moved the phone](#move-this-phone). | Open the console at the new address. |
+| **Not available on this address** under Notifications | The console is open on a plain `http` address. Browsers allow notifications only over HTTPS. | Open the agent's HTTPS address, or [set one up](#turn-on-alerts). |
+| **Add to Home Screen first** under Notifications | On iPhone, alerts work only from the Home Screen app. | Follow [On iPhone and iPad](#alerts-on-iphone). |
+| Alerts stopped and the card says **Renew on this device** | The agent's notification key changed, the phone moved, or it went unused too long. | Tap **Renew notifications**. See [Renew needed](/guides/pairing#renew-needed). |
+| "Another paired device already uses this browser's notifications. Turn them off there first." | This browser was paired twice, and the other pairing holds its alerts. | Turn alerts off from the other pairing, or remove that row, then turn them on here. |
 | The phone asks for a token again | It was removed, it [expired](#expiry-and-rotation), or a copied token got it removed. | Remove its row if it's still listed, then pair again. |
 
 More: [Troubleshooting](/guides/troubleshooting) for failed connections and tasks.

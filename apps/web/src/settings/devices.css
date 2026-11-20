@@ -231,6 +231,11 @@
 .devices-push-state ol {
   padding-left: var(--pl-space-5);
 }
+/* The "On" badge keeps its success border, but 11px success-green text on the light
+   surface is 3.4:1. Body text colour carries the word, as on the device rows. */
+.devices-push-state .pl-badge--success {
+  color: var(--pl-color-fg);
+}
 .devices-push-footnote,
 .devices-push-disclosure {
   font-size: var(--pl-font-size-xs);

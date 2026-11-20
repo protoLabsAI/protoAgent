@@ -749,3 +749,307 @@ test("a limited console gets no notification key card", async ({ page }) => {
   await expect(page.locator(".subagent-row", { hasText: "New Pixel" })).toBeVisible();
   await expect(page.getByTestId("notification-key-card")).toHaveCount(0);
 });
+
+// ── Notifications on this device, and each row's push line (ADR 0135 W2e, #5539) ─────────
+//
+// Headless Chromium has no push service and no permission prompt, so the browser half
+// (permission, the stored subscription) is stubbed in the page and the agent half
+// (`/api/devices`, `/api/devices/self/push`) with `page.route`. The prompt itself is a
+// manual check on a real device.
+
+const PUSH_KEY = "AQID"; // base64url of bytes 1,2,3: the key the fake subscription was made with
+
+type BrowserPush = { permission?: "default" | "granted" | "denied"; subscribed?: boolean; supported?: boolean };
+
+/** Stub what the browser knows: its permission and whether it holds a subscription. */
+async function stubBrowserPush(page, { permission = "default", subscribed = false, supported = true }: BrowserPush = {}) {
+  await page.addInitScript(
+    ([permission, subscribed, supported, key]) => {
+      if (!supported) {
+        delete (window as { PushManager?: unknown }).PushManager;
+        return;
+      }
+      Object.defineProperty(Notification, "permission", { configurable: true, get: () => permission });
+      const bytes = Uint8Array.from(atob(key as string), (c) => c.charCodeAt(0));
+      const subscription = subscribed
+        ? {
+            endpoint: "https://web.push.apple.com/e2e",
+            expirationTime: null,
+            options: { applicationServerKey: bytes.buffer, userVisibleOnly: true },
+            toJSON: () => ({ endpoint: "https://web.push.apple.com/e2e", keys: { p256dh: "e2e", auth: "e2e" } }),
+            unsubscribe: async () => true,
+          }
+        : null;
+      const pushManager = { getSubscription: async () => subscription, subscribe: async () => subscription };
+      // The card reads the registration; boot's silent renew goes through the real worker.
+      ServiceWorkerContainer.prototype.getRegistration = async () => ({ pushManager }) as unknown as ServiceWorkerRegistration;
+      PushManager.prototype.getSubscription = pushManager.getSubscription as PushManager["getSubscription"];
+      PushManager.prototype.subscribe = pushManager.subscribe as PushManager["subscribe"];
+    },
+    [permission, subscribed, supported, PUSH_KEY] as const,
+  );
+}
+
+/** This browser as the paired phone `dev-phone1`, whose row carries `push`. */
+async function asPushDevice(page, { push = null, renew = null }: { push?: object | null; renew?: string | null } = {}) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+  });
+  const now = Math.floor(Date.now() / 1000);
+  await page.route("**/api/devices", (route) =>
+    route.fulfill({
+      json: {
+        devices: [
+          { id: "dev-phone1", name: "Josh's iPhone", kind: "device", scope: "device", created_at: now - 9000, last_seen_at: now - 60, push, push_renew: renew },
+        ],
+        caller: { scope: "device", device_id: "dev-phone1" },
+      },
+    }),
+  );
+}
+
+/** Answer `/api/devices/self/push` (any method) with this device's status on the agent. */
+async function stubSelfPush(page, { bound = false, renew = null }: { bound?: boolean; renew?: string | null } = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  const binding = bound ? { vapid_version: 2, generation: 1, created_at: now - 9 * 86400, renewed_at: now - 2 * 86400 - 60 } : null;
+  await page.route("**/api/devices/self/push", (route) =>
+    route.fulfill({ json: { public_key: PUSH_KEY, version: 2, binding, renew } }),
+  );
+}
+
+const APPLE_BINDING = {
+  vapid_version: 2, generation: 1, created_at: 1, renewed_at: 1, provider: "apple",
+  last_attempt_at: null, last_accepted_at: null, last_error: null, last_error_at: null,
+};
+
+type PushCase = {
+  name: string;
+  state: string;
+  arrange: (page) => Promise<void>;
+  check: (card, page) => Promise<void>;
+};
+
+const PUSH_CARD_STATES: PushCase[] = [
+  {
+    name: "off",
+    state: "off",
+    arrange: async (page) => {
+      await stubBrowserPush(page);
+      await asPushDevice(page);
+      await stubSelfPush(page);
+    },
+    check: async (card) => {
+      await expect(card.getByTestId("push-state")).toContainText("Off on this device");
+      await expect(card.getByTestId("push-state")).toContainText("Get alerts on this device even when the console is closed.");
+      await expect(card.getByRole("button", { name: "Turn on notifications" })).toBeEnabled();
+    },
+  },
+  {
+    name: "on, with its push service",
+    state: "on",
+    arrange: async (page) => {
+      await stubBrowserPush(page, { permission: "granted", subscribed: true });
+      await asPushDevice(page, { push: APPLE_BINDING });
+      await stubSelfPush(page, { bound: true });
+    },
+    check: async (card) => {
+      await expect(card.getByTestId("push-state").getByText("On", { exact: true })).toBeVisible();
+      await expect(card.getByTestId("push-state")).toContainText("Push service: Apple");
+      await expect(card.getByTestId("push-state")).toContainText("Renewed 2 days ago");
+      await expect(card.getByRole("button", { name: "Turn off on this device" })).toBeEnabled();
+      await expect(card.getByRole("button", { name: "Turn on notifications" })).toHaveCount(0);
+    },
+  },
+  ...(
+    [
+      ["vapid_key", "This agent changed its notification key."],
+      ["handoff", "This phone moved to a new address, which needs its own notifications."],
+      ["idle", "This device went unused for too long."],
+    ] as const
+  ).map(([reason, sentence]): PushCase => ({
+    name: `renew (${reason})`,
+    state: "renew",
+    arrange: async (page) => {
+      await stubBrowserPush(page, { permission: "granted" });
+      await asPushDevice(page, { renew: reason });
+      await stubSelfPush(page, { renew: reason });
+    },
+    check: async (card) => {
+      await expect(card.getByTestId("push-state")).toContainText("Renew on this device");
+      await expect(card.getByTestId("push-state")).toContainText(sentence);
+      await expect(card.getByRole("button", { name: "Renew notifications" })).toBeEnabled();
+    },
+  })),
+  {
+    name: "blocked",
+    state: "denied",
+    arrange: async (page) => {
+      await stubBrowserPush(page, { permission: "denied" });
+      await asPushDevice(page);
+      await stubSelfPush(page);
+    },
+    check: async (card) => {
+      await expect(card.getByTestId("push-state")).toContainText("Blocked");
+      await expect(card.getByTestId("push-state")).toContainText("Notifications are blocked in this browser's settings.");
+      await expect(card.getByTestId("push-state")).toContainText("then allow notifications for this site.");
+      // Only the browser can undo a block: no button pretends otherwise.
+      await expect(card.getByRole("button")).toHaveCount(0);
+    },
+  },
+  {
+    name: "not supported",
+    state: "unsupported",
+    arrange: async (page) => {
+      await stubBrowserPush(page, { supported: false });
+      await asPushDevice(page);
+      await stubSelfPush(page);
+    },
+    check: async (card) => {
+      await expect(card.getByTestId("push-state")).toContainText("Not supported");
+      await expect(card.getByTestId("push-state")).toContainText("This browser can't get notifications.");
+      await expect(card.getByRole("button")).toHaveCount(0);
+    },
+  },
+  {
+    name: "shared sign-in",
+    state: "shared",
+    // No device token in this browser: there is no device to ask about.
+    arrange: async (page) => {
+      await stubBrowserPush(page);
+      await stubSelfPush(page);
+    },
+    check: async (card, page) => {
+      await expect(card.getByTestId("push-state")).toContainText("Shared sign-in");
+      await expect(card.getByTestId("push-state")).toContainText("Pair this browser to get notifications.");
+      await expect(card.getByRole("button", { name: "Turn on notifications" })).toHaveCount(0);
+      await card.getByRole("button", { name: "Pair this device" }).click();
+      await expect(page.getByRole("region", { name: "Pair a new device" })).toBeVisible();
+    },
+  },
+  {
+    name: "can't check",
+    state: "trouble",
+    arrange: async (page) => {
+      await stubBrowserPush(page);
+      await asPushDevice(page);
+      await page.route("**/api/devices/self/push", (route) => route.fulfill({ status: 500, json: { error: "boom" } }));
+    },
+    check: async (card) => {
+      await expect(card.getByTestId("push-state")).toHaveText("Couldn't check notifications on this device.");
+      // A failed read is never shown as "off": no Turn on, only Try again.
+      await expect(card.getByRole("button", { name: "Turn on notifications" })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "Try again" })).toBeEnabled();
+    },
+  },
+];
+
+for (const width of [1280, 390]) {
+  for (const { name, state, arrange, check } of PUSH_CARD_STATES) {
+    test(`PushCard at ${width}px: ${name}`, async ({ page }) => {
+      await arrange(page);
+      await openDevices(page);
+      // Settings is opened at desktop width, then narrowed: the card must hold at both.
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      const card = page.getByTestId("push-card");
+      await card.scrollIntoViewIfNeeded();
+      await expect(card.getByRole("heading", { name: "Notifications on this device" })).toBeVisible();
+      await expect(card).toHaveAttribute("data-state", state);
+      await expectNoAxeViolations(page, { include: '[data-testid="push-card"]' });
+      const overflow = await card.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
+      await check(card, page);
+    });
+  }
+}
+
+test("a 403 not_a_device answer also reads as a shared sign-in, not as a failure", async ({ page }) => {
+  await stubBrowserPush(page);
+  await asPushDevice(page);
+  await page.route("**/api/devices/self/push", (route) => route.fulfill({ status: 403, json: { error: "not_a_device" } }));
+  await openDevices(page);
+  const card = page.getByTestId("push-card");
+  await expect(card).toHaveAttribute("data-state", "shared");
+  await expect(card.getByTestId("push-state")).toContainText("Pair this browser to get notifications.");
+});
+
+test("Try again re-reads a failed check and lands on what is true now", async ({ page }) => {
+  await stubBrowserPush(page);
+  await asPushDevice(page);
+  let fail = true;
+  await page.route("**/api/devices/self/push", (route) =>
+    fail
+      ? route.fulfill({ status: 500, json: { error: "boom" } })
+      : route.fulfill({ json: { public_key: PUSH_KEY, version: 2, binding: null, renew: null } }),
+  );
+  await openDevices(page);
+  const card = page.getByTestId("push-card");
+  await expect(card).toHaveAttribute("data-state", "trouble");
+  fail = false;
+  await card.getByRole("button", { name: "Try again" }).click();
+  await expect(card).toHaveAttribute("data-state", "off");
+  await expect(card.getByTestId("push-status")).toHaveText("Notifications are off for this device.");
+});
+
+test("What leaves this machine opens to the four disclosure lines", async ({ page }) => {
+  await stubBrowserPush(page);
+  await asPushDevice(page);
+  await stubSelfPush(page);
+  await openDevices(page);
+  const card = page.getByTestId("push-card");
+  const lines = card.locator(".devices-push-disclosure p");
+  await expect(lines.first()).toBeHidden();
+  await card.getByText("What leaves this machine", { exact: true }).click();
+  await expect(lines).toHaveText([
+    "Alerts go straight from this machine to your browser's push service: Apple, Google or Mozilla. No protoAgent server sits in between, and you don't need a chat app.",
+    'The alert says only "protoAgent needs your attention" and "Open the console to view a decision" (or "an update"). It never includes the question, chat text, job output, names or file paths.',
+    "The push service can see when alerts are sent, how big they are and this machine's public IP address.",
+    "Opening an alert asks you to sign in to the console. Nothing can be approved from the lock screen.",
+  ]);
+  await expect(lines.first()).toBeVisible();
+  await expectNoAxeViolations(page, { include: '[data-testid="push-card"]' });
+});
+
+test("each device row says where its push stands: off, on, accepted, didn't accept, not reported yet", async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000);
+  const row = (id: string, name: string, extra: object) =>
+    ({ id, name, kind: "device", scope: "device", created_at: now - 9000, last_seen_at: null, ...extra });
+  const binding = (provider: string, extra: object = {}) => ({ ...APPLE_BINDING, provider, ...extra });
+  await page.route("**/api/devices", (route) =>
+    route.fulfill({
+      json: {
+        devices: [
+          row("r-off", "Off phone", { push: null }),
+          row("r-on", "On phone", { push: binding("apple") }),
+          row("r-ok", "Accepted phone", { push: binding("google", { last_attempt_at: now - 120, last_accepted_at: now - 119 }) }),
+          row("r-err", "Refused phone", {
+            push: binding("mozilla", { last_attempt_at: now - 120, last_error_at: now - 119, last_error: "timeout" }),
+          }),
+          row("r-code", "Odd phone", {
+            push: binding("apple", { last_attempt_at: now - 120, last_error_at: now - 119, last_error: "http_418" }),
+          }),
+          row("r-renew", "Moved phone", { push: null, push_renew: "handoff" }),
+          row("r-old", "Unreported phone", {}), // a server from before push status: no `push` key at all
+          { id: "h-1", name: "studio-hub", kind: "agent", scope: "full", created_at: now - 9000, last_seen_at: null },
+        ],
+        caller: { scope: "full", device_id: null },
+      },
+    }),
+  );
+  await openDevices(page);
+  const line = (name: string) => page.locator(".subagent-row", { hasText: name }).locator(".devices-push-line");
+  await expect(line("Off phone")).toHaveText("Push off");
+  await expect(line("On phone")).toHaveText("Push on · Apple");
+  await expect(line("Accepted phone")).toHaveText(/^Push on · Google accepted the last alert at \d/);
+  await expect(line("Refused phone")).toContainText("Push on · Mozilla didn't accept the last alert");
+  await expect(line("Refused phone")).toContainText("The push service took too long to answer.");
+  // An error the console has no sentence for still shows its code, never nothing.
+  await expect(line("Odd phone")).toContainText("Error code: http_418");
+  await expect(line("Moved phone")).toContainText("Renew needed");
+  await expect(line("Moved phone")).toContainText("This phone moved to a new address, which needs its own notifications.");
+  await expect(line("Unreported phone")).toHaveText("Not reported yet");
+  // Another agent's hub is not a browser: no push line at all.
+  await expect(line("studio-hub")).toHaveCount(0);
+  await expect(page.getByText("Accepted means the push service took the alert. It doesn't mean you saw it.")).toBeVisible();
+  await expectNoAxeViolations(page, { include: ".devices-list" });
+});
