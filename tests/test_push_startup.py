@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from graph.decisions import DecisionStore
 from graph.plugins import chat_surface
 from graph.plugins.chat_surface import ChatNotice, notify_chat_surfaces
 from graph.push_transport import NOTICE_ADAPTER_KEY, PushResult, PushTransport
@@ -118,6 +119,59 @@ async def test_restart_sends_pending_and_drops_expired(hub):
     try:
         await settle(lambda: rows(transport) == [("live", "accepted")])
         assert provider.calls == ["live"]
+    finally:
+        await loops._stop_push_delivery()
+
+
+def queue(notice_id, kind="question"):
+    """Leave one unsent push in the ledger, as a hub that stopped before sending would."""
+    now = time.time()
+    assert PushTransport(Provider()).enqueue(ChatNotice(kind, "high", "t", "", notice_id, now, now + 600)) == 1
+
+
+@pytest.mark.parametrize("close", ["answer", "withdraw", "expire", "cancel"])
+async def test_closed_decision_is_not_pushed(hub, close):
+    store = DecisionStore()  # no adapter is registered yet, so creating pushes nothing itself
+    # A deadline already past lets ``expire`` close it; the other closes ignore the deadline.
+    closed = store.create("s1", "Ship it?", ["yes", "no"], default_option="yes", expires_at="2020-01-01T00:00:00+00:00")
+    open_ = store.create("s1", "Merge it?", ["yes", "no"])
+    queue(f"decision-{closed.id}")
+    queue(f"decision-{open_.id}")
+    queue("decision-from-a-member")  # a relayed member decision: its id is not in the hub's store
+    queue("plain-question")
+    queue("heads-up", kind="notify")
+    getattr(store, close)(closed.id, *(["yes"] if close == "answer" else []))
+    provider = Provider()
+    transport = loops._start_push_delivery(provider)
+    try:
+        sent = {f"decision-{open_.id}", "decision-from-a-member", "plain-question", "heads-up"}
+        expected = {(f"decision-{closed.id}", "obsolete"), *((n, "accepted") for n in sent)}
+        await settle(lambda: set(rows(transport)) == expected)
+        await transport.drain()  # the obsolete row is not picked up again
+        assert set(provider.calls) == sent and len(provider.calls) == len(sent)
+    finally:
+        await loops._stop_push_delivery()
+
+
+async def test_decision_store_read_failure_keeps_the_push_pending(hub, monkeypatch):
+    rec = DecisionStore().create("s1", "Ship it?", ["yes", "no"])
+    queue(f"decision-{rec.id}")
+    queue("heads-up", kind="notify")
+
+    def broken(self, decision_id):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(DecisionStore, "get", broken)
+    provider = Provider()
+    transport = loops._start_push_delivery(provider)
+    try:
+        expected = {(f"decision-{rec.id}", "pending"), ("heads-up", "accepted")}
+        await settle(lambda: set(rows(transport)) == expected)
+        await transport.drain()
+        assert provider.calls == ["heads-up"]  # deferred: not sent, not dropped
+        monkeypatch.undo()  # the store reads again: the held push goes out
+        await transport.drain()
+        assert set(rows(transport)) == {(f"decision-{rec.id}", "accepted"), ("heads-up", "accepted")}
     finally:
         await loops._stop_push_delivery()
 
