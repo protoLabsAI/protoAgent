@@ -9,6 +9,7 @@ import { formatCountdown, hostKindLabel, newlyPaired, secondsLeft, tailnetFirst,
 import { api, DEVICE_SCOPE_MESSAGE } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import { currentSlug } from "../lib/api/routing";
+import { currentDeviceId } from "../lib/credentials";
 import {
   PUBLIC_CONSOLE_DOCS,
   PUBLIC_CONSOLE_WARNING,
@@ -21,7 +22,7 @@ import {
 } from "../lib/deviceReach";
 import { DeviceList, MAX_DEVICE_NAME } from "./DeviceList";
 import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
-import { PushToggle } from "./PushToggle";
+import { PushCard } from "./PushCard";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
@@ -462,6 +463,13 @@ export function DevicesPanel() {
         Phones, tablets and other agents&apos; hubs paired to this agent. Each holds its own
         token, so removing one here doesn&apos;t sign out anything else.
       </p>
+      {/* This device's own closed-console notifications (ADR 0135 D10 / W2e). The push service
+          comes from this device's own row in the list loaded above. */}
+      <PushCard
+        provider={devices.find((d) => d.id === currentDeviceId())?.push?.provider}
+        onPair={limited ? undefined : () => void startPairing("device")}
+        onChanged={() => void refresh()}
+      />
       {publicUrl ? (
         // Persistent while the console is declared public (ADR 0121 D6): the token-only posture
         // is supported, but the operator must know who can reach the sign-in.
@@ -865,9 +873,6 @@ export function DevicesPanel() {
           </div>
         </section>
       )}
-
-      {/* This device's own closed-console notifications (ADR 0135 W2e, first control). */}
-      <PushToggle />
 
       {/* The paired-devices list — rename, "This device", revoke (DeviceList.tsx). */}
       <DeviceList devices={devices} loading={loading} onChanged={refresh} callerLimited={limited} callerDeviceId={callerDeviceId} />

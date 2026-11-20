@@ -201,28 +201,95 @@
   margin: var(--pl-space-2_5) 0;
 }
 
-/* "Notifications on this device" (PushToggle.tsx): one row, the control on the right; it
-   stacks on a phone, where the tap target must stay full width. */
+/* "Notifications on this device" (PushCard.tsx): one column at every width. The state block,
+   its one action, any refusal under it, then the "What leaves this machine" disclosure. */
 .devices-push {
   display: flex;
-  gap: var(--pl-space-4);
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: var(--pl-space-3);
   margin: var(--pl-space-2_5) 0 var(--pl-space-4);
   padding: var(--pl-space-4);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised, var(--pl-color-bg));
 }
-.devices-push-body {
+.devices-push-heading {
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+}
+.devices-push-state {
   display: flex;
   flex-direction: column;
   gap: var(--pl-space-1);
   min-width: 0;
+  font-size: var(--pl-font-size-sm);
 }
+.devices-push-state p,
+.devices-push-state ol {
+  margin: 0;
+}
+.devices-push-state ol {
+  padding-left: var(--pl-space-5);
+}
+.devices-push-footnote,
+.devices-push-disclosure {
+  font-size: var(--pl-font-size-xs);
+}
+.devices-push-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+}
+.devices-push-actions:empty {
+  display: none;
+}
+.devices-push-refusal {
+  display: flex;
+  gap: var(--pl-space-2);
+  align-items: flex-start;
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+}
+.devices-push-refusal svg {
+  flex: none;
+  margin-top: var(--pl-space-0_5);
+  color: var(--pl-color-status-warning);
+}
+/* Stays in the accessibility tree (a clipped 1px box, never display:none, which would
+   silence the live region). The console ships no shared sr-only utility. */
+.devices-push-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.devices-push-disclosure summary {
+  cursor: pointer;
+}
+.devices-push-disclosure p {
+  margin: var(--pl-space-2) 0 0;
+}
+/* A phone: every control spans the card and meets the touch-target height (32 + 12). */
 @media (max-width: 640px) {
-  .devices-push {
+  .devices-push-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+  .devices-push-actions .pl-btn,
+  .devices-push-actions a,
+  .devices-push-disclosure summary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: calc(var(--pl-space-8) + var(--pl-space-3));
+  }
+  .devices-push-disclosure summary {
+    justify-content: flex-start;
   }
 }
