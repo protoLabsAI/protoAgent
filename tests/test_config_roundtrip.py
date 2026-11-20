@@ -347,6 +347,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "quiet_hours_start": "22:00",
     "quiet_hours_end": "07:00",
     "quiet_hours_timezone": "UTC",
+    "push_all_notices": False,
     "spend_cap_enabled": False,
     "spend_cap_daily_cost_hard_limit": 10.0,
     "spend_cap_daily_token_hard_limit": 1_000_000,
@@ -1507,3 +1508,15 @@ def test_quiet_hours_settings_roundtrip(tmp_path):
     fields = [f for f in FIELDS if f.key.startswith("quiet_hours.")]
     assert len(fields) == 4
     assert all(f.section == "Quiet hours" and not f.ui_hidden for f in fields)
+
+
+def test_push_all_notices_setting_roundtrip(tmp_path):
+    assert LangGraphConfig.from_dict({}).push_all_notices is False
+    config = LangGraphConfig.from_dict({"push": {"all_notices": True}})
+    assert config.push_all_notices is True
+    assert config_to_dict(config)["push"] == {"all_notices": True}
+    path = tmp_path / "push.yaml"
+    save_yaml_doc(config_to_dict(config), path)
+    assert LangGraphConfig.from_yaml(str(path)).push_all_notices is True
+    (field,) = [f for f in FIELDS if f.key.startswith("push.")]
+    assert (field.label, field.type, field.section, field.ui_hidden) == ("Push every notice", "bool", "Notifications", False)

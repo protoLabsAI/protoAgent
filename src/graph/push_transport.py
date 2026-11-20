@@ -134,12 +134,36 @@ class PushTransport:
             ).fetchone()
         return row["agent"] if row else None
 
+    @staticmethod
+    def _pushes(notice: ChatNotice) -> bool:
+        """Push policy (#5648): questions and high-importance notices always push.
+
+        Everything else pushes only when live config has ``push.all_notices`` on;
+        no config (or one that cannot be read) means off. Hub and relayed member
+        notices both arrive through ``enqueue``, so this is the one check.
+        """
+        if notice.kind == "question" or notice.importance == "high":
+            return True
+        from graph.plugins.host import HOST
+
+        try:
+            config = HOST.config() if HOST.config else None
+        except Exception:
+            logger.exception("Could not read push policy; pushing only questions and urgent notices")
+            return False
+        return getattr(config, "push_all_notices", False) is True
+
     def enqueue(self, notice: ChatNotice) -> int:
-        """Snapshot enrolled recipients once; repeated enqueue is idempotent per key."""
+        """Snapshot enrolled recipients once; repeated enqueue is idempotent per key.
+
+        Returns 0 without touching devices or the ledger when policy keeps the notice off push.
+        """
         if not notice.notice_id or not math.isfinite(notice.expires_at):
             raise ValueError("push requires a notice identity and finite expiry")
         now = self.clock()
         if notice.expires_at <= now:
+            return 0
+        if not self._pushes(notice):
             return 0
         recipients = []
         for view in devices.list_devices():
