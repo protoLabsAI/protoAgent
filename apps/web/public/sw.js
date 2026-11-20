@@ -34,6 +34,12 @@ var CLICK_MESSAGE = "protoagent:notice-click";
 // cache: one small entry, no request is ever served from it.
 var CLICK_CACHE = "protoagent-notice-click";
 var CLICK_KEY = "/app/__notice-click";
+// What happened to the last few taps, for Settings > Devices (lib/noticeTrace.ts). A tap on an
+// installed phone console cannot be observed any other way. Step names, opaque ids and page
+// paths only.
+var TRACE_CACHE = "protoagent-notice-trace";
+var TRACE_KEY = "/app/__notice-trace";
+var TRACE_MAX = 40;
 var KINDS = ["notify", "question", "review"];
 var IMPORTANCES = ["low", "normal", "high"];
 var NOTICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -113,9 +119,51 @@ function showNotice(data) {
 
 /** Focus the console window already on `route`'s page and tell it which notice was clicked;
  *  with none open (or when it cannot be focused), open one. */
+/** Append one step to the tap trace. Never rejects. Writes are queued: each is a
+ *  read-modify-write of one entry, so two at once would lose a step. */
+var traceQueue = Promise.resolve();
+function trace(step, detail) {
+  var at = Date.now();
+  traceQueue = traceQueue.then(function () {
+    return writeTrace(at, step, detail);
+  });
+  return traceQueue;
+}
+
+function writeTrace(at, step, detail) {
+  if (typeof caches === "undefined") return Promise.resolve();
+  return caches
+    .open(TRACE_CACHE)
+    .then(function (cache) {
+      return cache
+        .match(TRACE_KEY)
+        .then(function (hit) {
+          return hit ? hit.json() : [];
+        })
+        .catch(function () {
+          return [];
+        })
+        .then(function (rows) {
+          var list = Array.isArray(rows) ? rows : [];
+          list.push({ at: at, who: "worker", step: step, detail: String(detail || "").slice(0, 160) });
+          return cache.put(TRACE_KEY, new Response(JSON.stringify(list.slice(-TRACE_MAX))));
+        });
+    })
+    .catch(function () {});
+}
+
+function pathOf(url) {
+  try {
+    return new URL(url).pathname;
+  } catch (e) {
+    return "?";
+  }
+}
+
 function openConsole(route, id) {
   var target = new URL(route, self.location.origin);
   return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (windows) {
+    trace("windows", windows.length + " open: " + windows.map(function (w) { return pathOf(w.url) + (w.focused ? "*" : ""); }).join(" "));
     var open = windows.filter(function (client) {
       try {
         var at = new URL(client.url);
@@ -124,12 +172,24 @@ function openConsole(route, id) {
         return false;
       }
     })[0];
-    if (!open) return self.clients.openWindow(target.href);
+    if (!open) {
+      return self.clients.openWindow(target.href).then(
+        function (client) {
+          trace("open-window", client ? "opened " + pathOf(client.url) : "returned nothing");
+          return client;
+        },
+        function (error) {
+          return trace("open-window", "refused: " + (error && error.name));
+        },
+      );
+    }
     return open.focus().then(
       function (focused) {
         (focused || open).postMessage({ type: CLICK_MESSAGE, v: PAYLOAD_VERSION, id: id, route: route });
+        trace("message", "sent to " + pathOf(open.url));
       },
-      function () {
+      function (error) {
+        trace("focus", "refused: " + (error && error.name));
         return self.clients.openWindow(target.href);
       },
     );
@@ -153,14 +213,21 @@ function onPush(event) {
  *  was left on, with neither. One entry, the opaque id and a time only; the console deletes
  *  it on read (`NoticeClickWatch`). Never rejects: the click must still open the console. */
 function rememberClick(id) {
-  if (!id || !NOTICE_ID.test(id) || typeof caches === "undefined") return Promise.resolve();
+  if (!id || !NOTICE_ID.test(id) || typeof caches === "undefined") return trace("note", "not written: no usable id");
   var body = JSON.stringify({ v: PAYLOAD_VERSION, id: id, at: Date.now() });
   return caches
     .open(CLICK_CACHE)
     .then(function (cache) {
       return cache.put(CLICK_KEY, new Response(body, { headers: { "Content-Type": "application/json" } }));
     })
-    .catch(function () {});
+    .then(
+      function () {
+        return trace("note", "written");
+      },
+      function (error) {
+        return trace("note", "failed: " + (error && error.name));
+      },
+    );
 }
 
 function onNotificationClick(event) {
@@ -168,9 +235,16 @@ function onNotificationClick(event) {
   var id = data && typeof data.id === "string" ? data.id : "";
   event.notification.close();
   event.waitUntil(
-    rememberClick(id).then(function () {
-      return openConsole(clickRoute(data), id);
-    }),
+    trace("tap", (id || "no id") + " → " + clickRoute(data))
+      .then(function () {
+        return rememberClick(id);
+      })
+      .then(function () {
+        return openConsole(clickRoute(data), id);
+      })
+      .then(function () {
+        return traceQueue; // keep the worker alive until every step is written
+      }),
   );
 }
 

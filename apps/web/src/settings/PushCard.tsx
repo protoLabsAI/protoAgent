@@ -1,4 +1,5 @@
 import { Badge, Button } from "@protolabsai/ui/primitives";
+import { TapLog } from "./TapLog";
 import { AlertTriangle, Bell, BellOff, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
@@ -368,6 +369,7 @@ export function PushCard({ provider, onPair, onChanged }: PushCardProps) {
         <summary>What leaves this machine</summary>
         {DISCLOSURE.map((line) => <p key={line}>{line}</p>)}
       </details>
+      <TapLog />
     </section>
   );
 }

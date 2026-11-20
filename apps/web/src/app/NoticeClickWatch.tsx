@@ -2,6 +2,7 @@ import { useEffect } from "react";
 
 import { openWorkGroup } from "../chat/ChatStatusRail";
 import { agentHref, apiUrl, applyAuth, currentSlug } from "../lib/api/routing";
+import { keepIfTapped, logTap, noteRoutine } from "../lib/noticeTrace";
 import { useUI } from "../state/uiStore";
 
 // A clicked push notification lands here (ADR 0135 W2, "Clicking fetches the current
@@ -18,6 +19,10 @@ let latestClick = 0;
 const CLICK_CACHE = "protoagent-notice-click"; // sw.js CLICK_CACHE
 const CLICK_KEY = "/app/__notice-click"; // sw.js CLICK_KEY
 const CLICK_MAX_AGE_MS = 5 * 60_000; // older than this is not "the tap that brought me here"
+// A phone can bring the console to the front BEFORE the worker has handled the tap, so one
+// look is not enough: keep looking for a short while after every foreground.
+const POLL_EVERY_MS = 400;
+const POLL_FOR_MS = 10_000;
 
 /** The fleet member that raised a notice, or null for this hub's own. The push payload names
  *  no agent, so the hub is asked after authentication (`GET /api/notices/<id>`, #5614). Any
@@ -46,6 +51,7 @@ export async function openNotice(id: unknown, go: (href: string) => void = (href
   const mine = ++latestClick;
   const agent = await agentOf(id);
   if (mine !== latestClick) return false;
+  logTap("open", `${id} raised by ${agent ?? "this agent"}; here is ${currentSlug()}`);
   if (agent && agent !== currentSlug()) {
     go(`${agentHref(agent)}?notice=${encodeURIComponent(id)}`);
     return true;
@@ -86,16 +92,41 @@ export async function takeClickedNotice(now: number = Date.now()): Promise<strin
 
 export function NoticeClickWatch() {
   useEffect(() => {
-    void openNotice(takeNoticeFromUrl());
+    const fromUrl = takeNoticeFromUrl();
+    if (fromUrl) logTap("start", `${window.location.pathname} with notice ${fromUrl}`);
+    else noteRoutine("start", window.location.pathname);
+    void openNotice(fromUrl);
+    let stopped = false;
+    let polling = false;
     const fromWorker = () => {
-      if (document.visibilityState !== "visible") return;
-      void takeClickedNotice().then((id) => { if (id) void openNotice(id); });
+      if (document.visibilityState !== "visible" || polling) return;
+      polling = true;
+      const until = Date.now() + POLL_FOR_MS;
+      noteRoutine("front", "looking for a tapped notice");
+      const look = async () => {
+        const id = stopped ? null : await takeClickedNotice();
+        if (id) {
+          polling = false;
+          logTap("note", `found ${id}`);
+          void openNotice(id);
+        } else if (stopped || Date.now() >= until) {
+          polling = false;
+          if (!stopped) {
+            noteRoutine("note", "none found");
+            void keepIfTapped();
+          }
+        } else {
+          window.setTimeout(() => void look(), POLL_EVERY_MS);
+        }
+      };
+      void look();
     };
     fromWorker();
     document.addEventListener("visibilitychange", fromWorker);
     window.addEventListener("focus", fromWorker);
     window.addEventListener("pageshow", fromWorker);
     const stop = () => {
+      stopped = true;
       document.removeEventListener("visibilitychange", fromWorker);
       window.removeEventListener("focus", fromWorker);
       window.removeEventListener("pageshow", fromWorker);
@@ -108,6 +139,7 @@ export function NoticeClickWatch() {
       // This click arrived by message, so the note the worker left for it is spent: drop it,
       // or the next time the console comes to the front it would open the same decision again.
       void takeClickedNotice();
+      logTap("message", `worker says ${String(data.id)} was tapped`);
       void openNotice(data.id);
     };
     worker.addEventListener("message", onMessage);
