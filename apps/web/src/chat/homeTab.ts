@@ -2,11 +2,22 @@
 // regardless of where it sits in the chat store's session list (`ensureSession` appends it).
 // Everything that walks "the tabs in order" outside ChatSurface — the ⌘1–9 / Ctrl+Tab
 // keybindings, the mobile session sheet — must use the same order, so the helper lives here.
-import { currentSlug } from "../lib/api";
+import { api, ApiError, currentSlug } from "../lib/api";
 import { queryClient } from "../lib/queryClient";
 
 /** Query key of `GET /api/home` — shared by ChatSurface's query and the readers below. */
 export const homeQueryKey = () => [currentSlug(), "home"] as const;
+
+/** The one `GET /api/home` read, shared by ChatSurface's query and the phone shell's
+ *  open-on-Home default so both resolve the same cache entry. A 404 means the feature is off
+ *  and resolves to null; any other failure rejects. */
+export async function fetchHomeState() {
+  try { return await api.home(); }
+  catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
 
 /** The Home session id from the already-loaded `GET /api/home` state; undefined when the
  *  feature is off (404 → null), not loaded yet, or failed. Never fetches. */

@@ -8,9 +8,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore, unusedSession } from "../chat/chat-store";
+import { openChat, setStage } from "../chat/conversations-store";
+import { homeQueryKey } from "../chat/homeTab";
+import { queryClient } from "../lib/queryClient";
 // Raw stylesheet text — same source-guard pattern as mobileBottomInset.test.ts. `vitest.config.ts`
 // opts src's CSS into processing so `?raw` returns the real text.
 import mobileShellCss from "./mobile-shell.css?raw";
+import chatCss from "../chat/chat.css?raw";
 import appSource from "./App.tsx?raw";
 import { useUI } from "../state/uiStore";
 import { needsYouCount } from "./App";
@@ -374,5 +378,132 @@ describe("mobile history ownership", () => {
     } finally {
       window.removeEventListener("popstate", capture, true);
     }
+  });
+});
+
+
+// H-U6: opening the console on a phone lands in Home. The shell reads GET /api/home (the same
+// query ChatSurface owns) and, on a fresh open, makes Home the chat on screen.
+describe("phone opens on Home (H-U6)", () => {
+  const HOME = "home-hu6";
+  let opened: string | null;
+  let calls: string[];
+
+  function stubHome(respond: () => Response | Promise<Response>) {
+    calls = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(String(url));
+      return respond();
+    }));
+  }
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  // Let the stubbed read and the shell's follow-up settle.
+  const settle = () => act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); await new Promise((r) => setTimeout(r, 0)); });
+  const titleText = () => container.querySelector(".mshell-title-text")?.textContent;
+
+  beforeEach(() => {
+    queryClient.clear();
+    chatStore.ensureSession("hu6-chat", "Chat A");
+    chatStore.switchSession("hu6-chat");
+    opened = chatStore.getSnapshot().currentSessionId;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    openChat();
+    chatStore.switchSession("hu6-chat");
+    chatStore.deleteSession(HOME);
+    queryClient.clear();
+  });
+
+  it("makes Home the default view when GET /api/home succeeds, under an <h2> title", async () => {
+    stubHome(() => json({ session_id: HOME, last_read_at: null }));
+    mount();
+    expect(titleText()).toBe("Chat A"); // nothing moves until the read answers
+    await settle();
+
+    expect(calls.some((url) => url.includes("/api/home"))).toBe(true);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(HOME);
+    expect(titleText()).toBe("Home");
+    // The visible header title is the phone's "Home" heading, and still the sheet switcher.
+    const heading = container.querySelector("h2.mshell-title-heading");
+    expect(heading?.textContent).toBe("Home");
+    expect(heading!.querySelector("button.mshell-title")?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(container.querySelectorAll("h2")).toHaveLength(1);
+  });
+
+  it("keeps the previous default when GET /api/home returns 404 (flag off)", async () => {
+    stubHome(() => json({ detail: "Not Found" }, 404));
+    mount();
+    await settle();
+
+    expect(calls.some((url) => url.includes("/api/home"))).toBe(true);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(opened);
+    expect(chatStore.getSnapshot().sessions.some((session) => session.id === HOME)).toBe(false);
+    expect(titleText()).toBe("Chat A");
+    expect(container.querySelector("h2")).toBeNull();
+    // An ordinary chat's title stays the bare switcher button, exactly as before.
+    expect(container.querySelector(".mshell-head > button.mshell-title")).not.toBeNull();
+  });
+
+  it("keeps the previous default when the read fails", async () => {
+    stubHome(() => json({ detail: "boom" }, 401)); // 401 is never retried
+    mount();
+    await settle();
+    expect(chatStore.getSnapshot().currentSessionId).toBe(opened);
+    expect(container.querySelector("h2")).toBeNull();
+  });
+
+  it("does not pull the operator off a chat they picked while the read was in flight", async () => {
+    let answer!: (response: Response) => void;
+    stubHome(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    mount();
+    await settle();
+    chatStore.ensureSession("hu6-picked", "Picked");
+    act(() => chatStore.switchSession("hu6-picked"));
+    answer(json({ session_id: HOME, last_read_at: null }));
+    await settle();
+    expect(chatStore.getSnapshot().currentSessionId).toBe("hu6-picked");
+    chatStore.deleteSession("hu6-picked");
+  });
+
+  it("does not leave “From others” opened while the read was in flight", async () => {
+    let answer!: (response: Response) => void;
+    stubHome(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    mount();
+    await settle();
+    act(() => setStage("conversations"));
+    answer(json({ session_id: HOME, last_read_at: null }));
+    await settle();
+    expect(chatStore.getSnapshot().currentSessionId).toBe(opened);
+  });
+
+  it("leaves the chat alone when the shell mounts after Home already loaded (a narrowed desktop window)", async () => {
+    stubHome(() => json({ session_id: HOME, last_read_at: null }));
+    queryClient.setQueryData(homeQueryKey(), { session_id: HOME, last_read_at: null });
+    chatStore.ensureSession(HOME, "Home");
+    mount();
+    await settle();
+    expect(calls).toHaveLength(0);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(opened);
+    // …and picking Home from the sheet still gives the header its heading.
+    act(() => chatStore.switchSession(HOME));
+    expect(container.querySelector("h2.mshell-title-heading")?.textContent).toBe("Home");
+  });
+
+  it("stands the transcript's hidden Home heading down inside the shell, so there is one <h2>", () => {
+    expect(mobileShellCss).toMatch(/\.mshell \.chat-home-heading\s*\{\s*display:\s*none;/);
+  });
+
+  it("makes Home card actions full-width touch targets on a phone, with no raw px", () => {
+    const block = /@media \(max-width: 767px\) \{\s*\.pl-home-alert-actions \{[\s\S]*?\n\}/.exec(chatCss);
+    expect(block, "expected the phone .pl-home-alert-actions block in chat.css").not.toBeNull();
+    const rule = /\.pl-home-alert-actions > \.pl-link,\s*\.pl-home-alert-actions > \.pl-btn \{[^}]*\}/.exec(block![0]);
+    expect(rule, "expected the action rule for links and buttons").not.toBeNull();
+    expect(rule![0]).toMatch(/width:\s*100%/);
+    // 32 + 12 = 44: the touch-target value the Devices cards already use (devices.css).
+    expect(rule![0]).toMatch(/min-height:\s*calc\(var\(--pl-space-8\) \+ var\(--pl-space-3\)\)/);
+    expect(block![0].replace("max-width: 767px", "")).not.toMatch(/\d+px/);
   });
 });

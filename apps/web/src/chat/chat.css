@@ -291,6 +291,23 @@
   gap: var(--pl-space-2);
 }
 
+/* A phone (H-U6): each card action ("Open run", "Answer", the source link) spans the card and
+   meets the touch-target height — the same 32 + 12 the Devices cards use. */
+@media (max-width: 767px) {
+  .pl-home-alert-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pl-home-alert-actions > .pl-link,
+  .pl-home-alert-actions > .pl-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: calc(var(--pl-space-8) + var(--pl-space-3));
+  }
+}
+
 /* Recurring re-fire chip (#2990 + #4726) — the compact one-line variant, now EXPANDABLE so a
    repeat fire is readable instead of a dead end. Collapsed it is the raised pill; expanded it
    grows a card body (the shared ScheduledResultBody) under the one-line row. The disclosure
