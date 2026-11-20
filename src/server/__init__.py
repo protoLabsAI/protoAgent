@@ -1304,6 +1304,17 @@ def _main():
 
     register_flags_routes(fastapi_app)
 
+    # Home conversation (ADR 0135 D9, #5545) — /api/home names this instance's one Home
+    # chat and holds its read marker. 404 while the `home_conversation` flag is off.
+    from operator_api.home_routes import register_home_routes
+    from server import session_registry as _home_session_registry
+
+    register_home_routes(
+        fastapi_app,
+        read_session_list=_home_session_registry.read_session_list,
+        register_session=_home_session_registry.register_session,
+    )
+
     # External secrets manager (ADR 0080) — /api/secrets status / sync-now /
     # connection-test for the Settings panel.
     from operator_api.secrets_routes import register_secrets_routes
