@@ -1216,12 +1216,17 @@ export type QueuedSteer = ConsumedSteer & {
  *  notice_id}` the server stamps on an owner notice it writes into Home's thread
  *  (`graph/home_entries.py`, `additional_kwargs.protoagent_home_entry`). Field names are the
  *  wire's. `source` names the raising code path ("decision", "fleet-health", "scheduler",
- *  "watch", "spend-cap", …); a decision's `notice_id` is `decision-<id>`. */
+ *  "watch", "spend-cap", …); a decision's `notice_id` is `decision-<id>`. A scheduled
+ *  result (`source: "scheduler"`) also carries the run it reports: `activity_context` is the
+ *  thread the fire's full turn lives in and `task_id` is that turn, which is what the card's
+ *  "View full result" reads. Both are absent on entries written before they were stamped. */
 export type HomeEntry = {
   kind: "notify" | "question" | "review" | (string & {});
   importance: "low" | "normal" | "high" | (string & {});
   source: string;
   notice_id?: string | null;
+  activity_context?: string | null;
+  task_id?: string | null;
 };
 
 export type ChatMessage = {

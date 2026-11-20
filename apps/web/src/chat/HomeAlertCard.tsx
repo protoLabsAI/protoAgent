@@ -5,9 +5,11 @@ import type { MouseEvent } from "react";
 
 import { openNotice } from "../app/NoticeClickWatch";
 import { openView } from "../app/palette/nav";
+import { openDocument } from "../docviewer";
 import type { ChatMessage, HomeEntry } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { openWorkGroup } from "./ChatStatusRail";
+import { loadFullScheduledResult } from "./fullScheduledResult";
 import { quoteEntry, replyContext, replyToHomeEntry, type HomeReply } from "./homeReply";
 
 // A Home entry (ADR 0135 D9, #5545): a brief, an alert or a decision pointer the server wrote
@@ -131,6 +133,16 @@ export function HomeAlertCard({
   const time = entryTime(message.createdAt);
   const Icon = decision ? MessageCircleQuestion : urgent ? TriangleAlert : home.kind === "review" ? CalendarClock : Bell;
   const heading = title || (decision ? "A decision is waiting" : "Notice");
+  // A scheduled result's body is the server's 500-char summary. When the entry names the run
+  // (`activity_context`; older entries don't), the whole answer is that run's own turn.
+  const activityContext = home.source === "scheduler" ? (home.activity_context ?? "").trim() : "";
+  const openFullResult = () =>
+    openDocument({
+      title: heading,
+      subtitle: time ? `${time.full} — full turn in Activity` : "Full turn in Activity",
+      // Falls back to the card's own text when that turn can't be read.
+      load: () => loadFullScheduledResult(activityContext, home.task_id ?? "", body),
+    });
   const onSource = (event: MouseEvent<HTMLAnchorElement>) => {
     // A modified click (new tab, new window) keeps the browser's own behavior on the href.
     if (!source?.open || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
@@ -166,6 +178,11 @@ export function HomeAlertCard({
             {decision ? (
               <Button variant="primary" size="sm" onClick={() => source?.open?.()}>
                 Answer
+              </Button>
+            ) : null}
+            {activityContext ? (
+              <Button variant="ghost" size="sm" onClick={openFullResult}>
+                View full result
               </Button>
             ) : null}
             {canReply ? (
