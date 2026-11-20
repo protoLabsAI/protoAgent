@@ -697,3 +697,55 @@ test("past the grace, the old origin's refused token is dropped and the gate poi
   await expect(gate.getByTestId("auth-moved")).toContainText("This phone moved to box.tail1234.ts.net");
   expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBeNull();
 });
+
+// ── Notification key (ADR 0135, #5539) ────────────────────────────────────────────────────
+
+test("a full-access console sees the notification key and rotates it behind a confirm", async ({ page }) => {
+  await mockScopedDevices(page, { caller: { scope: "full", device_id: null } });
+  const retires = Math.floor(Date.now() / 1000) + 20 * 86400;
+  let keys = [
+    { version: 1, public_key: "BOLDPUBLICKEY", created_at: 1, active: false, retire_after: retires },
+    { version: 2, public_key: "BNEWPUBLICKEY", created_at: 2, active: true, retire_after: null },
+  ];
+  let posts = 0;
+  await page.route("**/api/push/keys", (route) => route.fulfill({
+    json: { keys, rotation_window_seconds: 2592000, bindings_by_version: { 1: 2, 2: 1 } },
+  }));
+  await page.route("**/api/push/keys/rotate", (route) => {
+    posts += 1;
+    keys = [{ ...keys[1], active: false, retire_after: retires }, { version: 3, public_key: "BTHIRD", created_at: 3, active: true, retire_after: null }];
+    return route.fulfill({ json: keys[1] });
+  });
+  await openDevices(page);
+  const card = page.getByTestId("notification-key-card");
+  await expect(card).toContainText("Key version 2 · active");
+  await expect(card).toContainText(/Version 1 retires on \d{1,2} \w+\. 2 devices still use it\./);
+  await expect(card).not.toContainText("PUBLICKEY");
+
+  const open = card.getByRole("button", { name: "Rotate key…" });
+  await open.click();
+  const confirm = card.getByRole("group", { name: "Confirm key rotation" });
+  await expect(confirm).toContainText("Every device must renew within 30 days.");
+  await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expectNoAxeViolations(page, { include: '[data-testid="notification-key-card"]' });
+
+  // Escape cancels the rotation only: Settings stays open and focus returns to the opener.
+  await page.keyboard.press("Escape");
+  await expect(confirm).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+  await expect(open).toBeFocused();
+  expect(posts).toBe(0);
+
+  await open.click();
+  await confirm.getByRole("button", { name: "Rotate key", exact: true }).click();
+  await expect(card).toContainText("Key version 3 · active");
+  await expect(confirm).toHaveCount(0);
+  expect(posts).toBe(1);
+});
+
+test("a limited console gets no notification key card", async ({ page }) => {
+  await mockScopedDevices(page, { caller: { scope: "device", device_id: "p-new" } });
+  await openDevices(page);
+  await expect(page.locator(".subagent-row", { hasText: "New Pixel" })).toBeVisible();
+  await expect(page.getByTestId("notification-key-card")).toHaveCount(0);
+});
