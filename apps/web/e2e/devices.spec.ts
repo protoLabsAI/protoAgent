@@ -841,7 +841,7 @@ const PUSH_CARD_STATES: PushCase[] = [
     },
     check: async (card) => {
       await expect(card.getByTestId("push-state")).toContainText("Off on this device");
-      await expect(card.getByTestId("push-state")).toContainText("Get alerts on this device even when the console is closed.");
+      await expect(card.getByTestId("push-state")).toContainText("Get notifications on this device even when the console is closed.");
       await expect(card.getByRole("button", { name: "Turn on notifications" })).toBeEnabled();
     },
   },
@@ -958,6 +958,8 @@ for (const width of [1280, 390]) {
       await expectNoAxeViolations(page, { include: '[data-testid="push-card"]' });
       const overflow = await card.evaluate((el) => el.scrollWidth - el.clientWidth);
       expect(overflow).toBeLessThanOrEqual(0);
+      // "What leaves this computer" shows only where notifications can be turned on or renewed.
+      await expect(card.getByText("What leaves this computer", { exact: true })).toHaveCount(state === "off" || state === "renew" ? 1 : 0);
       await check(card, page);
     });
   }
@@ -991,7 +993,7 @@ test("Try again re-reads a failed check and lands on what is true now", async ({
   await expect(card.getByTestId("push-status")).toHaveText("Notifications are off for this device.");
 });
 
-test("What leaves this machine opens to the four disclosure lines", async ({ page }) => {
+test("What leaves this computer opens, under Turn on notifications, to what a notification reveals", async ({ page }) => {
   await stubBrowserPush(page);
   await asPushDevice(page);
   await stubSelfPush(page);
@@ -999,12 +1001,12 @@ test("What leaves this machine opens to the four disclosure lines", async ({ pag
   const card = page.getByTestId("push-card");
   const lines = card.locator(".devices-push-disclosure p");
   await expect(lines.first()).toBeHidden();
-  await card.getByText("What leaves this machine", { exact: true }).click();
+  const summary = card.getByText("What leaves this computer", { exact: true });
+  const turnOn = await card.getByRole("button", { name: "Turn on notifications" }).boundingBox();
+  expect((await summary.boundingBox())!.y).toBeGreaterThanOrEqual(turnOn!.y + turnOn!.height);
+  await summary.click();
   await expect(lines).toHaveText([
-    "Alerts go straight from this machine to your browser's push service: Apple, Google or Mozilla. No protoAgent server sits in between, and you don't need a chat app.",
-    'The alert says only "protoAgent needs your attention" and "Open the console to view a decision" (or "an update"). It never includes the question, chat text, job output, names or file paths.',
-    "The push service can see when alerts are sent, how big they are and this machine's public IP address.",
-    "Opening an alert asks you to sign in to the console. Nothing can be approved from the lock screen.",
+    'Notifications go from this computer to your browser\'s push service (Apple, Google or Mozilla). They say only "protoAgent needs your attention". They never include chat text, names or file paths. The push service can see when they\'re sent and this computer\'s public IP address. Opening one asks you to sign in. Nothing can be approved from the lock screen.',
   ]);
   await expect(lines.first()).toBeVisible();
   await expectNoAxeViolations(page, { include: '[data-testid="push-card"]' });

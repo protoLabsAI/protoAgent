@@ -284,10 +284,12 @@ This needs iOS 16.4 or later.
 | **Not supported** | This browser can't get notifications. | Use another browser, or the Home Screen app on iPhone. |
 | **Shared sign-in** | This browser isn't a paired device. | Select **Pair this device**. |
 | **Couldn't check notifications on this device.** | The console couldn't read this device's status. It doesn't mean alerts are off. | Select **Try again**. |
-| **Desktop app** | The desktop app shows alerts itself while it's running, including when its window is closed. | Nothing. Quitting the app stops them. |
 
-**What leaves this machine**, at the bottom of the card, says what an alert reveals. The same
-text, and what it means, is in
+The desktop app has no such card: it shows alerts itself while it's running, including when
+its window is closed, and quitting the app stops them.
+
+**What leaves this computer**, under **Turn on notifications** or **Renew notifications**,
+says what an alert reveals. The same text, and what it means, is in
 [Security & the trust model](/explanation/security-and-trust#what-leaves-this-machine).
 
 ### No offline mode {#no-offline-mode}

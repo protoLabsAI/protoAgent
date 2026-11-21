@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 // Settings ▸ Devices ▸ "Notifications on this device" at phone width (ADR 0135 W2e, first
 // card). The `mobile` projects are an iPhone in a browser tab, where iOS has no Web Push, so
 // the card must send the operator to the Home Screen instead of offering a button that can't
-// work, keep its "What leaves this machine" disclosure closed, and fit the phone.
+// work, leave out "What leaves this computer" (nothing can be turned on here), and fit the phone.
 
 const scope = (testInfo) => `push-card-mobile-${testInfo.parallelIndex}`;
 
@@ -26,8 +26,9 @@ test("mobile: a paired iPhone browser tab is sent to the Home Screen, with no de
   await expect(card.getByTestId("push-state")).toContainText("On iPhone, notifications work only from the Home Screen app.");
   await expect(card.getByRole("listitem")).toHaveCount(4);
   await expect(card.getByRole("button")).toHaveCount(0);
-  await expect(card.getByText("What leaves this machine")).toBeVisible();
-  await expect(card.getByText("No protoAgent server sits in between")).toBeHidden();
+  // Shown only where notifications can be turned on or renewed, which a browser tab can't.
+  await expect(card.getByText(/What leaves this/)).toHaveCount(0);
+  await expect(card.locator("details.devices-push-disclosure")).toHaveCount(0);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });

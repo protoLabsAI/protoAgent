@@ -286,26 +286,19 @@ phone credential. Unknown, expired, replayed or substituted handles fail closed,
 after a hub restart or capacity eviction (mint a fresh ticket). Other plugins' ticket
 protocols still need explicit integration; their proxied ticket sockets are not covered.
 
-## What leaves this machine {#what-leaves-this-machine}
+## What leaves this computer {#what-leaves-this-machine}
 
 A paired device can get an alert while the console is closed
 ([Turn on alerts](../guides/phone-access.md#turn-on-alerts),
 [ADR 0135](../adr/0135-always-on-orchestrator.md)). That is the one place the agent sends
 something about your work to a service you don't run, so the console says exactly what goes.
-**Settings ▸ Devices ▸ Notifications on this device ▸ What leaves this machine** reads:
+**Settings ▸ Devices ▸ Notifications on this device ▸ What leaves this computer**, shown
+under the button wherever notifications can be turned on or renewed, reads:
 
-> Alerts go straight from this machine to your browser's push service: Apple, Google or
-> Mozilla. No protoAgent server sits in between, and you don't need a chat app.
->
-> The alert says only "protoAgent needs your attention" and "Open the console to view a
-> decision" (or "an update"). It never includes the question, chat text, job output, names or
-> file paths.
->
-> The push service can see when alerts are sent, how big they are and this machine's public
-> IP address.
->
-> Opening an alert asks you to sign in to the console. Nothing can be approved from the lock
-> screen.
+> Notifications go from this computer to your browser's push service (Apple, Google or
+> Mozilla). They say only "protoAgent needs your attention". They never include chat text,
+> names or file paths. The push service can see when they're sent and this computer's public
+> IP address. Opening one asks you to sign in. Nothing can be approved from the lock screen.
 
 What that means for trust:
 
