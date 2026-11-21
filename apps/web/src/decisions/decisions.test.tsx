@@ -1201,8 +1201,8 @@ describe("DecisionCard", () => {
     const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
     await renderNode(<DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} />);
     expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(true);
-    // No "Reply in chat instead" in the source chat: its composer answers directly (#5668 §4).
-    expect(document.body.textContent).not.toContain("Reply in chat instead");
+    // The source chat's card offers the free-text route again (#5678): typing does not answer on its own.
+    expect(buttons().some((b) => b.textContent?.trim() === "Reply in chat instead")).toBe(true);
     expect(buttons().some((b) => b.textContent?.trim() === "Dismiss")).toBe(true);
     expect(document.body.textContent).not.toContain("You chose");
   });

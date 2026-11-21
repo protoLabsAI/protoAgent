@@ -538,9 +538,7 @@ export function DecisionCard({
           )}
           {(answerable || !isTranscript) && (
             <div style={footerActions}>
-              {/* The source chat's transcript passes no handler: its composer already answers
-                  the decision (#5668 §4). Every other host keeps the action. */}
-              {answerable && (!isTranscript || onReplyInChat) && (
+              {answerable && (
                 <Button variant="ghost" size={optionSize} onClick={() => onReplyInChat?.(decision)}>
                   Reply in chat instead
                 </Button>
