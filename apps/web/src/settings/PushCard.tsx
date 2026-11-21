@@ -43,12 +43,9 @@ const REFUSAL: Record<string, string> = {
 
 const PROVIDER: Record<string, string> = { apple: "Apple", google: "Google", mozilla: "Mozilla" };
 
-const DISCLOSURE = [
-  "Alerts go straight from this machine to your browser's push service: Apple, Google or Mozilla. No protoAgent server sits in between, and you don't need a chat app.",
-  'The alert says only "protoAgent needs your attention" and "Open the console to view a decision" (or "an update"). It never includes the question, chat text, job output, names or file paths.',
-  "The push service can see when alerts are sent, how big they are and this machine's public IP address.",
-  "Opening an alert asks you to sign in to the console. Nothing can be approved from the lock screen.",
-];
+/** "What leaves this computer": shown only where notifications can be turned on or renewed. */
+const DISCLOSURE =
+  "Notifications go from this computer to your browser's push service (Apple, Google or Mozilla). They say only \"protoAgent needs your attention\". They never include chat text, names or file paths. The push service can see when they're sent and this computer's public IP address. Opening one asks you to sign in. Nothing can be approved from the lock screen.";
 
 function isApple(): boolean {
   return /iPhone|iPad|iPod/.test(navigator.userAgent ?? "") ||
@@ -133,7 +130,8 @@ export type PushCardProps = {
 
 /** Settings ▸ Devices ▸ "Notifications on this device" (ADR 0135 D10 / W2e): turn this
  *  device's alerts on, renew them or turn them off, and see what an alert reveals. The turn-on
- *  handler calls `enrollPush` first thing: iOS only grants permission from the tap itself. */
+ *  handler calls `enrollPush` first thing: iOS only grants permission from the tap itself.
+ *  Renders nothing in the desktop app, where there is nothing here to act on. */
 export function PushCard({ provider, onPair, onChanged }: PushCardProps) {
   const [env] = useState(environment);
   const [view, setView] = useState<View>(env ? { kind: env } : { kind: "loading" });
@@ -265,6 +263,10 @@ export function PushCard({ provider, onPair, onChanged }: PushCardProps) {
   const service = provider ? PROVIDER[provider] : undefined;
   const canEnroll = view.kind === "off" || view.kind === "renew";
 
+  // The desktop app shows every notice itself and has nothing to turn on here, so the card
+  // is left out of the page entirely rather than shown with no action.
+  if (view.kind === "desktop") return null;
+
   return (
     <section className="devices-push" data-testid="push-card" data-state={view.kind} aria-labelledby={headingId}>
       <h3 id={headingId} ref={heading} tabIndex={-1} className="devices-push-heading">
@@ -272,12 +274,6 @@ export function PushCard({ provider, onPair, onChanged }: PushCardProps) {
       </h3>
       {view.kind !== "loading" && (
         <div className="devices-push-state" data-testid="push-state">
-          {view.kind === "desktop" && (
-            <>
-              <strong>Desktop app</strong>
-              <p>The desktop app shows alerts while it&apos;s running, including when its window is closed. Quitting the app stops them.</p>
-            </>
-          )}
           {view.kind === "insecure" && (
             <>
               <strong>Not available on this address</strong>
@@ -325,7 +321,7 @@ export function PushCard({ provider, onPair, onChanged }: PushCardProps) {
           {view.kind === "off" && (
             <>
               <strong>Off on this device</strong>
-              <p>Get alerts on this device even when the console is closed.</p>
+              <p>Get notifications on this device even when the console is closed.</p>
             </>
           )}
           {view.kind === "on" && (
@@ -365,10 +361,12 @@ export function PushCard({ provider, onPair, onChanged }: PushCardProps) {
       ) : null}
       {/* The only live region. Its text is written by `say`, never by React. */}
       <p className="devices-push-status" role="status" data-testid="push-status" ref={status} />
-      <details className="devices-push-disclosure">
-        <summary>What leaves this machine</summary>
-        {DISCLOSURE.map((line) => <p key={line}>{line}</p>)}
-      </details>
+      {canEnroll ? (
+        <details className="devices-push-disclosure">
+          <summary>What leaves this computer</summary>
+          <p>{DISCLOSURE}</p>
+        </details>
+      ) : null}
       <TapLog />
     </section>
   );
