@@ -567,3 +567,11 @@ def test_registry_override_editor_reads_preserves_and_respects_locked_config():
     cfg.settings_hidden = ["subagents"]
     assert not any(f["key"] == "subagents" for g in build_schema(cfg) for f in g["fields"])
     assert validate_flat({"subagents": overrides}, hidden=cfg.settings_hidden)[0] is False
+
+
+def test_skills_enable_action_is_writable_and_requires_restart():
+    updates = {"skills.enabled": True}
+    assert validate_flat(updates) == (True, None)
+    assert nest_updates(updates) == {"skills": {"enabled": True}}
+    assert restart_keys(updates) == ["skills.enabled"]
+    assert validate_flat({"skills.enabled": "true"})[0] is False

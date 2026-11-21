@@ -28,6 +28,8 @@ test("Agent → Skills lists pinned + learned skills and supports search", async
   await expect(surface.getByText("pinned").first()).toBeVisible();
   await expect(surface.getByText("learned").first()).toBeVisible();
 
+  await expect(surface).toContainText("Step-by-step guides the agent can follow · 1 pinned · 1 learned · 1 shared");
+
   // Search narrows the list.
   await surface.getByPlaceholder(/Search skills/).fill("triage");
   await expect(surface.getByText("pr-triage-flow")).toBeVisible();
@@ -70,7 +72,7 @@ test("layered skills show tier badges and promote a private skill to the commons
   await expect(surface).toBeVisible();
 
   // Tier badges from the layered index (ADR 0041): one commons, one private.
-  await expect(surface.getByText("commons", { exact: true })).toBeVisible();
+  await expect(surface.getByText("Shared", { exact: true })).toBeVisible();
   await expect(surface.getByText("private", { exact: true })).toBeVisible();
 
   // Promote is offered only on the private skill (id 2), not the commons one (id 1).
@@ -95,7 +97,7 @@ test("unshares a commons skill from the Skills view (forget, with confirm)", asy
 
   // It confirms first (a commons skill is read by every agent), then removes the row.
   await surface.getByTestId("playbook-forget-1").click();
-  const dialog = page.getByRole("dialog", { name: "Unshare from the commons?" });
+  const dialog = page.getByRole("dialog", { name: "Unshare this skill?" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Unshare", exact: true }).click();
   await expect(surface.getByTestId("playbook-forget-1")).toHaveCount(0);
