@@ -1,4 +1,7 @@
-"""A decision whose chat is open in a console is not pushed to the phone (#5648 fix 9).
+"""A decision in a chat that is open in a console is still pushed to the phone (#5648).
+
+#5663 dropped that push, and a desktop app that keeps a chat open then stopped every
+decision push. That rule is reverted; this is the real-process guard against its return.
 
 A real hub boots with one push-enrolled device. The decision is raised through the tool
 path: a chat turn sent to the hub's ``/a2a`` endpoint, in which the (fake) model calls the
@@ -6,8 +9,8 @@ path: a chat turn sent to the hub's ``/a2a`` endpoint, in which the (fake) model
 does for a real agent.
 
 While the test holds ``GET /api/chat/attend?session=<sid>`` open, as a console showing that
-chat does, the decision's row in the hub's ``push/delivery.sqlite3`` ends ``obsolete``. A
-second decision, in a chat with no attend stream, is attempted: its row is not obsolete.
+chat does, the decision's row in the hub's ``push/delivery.sqlite3`` is attempted and is
+not ``obsolete``. A second decision, in a chat with no attend stream, is attempted the same.
 No push service is contacted: the seeded device's client keys are not a real subscription.
 
 Slow + opt-in: ``PA_RUN_INTEGRATION=1 pytest tests/integration``.
@@ -114,7 +117,7 @@ def _attempt(ledger, decision_id: str):
         return db.execute(query, (f"decision-{decision_id}",)).fetchone()
 
 
-def test_a_decision_in_a_chat_open_in_a_console_is_not_pushed(fleet, monkeypatch):
+def test_a_decision_in_a_chat_open_in_a_console_is_still_pushed(fleet, monkeypatch):
     hub = fleet(name="hubattended")
     ledger = hub.home / "push" / "delivery.sqlite3"
 
@@ -128,19 +131,19 @@ def test_a_decision_in_a_chat_open_in_a_console_is_not_pushed(fleet, monkeypatch
         assert devices.set_push_binding(device.id, token, endpoint="https://web.push.apple.com/test", **keys)
     reset_instance_paths()
 
-    # 1. A console has the chat open: hold its attend stream for the whole check.
+    # 1. A console has the chat open: hold its attend stream until the push has been attempted.
     stream = urllib.request.urlopen(f"{hub.base}/api/chat/attend?session=watched-chat", timeout=30)
     try:
         assert stream.readline().strip() == b": attending"
         watched = _raise_decision(hub.base, "watched-chat")
-        row = poll(lambda: (r := _attempt(ledger, watched)) and r[0] != "pending" and r, timeout=30, interval=0.25)
-        assert row == ("obsolete", 0), f"an attended decision must be dropped unsent, got {row}"
+        # The sender rejects the fake keys, so the row need not end accepted: it must have been tried.
+        tried = lambda r: r and (r[1] >= 1 or r[0] == "obsolete") and r  # noqa: E731
+        row = poll(lambda: tried(_attempt(ledger, watched)), timeout=30, interval=0.25)
+        assert row and row[1] >= 1 and row[0] != "obsolete", f"an attended decision must still be pushed, got {row}"
     finally:
         stream.close()
 
-    # 2. Nobody has this chat open: the push is attempted (the sender then rejects the fake keys).
+    # 2. Nobody has this chat open: the push is attempted just the same.
     unwatched = _raise_decision(hub.base, "unwatched-chat")
     row = poll(lambda: (r := _attempt(ledger, unwatched)) and r[1] >= 1 and r, timeout=30, interval=0.25)
     assert row and row[0] != "obsolete", f"an unattended decision must still be pushed, got {row}"
-    # Leaving the first chat did not bring its dropped push back.
-    assert _attempt(ledger, watched) == ("obsolete", 0)
