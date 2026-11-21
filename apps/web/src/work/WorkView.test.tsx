@@ -18,6 +18,9 @@ Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.setPointerCapture ??= () => {};
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
+// The spend block has its own suite (SpendToday.test.tsx); a stub keeps this file's heading,
+// alert and button queries on the groups it is about.
+vi.mock("./SpendToday", () => ({ SpendToday: () => <div data-spend-today="" /> }));
 vi.mock("./useWorkItems", () => ({ useWorkItems: () => data.sources }));
 const openChat = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("./openSourceChat", () => ({ openSourceChat: openChat }));
@@ -798,5 +801,19 @@ it("ignores resize-reset scroll events until the observer restores the saved pos
     expect(list.scrollTop).toBe(75);
   } finally {
     vi.stubGlobal("ResizeObserver", original);
+  }
+});
+
+it("mounts the spend block above the groups on every Work surface, Overview or a picked group", async () => {
+  data.sources.tasks.items = [task("queued", "open")];
+  for (const frame of ["rail", "modal"] as const) {
+    for (const section of ["overview", "coming-up"]) {
+      useUI.setState({ surfaceStates: { work: { section } } });
+      await render(frame);
+      const content = host.querySelector(".work-view__content")!;
+      expect(content.firstElementChild?.hasAttribute("data-spend-today"), `${frame} ${section}`).toBe(true);
+      // A pause never changes a job row: the block is the only place it shows (§1.5).
+      expect(content.querySelectorAll("[data-spend-today]")).toHaveLength(1);
+    }
   }
 });

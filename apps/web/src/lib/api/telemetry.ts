@@ -19,7 +19,32 @@ import type {
 import { apiUrl, applyAuth } from "./routing";
 import { request } from "./http";
 
+/** `GET /api/telemetry/spend-cap` (`server/turn_control.py` `spend_cap_status`): today's
+ *  unattended spend against the daily cap. The day is a UTC date. With no meter
+ *  (`meter_available: false`) `cost_usd` and `total_tokens` are `null`. The two soft
+ *  ("notice") limits are optional: an older server omits them, and 0 means no notice limit. */
+export type SpendCapStatus = {
+  day: string;
+  cost_usd: number | null;
+  total_tokens: number | null;
+  enabled: boolean;
+  meter_available: boolean;
+  daily_cost_hard_limit: number;
+  daily_token_hard_limit: number;
+  daily_cost_soft_limit?: number;
+  daily_token_soft_limit?: number;
+  approved_today: boolean;
+  decision_id: string | null;
+  paused: boolean;
+};
+
 export const telemetryApi = {
+  // Today's unattended spend and the cap's pause state (Work ▸ Unattended spend today).
+  // Read-only: it never creates the spend-cap decision.
+  spendCap() {
+    return request<SpendCapStatus>("/api/telemetry/spend-cap");
+  },
+
   trajectoryEvents(sessionId: string, limit = 20) {
     return request<{ found: boolean; events: TrajectoryEvent[]; total: number }>(
       `/api/trajectory/${encodeURIComponent(sessionId)}?limit=${limit}`,

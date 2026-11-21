@@ -1345,6 +1345,12 @@ function handleApiGet(
         langfuse_trace_url_template: null,
         tracing_enabled: false,
       };
+    case "/api/telemetry/spend-cap":
+      // Work's "Unattended spend today" block: a quiet running reading, well under both
+      // limits, so the block draws no callout, alert or button in unrelated specs.
+      return { day: new Date().toISOString().slice(0, 10), cost_usd: 2.1, total_tokens: 184000, enabled: true,
+        meter_available: true, daily_cost_hard_limit: 10, daily_token_hard_limit: 1000000,
+        daily_cost_soft_limit: 0, daily_token_soft_limit: 0, approved_today: false, decision_id: null, paused: false };
     case "/api/telemetry/summary":
       return telemetryOff ? { enabled: false, summary: null } : { enabled: true, summary: TELEMETRY_SUMMARY };
     case "/api/telemetry/recent":

@@ -16,6 +16,9 @@ import { setPaletteNavigator } from "../app/palette/nav";
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
 const openChat = vi.hoisted(() => vi.fn());
+// The spend block has its own suite (SpendToday.test.tsx); a stub keeps this file's heading,
+// alert and button queries on the groups it is about.
+vi.mock("../work/SpendToday", () => ({ SpendToday: () => null }));
 vi.mock("../work/useWorkItems", () => ({ useWorkItems: () => data.sources }));
 vi.mock("../work/openSourceChat", () => ({ openSourceChat: openChat }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
