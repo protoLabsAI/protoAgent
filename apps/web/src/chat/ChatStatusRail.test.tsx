@@ -3,12 +3,15 @@
  *  Open-in-Work deep links, the preserved instructions Load-again/error state, the one polite
  *  change-only live region, and the dialog a11y contract (haspopup/expanded, trap, Escape,
  *  focus return). The selector itself is covered in work/workGroups.test.ts — here every count
- *  assertion is checked AGAINST the selector so chip and Work-row numbers cannot drift. */
+ *  assertion is checked AGAINST the selector so chip and Work-row numbers cannot drift.
+ *  Every case starts with the right panel collapsed (Work off screen), so the chips render;
+ *  "while the Work pane is on screen" pins what the rail leaves out beside an open Work. */
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useUI } from "../state/uiStore";
+import { useKbIntents } from "../keybindings/intents";
 import type { WorkItems, WorkSource } from "../work/useWorkItems";
 import { flattenWorkItems, workGroups } from "../work/workGroups";
 import { registerWorkSection } from "../work/sectionRegistry";
@@ -197,14 +200,21 @@ describe("chips", () => {
     expect(state.ledgerSessions[0]).toBe(SESSION);
   });
 
-  it("uses the spinner with no goal, pluralizes Instructions, and keeps only started blocked work in Doing now", async () => {
+  it("uses the still Play icon (no spinner) with no goal, pluralizes Instructions, and keeps only started blocked work in Doing now", async () => {
     await render(rail([bg("bg-run", "running", SESSION), directive("d1", SESSION), directive("d2", SESSION)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");
-    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeTruthy();
+    const play = chip("doing-now")!.querySelector(".lucide-play");
+    expect(play).toBeTruthy();
+    expect(play!.getAttribute("aria-hidden")).toBe("true");
+    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull(); // nothing in the chip animates
+    expect(chip("doing-now")!.querySelector(".lucide-target")).toBeNull();
     expect(chip("instructions")!.getAttribute("aria-label"))
       .toBe("Instructions: 2 instructions in force in this chat. Show details");
     await render(rail(MIXED));
-    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull(); // goal → target icon
+    expect(chip("doing-now")!.querySelector(".lucide-target")).toBeTruthy(); // goal → target icon
+    expect(chip("doing-now")!.querySelector(".lucide-play")).toBeNull();
+    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull();
+    expect(chip("doing-now")!.textContent).toContain("goal 3/8");
     // started: false is the selector's only "never ran" proof — absent means it did start.
     await render(rail([task("t-blocked", "blocked", SESSION, true), task("t-waiting", "blocked", SESSION, false)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");
@@ -377,6 +387,89 @@ describe("details panel", () => {
     expect(dialog()).toBeNull();
     expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(chip("doing-now"));
+  });
+});
+
+describe("while the Work pane is on screen", () => {
+  const railEl = () => host.querySelector('[data-testid="chat-status-rail"]');
+  const WORK_IDS = ["doing-now", "coming-up", "instructions", "needs-you"];
+  const people = () => [...host.querySelectorAll("button.chat-roster-chip")].map((c) => c.textContent);
+  const ui = (patch: Partial<ReturnType<typeof useUI.getState>>) => act(async () => useUI.setState(patch));
+  const WITH_NEEDS = [...MIXED, decision("q1")];
+
+  it.each([
+    ["the right panel", { rightPanel: "work", rightCollapsed: false }],
+    ["the surface modal", { surfaceModal: { viewId: "work", state: {} } }],
+    ["the bottom dock", {
+      bottomPanel: "work", bottomCollapsed: false,
+      railOrder: { left: ["chat"], right: ["context"], bottom: ["work"], hidden: [] },
+    }],
+  ])("Work open in %s: no work or Needs you chip, people chips keep the whole row", async (_where, patch) => {
+    const cast = ["ana", "bo", "cy", "dee", "elle", "fay"];
+    await render(rail(WITH_NEEDS, { cast }));
+    // Work off screen: every chip, and the people fold to the cap beside Needs you + statuses.
+    for (const id of WORK_IDS) expect(chip(id)).toBeTruthy();
+    expect(people()).toEqual(["@ana", "@bo", "+4"]);
+    await ui(patch);
+    expect(railEl()).toBeTruthy();
+    for (const id of WORK_IDS) expect(chip(id)).toBeNull();
+    expect(host.querySelector(".chat-status-chip, .chat-status-needs-you")).toBeNull();
+    expect(people()).toEqual(["@ana", "@bo", "@cy", "@dee", "@elle", "+1"]); // the people-own-the-row cap
+    expect(dialog()).toBeNull();
+  });
+
+  it.each([
+    ["the right panel is collapsed", { rightPanel: "work", rightCollapsed: true }],
+    ["another right tab is showing", { rightPanel: "context", rightCollapsed: false }],
+    ["Work was moved off the right rail", {
+      rightPanel: "work", rightCollapsed: false,
+      railOrder: { left: ["chat", "work"], right: ["context"], bottom: [], hidden: [] },
+    }],
+  ])("every chip renders as today when %s, in the same rail row", async (_why, patch) => {
+    await ui({ rightPanel: "work", rightCollapsed: false });
+    await render(rail(WITH_NEEDS, { cast: ["lead"] }));
+    const hiddenRow = railEl()!;
+    expect(chip("doing-now")).toBeNull();
+    await ui(patch);
+    for (const id of WORK_IDS) expect(chip(id)).toBeTruthy();
+    expect(chip("doing-now")!.textContent).toBe("Doing now · goal 3/8 · 2");
+    // ONE row element with one class in both states: its min-height (chat-status-rail.css)
+    // holds the row's height, so showing or hiding the pane never moves the composer.
+    expect(railEl()).toBe(hiddenRow);
+    expect(hiddenRow.className).toBe("chat-status-rail");
+  });
+
+  it("renders nothing with no people, whatever work or failed ledger this chat has", async () => {
+    await ui({ rightPanel: "work", rightCollapsed: false });
+    state.ledger = { state: "failed", loadedAt: null, refresh: vi.fn() };
+    await render(rail(WITH_NEEDS));
+    expect(railEl()).toBeNull();
+    expect(host.querySelector("button")).toBeNull();
+    // The polite live region stays mounted outside the rail.
+    expect([...host.children].map((node) => node.className)).toEqual(["chat-status-rail__announce"]);
+  });
+
+  it("closes an open chip panel when Work comes on screen, hands focus to the composer, and stays closed after", async () => {
+    await render(rail(MIXED, { cast: ["lead"] }));
+    await click(chip("doing-now"));
+    expect(dialog()).toBeTruthy();
+    const before = useKbIntents.getState().composerFocusNonce;
+    await ui({ rightPanel: "work", rightCollapsed: false });
+    expect([chip("doing-now"), dialog()]).toEqual([null, null]);
+    expect(useKbIntents.getState().composerFocusNonce).toBe(before + 1);
+    await ui({ rightCollapsed: true });
+    expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
+    expect(dialog()).toBeNull();
+    expect(useKbIntents.getState().composerFocusNonce).toBe(before + 1); // no second focus grab
+  });
+
+  it("phone: the chips and their sheet stay, even with Work as the stored right tab", async () => {
+    state.mobile = true;
+    await ui({ rightPanel: "work", rightCollapsed: false, surfaceModal: { viewId: "work", state: {} } });
+    await render(rail(WITH_NEEDS, { cast: ["lead"] }));
+    for (const id of WORK_IDS) expect(chip(id)).toBeTruthy();
+    await click(chip("coming-up"));
+    expect(document.querySelector(".pl-drawer--bottom")).toBeTruthy();
   });
 });
 

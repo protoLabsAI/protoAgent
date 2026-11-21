@@ -28,6 +28,13 @@ for (const width of [1440, 390]) {
     test(`ledger withdrawal and entry points at ${width} ${mode}`, async ({ page }, info) => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.setViewportSize({ width, height: 900 });
+      // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+      // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+      await page.addInitScript(() => {
+        if (!localStorage.getItem("protoagent.ui")) {
+          localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+        }
+      });
       await page.addInitScript(({ session, note }) => {
         localStorage.setItem("protoagent.chat.sessions", JSON.stringify({
           version: 1, currentSessionId: session,
@@ -153,6 +160,12 @@ for (const width of [1440, 390]) {
       await page.screenshot({ path: info.outputPath("withdrawn.png"), fullPage: true, animations: "disabled" });
 
       if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
+      if (width === 1440) {
+        // "Open in Work" put the Work pane on screen, so the rail stopped repeating it: the
+        // chip is out of the DOM until the pane is hidden again.
+        await expect(chip).toHaveCount(0);
+        await page.getByTestId("toggle-right").click();
+      }
       // The withdrawn instruction leaves the count; the still-in-force approval keeps the chip up.
       await expect(chip).toHaveText(width === 390 ? "1" : "Instructions 1", { useInnerText: true });
       await expect(page.locator(".pl-message--system").filter({ hasText: 'You withdrew: "' + QUOTE + '" — Hold until Monday' })).toBeVisible();

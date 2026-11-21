@@ -13,6 +13,13 @@ const DESCRIPTION =
 
 test("a long background-job label stays inside the details panel instead of widening the chat column", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
+  // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+  // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
+  });
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(

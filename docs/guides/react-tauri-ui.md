@@ -57,7 +57,9 @@ See [Steering](/explanation/steering) for pending-message behavior.
 - **Status rail:** a strip above the composer sums up this chat's work — a **Needs
   you** marker and a chip for each non-empty [Work](#work) group (**Doing now**,
   **Coming up**, **Instructions**). A chip opens that group's rows; **Needs you**
-  is never limited to one chat.
+  is never limited to one chat. On desktop these chips step aside while the Work
+  pane is on screen, since it already shows the same rows; they return when you
+  hide the pane or switch its tab. The chips for who is in the chat always stay.
 
 On desktop, a failed streaming relay can fall back to showing the completed reply.
 If a reply stalls or fails, follow [Chat fails](/guides/troubleshooting#chat-fails).

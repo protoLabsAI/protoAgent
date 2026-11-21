@@ -71,6 +71,11 @@ function routes(page: import("@playwright/test").Page, mode: string, opts: { fai
 
 function seedSession(page: import("@playwright/test").Page, messages: object[] = []) {
   return page.addInitScript(({ session, messages }) => {
+    // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+    // is on screen (the desktop default). Seeded once, so a later open keeps its state.
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
     localStorage.setItem("protoagent.chat.sessions", JSON.stringify({
       version: 1, currentSessionId: session,
       sessions: [{ id: session, title: "Rail chat", createdAt: 1, updatedAt: 2, messages }],
@@ -202,6 +207,36 @@ for (const width of [1440, 390]) {
     });
   }
 }
+
+// Layout only a real browser can show: opening the Work pane takes the work chips off the rail
+// (the pane already shows them) and the people keep the row — and because the row has a fixed
+// min-height, neither the rail nor the composer moves. (Which chips hide when is pinned in
+// ChatStatusRail.test.tsx.)
+test("opening the Work pane hides the work chips without moving the rail row or the composer", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await seedSession(page, castMessages);
+  await routes(page, "light");
+  await page.goto("/app/", { waitUntil: "load" });
+
+  const rail = page.getByTestId("chat-status-rail");
+  const doing = page.getByTestId("chat-status-chip-doing-now");
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await expect(doing).toBeVisible(); // side panel collapsed: every chip, as before
+  await expect(rail.locator("button.chat-roster-chip").first()).toHaveText("@opus");
+  const before = { rail: (await rail.boundingBox())!, composer: (await composer.boundingBox())! };
+
+  await page.getByTestId("toggle-right").click(); // the side panel opens on Work
+  await expect(page.locator('.work-view[data-frame="rail"]')).toBeVisible();
+  await expect(rail.locator(".chat-status-chip")).toHaveCount(0);
+  await expect(rail.locator("button.chat-roster-chip").first()).toHaveText("@opus");
+  const after = { rail: (await rail.boundingBox())!, composer: (await composer.boundingBox())! };
+  expect(after.rail.height).toBe(before.rail.height);
+  expect([after.rail.y, after.composer.y]).toEqual([before.rail.y, before.composer.y]);
+
+  await page.getByTestId("toggle-right").click(); // hidden again: the chips return
+  await expect(doing).toBeVisible();
+});
 
 // S6b touch floor (review round 1): the roster clips SIDEWAYS only. On touch devices each
 // people chip and `+K` carries a 44px ::after tap overlay TALLER than the one-line row
