@@ -105,7 +105,7 @@ describe("peopleFit (pure edges)", () => {
 
 describe("the one-row fit", () => {
   it.each([
-    [false, 1, ["@ana", "@bo", "@cy"], "+3"], // desktop beside status chips: 3
+    [false, 1, ["@ana", "@bo", "@cy", "@dee", "@elle"], "+1"], // desktop hides the status chips: still 5
     [false, 0, ["@ana", "@bo", "@cy", "@dee", "@elle"], "+1"], // desktop, people own the row: 5
     [true, 1, ["@ana"], "+5"], // phone beside status chips: 1
     [true, 0, ["@ana", "@bo", "@cy"], "+3"], // phone, people own the row: 3
@@ -117,7 +117,8 @@ describe("the one-row fit", () => {
     expect(more()!.getAttribute("aria-label")).toBe(spokenMoreLabel(CAST.length - visible.length));
     // The status chip's count comes from the shared selector — people visibility never moves it.
     const doing = host.querySelector('[data-testid="chat-status-chip-doing-now"]');
-    expect(doing?.querySelector(".chat-status-chip__count")?.textContent ?? null).toBe(running ? "1" : null);
+    // Desktop renders no status chip at all, so its people keep the whole row.
+    expect(doing?.querySelector(".chat-status-chip__count")?.textContent ?? null).toBe(running && mobile ? "1" : null);
   });
 
   it("shows everyone, +K-less, when the cast fits the cap", async () => {
@@ -168,7 +169,7 @@ describe("the +K picker", () => {
   it("opens at In this chat · N, keeps picking open, reorders the rail, and restores focus", async () => {
     state.sources = mkSources(1);
     await render(<Harness cast={CAST} initial="@bo hi there" />);
-    expect(names()).toEqual(["@bo", "@ana", "@cy"]); // draft-addressed first, then cast order
+    expect(names()).toEqual(["@bo", "@ana", "@cy", "@dee", "@elle"]); // draft-addressed first, then cast order
     expect(more()!.getAttribute("aria-haspopup")).toBe("dialog");
     await click(more());
     expect(more()!.getAttribute("aria-expanded")).toBe("true");
@@ -182,9 +183,9 @@ describe("the +K picker", () => {
     // panel still open, +K count unmoved — and the pick LEADS the rail (it joins the
     // run's end, where a full row would hide it; the recipients line keeps run order).
     expect(calls).toEqual([["fay", "picker"]]);
-    expect(names()).toEqual(["@fay", "@bo", "@ana"]);
+    expect(names()).toEqual(["@fay", "@bo", "@ana", "@cy", "@dee"]);
     const fay = document.querySelector<HTMLElement>('.chat-people button[title="Remove @fay from this message"]')!;
-    expect([fay.getAttribute("aria-pressed"), more()!.textContent]).toEqual(["true", "+3"]);
+    expect([fay.getAttribute("aria-pressed"), more()!.textContent]).toEqual(["true", "+1"]);
     expect(document.querySelector(".chat-people__line")!.textContent)
       .toBe("Your message goes to @bo, @fay. Choose a name again to take it out.");
     await click(fay); // picking again takes it out; the picker still stays open
@@ -196,7 +197,7 @@ describe("the +K picker", () => {
   });
 
   it("a work chip's panel carries NO People rider (chat-status-rail-v2 §1 D1) — the picker lives on +K", async () => {
-    state.sources = mkSources(1);
+    Object.assign(state, { mobile: true, sources: mkSources(1) }); // work chips are phone-only
     await render(<Harness cast={CAST} />);
     // Opening a work chip shows ONLY its own group; the People picker never rides along.
     await click(host.querySelector('[data-testid="chat-status-chip-doing-now"]'));

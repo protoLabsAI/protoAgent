@@ -4,7 +4,8 @@ import { expect, test } from "@playwright/test";
 // rail's chip carries only the group name and count (S6a) — the label lives in the grouped
 // details panel, where the row title ellipsizes inside the panel. Before the rail, the
 // one-line strip's unwrapped label pushed the whole chat wider than the panel
-// (Josh, 2026-10-04); this keeps that class of regression pinned.
+// (Josh, 2026-10-04); this keeps that class of regression pinned. The work chips are
+// phone-only, so this runs at the phone width.
 
 const SESSION = "chat-bgwork-overflow-e2e";
 const DESCRIPTION =
@@ -12,7 +13,7 @@ const DESCRIPTION =
   "features, board every feature with acceptance criteria, link the parent epic, and report back with the ids";
 
 test("a long background-job label stays inside the details panel instead of widening the chat column", async ({ page }) => {
-  await page.setViewportSize({ width: 900, height: 800 });
+  await page.setViewportSize({ width: 390, height: 800 });
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(

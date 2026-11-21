@@ -20,7 +20,11 @@
  *  whose first section is "Needs you · N": the shared DecisionCard (answer logic and the
  *  shared decisions store, not a fork) for the first decision, one-line rows for the rest,
  *  neutral rows for undelivered human-needed pages and stopped goals (Keep going / Drop the
- *  goal). Results hold in the OPEN panel until it closes; the count stays pending-only. */
+ *  goal). Results hold in the OPEN panel until it closes; the count stays pending-only.
+ *
+ *  Phone only, for now: on desktop the work chips, the Needs you marker and their details
+ *  panels do not render — only the people chips and their picker do, and with no people the
+ *  rail renders no DOM at all. */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefAttributes } from "react";
 import { Button, type ButtonProps } from "@protolabsai/ui/primitives";
@@ -355,6 +359,12 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   onToggleMention: (name: string, source?: "picker") => void;
 }) {
   const mobile = useIsMobile();
+  // Desktop hides the work side of the rail (Josh, 2026-11-21): the work chips, the Needs you
+  // marker and their details panels render on the phone only — desktop already carries the
+  // same facts in notification toasts, the Work panel and the utility bar. People chips and
+  // their `+K` picker stay on both. The desktop Popover hosts below are kept (unreached while
+  // this is false on desktop) so the hide is this one switch.
+  const showWork = mobile;
   const sources = useWorkItems({ sessionId, thisChatOnly: false });
   // The shared decisions store (useDecisions) overlays the Work rows exactly like the Work
   // view does, so an answer drops the marker's count the moment it lands — the two surfaces
@@ -366,7 +376,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   );
   const flat = useMemo(() => flattenWorkItems(merged), [merged]);
   const groups = useMemo(() => workGroups(flat, { thisChatOnly: true, sessionId }), [flat, sessionId]);
-  const chips = railChips(groups);
+  const chips = showWork ? railChips(groups) : [];
   // Fleet-wide Needs you (S7): the selector never chat-scopes this group, so the marker's
   // count is every pending decision, undelivered human-needed page, stopped goal and
   // `waiting` task (ADR 0129 Q1) anywhere — EXACTLY the kinds the section draws
@@ -401,7 +411,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   };
   // The failed-instructions chip: THIS chat's ledger never loaded, so the count is unknowable —
   // it renders without one and the details panel carries the preserved "Load again" path.
-  if (ledgerStatus === "error" && !chips.some((chip) => chip.id === "instructions")) {
+  if (showWork && ledgerStatus === "error" && !chips.some((chip) => chip.id === "instructions")) {
     chips.push({ id: "instructions", label: "Instructions", count: 0, problem: true });
   }
 
@@ -460,7 +470,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     const boxes = children.slice(1, -1).map((el) => ({ left: el.offsetLeft, width: el.offsetWidth }));
     setMeasured(fitCount(boxes, more.offsetWidth, available));
   }, [available, orderedKey]);
-  const visibleCount = Math.min(measured ?? fallbackCap(mobile, chips.length > 0, needsYou.count > 0), ordered.length);
+  const visibleCount = Math.min(measured ?? fallbackCap(mobile, chips.length > 0, showWork && needsYou.count > 0), ordered.length);
   const visible = ordered.slice(0, visibleCount);
   const hiddenCount = ordered.length - visibleCount;
 
@@ -475,13 +485,16 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   // A WORK chip whose group empties does NOT auto-close (§1 "emptied while open"): the panel
   // stays open with a role="status" line until dismissed, so it stays rendered as its anchor.
   const emptiedChipId: RailChip["id"] | null =
-    open !== null && open !== "people" && open !== "needs-you" && !chips.some((chip) => chip.id === open)
+    showWork && open !== null && open !== "people" && open !== "needs-you" && !chips.some((chip) => chip.id === open)
       ? open
       : null;
+  // A work or Needs-you panel also closes when the viewport leaves the phone layout (its
+  // opener is no longer on the rail), so it cannot reopen by itself on the way back.
   const openGone = open !== null
     && (open === "people" ? hiddenCount === 0
-      : open === "needs-you" ? needsYou.count === 0 && held.size === 0
-        : false);
+      : !showWork ? true
+        : open === "needs-you" ? needsYou.count === 0 && held.size === 0
+          : false);
   useEffect(() => {
     if (openGone) setOpen(null);
   }, [openGone]);
@@ -538,8 +551,10 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     else if (lastOpen.current) chipRefs.current.get(lastOpen.current)?.focus();
   };
 
-  const hasContent = chips.length > 0 || cast.length > 0 || needsYou.count > 0
-    || (open === "needs-you" && held.size > 0) || emptiedChipId !== null;
+  // Desktop with no people leaves nothing to show: the rail renders no DOM, so it takes no
+  // height above the composer.
+  const hasContent = cast.length > 0 || (showWork && (chips.length > 0 || needsYou.count > 0
+    || (open === "needs-you" && held.size > 0) || emptiedChipId !== null));
   // The chips actually rendered: the live set, plus — when a work chip emptied while open —
   // a label-only placeholder so its popover/sheet stays mounted as the open panel's anchor.
   const chipsToRender: RailChip[] = emptiedChipId !== null
@@ -624,7 +639,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
       {needsYou.count > 0 && <span className="chat-status-chip__count">{needsYou.count}</span>}
     </RefButton>
   );
-  const needsYouMarker = needsYou.count === 0 && !(needsYouExpanded && held.size > 0)
+  const needsYouMarker = !showWork || (needsYou.count === 0 && !(needsYouExpanded && held.size > 0))
     ? null
     : mobile ? needsYouButton : (
       <Popover

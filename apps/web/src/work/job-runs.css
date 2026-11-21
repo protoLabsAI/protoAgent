@@ -1,0 +1,54 @@
+/* A scheduled job's Recent runs list (work-view-additions §2.3). The bordered list itself
+   is the shared .work-group style; these rules lay out one run inside it. */
+.job-runs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.job-runs__heading {
+  margin: 0;
+  font-size: var(--pl-font-size-sm);
+  font-weight: var(--pl-font-weight-semibold);
+}
+.job-runs__note {
+  margin: 0;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-sm);
+  overflow-wrap: anywhere;
+}
+.job-run {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  min-width: 0;
+  padding: var(--pl-space-2) var(--pl-space-3);
+}
+.job-run__line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.job-run__word {
+  font-weight: var(--pl-font-weight-semibold);
+}
+/* Long errors wrap inside the row; nothing scrolls sideways at 390 px or 400 % zoom (§4). */
+.job-run__note {
+  margin: 0;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-sm);
+  overflow-wrap: anywhere;
+}
+/* The Health field's last error: muted, clamped to two lines; Technical details has it all. */
+.job-health__error {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: var(--pl-space-1);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-sm);
+  overflow-wrap: anywhere;
+}

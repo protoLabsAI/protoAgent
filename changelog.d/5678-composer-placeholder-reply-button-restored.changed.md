@@ -1,0 +1,1 @@
+- **Withdrew the rest of the unreleased "composer answers the open decision" change.** The composer placeholder no longer switches to "Type your answer…" while a decision is open, and the decision card in the chat transcript shows its "Reply in chat instead" button again. Refs #5678.

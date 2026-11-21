@@ -2,10 +2,7 @@ import type { SessionStatus } from "./chat-store";
 
 // The composer's placeholder line. Short hints only (#1699) — key/command discoverability
 // lives in /help now, not in a placeholder wall of text competing with the message being
-// written. Four states:
-//   a decision awaits an answer → "Type your answer…" (#5668 §4): the composer answers the
-//                               open decision card in this chat, and the placeholder is the
-//                               ONLY visible composer change. Wins over every other state.
+// written. Three states:
 //   idle                      → "Message <agent name>…" — the agent's display name (same
 //                               source as the header and PaletteChat: brandName(identity.name)),
 //                               so a renamed agent no longer reads "Message protoAgent…". Falls
@@ -19,9 +16,7 @@ export function composerPlaceholder(
   status: SessionStatus,
   queuedSteers: number,
   agentName?: string | null,
-  answersDecision = false,
 ): string {
-  if (answersDecision) return "Type your answer…";
   if (status !== "streaming") {
     const name = (agentName ?? "").trim();
     return name ? `Message ${name}…` : "Message the agent…";

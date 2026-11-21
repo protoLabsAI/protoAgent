@@ -90,6 +90,19 @@ for (const width of [1440, 390] as const) {
 
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
+      if (width === 1440) {
+        // Desktop hides the Needs you marker (and the work chips): with no cast the rail is
+        // absent, however many things need the operator.
+        // (Reload behind the decisions read, so "absent" is asserted after the data landed.)
+        await Promise.all([
+          page.waitForResponse((r) => r.url().includes("/api/decisions")),
+          page.reload({ waitUntil: "load" }),
+        ]);
+        await page.getByPlaceholder(/Message protoAgent/i).waitFor({ state: "visible" });
+        await expect(page.getByTestId("chat-status-rail")).toHaveCount(0);
+        await expect(marker).toHaveCount(0);
+        return;
+      }
 
       // The marker: FIRST on the row, fleet-wide 3 (another chat's decision + an undelivered
       // page + a stopped goal), numbers only on the phone — and nothing scrolls sideways.

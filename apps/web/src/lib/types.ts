@@ -839,6 +839,38 @@ export type ScheduledJob = {
   enabled?: boolean;
   /** IANA tz the cron is evaluated in (recurring jobs only); null/absent = UTC. */
   timezone?: string | null;
+  /** Outcome tracking (#3376): back-to-back failed runs — resets the moment one succeeds. */
+  consecutive_failures?: number;
+  /** The last failed run's error text; null/absent when none was recorded. */
+  last_error?: string | null;
+  /** ISO time of the last run that worked; null/absent when none has yet. */
+  last_ok?: string | null;
+};
+
+/** One entry of a job's run history (`GET /api/scheduler/jobs/{id}/runs`, ADR 0135 D8):
+ *  one claimed fire slot, newest first. `started_at` / `ended_at` / `duration_s` /
+ *  `reported` are the S2 keys — absent or null on rows written before the ledger kept them. */
+export type ScheduledJobRun = {
+  job_id?: string;
+  /** The slot the run was claimed for (ISO) — the run's time. */
+  scheduled_for: string;
+  /** The ledger's dispatch state: claimed / running / unknown / retryable / settled /
+   *  interrupted / interrupted_needs_operator. */
+  state: string;
+  /** The turn's terminal A2A state once known (completed / failed / canceled / …). */
+  task_state?: string | null;
+  /** true / false for a settled run whose outcome was recorded, else null. */
+  ok?: boolean | null;
+  error?: string | null;
+  task_id?: string | null;
+  message_id?: string | null;
+  /** The job generation the run belongs to — a re-created id starts a new one. */
+  job_created_at?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_s?: number | null;
+  /** true = posted its result, false = completed with nothing to report, null = unknown. */
+  reported?: boolean | null;
 };
 
 export type Subagent = {

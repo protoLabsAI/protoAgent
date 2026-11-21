@@ -113,7 +113,8 @@ sorts that work into four groups, with an **Overview** that lists them together:
 - **Your instructions** — standing instructions you've given that are still in force.
 
 Opening a group from the chat [status rail](#chat) scopes that visit to the
-current conversation. Choosing another section in Work ends that scope.
+current conversation. (The rail's work chips show on the phone; on desktop the
+rail shows only who is in the chat.) Choosing another section in Work ends that scope.
 **Needs you** is the exception: it always counts everything waiting on you,
 across the agent's chats.
 

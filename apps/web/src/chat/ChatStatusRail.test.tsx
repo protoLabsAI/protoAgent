@@ -3,7 +3,9 @@
  *  Open-in-Work deep links, the preserved instructions Load-again/error state, the one polite
  *  change-only live region, and the dialog a11y contract (haspopup/expanded, trap, Escape,
  *  focus return). The selector itself is covered in work/workGroups.test.ts — here every count
- *  assertion is checked AGAINST the selector so chip and Work-row numbers cannot drift. */
+ *  assertion is checked AGAINST the selector so chip and Work-row numbers cannot drift.
+ *  The work side of the rail is phone-only, so these cases run on the phone layout unless a
+ *  case says otherwise; "desktop" below pins what the desktop rail leaves out. */
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -109,7 +111,7 @@ const initialUI = useUI.getState();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  Object.assign(state, { mobile: false, hookArgs: [], ledgerSessions: [], ledger: { state: "ready", loadedAt: 1, refresh: vi.fn() } });
+  Object.assign(state, { mobile: true, hookArgs: [], ledgerSessions: [], ledger: { state: "ready", loadedAt: 1, refresh: vi.fn() } });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
   Element.prototype.hasPointerCapture = Element.prototype.hasPointerCapture ?? (() => false);
@@ -384,6 +386,43 @@ describe("details panel", () => {
     expect(dialog()).toBeNull();
     expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(chip("doing-now"));
+  });
+});
+
+describe("desktop", () => {
+  beforeEach(() => { state.mobile = false; });
+  const railEl = () => host.querySelector('[data-testid="chat-status-rail"]');
+
+  it("renders no work chip and no Needs you chip — people chips only", async () => {
+    await render(rail(MIXED, { cast: ["lead", "scout"] }));
+    expect(railEl()).toBeTruthy();
+    for (const id of ["doing-now", "coming-up", "instructions", "needs-you"]) expect(chip(id)).toBeNull();
+    expect(host.querySelector(".chat-status-chip")).toBeNull();
+    expect([...host.querySelectorAll("button.chat-roster-chip")].map((c) => c.textContent)).toEqual(["@lead", "@scout"]);
+    expect(dialog()).toBeNull();
+  });
+
+  it("renders no rail at all with no people, whatever work or failed ledger this chat has", async () => {
+    state.ledger = { state: "failed", loadedAt: null, refresh: vi.fn() };
+    await render(rail(MIXED));
+    expect(railEl()).toBeNull();
+    expect(host.querySelector("button")).toBeNull();
+    // Only the sr-only live region is left, so the rail takes no height above the composer.
+    expect([...host.children].map((node) => node.className)).toEqual(["chat-status-rail__announce"]);
+  });
+
+  it("closes an open work panel when the layout leaves the phone, and does not reopen it on the way back", async () => {
+    state.mobile = true;
+    await render(rail(MIXED));
+    await click(chip("doing-now"));
+    expect(dialog()).toBeTruthy();
+    state.mobile = false;
+    await render(rail(MIXED));
+    expect([railEl(), dialog()]).toEqual([null, null]);
+    state.mobile = true;
+    await render(rail(MIXED));
+    expect(chip("doing-now")!.getAttribute("aria-expanded")).toBe("false");
+    expect(dialog()).toBeNull();
   });
 });
 

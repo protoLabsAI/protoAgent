@@ -78,6 +78,7 @@ Rail, window and phone sheet keep the approved third-pass layout: the list is th
 
 - **Count rule:** a chip's count equals the rows the matching Work group shows with `thisChat` applied. Needs you is never filtered. One shared selector (`workGroups`) computes both, so they can't drift. Not-started jobs are in Coming up, so they never reach the Doing now chip.
 - The goal stays visible inside the Doing now chip ("goal 3/8"). With no goal, the chip uses a still play icon; nothing in the chip animates.
+- **Desktop hides the work side, for now (Josh, 2026-11-21).** The Needs you marker, the three work chips and their details panels render on the phone only; the "Desktop" column above is the wording they would use there. Desktop keeps the people chips and their picker, and with no people the rail renders nothing. Toasts, the Work panel and the utility bar carry the same facts on desktop.
 - Zero-count chips don't render. The empty-rail rule, the `+K` people overflow and the decision marker's room rules are unchanged.
 - **Details panel:** one section per group, using the Work group names ("Your instructions · 3", not "Instructions"), each with **Open in Work** (deep link to that group, `thisChat`). The Needs you section keeps the approved decision card behaviour (full card, answer states, stale hint).
 - **Spoken labels:** "Doing now, 3 running in this chat, including the goal at step 3 of 8. Show details"; "Instructions: 3 instructions in force in this chat. Show details"; "2 things need you. Show them".

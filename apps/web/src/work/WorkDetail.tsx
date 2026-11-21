@@ -49,6 +49,9 @@ export type WorkDetailProps = {
   /** Refreshes the item behind the `changedNotice` Callout. */
   onRefresh?: () => void;
   changedNotice?: string;
+  /** Rendered below the actions (or the inline confirm) and above Technical details —
+   *  e.g. a scheduled job's Recent runs list (work-view-additions §2.1). */
+  children?: ReactNode;
 };
 
 /** A field is hidden when its value is empty — never rendered as "—" (task §4.3). */
@@ -72,6 +75,7 @@ export function WorkDetail({
   statusLabel,
   onRefresh,
   changedNotice,
+  children,
 }: WorkDetailProps) {
   const size = useWorkActionSize();
   const toast = useToast();
@@ -255,6 +259,8 @@ export function WorkDetail({
           </>
         )
       )}
+
+      {children}
 
       {techEntries.length > 0 && (
         <Accordion>

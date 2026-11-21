@@ -74,6 +74,9 @@ export const queryKeys = {
   get schedules() {
     return ns("schedules");
   },
+  // Its own segment, NOT under `schedules`: the schedules list polls and is invalidated on
+  // every `scheduler.changed`, and a prefix match would re-fetch an open run list each time.
+  scheduleRuns: (jobId: string) => ns("schedule-runs", jobId),
   get runtime() {
     return ns("runtime");
   },
