@@ -114,6 +114,7 @@ async def test_a_member_cannot_extend_a_notices_life(box):
     try:
         now = time.time()
         await notice_relay.accept_member_notice(notice_body(kind="notify", expires_at=now + 10 * 86400))
+        await settle(lambda: rows(transport))  # the seam queues the push adapter; it does not await it
         with sqlite3.connect(transport.path) as db:
             (expires_at,) = db.execute("SELECT expires_at FROM attempts").fetchone()
         assert expires_at <= now + 3600 + 5  # a notify lives an hour
@@ -288,6 +289,89 @@ async def test_outside_quiet_hours_a_members_routine_notice_is_pushed(hub_hold, 
         hub_hold.config.quiet_hours_start, hub_hold.config.quiet_hours_end = window_around_now()
         assert await notice_relay.accept_member_notice(notice_body(notice_id="job-4", kind="notify", importance="normal"))
         assert hub_hold.held() == [f"A notice from {MEMBER}"]
+    finally:
+        await loops._stop_push_delivery()
+
+
+# ── the hub's notice seam (#5648 fix 7) ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def bus(monkeypatch):
+    """What the hub publishes on its event bus (the stream the desktop app reads)."""
+    published = []
+    monkeypatch.setattr("graph.plugins.host.HOST.publish", lambda topic, data: published.append((topic, data)))
+    return published
+
+
+def second_adapter():
+    """One more notice adapter beside the push transport, as a hub chat plugin would be."""
+    seen = []
+
+    async def hook(notice):
+        seen.append(notice)
+
+    chat_surface.register_notice_adapter("second-adapter", hook)
+    return seen
+
+
+async def test_a_members_notice_is_published_on_the_hub_bus(box, bus):
+    loops._start_push_delivery(Provider())
+    try:
+        before = time.time()
+        assert await notice_relay.accept_member_notice(notice_body()) is True
+        ((topic, data),) = bus
+        assert topic == "notice"
+        assert (data["notice_id"], data["kind"], data["importance"]) == ("decision-dec-1", "question", "high")
+        # The hub's own wording and no link: nothing the member sent.
+        assert (data["text"], data["link"]) == ("A notice from protoEngineer", "")
+        assert before <= data["created_at"] < data["expires_at"] <= time.time() + 86400
+    finally:
+        await loops._stop_push_delivery()
+
+
+async def test_a_members_notice_reaches_every_notice_adapter_and_still_the_push_ledger(box):
+    transport = loops._start_push_delivery(Provider())
+    seen = second_adapter()
+    try:
+        assert await notice_relay.accept_member_notice(notice_body()) is True
+        await settle(lambda: len(seen) == 1 and rows(transport) == [("decision-dec-1", "question", "high", "accepted")])
+        (notice,) = seen
+        assert (notice.notice_id, notice.kind, notice.importance) == ("decision-dec-1", "question", "high")
+        assert (notice.text, notice.link) == ("A notice from protoEngineer", "")
+    finally:
+        chat_surface.unregister_notice_adapter("second-adapter")
+        await loops._stop_push_delivery()
+
+
+async def test_quiet_hours_keep_a_members_routine_notice_from_every_adapter(hub_hold):
+    transport = loops._start_push_delivery(Provider())
+    seen = second_adapter()
+    try:
+        routine = notice_body(notice_id="job-9", kind="notify", importance="normal")
+        assert await notice_relay.accept_member_notice(routine) is True  # held is still taken
+        assert hub_hold.held() == ["A notice from protoEngineer"]
+        # A question raised after it is not held, and is the only one any adapter gets.
+        assert await notice_relay.accept_member_notice(notice_body(notice_id="decision-dec-3")) is True
+        await settle(lambda: seen and rows(transport) == [("decision-dec-3", "question", "high", "accepted")])
+        assert [notice.notice_id for notice in seen] == ["decision-dec-3"]
+        assert hub_hold.held() == ["A notice from protoEngineer"]
+    finally:
+        chat_surface.unregister_notice_adapter("second-adapter")
+        await loops._stop_push_delivery()
+
+
+async def test_a_members_notice_writes_no_home_entry(box, monkeypatch):
+    entries = []
+    monkeypatch.setattr("graph.home_entries.post_home_entry", lambda *args, **kwargs: entries.append(args))
+    transport = loops._start_push_delivery(Provider())
+    try:
+        assert await notice_relay.accept_member_notice(notice_body()) is True
+        await settle(lambda: rows(transport) == [("decision-dec-1", "question", "high", "accepted")])
+        assert entries == []
+        # The hub's own notice does write one, so the recorder above is on the real path.
+        notify_chat_surfaces("the hub's own notice", "")
+        assert [args[2] for args in entries] == ["the hub's own notice"]
     finally:
         await loops._stop_push_delivery()
 
