@@ -106,8 +106,9 @@ of the exchange. See [rooms](/guides/rooms#start-a-fresh-conversation).
 
 ## Use incognito {#use-incognito}
 
-For a conversation kept out of automatic memory, right-click a chat tab and
-choose **New incognito chat**, or **Shift+click** the tab bar's **+**.
+For a conversation kept out of automatic memory, right-click an empty
+spot in the tab bar and choose **New incognito chat**, or **Shift+click** the
+tab bar's **+**.
 The tab shows an eye-off icon and the composer shows an **incognito** chip.
 
 You can also toggle the current tab with `/incognito` or its right-click menu.
