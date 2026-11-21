@@ -116,7 +116,23 @@ export type DirectiveRow = {
   closed_by: "agent" | "operator" | "system" | null;
   closed_at: string | null;
   close_reason: string | null;
+  /** True for an instance-wide standing order (ADR 0135 D13): in force for every chat and
+   *  every unattended turn; `session_id` is then only the chat it was recorded in. Optional
+   *  on the wire — a server that predates the field omits it (see {@link isInstanceWide}). */
+  instance_wide?: boolean;
+  /** Who recorded it. */
+  author?: "agent" | "operator";
+  /** Linked work (ADR 0129 D4/Q2); empty for the unlinked case. */
+  links?: { ref: string; kind?: string; state?: string; reason?: string | null }[];
 };
+
+/** Whether a directive row is an instance-wide standing order. The wire field decides; the
+ *  `dir-i` id prefix is a fallback ONLY when the field is missing (work-view-additions §3.1). */
+export function isInstanceWide(row: Pick<DirectiveRow, "id" | "instance_wide"> | null | undefined): boolean {
+  if (!row) return false;
+  if (typeof row.instance_wide === "boolean") return row.instance_wide;
+  return typeof row.id === "string" && row.id.startsWith("dir-i");
+}
 
 export type DirectiveList = { directives: DirectiveRow[]; in_force: number };
 
@@ -227,6 +243,31 @@ export const chatApi = {
     return request<{ directive: DirectiveRow }>(
       `/api/directives/${encodeURIComponent(id)}?session_id=${encodeURIComponent(sessionId)}`,
       { method: "PATCH", body },
+    );
+  },
+
+  // The instance-wide standing orders (ADR 0135 D13), oldest first. Deliberately sent with
+  // NO `status`: a status filter drops closed rows, and the Work detail needs a row that
+  // closed under it to stay listed (work-view-additions §3.1).
+  listInstanceDirectives() {
+    return request<DirectiveList>("/api/directives");
+  },
+
+  // Edit an instance-wide order's scope/conditions in place (the quote stays immutable).
+  updateInstanceDirective(id: string, body: { scope: string; conditions: string }) {
+    return request<{ directive: DirectiveRow }>(
+      `/api/directives/${encodeURIComponent(id)}?instance_wide=true`,
+      { method: "PATCH", body },
+    );
+  },
+
+  // Withdraw an instance-wide order as the operator: it stops applying to every chat and
+  // every unattended turn. The server trims the reason and stores its first 2,000 characters.
+  withdrawInstanceDirective(id: string, reason?: string) {
+    const query = reason?.trim() ? `&reason=${encodeURIComponent(reason)}` : "";
+    return request<{ directive: DirectiveRow }>(
+      `/api/directives/${encodeURIComponent(id)}/withdraw?instance_wide=true${query}`,
+      { method: "POST" },
     );
   },
 

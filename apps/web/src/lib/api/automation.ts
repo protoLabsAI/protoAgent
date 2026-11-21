@@ -169,7 +169,7 @@ export const automationApi = {
   // 1–200. An id with neither a job nor a run is a 404; a backend that keeps no run
   // history is a 501 — both reach the caller as an `ApiError` carrying the status.
   scheduleRuns(jobId: string, limit: number) {
-    return request<{ job_id: string; runs: ScheduledJobRun[] }>(
+    return request<{ job_id: string; runs: ScheduledJobRun[]; next_cursor?: string | null }>(
       `/api/scheduler/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}`,
     );
   },

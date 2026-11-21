@@ -91,6 +91,34 @@ describe("shared workGroups projection", () => {
     expect(workGroups([background("completed"), directive()])[3].count).toBe(1);
   });
 
+  it("counts an instance-wide order in every chat and sorts it before the chat's own", () => {
+    const row = (id: string, session: string, patch: Partial<DirectiveRow> = {}): GroupableWorkItem => {
+      const raw: DirectiveRow = { ...(directive().raw as DirectiveRow), id, session_id: session, ...patch };
+      return { ...base, id, sessionId: session, kind: "directive", status: fromDirective(raw.status), raw };
+    };
+    const wide = (id: string, patch: Partial<DirectiveRow> = {}) => row(id, "origin", { instance_wide: true, ...patch });
+    const own = directive();
+    const elsewhere = row("other", "other");
+    const rows = [own, elsewhere, wide("dir-i1"), wide("dir-i2")];
+    // Recorded in "origin", yet listed under EVERY chat's "This chat" scope — first, in source order.
+    for (const sessionId of ["chat", "other", "never-seen"]) {
+      const scoped = workGroups(rows, { thisChatOnly: true, sessionId })[3];
+      expect(scoped.items.slice(0, 2).map((item) => item.id)).toEqual(["dir-i1", "dir-i2"]);
+      expect(scoped.count).toBe(sessionId === "never-seen" ? 2 : 3);
+    }
+    expect(workGroups(rows)[3].items.map((item) => item.id)).toEqual(["dir-i1", "dir-i2", "d", "other"]);
+    // A closed one leaves the group like any other directive.
+    expect(workGroups([own, wide("dir-i1", { status: "revoked" })], { thisChatOnly: true, sessionId: "chat" })[3].items).toEqual([own]);
+    // The wire field decides; the `dir-i` prefix is only a fallback when the field is missing.
+    const scopedIds = (row: GroupableWorkItem) => workGroups([row], { thisChatOnly: true, sessionId: "chat" })[3].count;
+    expect(scopedIds(wide("dir-i9", { instance_wide: undefined }))).toBe(1);
+    expect(scopedIds(wide("dir-i9", { instance_wide: false }))).toBe(0);
+    expect(scopedIds(wide("dir-plain"))).toBe(1);
+    // Never tied to a job: an ended job can't hide it.
+    const tied = { ...wide("dir-i1"), tiedJob: { kind: "background" as const, id: "job" } };
+    expect(workGroups([background("completed"), tied])[3].count).toBe(1);
+  });
+
   it("projects job endings before session filtering", () => {
     const tied = { ...directive(), tiedJob: { kind: "background" as const, id: "job" } };
     const ended = { ...background("completed"), sessionId: "other" };

@@ -13,6 +13,8 @@ import { decisionsStoreForTest } from "../../decisions/useDecisions";
 import { WorkView } from "../WorkView";
 import { beginThisChatVisit, endThisChatVisit } from "../visitScope";
 import { sections } from "../sectionRegistry";
+import { instanceDirectiveStore } from "../instanceDirectives";
+import { workGroups } from "../workGroups";
 import { decisionMeta, fromBackgroundJob, fromDecision, fromDirective } from "../tone";
 import { useUI } from "../../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "../useWorkItems";
@@ -787,6 +789,278 @@ describe("Directives section (Your instructions, ADR 0129 §3)", () => {
     await act(async () => buttons("Withdraw…")[0].click());
     await act(async () => buttons("Withdraw")[0].click());
     expect(document.querySelector(".pl-toast__msg")?.textContent).toContain("This instruction is no longer in the list.");
+  });
+});
+
+describe("Instance-wide standing orders (work-view-additions §3, §4)", () => {
+  const wideRow = (id: string, patch: Partial<DirectiveRow> = {}): DirectiveRow => directiveRow(id, {
+    session_id: "elsewhere", quote: `Order ${id}`, instance_wide: true, author: "operator", links: [], ...patch,
+  });
+  const closedRow = (row: DirectiveRow): DirectiveRow =>
+    ({ ...row, status: "revoked", closed_by: "operator", closed_at: new Date().toISOString(), close_reason: "revoked by the operator" });
+  const setItems = (rows: DirectiveRow[]) => {
+    data.sources = { ...data.sources, directives: { ...data.sources.directives, items: rows.map(directiveItem) } };
+  };
+  const heading = () => host.querySelector<HTMLElement>(".work-view__list h2.work-heading");
+  const detail = () => host.querySelector<HTMLElement>(".work-view__detail");
+  const type = (el: HTMLTextAreaElement, value: string) => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  let withdrawApi: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    instanceDirectiveStore.resetForTest();
+    vi.spyOn(api, "listInstanceDirectives").mockImplementation(async () => {
+      const directives = data.sources.directives.items.map((item) => item.raw as DirectiveRow).filter((row) => row.instance_wide);
+      return { directives, in_force: directives.filter((row) => row.status === "in_force").length };
+    });
+    // Like the real route: the order closes on the server, and the (mocked) Work source lists
+    // it closed from then on.
+    withdrawApi = vi.spyOn(api, "withdrawInstanceDirective").mockImplementation(async (id: string) => {
+      const rows = data.sources.directives.items.map((item) => item.raw as DirectiveRow);
+      const directive = closedRow(rows.find((row) => row.id === id)!);
+      setItems(rows.map((row) => (row.id === id ? directive : row)));
+      return { directive };
+    });
+  });
+
+  async function openConfirm(id: string) {
+    workState({ section: "instructions", itemId: `directive:${id}`, filters: { thisChat: true } });
+    await render("rail", "here");
+    await act(async () => buttons("Withdraw…")[0].click());
+  }
+
+  it("lists an order recorded in another chat first, with Instance-wide then Instruction and the reach leading the meta (r1, r2)", async () => {
+    setItems([
+      directiveRow("mine", { session_id: "here", quote: "Chat instruction" }),
+      directiveRow("theirs", { session_id: "elsewhere", quote: "Another chat's instruction" }),
+      wideRow("dir-i1", { quote: "Always summarise before you stop", created_at: new Date().toISOString() }),
+    ]);
+    workState({ section: "instructions", filters: { thisChat: true } });
+    await render("rail", "here");
+
+    // Recorded in "elsewhere", yet listed in this chat — before the chat's own instruction.
+    expect(rows().map((row) => row.querySelector(".work-row__title")?.textContent)).toEqual(["Always summarise before you stop", "Chat instruction"]);
+    const row = rows()[0];
+    expect([...row.querySelectorAll(".pl-badge")].map((badge) => badge.textContent)).toEqual(["Instance-wide", "Instruction"]);
+    expect([...row.querySelectorAll(".pl-badge")].every((badge) => badge.className.includes("neutral") || !/info|warning|error|success/.test(badge.className))).toBe(true);
+    expect(row.querySelector(".work-row__meta")?.textContent).toMatch(
+      /^Applies to every chat and unattended turn · You said “Always summarise before you stop” · today \d{2}:\d{2}$/);
+    // The chat's own row keeps its single badge.
+    expect([...rows()[1].querySelectorAll(".pl-badge")].map((badge) => badge.textContent)).toEqual(["Instruction"]);
+
+    // Work's count and the rail's chip source read the same selector, so they agree — in
+    // this chat and in one that never recorded anything.
+    expect(heading()?.getAttribute("aria-label")).toBe("Your instructions, 2");
+    expect(workGroups(data.sources, { thisChatOnly: true, sessionId: "here" })[3].count).toBe(2);
+    expect(workGroups(data.sources, { thisChatOnly: true, sessionId: "brand-new" })[3].count).toBe(1);
+
+    // The Overview draws the same two badges.
+    workState({ section: "overview", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect([...rowFor("Always summarise")!.querySelectorAll(".pl-badge")].map((badge) => badge.textContent)).toEqual(["Instance-wide", "Instruction"]);
+  });
+
+  it("falls back to the dir-i id prefix only when the wire field is missing (§3.1)", async () => {
+    setItems([
+      wideRow("dir-i7", { instance_wide: undefined, quote: "Old server row" }),
+      wideRow("dir-i8", { instance_wide: false, quote: "Field says no", session_id: "here" }),
+    ]);
+    workState({ section: "instructions", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(rowFor("Old server row")!.textContent).toContain("Instance-wide");
+    expect(rowFor("Field says no")!.textContent).not.toContain("Instance-wide");
+  });
+
+  it("shows the detail fields, actions and Technical details, with focus left on the heading (r3, r6)", async () => {
+    const snapshot = chatStore.getSnapshot();
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({
+      ...snapshot, sessions: [...snapshot.sessions, { id: "elsewhere", title: "Release planning", messages: [] } as never],
+    });
+    const row = wideRow("dir-i1", { quote: "Always summarise before you stop", created_at: "2026-11-18T09:40:00+00:00" });
+    setItems([row]);
+    workState({ section: "instructions", itemId: "directive:dir-i1", filters: { thisChat: true } });
+    await render("rail", "here");
+
+    const pane = detail()!;
+    expect([...pane.querySelectorAll(".work-detail__header .pl-badge")].map((badge) => badge.textContent)).toEqual(["Instance-wide", "Instruction"]);
+    const field = (label: string) => [...pane.querySelectorAll(".work-detail__field")]
+      .find((node) => node.querySelector("dt")?.textContent === label)?.querySelector("dd")?.textContent;
+    expect(field("Applies to")).toBe("Every chat and every unattended turn on this instance: scheduled jobs, watches, the inbox and webhooks.");
+    expect(field("Your words")).toMatch(/^You said “Always summarise before you stop” in “Release planning” · .+ \d{2}:\d{2} \(your time\)$/);
+    expect(field("Lasts")).toBe("Until you withdraw it");
+    expect(buttons("Edit")).toHaveLength(1);
+    expect(buttons("Withdraw…")).toHaveLength(1);
+    expect(buttons("Withdraw…")[0].hasAttribute("data-withdraw")).toBe(true);
+    expect(buttons("Withdraw…")[0].classList.contains("pl-btn--danger")).toBe(true);
+
+    const summary = [...pane.querySelectorAll<HTMLElement>("button, summary")].find((node) => node.textContent?.trim() === "Technical details")!;
+    const focusedBefore = document.activeElement;
+    if (!pane.querySelector(".work-detail__tech-row")) await act(async () => summary.click());
+    const tech = [...pane.querySelectorAll(".work-detail__tech-row")].map((node) =>
+      [node.querySelector("dt")?.textContent, node.querySelector("dd")?.textContent]);
+    expect(tech).toEqual([
+      ["id", "dir-i1"], ["instance_wide", "true"], ["recorded in", "elsewhere"],
+      ["status", "in_force"], ["created_at", "2026-11-18T09:40:00+00:00"],
+    ]);
+
+    // Opening the detail leaves focus on its heading — never on Withdraw… (the wasConfirming guard).
+    expect(focusedBefore).toBe(pane.querySelector("h2"));
+  });
+
+  it("says the recording chat has since been deleted when this console no longer holds it", async () => {
+    setItems([wideRow("dir-i1")]);
+    workState({ section: "instructions", itemId: "directive:dir-i1" });
+    await render("rail", "here");
+    expect(detail()!.textContent).toContain("You said “Order dir-i1” in a chat that's since been deleted");
+  });
+
+  it("confirms with the instance-wide copy; Keep it and Escape both return focus to Withdraw… (r6)", async () => {
+    setItems([wideRow("dir-i1")]);
+    await openConfirm("dir-i1");
+
+    const confirm = host.querySelector<HTMLElement>(".work-detail__confirm")!;
+    const prompt = confirm.querySelector<HTMLElement>(".work-detail__confirm-prompt")!;
+    expect(prompt.textContent).toBe("Withdraw this standing order everywhere?");
+    expect(document.activeElement).toBe(prompt);
+    expect(confirm.getAttribute("role")).toBe("group");
+    expect(confirm.getAttribute("aria-labelledby")).toBe(prompt.id);
+    expect(confirm.textContent).toContain("Every chat and every unattended turn stops following it from its next turn. Anything it already scheduled keeps running until you cancel it.");
+    expect(confirm.querySelector("textarea")?.getAttribute("placeholder")).toBe("For example: moving the summary to the weekly digest");
+    expect([...confirm.querySelectorAll(".work-detail__confirm-actions button")].map((b) => b.textContent)).toEqual(["Withdraw everywhere", "Keep it"]);
+
+    await act(async () => buttons("Keep it")[0].click());
+    expect(host.querySelector(".work-detail__confirm")).toBeNull();
+    expect(document.activeElement).toBe(buttons("Withdraw…")[0]);
+
+    await act(async () => buttons("Withdraw…")[0].click());
+    await act(async () => {
+      host.querySelector(".work-detail__confirm-prompt")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(host.querySelector(".work-detail__confirm")).toBeNull();
+    expect(detail()).not.toBeNull(); // Escape closed the confirm, not the detail
+    expect(document.activeElement).toBe(buttons("Withdraw…")[0]);
+    expect(withdrawApi).not.toHaveBeenCalled();
+  });
+
+  it("puts Keep it first on the phone (the existing frame rule)", async () => {
+    setItems([wideRow("dir-i1")]);
+    workState({ section: "instructions", itemId: "directive:dir-i1" });
+    await render("sheet", "here");
+    await act(async () => buttons("Withdraw…")[0].click());
+    expect([...host.querySelectorAll(".work-detail__confirm-actions button")].map((b) => b.textContent)).toEqual(["Keep it", "Withdraw everywhere"]);
+  });
+
+  it("Withdraw everywhere posts the reason, drops the row and count, and focuses the next row (r4, r6)", async () => {
+    setItems([wideRow("dir-i1"), wideRow("dir-i2"), directiveRow("mine", { session_id: "here", quote: "Chat instruction" })]);
+    await openConfirm("dir-i1");
+    expect(heading()?.getAttribute("aria-label")).toBe("Your instructions, 3");
+    await act(async () => type(host.querySelector("textarea")!, "moving it to the digest"));
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+
+    expect(withdrawApi).toHaveBeenCalledWith("dir-i1", "moving it to the digest");
+    expect(detail()).toBeNull();
+    expect(rows().map((row) => row.querySelector(".work-row__title")?.textContent)).toEqual(["Order dir-i2", "Chat instruction"]);
+    expect(heading()?.getAttribute("aria-label")).toBe("Your instructions, 2");
+    expect(document.activeElement).toBe(rowFor("Order dir-i2"));
+    expect(document.querySelector(".pl-toast__msg")?.textContent).toContain("Withdrawn.");
+  });
+
+  it("focuses the previous row when the withdrawn order was last (r6)", async () => {
+    setItems([wideRow("dir-i1"), wideRow("dir-i2")]);
+    await openConfirm("dir-i2");
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+    expect(withdrawApi).toHaveBeenCalledWith("dir-i2", "");
+    expect(rows()).toHaveLength(1);
+    expect(document.activeElement).toBe(rowFor("Order dir-i1"));
+  });
+
+  it("focuses the group heading when the group is now empty — never body (r6)", async () => {
+    setItems([wideRow("dir-i1")]);
+    await openConfirm("dir-i1");
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+    expect(rows()).toHaveLength(0);
+    expect(heading()?.getAttribute("aria-label")).toBe("Your instructions, 0");
+    expect(heading()?.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(heading());
+  });
+
+  it("on 409 keeps the detail mounted read-only with the closing sentence, focused (r5)", async () => {
+    const row = wideRow("dir-i1");
+    setItems([row]);
+    await openConfirm("dir-i1");
+    withdrawApi.mockImplementation(async () => {
+      setItems([closedRow(row)]); // closed elsewhere: the refetched list still carries it
+      throw new ApiError(409, "already closed");
+    });
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+
+    const pane = detail()!;
+    expect(pane.textContent).toMatch(/This was already closed: Withdrawn by you · today at .+ \(your time\)\. Nothing changed\./);
+    expect(document.activeElement).toBe(pane.querySelector(".work-instruction-detail"));
+    expect(buttons("Withdraw everywhere")).toHaveLength(0);
+    expect(buttons("Withdraw…")).toHaveLength(0);
+    // The closed row left the group (the hand-driven source needs a render to show it) while
+    // the notice stays put.
+    await render("rail", "here");
+    expect(heading()?.getAttribute("aria-label")).toBe("Your instructions, 0");
+    expect(detail()!.textContent).toContain("This was already closed:");
+  });
+
+  it("on 404 toasts that the order is gone and the list was refreshed (r5)", async () => {
+    setItems([wideRow("dir-i1")]);
+    await openConfirm("dir-i1");
+    withdrawApi.mockImplementation(async () => {
+      setItems([]);
+      throw new ApiError(404, "no instance-wide directive");
+    });
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+    expect(document.querySelector(".pl-toast__msg")?.textContent).toBe("This order is no longer in the list. The list has been refreshed.");
+  });
+
+  it("on a network or 5xx error warns it is still in force everywhere, with Try again (r5)", async () => {
+    setItems([wideRow("dir-i1")]);
+    await openConfirm("dir-i1");
+    withdrawApi.mockRejectedValueOnce(new ApiError(503, "unavailable"));
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+
+    const alert = host.querySelector(".work-detail__confirm .pl-alert, .work-detail__confirm [role='alert']") ?? host.querySelector(".work-detail__confirm")!;
+    expect(alert.textContent).toContain("Couldn't withdraw it. It's still in force everywhere.");
+    expect(detail()).not.toBeNull();
+    expect(rows()).toHaveLength(1);
+
+    // Try again goes through the same route and, this time, lands.
+    await act(async () => buttons("Try again")[0].click());
+    expect(withdrawApi).toHaveBeenCalledTimes(2);
+    expect(detail()).toBeNull();
+    expect(document.activeElement).toBe(heading());
+  });
+
+  it("shows the stale callout above an instance-wide detail when the list couldn't refresh", async () => {
+    setItems([wideRow("dir-i1")]);
+    data.sources.directives.status = "stale";
+    workState({ section: "instructions", itemId: "directive:dir-i1" });
+    await render("rail", "here");
+    expect(detail()!.textContent).toContain("Showing the last load. Couldn't refresh.");
+    expect(buttons("Withdraw…")).toHaveLength(1);
+  });
+
+  it("leaves a chat instruction's own copy and route untouched", async () => {
+    setItems([directiveRow("mine", { session_id: "here", quote: "Chat instruction" })]);
+    dir.revoke.mockResolvedValue({ ok: true });
+    workState({ section: "instructions", itemId: "directive:mine", filters: { thisChat: true } });
+    await render("rail", "here");
+    expect(detail()!.textContent).not.toContain("Instance-wide");
+    expect(detail()!.textContent).not.toContain("Technical details");
+    await act(async () => buttons("Withdraw…")[0].click());
+    expect(host.querySelector(".work-detail__confirm-prompt")?.textContent).toBe("Withdraw this instruction?");
+    await act(async () => buttons("Keep it")[0].click());
+    expect(document.activeElement).toBe(buttons("Withdraw…")[0]); // the cancel() focus fix
+    await act(async () => buttons("Withdraw…")[0].click());
+    await act(async () => buttons("Withdraw")[0].click());
+    expect(dir.revoke).toHaveBeenCalledWith("mine", "");
+    expect(withdrawApi).not.toHaveBeenCalled();
   });
 });
 

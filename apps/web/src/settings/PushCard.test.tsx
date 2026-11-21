@@ -68,6 +68,7 @@ const stateText = () => node.querySelector('[data-testid="push-state"]')?.textCo
 const statusLine = () => node.querySelector<HTMLElement>('[role="status"]')!;
 const heading = () => node.querySelector("h3")!;
 const refusal = () => node.querySelector('[data-testid="push-refusal"]');
+const disclosure = () => node.querySelector<HTMLDetailsElement>("details.devices-push-disclosure");
 const buttons = () => [...node.querySelectorAll("button")];
 const button = (name: string) => buttons().find((b) => b.textContent?.includes(name));
 async function click(name: string) {
@@ -76,14 +77,18 @@ async function click(name: string) {
 }
 
 describe("the ten states", () => {
-  it("1: the desktop app needs no enrollment and offers nothing to press", async () => {
+  it("1: the desktop app renders no card at all, and never asks the browser or the agent", async () => {
     vi.spyOn(desktop, "isDesktopWebview").mockReturnValue(true);
-    const { read } = mock("not enrolled");
-    await render();
-    expect(stateText()).toContain("Desktop app");
-    expect(stateText()).toContain("The desktop app shows alerts while it's running, including when its window is closed. Quitting the app stops them.");
-    expect(buttons()).toHaveLength(0);
+    const { read, get } = mock("not enrolled");
+    await act(async () => root.render(<PushCard />));
+    await settle();
+    expect(node.childNodes).toHaveLength(0);
+    // Coming back to the window must not bring it back either.
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await settle();
+    expect(node.innerHTML).toBe("");
     expect(read).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
   });
 
   it("2: a plain-http console links to the first HTTPS address, and hides the link when there is none", async () => {
@@ -174,7 +179,7 @@ describe("the ten states", () => {
     mock("not enrolled");
     await render();
     expect(stateText()).toContain("Off on this device");
-    expect(stateText()).toContain("Get alerts on this device even when the console is closed.");
+    expect(stateText()).toContain("Get notifications on this device even when the console is closed.");
     expect(buttons().map((b) => b.textContent?.trim())).toEqual(["Turn on notifications"]);
   });
 
@@ -425,18 +430,58 @@ describe("structure and wording", () => {
     for (const icon of node.querySelectorAll("svg")) expect(icon.getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("keeps What leaves this machine closed, with the four sentences inside", async () => {
-    mock("not enrolled");
+  it.each([
+    ["off", "not enrolled", status(), "Turn on notifications"],
+    ["renew", "enrolled", { ...bound, renew: "idle" }, "Renew notifications"],
+  ] as const)("%s: What leaves this computer sits closed under the button, with the new text", async (kind, state, server, action) => {
+    mock(state, server);
     await render();
-    const details = node.querySelector("details")!;
+    expect(card().getAttribute("data-state")).toBe(kind);
+    const details = disclosure()!;
     expect(details.open).toBe(false);
-    expect(details.querySelector("summary")!.textContent).toBe("What leaves this machine");
+    expect(details.querySelector("summary")!.textContent).toBe("What leaves this computer");
     expect([...details.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
-      "Alerts go straight from this machine to your browser's push service: Apple, Google or Mozilla. No protoAgent server sits in between, and you don't need a chat app.",
-      'The alert says only "protoAgent needs your attention" and "Open the console to view a decision" (or "an update"). It never includes the question, chat text, job output, names or file paths.',
-      "The push service can see when alerts are sent, how big they are and this machine's public IP address.",
-      "Opening an alert asks you to sign in to the console. Nothing can be approved from the lock screen.",
+      'Notifications go from this computer to your browser\'s push service (Apple, Google or Mozilla). They say only "protoAgent needs your attention". They never include chat text, names or file paths. The push service can see when they\'re sent and this computer\'s public IP address. Opening one asks you to sign in. Nothing can be approved from the lock screen.',
     ]);
+    expect(button(action)!.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("hides What leaves this computer in every state that can't turn notifications on", async () => {
+    const iphone = () => vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)");
+    const cases: [string, () => void][] = [
+      ["insecure", () => { vi.stubGlobal("isSecureContext", false); mock("unsupported"); }],
+      ["ios", () => { iphone(); mock("unsupported"); }],
+      ["unsupported", () => { mock("unsupported"); }],
+      ["shared", () => { mock("not enrolled", refused("not_a_device", 403)); }],
+      ["denied", () => { mock("denied"); }],
+      ["on", () => { mock("enrolled", bound); }],
+      ["trouble", () => { mock(new Error("offline")); }],
+    ];
+    for (const [kind, arrange] of cases) {
+      vi.restoreAllMocks();
+      vi.stubGlobal("isSecureContext", true);
+      arrange();
+      await act(async () => root.render(<PushCard key={kind} />));
+      await settle();
+      expect(card().getAttribute("data-state")).toBe(kind);
+      expect(disclosure()).toBeNull();
+      expect(card().textContent).not.toContain("What leaves this");
+      // The card is still there, with its one live region.
+      expect(node.querySelectorAll('[role="status"]')).toHaveLength(1);
+    }
+  });
+
+  it("drops What leaves this computer once notifications are on, and brings it back when they go off", async () => {
+    const { get } = mock("not enrolled");
+    await render();
+    expect(disclosure()).not.toBeNull();
+    get.mockResolvedValue(bound);
+    vi.spyOn(push, "enrollPush").mockResolvedValue("enrolled");
+    await click("Turn on notifications");
+    expect(disclosure()).toBeNull();
+    vi.spyOn(push, "unenrollPush").mockResolvedValue();
+    await click("Turn off on this device");
+    expect(disclosure()).not.toBeNull();
   });
 
   it("never claims a push was delivered, read or seen, and never prefixes Warning: or Error:", async () => {

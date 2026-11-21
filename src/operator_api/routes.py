@@ -758,7 +758,7 @@ def register_operator_routes(
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     scheduler_set_enabled: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
-    scheduler_runs: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_runs: Callable[[str, int, str | None], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -1127,13 +1127,16 @@ def register_operator_routes(
     if scheduler_runs is not None:
 
         @app.get("/api/scheduler/jobs/{job_id}/runs")
-        async def _scheduler_runs(job_id: str, limit: int = 50):
+        async def _scheduler_runs(job_id: str, limit: int = 50, before: str | None = None):
             # A job's past runs, newest first, read from the scheduler's occurrences
             # ledger (ADR 0135 D8). ``limit`` bounds the list; the backend clamps it into
-            # its own range rather than rejecting it. An id with neither a job nor a run
-            # is a 404; a backend without run history is a 501.
+            # its own range rather than rejecting it. ``before`` is the ``next_cursor``
+            # of an earlier page and returns the runs older than it; ``next_cursor`` is
+            # set when this page came back full, else null. An unreadable cursor is a
+            # 400 (ValueError). An id with neither a job nor a run is a 404; a backend
+            # without run history is a 501.
             try:
-                return await scheduler_runs(job_id, limit)
+                return await scheduler_runs(job_id, limit, before)
             except NotImplementedError as exc:
                 raise HTTPException(
                     status_code=501,

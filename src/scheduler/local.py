@@ -30,6 +30,8 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import errno
 import json
 import logging
@@ -1089,14 +1091,19 @@ class LocalScheduler:
             db.close()
         return _row_to_job(row) if row else None
 
-    def list_runs(self, job_id: str, limit: int = RUN_HISTORY_DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    def list_runs(
+        self, job_id: str, limit: int = RUN_HISTORY_DEFAULT_LIMIT, before: str | None = None
+    ) -> list[dict[str, Any]]:
         """A job's past runs, newest first, read from the ``occurrences`` ledger
         (ADR 0135 D8 — the one run-history source; there is no second store).
 
         One entry per claimed fire slot, across every generation of ``job_id`` — the
         ledger outlives its job (a finished one-shot deletes its row, a cancel keeps
         the evidence), so history stays readable after the job is gone. ``limit`` is
-        clamped to ``1..RUN_HISTORY_MAX_LIMIT``. Each run carries:
+        clamped to ``1..RUN_HISTORY_MAX_LIMIT``. ``before`` is an opaque cursor from
+        :meth:`list_runs_page`: only runs strictly older than that position are
+        returned, so a client can page past the limit. A cursor that does not decode
+        is a ``ValueError``. Each run carries:
 
         - ``scheduled_for`` — the slot the run was claimed for (ISO, the run's time);
         - ``state`` — the ledger's dispatch state (``claimed`` / ``running`` /
@@ -1120,27 +1127,52 @@ class LocalScheduler:
 
         Read-only. Unlike :meth:`list_jobs`, a DB read failure RAISES: an empty list
         would read as "this job never ran" (or as an unknown job at the API)."""
+        return self.list_runs_page(job_id, limit, before)["runs"]
+
+    def list_runs_page(
+        self, job_id: str, limit: int = RUN_HISTORY_DEFAULT_LIMIT, before: str | None = None
+    ) -> dict[str, Any]:
+        """One page of :meth:`list_runs` plus the cursor for the next: ``{"runs",
+        "next_cursor"}``.
+
+        ``next_cursor`` is the position of the last returned run when the page came
+        back full (as many runs as the clamped ``limit``), else ``None``. Pass it back
+        as ``before`` for the next older page. A full page does not prove there are
+        more runs, so the page after it can be empty. The cursor is opaque: it encodes
+        the last row's place in the ledger order, and holds across runs that share a
+        ``scheduled_for``. Raises ``ValueError`` for a cursor that does not decode."""
         try:
             bound = int(limit)
         except (TypeError, ValueError):
             bound = RUN_HISTORY_DEFAULT_LIMIT
         bound = max(1, min(bound, RUN_HISTORY_MAX_LIMIT))
+        where, params = "", [job_id, self.agent_name]
+        if before is not None:
+            # Strictly older in the ORDER BY below; the three columns are never NULL.
+            where = "AND (o.next_fire, o.created_at, o.rowid) < (?, ?, ?) "
+            params.extend(_decode_run_cursor(before))
         db = self._connect()
         try:
             # Agent isolation mirrors ``get_job``: the ledger has no agent column, so a
             # run is hidden only when a live job of that id belongs to ANOTHER agent.
             rows = db.execute(
                 "SELECT o.job_id, o.next_fire, o.created_at, o.state, o.task_state, "
-                "o.diagnostic, o.task_id, o.message_id, o.started_at, o.ended_at, o.reported "
+                "o.diagnostic, o.task_id, o.message_id, o.started_at, o.ended_at, o.reported, "
+                "o.rowid AS ledger_rowid "
                 "FROM occurrences o "
                 "WHERE o.job_id = ? AND NOT EXISTS (SELECT 1 FROM jobs j "
                 "WHERE j.id = o.job_id AND j.agent_name != ?) "
-                "ORDER BY o.next_fire DESC, o.created_at DESC, o.rowid DESC LIMIT ?",
-                (job_id, self.agent_name, bound),
+                + where
+                + "ORDER BY o.next_fire DESC, o.created_at DESC, o.rowid DESC LIMIT ?",
+                (*params, bound),
             ).fetchall()
         finally:
             db.close()
-        return [_row_to_run(r) for r in rows]
+        next_cursor = None
+        if len(rows) == bound:
+            last = rows[-1]
+            next_cursor = _encode_run_cursor(last["next_fire"], last["created_at"], last["ledger_rowid"])
+        return {"runs": [_row_to_run(r) for r in rows], "next_cursor": next_cursor}
 
     async def start(self) -> None:
         if self._task is not None:
@@ -2867,6 +2899,33 @@ def _row_to_run(row: Any) -> dict[str, Any]:
         # Only a COMPLETED run reported or stayed quiet; anything else is unknown.
         "reported": bool(reported) if ok and reported is not None else None,
     }
+
+
+def _encode_run_cursor(next_fire: str, created_at: str, rowid: int) -> str:
+    """A run's place in the ``list_runs`` order as an opaque URL-safe token."""
+    raw = json.dumps([next_fire, created_at, rowid], separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_run_cursor(cursor: Any) -> tuple[str, str, int]:
+    """Read back :func:`_encode_run_cursor`; anything else is a ``ValueError``."""
+    problem = ValueError("Invalid run-history cursor.")
+    if not isinstance(cursor, str) or not cursor:
+        raise problem
+    try:
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        key = json.loads(raw.decode())
+    except (binascii.Error, ValueError, RecursionError):  # bad base64, UTF-8 or JSON
+        raise problem from None
+    if not isinstance(key, list) or len(key) != 3:
+        raise problem
+    next_fire, created_at, rowid = key
+    # ``bool`` is an ``int``; a row id never is one.
+    if not isinstance(next_fire, str) or not isinstance(created_at, str) or type(rowid) is not int:
+        raise problem
+    if not 0 <= rowid < 2**63:  # outside what SQLite can bind
+        raise problem
+    return next_fire, created_at, rowid
 
 
 def _utc_now_iso() -> str:

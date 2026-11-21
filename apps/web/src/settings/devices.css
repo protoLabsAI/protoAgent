@@ -202,7 +202,8 @@
 }
 
 /* "Notifications on this device" (PushCard.tsx): one column at every width. The state block,
-   its one action, any refusal under it, then the "What leaves this machine" disclosure. */
+   its one action, any refusal under it, then (only where notifications can be turned on or
+   renewed) the "What leaves this computer" disclosure. */
 .devices-push {
   display: flex;
   flex-direction: column;

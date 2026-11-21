@@ -1,5 +1,5 @@
 /** Live Work adapters; legacy source keys survive until registry cleanup. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 
 import { api, currentSlug } from "../lib/api";
@@ -29,6 +29,7 @@ import {
 } from "./tone";
 import { inWorkScope } from "./workGroups";
 import { directiveStore } from "../chat/useDirectives";
+import { instanceDirectiveStore } from "./instanceDirectives";
 import { scheduleMeta, summaryTitle, typeAndPriority, watchKind } from "./rowMeta";
 
 /** The eight work sources, in the order the Work view lays them out (§5). `activity` is a
@@ -232,16 +233,20 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
         queryFn: async () => {
           // The focused ledger remains available even if session discovery fails.
           const focused = sessionId ? directiveStore(sessionId).refresh() : Promise.resolve();
+          // The instance-wide orders (ADR 0135 D13) load alongside the chat ledgers, with NO
+          // status filter so closed rows stay listed (work-view-additions §3.1). The store
+          // records its own failure, so a failed read never rejects this inventory.
+          const instance = instanceDirectiveStore.refresh();
           let inventory;
           try {
             inventory = await api.chatSessions(200);
             // Preserve the last discovered inventory on a session-index read failure.
             if (inventory.reason) throw new Error(inventory.reason);
           } catch (error) {
-            await focused;
+            await Promise.all([focused, instance]);
             throw error;
           }
-          await focused;
+          await Promise.all([focused, instance]);
           // ADR 0130 S6: a session CLOSED on another device drops out of `inventory.sessions`
           // (its tab is hidden everywhere) but it is not deleted — its directive ledger is
           // unchanged — so include the server's `closed` ids too, or a chat closed anywhere would
@@ -283,6 +288,11 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     return () => offs.forEach((off) => off());
   }, [directiveSessionIds]);
 
+  // The instance-wide orders: read through useSyncExternalStore (not the observe + setState
+  // above) so a withdraw's row removal and the detail closing with it commit in ONE render.
+  const instanceDirectives = useSyncExternalStore(
+    instanceDirectiveStore.subscribe, instanceDirectiveStore.getSnapshot, instanceDirectiveStore.getSnapshot);
+
   const keep = useMemo(() => (item: WorkItem) =>
     inWorkScope(item, { thisChatOnly, sessionId }), [thisChatOnly, sessionId]);
 
@@ -295,10 +305,15 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
       schedules: (schedRes.data?.jobs ?? []).map(mapSchedule).filter(keep),
       background: (bgRes.data?.jobs ?? []).map(mapBackground).filter(keep),
       activity: [],
-      directives: directiveSessionIds.flatMap((id) => {
-        const snapshot = directiveStore(id).getSnapshot();
-        return [...snapshot.active, ...snapshot.history];
-      }).map(mapDirective).filter(keep),
+      // Instance-wide rows first, then every chat's ledger; keyed by id (instance ids start
+      // `dir-i`, so one never collides with a chat's — the map only guards a double listing).
+      directives: [...new Map([
+        ...instanceDirectives.rows,
+        ...directiveSessionIds.flatMap((id) => {
+          const snapshot = directiveStore(id).getSnapshot();
+          return [...snapshot.active, ...snapshot.history];
+        }),
+      ].map((row) => [row.id, row] as const)).values()].map(mapDirective).filter(keep),
     };
   }, [
     decRes.data,
@@ -310,6 +325,7 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     actRes.data,
     directiveSessionIds,
     directiveVersion,
+    instanceDirectives,
     keep,
   ]);
 
@@ -347,7 +363,12 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
         setSchedulerSeen(true);
         void qc.invalidateQueries({ queryKey: queryKeys.schedules });
       }),
-      onTopic("directive.changed", invalidate(workKey("directive-inventory"))),
+      // An instance-wide order's change names only the chat it was recorded in — no chat
+      // ledger moved, so re-read just the instance list (work-view-additions §3.1).
+      onTopic("directive.changed", (data) => {
+        if (data?.instance_wide === true) void instanceDirectiveStore.refresh();
+        else void qc.invalidateQueries({ queryKey: workKey("directive-inventory") });
+      }),
       // The durable change log (ADR 0130 D2) replays every retained frame, so a change that
       // landed while the bus was down re-fires its own targeted invalidation above once the
       // stream catches up. Two gaps the per-event replay cannot cover, so both re-read every
@@ -380,6 +401,13 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
     ["failed", "stale"].includes(directiveStore(id).getSnapshot().state))) {
     directiveSource.status = directiveSource.loadedAt === null ? "error" : "stale";
     directiveSource.error = new Error("A directive ledger could not be refreshed");
+  }
+  // Same rule for the instance-wide list: a failed read keeps whatever rows are retained and
+  // marks the source stale (error when nothing has ever loaded). Retry re-runs the inventory
+  // query, which re-reads this list too.
+  if (directiveSource.status === "ready" && ["failed", "stale"].includes(instanceDirectives.state)) {
+    directiveSource.status = directiveSource.loadedAt === null && instanceDirectives.loadedAt === null ? "error" : "stale";
+    directiveSource.error = new Error("The instance-wide directive list could not be refreshed");
   }
 
   return {
