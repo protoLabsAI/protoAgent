@@ -101,7 +101,7 @@ test("opening from the header drawer's Settings item shows the same dialog + the
   await expect(sidenav.getByRole("tab", { name: "Configuration", exact: true })).toHaveCount(0);
   // Fleet section shows the agents panel; Telemetry renders the dashboard.
   await sidenav.getByRole("tab", { name: "Fleet", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet", exact: true })).toBeVisible();
   await sidenav.getByRole("tab", { name: "Telemetry", exact: true }).click();
   await expect(page.getByTestId("telemetry-surface")).toBeVisible();
 });
@@ -221,7 +221,7 @@ test("a sister agent's console keeps Box ▸ Fleet, without the agent-scoped Box
   await expect(sidenav.getByRole("tab", { name: "Telemetry", exact: true })).toHaveCount(0);
   // And it's the real panel — the hub's roster, reachable from here.
   await sidenav.getByRole("tab", { name: "Fleet", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet", exact: true })).toBeVisible();
   await expect(page.locator(".fleet-row", { hasText: "roxy" })).toBeVisible();
 });
 

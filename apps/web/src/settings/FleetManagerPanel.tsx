@@ -221,6 +221,59 @@ export function groupNameError(raw: string, groups: readonly { id: string; name:
   return null;
 }
 
+/** One badge on a roster row. `key` names its slot; `title` is its hover text. */
+export type FleetRowBadge = {
+  key: "status" | "main" | "remote" | "delegate";
+  label: string;
+  status: "neutral" | "info" | "success" | "warning";
+  title?: string;
+};
+
+/**
+ * The badges a roster row shows — AT MOST TWO, in priority order: the status badge (a remote's
+ * pairing verdict, ADR 0113 D5), then exactly one of "Main" (the agent serving this computer's
+ * fleet) / "Remote" / "Delegate". Everything else that used to be a badge (a version mismatch,
+ * "active", a remote that is also a delegate) reads from the name tooltip — `fleetNameTooltip`.
+ */
+export function fleetRowBadges(
+  a: Pick<FleetAgent, "host" | "remote" | "auth">,
+  isDelegate: boolean,
+): FleetRowBadge[] {
+  const badges: FleetRowBadge[] = [];
+  const auth = a.remote ? remoteAuthBadge(a.auth) : null;
+  if (auth) badges.push({ key: "status", label: auth.label, status: auth.status, title: auth.title });
+  if (a.host) badges.push({ key: "main", label: "Main", status: "neutral", title: "The main agent on this computer" });
+  else if (a.remote) badges.push({ key: "remote", label: "Remote", status: "neutral", title: "An agent on another computer, paired with this one" });
+  else if (isDelegate) badges.push({ key: "delegate", label: "Delegate", status: "info", title: "This agent can hand work to it" });
+  return badges;
+}
+
+/**
+ * The hover text on a roster row's agent name: the details that left the visible row — port and
+ * process id (local agents; a remote's address stays on the row), a version mismatch, "you are
+ * here", and a delegate link the two-badge rule had no room for. One fact per line; "" when
+ * there is nothing to say.
+ */
+export function fleetNameTooltip(
+  a: Pick<FleetAgent, "host" | "remote" | "port" | "pid" | "version">,
+  ctx: { hubVersion?: string; isActive?: boolean; isDelegate?: boolean } = {},
+): string {
+  const lines: string[] = [];
+  if (ctx.isActive) lines.push("You're viewing this agent");
+  if (!a.remote && a.port) lines.push(`Port ${a.port}`);
+  if (a.pid) lines.push(`Process ID ${a.pid}`);
+  if (a.version && ctx.hubVersion && a.version !== ctx.hubVersion) {
+    lines.push(
+      `Version mismatch: this ${a.remote ? "remote" : "agent"} runs v${a.version}, the main agent runs v${ctx.hubVersion} — ${
+        a.remote ? "features may misbehave across the version gap." : "restart it (Stop → Start) to update it."
+      }`,
+    );
+  }
+  // A remote's second badge is "Remote", so its delegate link is named here instead.
+  if (ctx.isDelegate && a.remote) lines.push("This agent can hand work to it");
+  return lines.join("\n");
+}
+
 /** "N agent" / "N agents" — the card count Badge and the delete confirm both read off it. */
 export function pluralAgents(n: number): string {
   return `${n} agent${n === 1 ? "" : "s"}`;
@@ -251,7 +304,7 @@ export function defaultGroupName(groups: readonly { id: string; name: string }[]
   return name;
 }
 
-// Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
+// Fleet manager (ADR 0042) — Settings → Fleet. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
 // per-row start / stop / remove. "+ New agent" opens the archetype picker via `onNew`.
 export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onGroups?: () => void }) {
@@ -611,16 +664,16 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
   return (
     <section className="panel stage-panel">
       <PanelHeader
-        title="Agents"
-        kicker={`${agents.length} agent${agents.length === 1 ? "" : "s"} on this host · the fleet`}
+        title="Fleet"
+        kicker={`Agents on this computer and the ones you've paired · ${agents.length}`}
         actions={
           <>
             {/* Box-runtime knobs — host-scoped box defaults, set right where you manage
                 the fleet (ADR 0047 D8 / 0048). */}
             <QuickSetting
               keys={BOX_RUNTIME_KEYS}
-              title="Box runtime"
-              label="Box runtime settings"
+              title="Network & ports"
+              label="Network and port settings"
               icon={<Server size={15} />}
             />
             {/* The group editor (docs/design/fleet-switcher-groups.md): organize the switcher into
@@ -679,6 +732,11 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
           <ul className="fleet-list">
             {agents.map((a) => {
               const isActive = slugOf(a) === slug; // slug = stable id, not name
+              const displayName = a.label ?? a.name;
+              const isDelegate = !isActive && delegateNames.has(a.name);
+              // Port, process id, a version mismatch and "active" live in the name's hover text,
+              // not on the row (see fleetNameTooltip / fleetRowBadges).
+              const nameTip = fleetNameTooltip(a, { hubVersion, isActive, isDelegate });
               return (
                 <li
                   key={a.id}
@@ -702,7 +760,7 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                       and the keyboard path (focus it, press ↑ / ↓). It is a real <button>, not the
                       aria-hidden span it started as, because the always-visible move-up / move-down
                       button pair it replaced was the row's only non-pointer affordance and cost a
-                      fixed 80px column on every row. The host ("this instance") is pinned — it
+                      fixed 80px column on every row. The host ("Main") is pinned — it
                       carries no handle, but stays a valid drop slot. The DS bundles dnd-kit yet
                       exposes it only as AppShell-rail + TabBar reorder (rail/tab-shaped; TabBar's
                       keyboard path is unwired) — no generic sortable-list primitive fits a rich
@@ -788,54 +846,47 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                           onCommit={(next) => rename.mutate({ id: a.id, name: next })}
                         />
                       ) : isActive ? (
-                        (a.label ?? a.name) // you're already here — a link to this window would be a no-op reload
+                        // you're already here — a link to this window would be a no-op reload
+                        <span className="fleet-name-text" data-testid="fleet-name-tip" title={nameTip || undefined}>
+                          {displayName}
+                        </span>
                       ) : (
                         // #2240 — the name is the click-through to that agent's own window. A real
                         // <a href>, not a click handler, so cmd/middle-click opens it in a NEW window
                         // — the point of slug routing (ADR 0042) being one window per agent. Same
                         // destination the topbar FleetSwitcher navigates to; a stopped agent resumes
                         // on arrival via `activateSlugAgent`, so "not currently open" is not a gate.
-                        <a className="fleet-name-link" href={agentHref(slugOf(a))} title={`Open ${a.label ?? a.name}`}>
-                          {a.label ?? a.name}
+                        <a
+                          className="fleet-name-link"
+                          data-testid="fleet-name-tip"
+                          href={agentHref(slugOf(a))}
+                          title={nameTip ? `Open ${displayName}\n${nameTip}` : `Open ${displayName}`}
+                        >
+                          {displayName}
                         </a>
                       )}
-                      {a.host ? <Badge status="neutral">this instance</Badge> : null}
-                      {a.remote ? (
-                        <span title="A remote fleet member — proxied by URL">
-                          <Badge status="neutral">remote</Badge>
-                        </span>
-                      ) : null}
-                      {/* The hub's token verdict (ADR 0113 D5): a revoked hub shows up as
-                          revoked here, instead of a green dot that 401s when clicked. */}
-                      {a.remote
-                        ? (() => {
-                            const badge = remoteAuthBadge(a.auth);
-                            return badge ? (
-                              <span title={badge.title} data-testid="fleet-auth-badge" data-auth={a.auth}>
-                                <Badge status={badge.status}>{badge.label}</Badge>
-                              </span>
-                            ) : null;
-                          })()
-                        : null}
-                      {/* Version skew — remotes (hub↔remote handshake) AND local members:
-                          a local member spawned before an app update keeps running the OLD
-                          binary until restarted (version-coherence P2), so it gets the same
-                          warning badge a drifted remote does. */}
-                      {a.version && hubVersion && a.version !== hubVersion ? (
+                      {/* At most two badges: the status badge — the hub's token verdict (ADR 0113
+                          D5): a revoked hub shows up as revoked here, instead of a green dot that
+                          401s when clicked — then one of Main / Remote / Delegate. A version
+                          mismatch (remotes AND local members: one spawned before an app update
+                          keeps running the OLD binary until restarted) and "active" are in the
+                          name's hover text. */}
+                      {fleetRowBadges(a, isDelegate).map((b) => (
                         <span
-                          data-testid="fleet-version-skew"
-                          title={`This ${a.remote ? "remote" : "member"} runs v${a.version}, the hub runs v${hubVersion} — ${a.remote ? "features may misbehave across the version gap." : "restart it (Stop → Start) to pick up the hub's binary."}`}
+                          key={b.key}
+                          title={b.title}
+                          data-testid={b.key === "status" ? "fleet-auth-badge" : `fleet-badge-${b.key}`}
+                          data-auth={b.key === "status" ? a.auth : undefined}
                         >
-                          <Badge status="warning">v{a.version}</Badge>
+                          <Badge status={b.status}>{b.label}</Badge>
                         </span>
-                      ) : null}
-                      {isActive ? <Badge status="info">active</Badge> : null}
+                      ))}
                     </span>
-                    <span className="fleet-meta">
-                      {a.remote ? a.url : `:${a.port}`}
-                      {a.pid ? ` · pid ${a.pid}` : ""}
-                      {a.bundle ? ` · ${a.bundle}` : ""}
-                    </span>
+                    {/* A remote's address stays (it is how you tell two remotes apart); a local
+                        agent's port and process id moved to the name's hover text. */}
+                    {a.remote || a.bundle ? (
+                      <span className="fleet-meta">{[a.remote ? a.url : "", a.bundle].filter(Boolean).join(" · ")}</span>
+                    ) : null}
                   </div>
                   <div className="fleet-row-actions">
                     {/* Boot autostart is a hub-owned process policy, so it applies only to
@@ -852,21 +903,15 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                     {/* Add as a delegate of the focused agent → enables delegate_to flows. Any
                         agent but the one you're on (it can't delegate to itself). */}
                     {!isActive ? (
-                      delegateNames.has(a.name) ? (
-                        // The badge is the STATE, the button is the ACTION — the pair keeps the
-                        // add/remove symmetric with the link button it replaced. Unlink2 (not
-                        // Trash2) on purpose: the row's Trash2 removes the AGENT, and these two
-                        // destructive-looking icons sit inches apart (#2266).
-                        <>
-                          <span title="A delegate of this agent">
-                            <Badge status="info">delegate</Badge>
-                          </span>
-                          <Button icon variant="ghost" title="Remove as a delegate of this agent (delegate_to)"
-                            disabled={removeDelegate.isPending}
-                            onClick={() => removeDelegate.mutate(a.name)}>
-                            <Unlink2 size={14} />
-                          </Button>
-                        </>
+                      isDelegate ? (
+                        // The "Delegate" badge beside the name is the STATE, this button is the
+                        // ACTION. Unlink2 (not Trash2) on purpose: the row's Trash2 removes the
+                        // AGENT, and these two destructive-looking icons sit inches apart (#2266).
+                        <Button icon variant="ghost" title={`Stop handing work to ${displayName}`}
+                          disabled={removeDelegate.isPending}
+                          onClick={() => removeDelegate.mutate(a.name)}>
+                          <Unlink2 size={14} />
+                        </Button>
                       ) : (
                         // The URL comes from `delegateLinkFor`: the member's hub-side `a2a` (a
                         // remote's is the hub's proxy, carrying its paired token — ADR 0113 D4),
@@ -877,7 +922,7 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                           return (
                             <span title={linkRefusal ?? undefined}>
                               <Button icon variant="ghost"
-                                title={linkRefusal ?? "Add as a delegate of this agent (delegate_to)"}
+                                title={linkRefusal ?? `Let this agent hand work to ${displayName}`}
                                 disabled={addDelegate.isPending || !link.url}
                                 onClick={() => link.url && addDelegate.mutate({ name: a.name, url: link.url })}>
                                 <Link2 size={14} />
@@ -899,7 +944,7 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                         <Button
                           variant="ghost"
                           size="sm"
-                          title={a.auth === "none" ? "Pair with a code from the remote" : "Re-pair with a fresh code from the remote"}
+                          title={a.auth === "none" ? "Pair using a code from the other agent" : "Re-pair using a fresh code from the other agent"}
                           disabled={!a.url}
                           onClick={() => openRepair(a)}
                         >
@@ -1014,7 +1059,7 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                 <SecretInput
                   value={addToken}
                   onChange={(e) => setAddToken(e.target.value)}
-                  placeholder={editingId ? "•••••••• — leave blank to keep the current token" : "the remote's operator token, if it's gated"}
+                  placeholder={editingId ? "•••••••• — leave blank to keep the current token" : "Its access token, if it has one"}
                 />
               </label>
               {addAskInsecure ? (
@@ -1065,7 +1110,7 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                       {/* Pair… is the PRIMARY way in (ADR 0113): the remote shows a code, this
                           hub redeems it, and the member holds its own revocable token. "Add to
                           this fleet" stays as the tokenless path for an OPEN remote. */}
-                      <Button variant="primary" size="sm" title="Pair with a code from that agent (Settings ▸ Devices ▸ Pair an agent)"
+                      <Button variant="primary" size="sm" title="Pair using a code from the other agent"
                         onClick={() => openPair(d)}>
                         <KeyRound size={14} aria-hidden /> Pair…
                       </Button>
@@ -1079,13 +1124,13 @@ export function FleetManagerPanel({ onNew, onGroups }: { onNew?: () => void; onG
                           agent it 401'd on first use — the failure ADR 0113 D4 removes. The same
                           button now opens Pair… with "also add as a delegate" on. */}
                       {delegateNames.has(d.name) ? (
-                        <span title="A delegate of this agent">
-                          <Badge status="info">delegate</Badge>
+                        <span title="This agent can hand work to it">
+                          <Badge status="info">Delegate</Badge>
                         </span>
                       ) : (
                         <span title={linkRefusal ?? undefined}>
                           <Button icon variant="ghost"
-                            title={linkRefusal ?? "Pair, then add as a delegate of this agent (delegate_to)"}
+                            title={linkRefusal ?? `Pair, then let this agent hand work to ${d.name}`}
                             disabled={linkRefusal !== null}
                             onClick={() => openPair(d, true)}>
                             <Link2 size={14} />
@@ -1455,7 +1500,7 @@ export function FleetGroupsPanel({ onBack }: { onBack?: () => void }) {
         </span>
         <span className="fleet-aname">
           <span className="fleet-aname-text">{name}</span>
-          {a.host ? <Badge status="neutral">this instance</Badge> : null}
+          {a.host ? <Badge status="neutral">Main</Badge> : null}
         </span>
         <button
           type="button"
