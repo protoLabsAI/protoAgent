@@ -4,13 +4,16 @@ import { describe, expect, it } from "vitest";
 import { composerPlaceholder } from "./composerPlaceholder";
 
 describe("composerPlaceholder", () => {
-  it("reads \"Type your answer…\" while a decision awaits an answer, whatever the turn state (#5668 §4)", () => {
-    expect(composerPlaceholder("idle", 0, "Gina", true)).toBe("Type your answer…");
-    expect(composerPlaceholder("idle", 2, null, true)).toBe("Type your answer…");
-    expect(composerPlaceholder("streaming", 1, "Gina", true)).toBe("Type your answer…");
-    // Answered, expired, withdrawn or dismissed: back to the normal line.
-    expect(composerPlaceholder("idle", 0, "Gina", false)).toBe("Message Gina…");
-    expect(composerPlaceholder("idle", 0, "Gina")).toBe("Message Gina…");
+  it("never reads \"Type your answer…\": a pending decision does not change the composer (#5678)", () => {
+    for (const status of ["idle", "streaming", "error"] as const) {
+      for (const queued of [0, 1, 3]) {
+        for (const name of [undefined, null, "", "Gina"]) {
+          expect(composerPlaceholder(status, queued, name)).not.toBe("Type your answer…");
+        }
+      }
+    }
+    // The function takes no "a decision awaits an answer" input any more.
+    expect(composerPlaceholder.length).toBe(3);
   });
 
   it("hints ↑-recall while streaming with a steer queued (#2837)", () => {
