@@ -60,6 +60,47 @@ describe("NotificationKeyCard", () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it("renders no DOM when no key exists", async () => {
+    const get = vi.spyOn(api, "pushKeys").mockResolvedValue({
+      keys: [],
+      rotation_window_seconds: 2592000,
+      bindings_by_version: {},
+    });
+    await render();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(card()).toBeNull();
+    expect(node.innerHTML).toBe("");
+  });
+
+  it("renders no DOM while the first read is still out", async () => {
+    vi.spyOn(api, "pushKeys").mockReturnValue(new Promise<PushKeys>(() => {}));
+    await render();
+    expect(node.innerHTML).toBe("");
+  });
+
+  it("renders no DOM for a version that is neither active nor retiring", async () => {
+    vi.spyOn(api, "pushKeys").mockResolvedValue({
+      keys: [key(1)],
+      rotation_window_seconds: 2592000,
+      bindings_by_version: { "1": 2 },
+    });
+    await render();
+    expect(node.innerHTML).toBe("");
+  });
+
+  it("renders the card for a retiring key with no active one, and offers no rotation", async () => {
+    vi.spyOn(api, "pushKeys").mockResolvedValue({
+      keys: [key(1, { retire_after: RETIRES })],
+      rotation_window_seconds: 2592000,
+      bindings_by_version: { "1": 2 },
+    });
+    await render();
+    expect(card()!.textContent).toContain("Version 1 retires on 18 Dec. 2 devices still use it.");
+    expect(card()!.textContent).not.toContain("No notification key yet");
+    expect(card()!.textContent).not.toContain("active");
+    expect(button("Rotate key…")).toBeNull();
+  });
+
   it("shows the active version, the retiring version and how many devices still use it", async () => {
     vi.spyOn(api, "pushKeys").mockResolvedValue(keyring(2));
     await render();
@@ -162,23 +203,22 @@ describe("NotificationKeyCard", () => {
     expect(document.activeElement).toBe(button("Rotate key…"));
   });
 
-  it("a 403 on rotate shows the full-access sentence with no button", async () => {
+  it("a 403 on rotate removes the card: the caller lacks full access", async () => {
     vi.spyOn(api, "pushKeys").mockResolvedValue(keyring(2));
     vi.spyOn(api, "rotatePushKey").mockRejectedValue(new ApiError(403, "forbidden", "device_scope"));
     await render();
     await click("Rotate key…");
     await click("Rotate key");
     await act(async () => {});
-    expect(card()!.textContent).toContain(KEY_COPY.fullAccessOnly);
-    expect(KEY_COPY.fullAccessOnly).toBe("Only full-access sign-ins can manage the notification key.");
-    expect(node.querySelectorAll("button")).toHaveLength(0);
+    expect(card()).toBeNull();
+    expect(node.innerHTML).toBe("");
   });
 
-  it("a 403 on the read shows the same sentence with no button", async () => {
+  it("a 403 on the read renders no DOM: the caller lacks full access", async () => {
     vi.spyOn(api, "pushKeys").mockRejectedValue(new ApiError(403, "forbidden"));
     await render();
-    expect(card()!.textContent).toContain(KEY_COPY.fullAccessOnly);
-    expect(node.querySelectorAll("button")).toHaveLength(0);
+    expect(card()).toBeNull();
+    expect(node.innerHTML).toBe("");
   });
 
   it("another rotate failure keeps the confirm open and says so", async () => {
@@ -192,14 +232,14 @@ describe("NotificationKeyCard", () => {
     expect(button("Rotate key")!.disabled).toBe(false);
   });
 
-  it("a failed read offers Try again, and no key yet offers no rotation", async () => {
+  it("a failed read offers Try again, and the card goes away when the retry finds no key", async () => {
     const get = vi.spyOn(api, "pushKeys").mockRejectedValueOnce(new Error("offline"));
     get.mockResolvedValue({ keys: [], rotation_window_seconds: 2592000, bindings_by_version: {} });
     await render();
     expect(card()!.textContent).toContain(KEY_COPY.loadFailed);
     await click("Try again");
     await act(async () => {});
-    expect(card()!.textContent).toContain(KEY_COPY.none);
-    expect(button("Rotate key…")).toBeNull();
+    expect(card()).toBeNull();
+    expect(node.innerHTML).toBe("");
   });
 });
