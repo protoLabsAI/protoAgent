@@ -11,10 +11,10 @@ import { CircleDashed, CirclePause, Clock, Eye, Plus, Target } from "lucide-reac
 import { WorkEmpty as Empty } from "./WorkEmpty";
 import { WorkHeading } from "./WorkHeading";
 import { useDecisions } from "../decisions/useDecisions";
-import { goalProgress } from "./rowMeta";
+import { goalProgress, scheduleFailureNote } from "./rowMeta";
 import { decisionMeta, relTime, staleTaskMeta, taskStaleDays, type GroupableWorkItem, type WorkGroupId } from "./tone";
 import type { DecisionRow } from "../lib/api/decisions";
-import type { GoalState, Task } from "../lib/types";
+import type { GoalState, ScheduledJob, Task } from "../lib/types";
 import type { WorkGroup } from "./workGroups";
 import { WorkRow } from "./WorkRow";
 import { instructionRowPresentation } from "./sections/directives";
@@ -133,8 +133,13 @@ function rowPresentation(item: GroupableWorkItem, group: Exclude<WorkGroupId, "i
       if (item.kind === "schedule" || item.kind === "wait") {
         // A disabled schedule keeps its Time row but must never pass for an active one: the
         // word "paused" leads its timing meta and the clock yields to the pause glyph.
-        return item.status === "paused"
-          ? { tag: "Time", tone: "neutral", icon: <CirclePause size={16} />, meta: withStatusWord("paused", item.meta) }
+        if (item.status === "paused") {
+          return { tag: "Time", tone: "neutral", icon: <CirclePause size={16} />, meta: withStatusWord("paused", item.meta) };
+        }
+        // A job whose last runs failed swaps its clock for a warning dot (work-view-additions
+        // §2.2); the badge stays Time, and the meta already ends with the failure note.
+        return scheduleFailureNote(item.raw as ScheduledJob)
+          ? { tag: "Time", tone: "neutral", icon: <StatusDot status="warning" /> }
           : { tag: "Time", tone: "neutral", icon: <Clock size={16} /> };
       }
       return { tag: "Job", tone: "neutral", icon: <CircleDashed size={16} />, meta: notStartedMeta(item) };
