@@ -81,9 +81,11 @@ function setConnected(next: boolean) {
 /** Route a raw SSE frame to matching subscribers. Returns its topic and the server-assigned
  *  seq (for `?since=` replay / the resume cursor), or null when the frame is unparseable or
  *  carries no topic. `seq` is null for a frame the server sent without one. */
-// When the frame being dispatched HAPPENED (the server's `ts`, seconds), for the listeners
-// running right now; null outside a dispatch or for a frame without one.
-let dispatchingTs: number | null = null;
+// How old the frame being dispatched is, in seconds, for the listeners running right now;
+// null outside a dispatch or when the frame doesn't say. The server computes it on its own
+// clock as the frame leaves (`age_s`), so this console's clock is never involved. An older
+// server sends only `ts`; then the age is taken against this console's clock.
+let dispatchingAge: number | null = null;
 /** Older than this, an event is catch-up, not news. A console that reopens resumes from its
  *  saved cursor and the server replays everything it missed (ADR 0130 D3). */
 export const REPLAY_AGE_S = 120;
@@ -93,12 +95,12 @@ export const REPLAY_AGE_S = 120;
  *  event (state must catch up); they must not toast or raise a system notification for it,
  *  or reopening the app replays every alert since the last visit. Call synchronously inside
  *  the listener. An event with no timestamp counts as live. */
-export function eventIsReplay(nowMs: number = Date.now()): boolean {
-  return dispatchingTs !== null && nowMs / 1000 - dispatchingTs > REPLAY_AGE_S;
+export function eventIsReplay(): boolean {
+  return dispatchingAge !== null && dispatchingAge > REPLAY_AGE_S;
 }
 
 function dispatch(raw: string): { topic: string; seq: number | null } | null {
-  let frame: { topic?: string; data?: Record<string, unknown>; seq?: number; ts?: number } = {};
+  let frame: { topic?: string; data?: Record<string, unknown>; seq?: number; ts?: number; age_s?: number } = {};
   try {
     frame = JSON.parse(raw || "{}");
   } catch {
@@ -118,7 +120,8 @@ function dispatch(raw: string): { topic: string; seq: number | null } | null {
   }
   // Each listener in its own try (ADR 0114 D1): one throwing subscriber must not starve
   // the ones after it, nor skip the caller's `lastSeq` update.
-  dispatchingTs = typeof frame.ts === "number" && Number.isFinite(frame.ts) ? frame.ts : null;
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  dispatchingAge = finite(frame.age_s) ? frame.age_s : finite(frame.ts) ? Date.now() / 1000 - frame.ts : null;
   try {
     for (const sub of subs) {
       if (!topicMatches(sub.pattern, topic)) continue;
@@ -129,7 +132,7 @@ function dispatch(raw: string): { topic: string; seq: number | null } | null {
       }
     }
   } finally {
-    dispatchingTs = null;
+    dispatchingAge = null;
   }
   return { topic, seq: seq ?? null };
 }

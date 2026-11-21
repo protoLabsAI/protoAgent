@@ -35,7 +35,15 @@ it("tells a replayed event from a live one, only while its listener runs", async
   source.emit({ topic: "goal.achieved", data: { id: "live" }, seq: 3, ts: now - 2 });
   source.emit({ topic: "goal.achieved", data: { id: "no-ts" }, seq: 4 });
   source.emit({ topic: "goal.achieved", data: { id: "bad-ts" }, seq: 5, ts: "yesterday" });
-  expect(seen).toEqual([["old", true], ["edge", true], ["live", false], ["no-ts", false], ["bad-ts", false]]);
+  // The server's own reading of the age wins over this console's clock: a console whose clock
+  // is an hour fast still sees a live event as live, and one an hour slow still sees an old
+  // event as old.
+  source.emit({ topic: "goal.achieved", data: { id: "fast-clock" }, seq: 6, ts: now - 3600, age_s: 0.4 });
+  source.emit({ topic: "goal.achieved", data: { id: "slow-clock" }, seq: 7, ts: now + 3600, age_s: 7200 });
+  expect(seen).toEqual([
+    ["old", true], ["edge", true], ["live", false], ["no-ts", false], ["bad-ts", false],
+    ["fast-clock", false], ["slow-clock", true],
+  ]);
   // Outside a dispatch nothing is a replay.
   expect(events.eventIsReplay()).toBe(false);
   off();

@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
@@ -337,6 +338,10 @@ def _sse_frame(evt: dict[str, Any]) -> str:
         frame["seq"] = seq
     if isinstance(evt.get("ts"), (int, float)):
         frame["ts"] = evt["ts"]  # when it happened — a replaying client must not stamp it "now"
+        # How old the event is as it leaves, by THIS machine's clock. A console decides
+        # "news or catch-up" from this, never from its own clock, so a phone that is minutes
+        # off neither loses its live alerts nor replays old ones.
+        frame["age_s"] = round(max(0.0, time.time() - evt["ts"]), 3)
     return f"{prefix}data: {json.dumps(frame)}\n\n"
 
 
