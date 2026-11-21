@@ -190,6 +190,7 @@ describe("Decisions section", () => {
     expect(detail?.textContent).toContain("Go ahead");
     expect(detail?.textContent).toContain("Reply in chat instead"); // a DecisionCard-only affordance
     expect(detail?.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
+    expect(detail?.querySelector(".pl-card")).toBeNull(); // the pane is the container (#5668 §1)
   });
 
   it("pins a pending decision first in the Overview Needs you lane with 'Asked {time}', opening the DecisionCard (r1 §2.1)", async () => {

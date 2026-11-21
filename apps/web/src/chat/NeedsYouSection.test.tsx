@@ -144,6 +144,7 @@ describe("the quiet-frame rows (S3a)", () => {
     try {
       expect(section().querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(1);
       expect(section().querySelector(".chat-status-row")).toBeNull(); // the sole decision is the expanded card
+      expect(section().querySelector(".pl-card")).toBeNull(); // the row is the container (#5668 §1)
       await act(async () => findButton(section(), (t) => t.startsWith("Go"))!.click());
       await flush();
       expect(answer).toHaveBeenCalledWith("q1", "a"); // the shared store's answer, not a fork

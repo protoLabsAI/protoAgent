@@ -6,6 +6,8 @@ const QUERY = "(max-width: 767px)";
 export function useIsMobile(): boolean {
   const [mobile, setMobile] = useState(false);
   useEffect(() => {
+    // No matchMedia (a non-browser host, jsdom): stay on the desktop default rather than throw.
+    if (typeof window.matchMedia !== "function") return;
     const mq = window.matchMedia(QUERY);
     const on = () => setMobile(mq.matches);
     on();

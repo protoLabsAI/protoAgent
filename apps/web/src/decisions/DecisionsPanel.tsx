@@ -95,6 +95,7 @@ export function DecisionsPanel({
           {i > 0 && <Divider />}
           <DecisionCard
             decision={decision}
+            contained
             onAnswer={(optionId) => onAnswer(decision.id, optionId)}
             onHold={hold}
             onResolved={resolve}
