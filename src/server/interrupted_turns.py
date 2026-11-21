@@ -588,7 +588,8 @@ class InterruptedTurnRecovery:
         )
 
     async def operator_action(
-        self, rec, ref: dict, *, answer: str, answered_by: str = "operator", answered_surface: str = "console"
+        self, rec, ref: dict, *, answer: str, answered_by: str = "operator", answered_surface: str = "console",
+        answer_kind: str = "option",
     ) -> None:
         """Perform the operator's answer to an S7 recovery decision — Resume / Re-run /
         Drop — exactly once (ADR 0129 D7).
@@ -662,7 +663,8 @@ class InterruptedTurnRecovery:
             )
 
         # The exactly-once gate: one concurrent answer wins this CAS, the other raises.
-        store.answer(rec.id, answer, answered_by=answered_by, answered_surface=answered_surface)
+        store.answer(rec.id, answer, answered_by=answered_by, answered_surface=answered_surface,
+                     answer_kind=answer_kind)
         # Registered with NO await after the CAS: on this event loop a boot repair pass
         # can never read the record "answered" without also finding it here, so it never
         # reopens a card whose answer is still mid-action (:data:`_ACTING_ANSWERS`).

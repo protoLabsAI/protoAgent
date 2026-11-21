@@ -915,7 +915,7 @@ async def decision_resume(config: dict, answer):
     Runs on every resume surface, including console and taskId answers. A failed graph
     invocation that leaves the interrupt in place keeps the decision retryable.
     """
-    from graph.decisions import DecisionClosed, decision_store
+    from graph.decisions import ANSWER_KINDS, DecisionClosed, decision_store
     from runtime.state import STATE
 
     found = await _chat()._pending_interrupt(config) if answer is not None else None
@@ -943,9 +943,17 @@ async def decision_resume(config: dict, answer):
                         if resolution.get("state") == "expired":
                             store.expire(rec.id)
                         else:
+                            # No resolution = the operator typed the answer into the chat
+                            # composer (hitl_resume): a text answer (#5668). The resolution
+                            # rides request metadata, so an unknown kind falls back to text
+                            # rather than failing the settle.
+                            answer_kind = resolution.get("answer_kind", "text")
+                            if answer_kind not in ANSWER_KINDS:
+                                answer_kind = "text"
                             store.answer(rec.id, resolution.get("answer", str(answer)),
                                          answered_by=resolution.get("answered_by", "operator"),
-                                         answered_surface=resolution.get("answered_surface", "chat"))
+                                         answered_surface=resolution.get("answered_surface", "chat"),
+                                         answer_kind=answer_kind)
                     except DecisionClosed:
                         pass
                 return True
