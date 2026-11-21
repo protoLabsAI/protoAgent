@@ -3,7 +3,7 @@ import { useEffect } from "react";
 
 import { chatStore } from "../chat/chat-store";
 import { homeSessionId } from "../chat/homeTab";
-import { onTopic } from "../lib/events";
+import { eventIsReplay, onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
 import { parseScheduledEvent } from "./scheduledEvent";
@@ -100,7 +100,8 @@ export function ScheduledWatch() {
       const injected = appendScheduled(session, scheduled, noticeId);
       // Only toast on the window that owns the origin chat — avoids fleet-wide spam. A
       // recurring re-fire (collapse) is quiet: the chip is enough, no toast/OS notification.
-      if (injected && !scheduled.collapse) {
+      // A fire replayed to a console that was closed still lands as its card; no alert.
+      if (injected && !scheduled.collapse && !eventIsReplay()) {
         toast({
           tone: failed ? "error" : "success",
           title: failed ? "Scheduled task failed" : "Scheduled task ran",

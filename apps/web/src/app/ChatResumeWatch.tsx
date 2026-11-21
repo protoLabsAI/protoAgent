@@ -3,7 +3,7 @@ import { useEffect } from "react";
 
 import { chatStore } from "../chat/chat-store";
 import { reconcileSessionStatus, watchSessionLiveness } from "../chat/sessionLiveness";
-import { onTopic } from "../lib/events";
+import { eventIsReplay, onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import { resumedTurnRender, settleResumedTurn, type ResumedTurnRender } from "./resumedTurn";
 import { originForSession } from "../chat/server-turn-store";
@@ -86,6 +86,9 @@ export function ChatResumeWatch() {
       // all (#2692's same-root-cause sibling: unlike BackgroundWatch, this path
       // used to drop the event entirely rather than degrade to a toast).
       landResumedTurn(render);
+      // A resume replayed to a console that was closed lands in the transcript; it is not
+      // news any more, so no toast and no system notification.
+      if (eventIsReplay()) return;
       toast(render.toast);
       notifyIfHidden(render.notify.title, render.notify.body);
     });

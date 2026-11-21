@@ -3,7 +3,7 @@ import { useEffect } from "react";
 
 import { chatStore } from "../chat/chat-store";
 import { isShortResult } from "./background-jobs";
-import { onTopic } from "../lib/events";
+import { eventIsReplay, onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
 import { readKey, writeKey } from "../lib/storage";
@@ -79,10 +79,14 @@ export function BackgroundWatch() {
       const desc = String(data.description ?? "background task");
       // Toast only on the window that owns the spawning session — avoids fleet-wide spam.
       const owns = chatStore.getSnapshot().sessions.some((s) => s.id === String(data.origin_session ?? ""));
-      if (owns) toast({ tone: "info", title: "Background agent started", message: desc });
+      // A start replayed to a console that was closed is old news: no toast.
+      if (owns && !eventIsReplay()) toast({ tone: "info", title: "Background agent started", message: desc });
     });
 
     const offCompleted = onTopic("background.completed", (data) => {
+      // Read now: it is only valid while this listener runs. A completion replayed to a
+      // console that was closed still lands in the transcript below; it does not alert.
+      const replayed = eventIsReplay();
       const jobId = String(data.job_id ?? "");
       const session = String(data.origin_session ?? "");
       const key = `done:${jobId}`;
@@ -120,6 +124,7 @@ export function BackgroundWatch() {
               failed && result ? `${header}\n\n${result}` : result || header,
               jobId ? { jobId, title: desc } : undefined,
             );
+      if (replayed) return;
       toast({
         tone: failed ? "error" : "success",
         title: failed ? "Background task failed" : "Background task finished",

@@ -12,10 +12,12 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (data: Record<string, unknown>) => void>(),
   toast: vi.fn(),
   notifyIfHidden: vi.fn(),
+  replay: false,
 }));
 
 vi.mock("../lib/events", async (original) => ({
   ...(await original<typeof import("../lib/events")>()),
+  eventIsReplay: () => mocks.replay,
   onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
     mocks.handlers.set(topic, fn);
     return () => mocks.handlers.delete(topic);
@@ -71,6 +73,7 @@ describe("ScheduledWatch", () => {
   let container: HTMLDivElement;
 
   beforeEach(() => {
+    mocks.replay = false;
     sessionStorage.clear();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -184,6 +187,16 @@ describe("ScheduledWatch", () => {
     await hydrate(home, [home, origin], [storedEntry()]);
     expect(messagesOf(origin)).toEqual([{ ...card, createdAt: expect.any(Number) }]);
     expect(messagesOf(home).map((message) => message.id)).toEqual(["home-entry-notice-1"]);
+  });
+
+  it("a fire replayed to a console that was closed lands as its card, with no toast or notification", () => {
+    const chat = "chat-replayed-fire";
+    chatStore.ensureSession(chat, "Disk check");
+    mocks.replay = true; // an event from before this console opened (lib/events `eventIsReplay`)
+    emit(fire(chat, { notice_id: "notice-replayed" }));
+    expect(messagesOf(chat)).toEqual([expect.objectContaining({ scheduled: expect.objectContaining({ jobId: "job-1" }) })]);
+    expect(mocks.toast).not.toHaveBeenCalled();
+    expect(mocks.notifyIfHidden).not.toHaveBeenCalled();
   });
 
   it("ignores a fire whose chat is not open in this window", () => {

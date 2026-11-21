@@ -8,16 +8,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (data: Record<string, unknown>) => void>(),
+  replay: false,
+  toast: vi.fn(),
+  notify: vi.fn(),
 }));
 
 vi.mock("../lib/events", () => ({
+  eventIsReplay: () => mocks.replay,
   onTopic: (topic: string, fn: (data: Record<string, unknown>) => void) => {
     mocks.handlers.set(topic, fn);
     return () => mocks.handlers.delete(topic);
   },
 }));
-vi.mock("@protolabsai/ui/overlays", () => ({ useToast: () => () => {} }));
-vi.mock("../lib/notify", () => ({ notifyIfHidden: () => {} }));
+vi.mock("@protolabsai/ui/overlays", () => ({ useToast: () => mocks.toast }));
+vi.mock("../lib/notify", () => ({ notifyIfHidden: mocks.notify }));
 
 import { chatStore } from "../chat/chat-store";
 import { liveMessageId } from "../chat/server-turn-store";
@@ -68,6 +72,28 @@ describe("ChatResumeWatch and the session-status reconciler", () => {
       status: "done",
     });
     expect(status(sessionId)).toBe("idle");
+  });
+
+  it("a resume replayed to a console that was closed lands in the transcript without alerting", async () => {
+    mocks.toast.mockClear();
+    mocks.notify.mockClear();
+    const live = seedUnmountedServerTurn("t-live");
+    await act(async () =>
+      mocks.handlers.get("chat.resumed")!({ session_id: live, task_id: "t-live", text: "Done just now.", state: "completed" }),
+    );
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+
+    mocks.replay = true; // an event from before this console opened (lib/events `eventIsReplay`)
+    const old = seedUnmountedServerTurn("t-old");
+    await act(async () =>
+      mocks.handlers.get("chat.resumed")!({ session_id: old, task_id: "t-old", text: "Finished hours ago.", state: "completed" }),
+    );
+    mocks.replay = false;
+    const messages = chatStore.getSnapshot().sessions.find((s) => s.id === old)!.messages;
+    expect(messages[messages.length - 1]).toMatchObject({ content: "Finished hours ago.", status: "done" });
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
   });
 
   it("another task's `chat.resumed` leaves a session whose own turn is still live", async () => {
