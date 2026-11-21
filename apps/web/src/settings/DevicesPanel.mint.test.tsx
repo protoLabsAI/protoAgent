@@ -1,5 +1,6 @@
 // "New access token" (#4683): Settings ▸ Devices mints a NAMED device-scope token with no
-// phone to pair, shown ONCE. The button is for full-scope callers only — a device-scope caller
+// phone to pair, shown ONCE. The button lives in the closed-by-default Advanced section at the
+// end of the page (not the header), and is for full-scope callers only — a device-scope caller
 // (whose server would 403 the mint) must not see a dead button, mirroring how DeviceList hides
 // Promote/Limit. The panel is mounted for real; only the toast, fetch and the clipboard are
 // stubbed.
@@ -111,8 +112,31 @@ function tokenCode(): Element | null {
   return host!.querySelector('[data-testid="minted-device-token"]');
 }
 
+function advanced(): HTMLElement | null {
+  return host!.querySelector<HTMLElement>('[data-testid="devices-advanced"]');
+}
+
+function advancedTrigger(): HTMLButtonElement {
+  const el = advanced()?.querySelector<HTMLButtonElement>(".pl-accordion__trigger");
+  if (!el) throw new Error("no Advanced section");
+  return el;
+}
+
+async function openAdvanced() {
+  await act(async () => advancedTrigger().click());
+}
+
 async function openMint() {
+  await openAdvanced();
   await act(async () => buttonWith("New access token")!.click());
+}
+
+/** One recorded notification tap, as lib/noticeTrace keeps it on this device. */
+function recordTap() {
+  window.localStorage.setItem(
+    "protoagent.noticeTapLog",
+    JSON.stringify([{ at: 1, who: "console", step: "opened", detail: "chat c1" }]),
+  );
 }
 
 beforeEach(() => {
@@ -140,16 +164,71 @@ afterEach(async () => {
 });
 
 describe("DevicesPanel ▸ New access token", () => {
-  it("shows the button for a full-scope caller and hides it for a device-scope one", async () => {
+  it("keeps the button out of the header: Advanced is closed by default and holds it", async () => {
     mocks.devices.mockResolvedValue(listResult([], fullCaller));
     await mount();
-    expect(buttonWith("New access token")).not.toBeNull();
+    // The header keeps only the two pairing actions.
+    const header = host!.querySelector(".pl-panel-header")!;
+    expect(header.textContent).toContain("Pair an agent");
+    expect(header.textContent).toContain("Add a device");
+    expect(header.textContent).not.toContain("New access token");
+    expect(header.textContent).toContain("Phones, tablets and other agents that can reach this agent.");
+    expect(host!.textContent).not.toContain("Each holds its own");
 
-    await act(async () => root?.unmount());
-    host?.remove();
+    // Closed: the section is one "Advanced" trigger with nothing behind it yet.
+    expect(advancedTrigger().textContent).toBe("Advanced");
+    expect(advancedTrigger().getAttribute("aria-expanded")).toBe("false");
+    expect(buttonWith("New access token")).toBeNull();
+
+    await openAdvanced();
+    expect(advancedTrigger().getAttribute("aria-expanded")).toBe("true");
+    const row = advanced()!.querySelector('[data-testid="devices-advanced-token"]')!;
+    expect(row.textContent).toContain("Access token for a script");
+    expect(row.textContent).toContain(
+      "For a tool or script that needs to reach this agent without pairing. It can use this agent but can't pair devices or change sign-in settings.",
+    );
+
+    // The button opens the existing mint form, whose copy names no storage file or header.
+    await act(async () => buttonWith("New access token")!.click());
+    expect(nameInput()).not.toBeNull();
+    expect(host!.textContent).not.toContain("storage_state");
+    expect(host!.textContent).not.toContain("Authorization");
+  });
+
+  it("puts the device list first, then the notifications card, then Advanced", async () => {
+    mocks.devices.mockResolvedValue(listResult([newRow], fullCaller));
+    await mount();
+    const list = host!.querySelector('[data-testid="device-row-d-new"]')!;
+    const push = host!.querySelector('[data-testid="push-card"]')!;
+    expect(list.compareDocumentPosition(push) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(push.compareDocumentPosition(advanced()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Advanced is the last thing on the page.
+    expect(host!.querySelector(".stage-body")!.lastElementChild).toBe(advanced());
+  });
+
+  it("leaves Advanced out for a limited caller with no key and no tap log", async () => {
     mocks.devices.mockResolvedValue(listResult([], deviceCaller));
     await mount();
+    expect(advanced()).toBeNull();
     expect(buttonWith("New access token")).toBeNull();
+    expect(host!.textContent).not.toContain("Advanced");
+  });
+
+  it("shows a limited caller Advanced for the tap log alone, with no token row", async () => {
+    recordTap();
+    mocks.devices.mockResolvedValue(listResult([], deviceCaller));
+    await mount();
+    await openAdvanced();
+    expect(advanced()!.querySelector('[data-testid="tap-log"]')).not.toBeNull();
+    expect(advanced()!.querySelector('[data-testid="devices-advanced-token"]')).toBeNull();
+    expect(buttonWith("New access token")).toBeNull();
+    // The tap log sits in Advanced, not in the notifications card.
+    expect(host!.querySelector('[data-testid="push-card"] [data-testid="tap-log"]')).toBeNull();
+
+    // Clearing the log empties the section's only row, so the section goes too.
+    await act(async () => buttonExactly("Clear")!.click());
+    await flush();
+    expect(advanced()).toBeNull();
   });
 
   it("mints a named token, shows it once with a working Copy, and refreshes the list", async () => {
@@ -171,7 +250,7 @@ describe("DevicesPanel ▸ New access token", () => {
     }));
     expect(mocks.devices).toHaveBeenCalledTimes(2);
     expect(tokenCode()?.textContent).toBe(sampleToken);
-    // The new device row is now in the list below.
+    // The new device row is now in the list.
     expect(host!.querySelector('[data-testid="device-row-d-new"]')).not.toBeNull();
 
     await act(async () => buttonWith("Copy")!.click());

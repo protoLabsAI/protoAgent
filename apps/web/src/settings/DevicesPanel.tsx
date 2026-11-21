@@ -1,9 +1,10 @@
 import { Alert } from "@protolabsai/ui/data";
 import { Input } from "@protolabsai/ui/forms";
 import { useToast } from "@protolabsai/ui/overlays";
+import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Copy, KeyRound, Network, QrCode, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { formatCountdown, hostKindLabel, newlyPaired, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api, DEVICE_SCOPE_MESSAGE } from "../lib/api";
@@ -25,6 +26,7 @@ import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
 import { NotificationKeyCard } from "./NotificationKeyCard";
 import { PushCard } from "./PushCard";
 import { SettingsSubPanel } from "./SettingsSubPanel";
+import { TapLog, useTapLog } from "./TapLog";
 import "./devices.css";
 
 import type { PairAddress, PairedDevice, PairHost, PairReach } from "../lib/api";
@@ -93,8 +95,8 @@ export function DevicesPanel() {
   // into this browser's localStorage. Every other client (the desktop app's own webview, the
   // CLI, another browser) then gets 401s with no way to know the secret. Surface it once.
   const [mintedToken, setMintedToken] = useState<string | null>(null);
-  // "New access token" (#4683): a named device-scope token minted with no phone to pair, for a
-  // tool or script. Full-scope callers only (the server 403s a device-scope one). `mintOpen`
+  // "New access token" (#4683, under Advanced): a named device-scope token minted with no phone
+  // to pair, for a tool or script. Full-scope callers only (the server 403s a device-scope one). `mintOpen`
   // shows the name field; `issuedToken` is the secret shown ONCE here and kept nowhere else —
   // dismissing it drops it from state, and it is never persisted.
   const [mintOpen, setMintOpen] = useState(false);
@@ -111,6 +113,8 @@ export function DevicesPanel() {
   // an agent code is typed on ANOTHER machine, and the operator may only find out it expired
   // when the hub says "invalid or expired".
   const [expired, setExpired] = useState<PairKind | null>(null);
+  const taps = useTapLog();
+  const mintHeadingId = useId();
   const pollRef = useRef<number | null>(null);
   const devicesRef = useRef<Device[]>(devices);
   devicesRef.current = devices;
@@ -406,6 +410,13 @@ export function DevicesPanel() {
   }
 
   const host = pairing?.hosts[hostIdx];
+  // Advanced holds the rare tools. A device-scope caller can't mint a token (the server
+  // refuses it), so — like Promote/Limit in the list — that row is hidden rather than dead;
+  // it waits for the first list answer so a limited console never sees it flash. The key card
+  // needs full access, which implies the token row, so the section shows exactly when the
+  // token row or a tap log would.
+  const canMint = !limited && !loading;
+  const showAdvanced = canMint || taps.rows.length > 0;
   const ts = reach?.tailscale;
   // Tailscale is up on this machine and has a name to serve — "HTTPS via Tailscale" is on offer.
   const tsReady = Boolean(ts?.running && ts.dns_name);
@@ -419,6 +430,7 @@ export function DevicesPanel() {
     <SettingsSubPanel
       label="devices"
       title="Devices"
+      kicker="Phones, tablets and other agents that can reach this agent."
       actions={
         pairing ? (
           <Button type="button" variant="ghost" onClick={stopPairing}>
@@ -445,37 +457,10 @@ export function DevicesPanel() {
             >
               <QrCode size={15} aria-hidden /> {starting === "device" ? "Preparing…" : "Add a device"}
             </Button>
-            {/* A device-scope caller can't mint a token (the server refuses it), so — like
-                Promote/Limit in the list — the button is hidden rather than a dead one. */}
-            {!limited && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setIssuedToken(null);
-                  setMintName("");
-                  setMintOpen(true);
-                }}
-                disabled={starting != null}
-              >
-                <KeyRound size={15} aria-hidden /> New access token
-              </Button>
-            )}
           </>
         )
       }
     >
-      <p className="setting-desc">
-        Phones, tablets and other agents&apos; hubs paired to this agent. Each holds its own
-        token, so removing one here doesn&apos;t sign out anything else.
-      </p>
-      {/* This device's own closed-console notifications (ADR 0135 D10 / W2e). The push service
-          comes from this device's own row in the list loaded above. */}
-      <PushCard
-        provider={devices.find((d) => d.id === currentDeviceId())?.push?.provider}
-        onPair={limited ? undefined : () => void startPairing("device")}
-        onChanged={() => void refresh()}
-      />
       {publicUrl ? (
         // Persistent while the console is declared public (ADR 0121 D6): the token-only posture
         // is supported, but the operator must know who can reach the sign-in.
@@ -505,86 +490,6 @@ export function DevicesPanel() {
           pairing devices, changing another device and promoting one need a full-access device,
           such as the desktop app.
         </p>
-      )}
-
-      {mintOpen && (
-        <section className="devices-notice" aria-label="New access token">
-          <p className="setting-desc">
-            Name a device-scope token for a tool or script — no phone to pair. It works only on
-            this agent, can&apos;t pair devices or change credentials, and goes in a tool&apos;s{" "}
-            <code>storage_state</code> or an <code>Authorization: Bearer</code> header.
-          </p>
-          <form
-            className="devices-rename"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void mintToken();
-            }}
-          >
-            <Input
-              autoFocus
-              aria-label="Name for the new access token"
-              placeholder="e.g. CI uploader"
-              value={mintName}
-              required
-              maxLength={MAX_DEVICE_NAME}
-              onChange={(e) => setMintName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  // Close this field only — not the whole Settings overlay.
-                  e.stopPropagation();
-                  setMintOpen(false);
-                  setMintName("");
-                }
-              }}
-            />
-            <Button type="submit" loading={minting} disabled={minting || !mintName.trim()}>
-              Create token
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setMintOpen(false);
-                setMintName("");
-              }}
-              disabled={minting}
-            >
-              Cancel
-            </Button>
-          </form>
-        </section>
-      )}
-
-      {issuedToken && (
-        <section className="devices-notice" aria-label="New access token created">
-          <p className="setting-desc">
-            Here&apos;s the new token. <strong>Save it now</strong> — it isn&apos;t shown again.
-            Put it in the tool or script that needs to reach this agent; remove the device below
-            to revoke it.
-          </p>
-          <div className="devices-token">
-            <code data-testid="minted-device-token">{issuedToken}</code>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                void copyText(issuedToken).then((ok) =>
-                  toast(
-                    ok
-                      ? { title: "Token copied", message: "Keep it somewhere safe." }
-                      : { tone: "error", title: "Couldn't copy the token", message: "Select it and copy it by hand." },
-                  ),
-                );
-              }}
-            >
-              <Copy size={14} aria-hidden /> Copy
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => setIssuedToken(null)}>
-              Dismiss
-            </Button>
-          </div>
-        </section>
       )}
 
       {pairError && <p className="setting-desc devices-error">{pairError}</p>}
@@ -885,8 +790,131 @@ export function DevicesPanel() {
 
       {/* The paired-devices list — rename, "This device", revoke (DeviceList.tsx). */}
       <DeviceList devices={devices} loading={loading} onChanged={refresh} callerLimited={limited} callerDeviceId={callerDeviceId} />
-      {/* The agent's notification signing key: full-access sign-ins only (NotificationKeyCard.tsx). */}
-      <NotificationKeyCard fullAccess={fullAccess} />
+      {/* This device's own closed-console notifications (ADR 0135 D10 / W2e). The push service
+          comes from this device's own row in the list loaded above. */}
+      <PushCard
+        provider={devices.find((d) => d.id === currentDeviceId())?.push?.provider}
+        onPair={limited ? undefined : () => void startPairing("device")}
+        onChanged={() => void refresh()}
+      />
+      {showAdvanced && (
+        // Rare admin tools, folded away so the device list comes first. Each row hides itself
+        // when it has nothing to show, and the whole section goes when none would render.
+        <Accordion className="devices-advanced" data-testid="devices-advanced">
+          <AccordionItem title="Advanced">
+            {canMint && (
+              <section className="devices-advanced-row" data-testid="devices-advanced-token" aria-labelledby={mintHeadingId}>
+                <h3 id={mintHeadingId} className="devices-push-heading">
+                  Access token for a script
+                </h3>
+                <p className="setting-desc">
+                  For a tool or script that needs to reach this agent without pairing. It can use
+                  this agent but can&apos;t pair devices or change sign-in settings.
+                </p>
+                {!mintOpen && (
+                  <div className="devices-hosts">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setIssuedToken(null);
+                        setMintName("");
+                        setMintOpen(true);
+                      }}
+                      // Not while a code is live: the claim-poll reads any new row as the
+                      // device that claimed it, and a minted token is a new row.
+                      disabled={starting != null || pairing != null}
+                    >
+                      <KeyRound size={15} aria-hidden /> New access token
+                    </Button>
+                  </div>
+                )}
+                {mintOpen && (
+                  <section className="devices-notice" aria-label="New access token">
+                    <p className="setting-desc">
+                      Name the token after the tool or script that will use it. It works only on this
+                      agent.
+                    </p>
+                    <form
+                      className="devices-rename"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void mintToken();
+                      }}
+                    >
+                      <Input
+                        autoFocus
+                        aria-label="Name for the new access token"
+                        placeholder="e.g. CI uploader"
+                        value={mintName}
+                        required
+                        maxLength={MAX_DEVICE_NAME}
+                        onChange={(e) => setMintName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") {
+                            // Close this field only — not the whole Settings overlay.
+                            e.stopPropagation();
+                            setMintOpen(false);
+                            setMintName("");
+                          }
+                        }}
+                      />
+                      <Button type="submit" loading={minting} disabled={minting || !mintName.trim()}>
+                        Create token
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => {
+                          setMintOpen(false);
+                          setMintName("");
+                        }}
+                        disabled={minting}
+                      >
+                        Cancel
+                      </Button>
+                    </form>
+                  </section>
+                )}
+                {issuedToken && (
+                  <section className="devices-notice" aria-label="New access token created">
+                    <p className="setting-desc">
+                      Here&apos;s the new token. <strong>Save it now</strong> — it isn&apos;t shown again.
+                      Put it in the tool or script that needs to reach this agent; remove it from the
+                      device list above to revoke it.
+                    </p>
+                    <div className="devices-token">
+                      <code data-testid="minted-device-token">{issuedToken}</code>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => {
+                          void copyText(issuedToken).then((ok) =>
+                            toast(
+                              ok
+                                ? { title: "Token copied", message: "Keep it somewhere safe." }
+                                : { tone: "error", title: "Couldn't copy the token", message: "Select it and copy it by hand." },
+                            ),
+                          );
+                        }}
+                      >
+                        <Copy size={14} aria-hidden /> Copy
+                      </Button>
+                      <Button type="button" variant="ghost" onClick={() => setIssuedToken(null)}>
+                        Dismiss
+                      </Button>
+                    </div>
+                  </section>
+                )}
+              </section>
+            )}
+            {/* The agent's notification signing key: full-access sign-ins only, and nothing
+                until a key exists (NotificationKeyCard.tsx). */}
+            <NotificationKeyCard fullAccess={fullAccess} />
+            <TapLog rows={taps.rows} reload={taps.reload} />
+          </AccordionItem>
+        </Accordion>
+      )}
     </SettingsSubPanel>
   );
 }
