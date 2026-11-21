@@ -136,7 +136,9 @@ def fake_gateway():
 def fleet(tmp_path_factory, fake_gateway):
     """Factory that boots isolated real servers and tears them (and any members
     they spawned) down. Returns ``boot(name=..., instance=..., ui=...)`` → ``Server``;
-    ``extra_config`` appends YAML sections to its config and ``extra_env`` adds to its environment."""
+    ``extra_config`` appends YAML sections to its config and ``extra_env`` adds to its environment.
+    ``reuse=<a stopped Server>`` boots a NEW process on that server's instance home, data
+    root and port (a relaunch, as after an app update); its config file is left as it is."""
     servers: list[Server] = []
 
     def boot(
@@ -148,19 +150,23 @@ def fleet(tmp_path_factory, fake_gateway):
         auth_token: str = "",
         extra_config: str = "",
         extra_env: dict[str, str] | None = None,
+        reuse: Server | None = None,
     ) -> Server:
-        data_root = tmp_path_factory.mktemp(f"{name}-data")
-        home = tmp_path_factory.mktemp(f"{name}-home")
-        (home / "config").mkdir(parents=True, exist_ok=True)
-        (home / "config" / "langgraph-config.yaml").write_text(
-            "model:\n"
-            "  name: protolabs/reasoning\n"
-            f"  api_base: http://127.0.0.1:{fake_gateway}/v1\n"
-            "middleware:\n  knowledge: false\n  scheduler: false\n"
-            # Further top-level YAML sections for this server's config (e.g. quiet_hours).
-            + extra_config
-        )
-        port = free_port()
+        if reuse is not None:
+            data_root, home, port = reuse.data_root, reuse.home, reuse.port
+        else:
+            data_root = tmp_path_factory.mktemp(f"{name}-data")
+            home = tmp_path_factory.mktemp(f"{name}-home")
+            (home / "config").mkdir(parents=True, exist_ok=True)
+            (home / "config" / "langgraph-config.yaml").write_text(
+                "model:\n"
+                "  name: protolabs/reasoning\n"
+                f"  api_base: http://127.0.0.1:{fake_gateway}/v1\n"
+                "middleware:\n  knowledge: false\n  scheduler: false\n"
+                # Further top-level YAML sections for this server's config (e.g. quiet_hours).
+                + extra_config
+            )
+            port = free_port()
         env = {
             **os.environ,
             "HOME": str(data_root),  # isolate data_home() → <data_root>/.protoagent (box tier: host/commons/heartbeats)
