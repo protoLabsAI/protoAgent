@@ -1,4 +1,5 @@
 import type { DecisionRow } from "../lib/api/decisions";
+import { isInstanceWide, type DirectiveRow } from "../lib/api/chat";
 import type { WorkItems } from "./useWorkItems";
 import { decisionMeta, fromDecision, groupFor, WORK_GROUP_IDS, WORK_GROUP_LABELS, type GroupableWorkItem, type WorkGroupId, type WorkJobRef } from "./tone";
 
@@ -59,10 +60,20 @@ export function withSharedDecisions(sources: WorkItems, shared: {
   }])) as WorkItems;
 }
 
+/** An instance-wide standing order (ADR 0135 D13): in force for every chat, whichever chat
+ *  it was recorded in. Decided by the wire field, the `dir-i` prefix only as a fallback. */
+export function isInstanceWideItem(item: GroupableWorkItem): boolean {
+  return item.kind === "directive" && isInstanceWide(item.raw as DirectiveRow | null);
+}
+
+/** The ONE scope rule Work and the rail share. An instance-wide order counts in EVERY chat
+ *  (work-view-additions §3.2): it passes "This chat" filters whatever its `sessionId`, which
+ *  only records where it was given. */
 export function inWorkScope(item: GroupableWorkItem, { thisChatOnly = false, sessionId }: {
   thisChatOnly?: boolean; sessionId?: string;
 }): boolean {
-  return groupFor(item) === "needs-you" || !thisChatOnly || (!!sessionId && item.sessionId === sessionId);
+  return groupFor(item) === "needs-you" || !thisChatOnly || isInstanceWideItem(item)
+    || (!!sessionId && item.sessionId === sessionId);
 }
 
 /** Shared row/count projection for Work and the rail. Supply ALL chats' rows
@@ -79,12 +90,21 @@ export function workGroups(input: readonly GroupableWorkItem[] | WorkItems, {
   for (const item of items) {
     const id = groupFor(item);
     if (!id) continue;
-    if (item.kind === "directive" && item.tiedJob && ended.has(jobKey(item.tiedJob))) continue;
+    // An instance-wide order is never tied to a job (§3.2), so an ended job can't hide it.
+    if (item.kind === "directive" && item.tiedJob && !isInstanceWideItem(item) && ended.has(jobKey(item.tiedJob))) continue;
     if (!inWorkScope(item, { thisChatOnly, sessionId })) continue;
     const group = groups.find((candidate) => candidate.id === id)!;
     // A stopped goal needs attention without painting its failure as an error.
     group.items.push(item.kind === "goal" && id === "needs-you" ? { ...item, status: "paused" } : item);
   }
+  // Instance-wide orders sort FIRST in Your instructions, then the chat's own; each keeps
+  // its source order, oldest first (§3.2). A stable partition, applied here once so the
+  // Overview, the picked group and the rail list them identically.
+  const instructions = groups.find((candidate) => candidate.id === "instructions")!;
+  instructions.items = [
+    ...instructions.items.filter(isInstanceWideItem),
+    ...instructions.items.filter((item) => !isInstanceWideItem(item)),
+  ];
   for (const group of groups) group.count = group.items.length;
   return groups;
 }

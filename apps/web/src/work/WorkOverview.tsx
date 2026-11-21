@@ -93,7 +93,7 @@ function withStatusWord(word: string, meta: string): string {
  *  an accent (decision info / delivery warning); a stopped goal stays neutral, never error.
  *  Instruction rows have their own shared presentation ({@link instructionRowPresentation}). */
 function rowPresentation(item: GroupableWorkItem, group: Exclude<WorkGroupId, "instructions">): {
-  tag: string; tone: Status; icon: ReactNode; meta?: string; title?: string;
+  tag: string; tone: Status; icon: ReactNode; meta?: string; title?: string; scope?: string;
 } {
   switch (group) {
     case "needs-you":
@@ -175,6 +175,7 @@ export function WorkGroupRows({ group, sources, onOpen, sessionId }: {
               meta={row.meta ?? item.meta}
               tag={row.tag}
               tagTone={row.tone}
+              scope={row.scope}
               icon={row.icon}
               focusKey={itemKey(item)}
               onOpen={() => onOpen(item)}

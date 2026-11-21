@@ -17,6 +17,7 @@ import { queryClient } from "../lib/queryClient";
 import { queryKeys } from "../lib/queries";
 import { registerGoalKickoff } from "../chat/chat-store";
 import { directiveStore } from "../chat/useDirectives";
+import { instanceDirectiveStore } from "./instanceDirectives";
 import { parseDuration } from "../chat/watchForm";
 import { buildOnce, buildRepeat, localZone, parseSchedule } from "../schedule/schedule-builder";
 import { scheduleWhen } from "./rowMeta";
@@ -363,7 +364,8 @@ export type WorkEditTarget =
    *  verbatim instead of a re-derived rebuild (see {@link saveEdit}). */
   | { kind: "time"; id: string; schedule: string; timezone: string | null }
   | { kind: "condition"; id: string }
-  | { kind: "instruction"; id: string; sessionId: string };
+  /** `instanceWide` addresses the instance ledger (ADR 0135 D13) instead of `sessionId`'s. */
+  | { kind: "instruction"; id: string; sessionId: string; instanceWide?: boolean };
 
 /**
  * Save an inspector Edit in place (§10.7). A condition PATCHes the ORIGINAL watch id with
@@ -402,6 +404,11 @@ export async function saveEdit(draft: WorkDraft, base: WorkDraft, target: WorkEd
       body.deadline = expires ? Math.round(Date.now() / 1000) + expires : null;
     }
     if (Object.keys(body).length) await api.editWatch(target.id, body);
+    return;
+  }
+  if (draft.kind === "instruction" && target.kind === "instruction" && target.instanceWide) {
+    await api.updateInstanceDirective(target.id, { scope: draft.scope, conditions: draft.lasts });
+    void instanceDirectiveStore.refresh();
     return;
   }
   if (draft.kind === "instruction" && target.kind === "instruction") {

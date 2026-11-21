@@ -25,10 +25,14 @@ export type WorkRowProps = {
   /** Overrides the dot + badge tone when the kind isn't carried by the status (e.g. an
    *  in-force instruction reads neutral/"waiting", but the group paints it info). */
   tone?: Status;
+  /** A second, always-neutral badge BEFORE the kind badge — the row's reach, e.g.
+   *  "Instance-wide" on a standing order that applies to every chat (a word, not a colour). */
+  scope?: string;
 };
 
-export function WorkRow({ status, title, meta, onOpen, focusKey, tag, tagTone, icon, badge, tone }: WorkRowProps) {
+export function WorkRow({ status, title, meta, onOpen, focusKey, tag, tagTone, icon, badge, tone, scope }: WorkRowProps) {
   const dotTone = tone ?? statusTone(status);
+  const kindBadge = <Badge status={tag ? tagTone ?? "neutral" : dotTone}>{tag ?? badge ?? statusWord(status)}</Badge>;
   return (
     <button type="button" className="work-row" onClick={onOpen} data-surface-focus={focusKey}>
       {icon ? <span className="work-row__icon" aria-hidden="true">{icon}</span>
@@ -37,7 +41,10 @@ export function WorkRow({ status, title, meta, onOpen, focusKey, tag, tagTone, i
         <span className="work-row__title">{title}</span>
         {meta?.trim() && <span className="work-row__meta">{meta}</span>}
       </span>
-      <Badge status={tag ? tagTone ?? "neutral" : dotTone}>{tag ?? badge ?? statusWord(status)}</Badge>
+      {scope ? <span className="work-row__badges">
+        <Badge status="neutral">{scope}</Badge>
+        {kindBadge}
+      </span> : kindBadge}
     </button>
   );
 }

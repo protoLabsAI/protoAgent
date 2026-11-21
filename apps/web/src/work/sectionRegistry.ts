@@ -9,6 +9,11 @@ export type WorkSectionContext = {
   state: SurfaceState;
   onOpen: (item: WorkItem) => void;
   onBack: () => void;
+  /** Close the detail of an item that just LEFT its group (an instance-wide order withdrawn
+   *  everywhere) and move focus to the first of `rows` (item keys) still listed, else to
+   *  `group`'s heading — never back to the departed row, never to `body`. Optional: a host
+   *  without it falls back to `onBack`. */
+  onCloseTo?: (target: { rows: readonly string[]; group: WorkGroupId }) => void;
   /** The focused chat, for the per-session sections (the directive ledger). */
   sessionId?: string;
   decisionActions?: {

@@ -24,6 +24,15 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* Two badges (reach, then kind): they stack instead of squeezing the title on a narrow row. */
+.work-row__badges {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--pl-space-1);
+  max-width: 50%;
+}
 .work-row__title {
   display: -webkit-box;
   -webkit-box-orient: vertical;

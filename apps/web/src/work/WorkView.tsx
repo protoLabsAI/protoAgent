@@ -11,7 +11,7 @@ import { isConnected, onConnectionChange } from "../lib/events";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 import { useDecisions } from "../decisions/useDecisions";
-import { decisionMeta, fromDecision, relTime, type GroupableWorkItem, type WorkGroupId } from "./tone";
+import { decisionMeta, fromDecision, relTime, WORK_GROUP_LABELS, type GroupableWorkItem, type WorkGroupId } from "./tone";
 import { summaryTitle } from "./rowMeta";
 import type { InboxItem } from "../lib/types";
 import { useUI } from "../state/uiStore";
@@ -167,6 +167,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const detailRef = useRef<HTMLDivElement>(null);
   const listSize = useRef<{ width: number; height: number } | null>(null);
   const returnTo = useRef<string | undefined>(undefined);
+  const closeTo = useRef<{ rows: readonly string[]; group: WorkGroupId } | undefined>(undefined);
   const previousNeeds = useRef<Set<string> | null>(null);
   const [announcement, setAnnouncement] = useState("");
   // The §10.5 save announcement — its OWN polite region, set once per successful save, so
@@ -231,6 +232,19 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         heading.tabIndex = -1;
         heading.focus({ preventScroll: true });
       }
+    } else if (closeTo.current) {
+      // The closed item left its group (work-view-additions §4): the next row, else the
+      // previous one, else the group's heading — and if that heading isn't drawn (the
+      // Overview hides an empty group), the first row or control left in the list.
+      const { rows: keys, group: groupId } = closeTo.current;
+      closeTo.current = undefined;
+      returnTo.current = undefined;
+      const nodes = Array.from(rows ?? []);
+      const row = keys.map((key) => nodes.find((node) => node.dataset.surfaceFocus === key)).find(Boolean);
+      const heading = Array.from(listRef.current?.querySelectorAll<HTMLElement>("h2.work-heading") ?? [])
+        .find((node) => node.getAttribute("aria-label")?.startsWith(`${WORK_GROUP_LABELS[groupId]},`));
+      if (!row && heading) heading.tabIndex = -1;
+      (row ?? heading ?? nodes[0] ?? listRef.current?.querySelector<HTMLElement>("button"))?.focus({ preventScroll: true });
     } else if (returnTo.current) {
       // The opened item can finish while its detail shows (an answered decision, a completed
       // job) and leave every group — fall back to the first row so focus never drops to body.
@@ -241,6 +255,10 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   }, [state.itemId, selectedKey, selected?.id, hostFrame]);
   const onBack = () => {
     returnTo.current = selectedKey;
+    update({ itemId: undefined });
+  };
+  const onCloseTo = (target: { rows: readonly string[]; group: WorkGroupId }) => {
+    closeTo.current = target;
     update({ itemId: undefined });
   };
   useEffect(() => {
@@ -269,7 +287,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
     });
   };
-  const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, sessionId,
+  const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, onCloseTo, sessionId,
     decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
   // The activity kind maps to no section (S4c removed it): an activity row can never be
   // selected (`useWorkItems` keeps that source rows-empty for the delivery group), and a

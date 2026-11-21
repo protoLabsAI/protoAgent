@@ -66,6 +66,7 @@ beforeEach(() => {
   vi.spyOn(api, "inbox").mockResolvedValue({ items: [] });
   vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [] });
   vi.spyOn(api, "listDirectives").mockResolvedValue({ directives: [], in_force: 0 });
+  vi.spyOn(api, "listInstanceDirectives").mockResolvedValue({ directives: [], in_force: 0 });
 });
 afterEach(() => {
   roots.forEach((r) => act(() => r.unmount()));

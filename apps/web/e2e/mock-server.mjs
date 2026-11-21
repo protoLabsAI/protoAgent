@@ -2449,6 +2449,11 @@ const server = createServer(async (req, res) => {
       if (/^\/api\/chat\/sessions\/[^/]+\/directives$/.test(pathname)) {
         return sendJson(res, { directives: [], in_force: 0 });
       }
+      // The instance-wide standing orders (ADR 0135 D13) load beside every chat's ledger.
+      // None by default, never a failed list; the instance-wide spec routes its own rows.
+      if (pathname === "/api/directives") {
+        return sendJson(res, { directives: [], in_force: 0 });
+      }
       // Per-turn feedback (useSessionFeedback): off, as on a server without tracing. Without this
       // route the read 404'd and a "Could not load feedback." alert could appear above the
       // messages mid-test, shifting them 24px (the hitl-float flake).

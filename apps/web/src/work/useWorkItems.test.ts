@@ -31,6 +31,7 @@ vi.mock("../lib/events", () => ({
 }));
 
 import { directiveStore } from "../chat/useDirectives";
+import { instanceDirectiveStore } from "./instanceDirectives";
 import { workGroups } from "./workGroups";
 import { api } from "../lib/api";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
@@ -72,6 +73,7 @@ type Spies = {
   inbox: ReturnType<typeof vi.spyOn>;
   sessions: ReturnType<typeof vi.spyOn>;
   directives: ReturnType<typeof vi.spyOn>;
+  instance: ReturnType<typeof vi.spyOn>;
 };
 let spies: Spies;
 let roots: Root[] = [];
@@ -88,6 +90,7 @@ function stubEverything(): Spies {
     background: vi.spyOn(api, "background").mockResolvedValue({ enabled: true, jobs: [{ id: "b1", status: "running", subagent_type: "coder", description: "build", origin_session: "s1" }] }),
     activity: vi.spyOn(api, "activity").mockResolvedValue(history("s1", [actEntry(1, "completed")])),
     directives: vi.spyOn(api, "listDirectives").mockResolvedValue({ directives: [dir("x1", "in_force", "s1")], in_force: 1 }),
+    instance: vi.spyOn(api, "listInstanceDirectives").mockResolvedValue({ directives: [], in_force: 0 }),
   };
 }
 
@@ -119,6 +122,7 @@ async function flush() {
 beforeEach(() => {
   mocks.listeners.clear();
   mocks.conn.clear();
+  instanceDirectiveStore.resetForTest();
   spies = stubEverything();
 });
 afterEach(() => {
@@ -611,5 +615,87 @@ describe("live group adapters", () => {
     r.current.directives.retry();
     await flush();
     expect(r.current.directives.items.map((i) => i.id)).toEqual(["focused"]);
+  });
+});
+
+describe("useWorkItems — instance-wide standing orders (work-view-additions §3.1)", () => {
+  const wide = (id: string, status: string, session: string, patch: Partial<DirectiveRow> = {}): DirectiveRow =>
+    ({ ...dir(id, status, session), instance_wide: true, author: "operator", links: [], ...patch });
+
+  it("merges every instance-wide row (closed ones too) into the source and counts it in every chat", async () => {
+    spies.sessions.mockResolvedValue({ sessions: [{ session_id: "iw-a" }, { session_id: "iw-b" }] });
+    spies.directives.mockImplementation(async (id: string) => ({ directives: [dir(`own-${id}`, "in_force", id)], in_force: 1 }));
+    spies.instance.mockResolvedValue({
+      directives: [wide("dir-i1", "in_force", "iw-b"), wide("dir-i2", "revoked", "iw-b")], in_force: 1,
+    });
+    const r = mount({ sessionId: "iw-a", thisChatOnly: false });
+    await flush();
+    // The list is read with NO status filter (the client takes no argument at all).
+    expect(spies.instance).toHaveBeenCalledWith();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["dir-i1", "dir-i2", "own-iw-a", "own-iw-b"]);
+    expect(r.current.directives.items[1].raw).toMatchObject({ status: "revoked", instance_wide: true });
+    // Recorded in iw-b, yet in force under iw-a's AND iw-b's "This chat" scope, sorted first.
+    for (const chat of ["iw-a", "iw-b"]) {
+      const group = workGroups(r.current, { thisChatOnly: true, sessionId: chat })[3];
+      expect(group.items.map((i) => i.id)).toEqual(["dir-i1", `own-${chat}`]);
+      expect(group.count).toBe(2);
+    }
+  });
+
+  it("keeps instance-wide rows under the hook's own thisChatOnly filter", async () => {
+    spies.instance.mockResolvedValue({ directives: [wide("dir-i1", "in_force", "elsewhere")], in_force: 1 });
+    const r = mount({ sessionId: "s1", thisChatOnly: true });
+    await flush();
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["dir-i1", "x1"]);
+  });
+
+  it("re-reads only the instance list on directive.changed with instance_wide: true", async () => {
+    spies.instance.mockResolvedValue({ directives: [wide("dir-i1", "in_force", "s1")], in_force: 1 });
+    const r = mount({ sessionId: "s1", thisChatOnly: false });
+    await flush();
+    expect(spies.instance).toHaveBeenCalledTimes(1);
+    expect(spies.directives).toHaveBeenCalledTimes(1);
+
+    spies.instance.mockResolvedValue({ directives: [wide("dir-i1", "revoked", "s1")], in_force: 0 });
+    emit("directive.changed", { id: "dir-i1", session_id: "s1", instance_wide: true });
+    await flush();
+    expect(spies.instance).toHaveBeenCalledTimes(2);
+    expect(spies.directives).toHaveBeenCalledTimes(1);
+    expect(spies.sessions).toHaveBeenCalledTimes(1);
+    // The closed row stays in the source (an open detail keeps it) but leaves the group.
+    expect(r.current.directives.items.find((i) => i.id === "dir-i1")?.raw).toMatchObject({ status: "revoked" });
+    expect(workGroups(r.current, { thisChatOnly: true, sessionId: "s1" })[3].items.map((i) => i.id)).toEqual(["x1"]);
+
+    // A chat directive's event still refetches the chat ledgers, as before.
+    emit("directive.changed", { id: "x1", session_id: "s1" });
+    await flush();
+    expect(spies.directives).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the source stale when the instance list fails after a load, and recovers on retry", async () => {
+    spies.instance.mockResolvedValue({ directives: [wide("dir-i1", "in_force", "s1")], in_force: 1 });
+    const r = mount({ sessionId: "s1", thisChatOnly: false });
+    await flush();
+    spies.instance.mockRejectedValue(new Error("offline"));
+    emit("directive.changed", { id: "dir-i1", session_id: "s1", instance_wide: true });
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.error).toBeInstanceOf(Error);
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["dir-i1", "x1"]);
+
+    spies.instance.mockResolvedValue({ directives: [], in_force: 0 });
+    r.current.directives.retry();
+    await flush();
+    expect(r.current.directives.status).toBe("ready");
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["x1"]);
+  });
+
+  it("a first-load failure of the instance list reads stale beside loaded chat ledgers, never a hidden gap", async () => {
+    spies.instance.mockRejectedValue(new Error("offline"));
+    const r = mount({ sessionId: "s1", thisChatOnly: false });
+    await flush();
+    expect(r.current.directives.status).toBe("stale");
+    expect(r.current.directives.items.map((i) => i.id)).toEqual(["x1"]);
   });
 });
