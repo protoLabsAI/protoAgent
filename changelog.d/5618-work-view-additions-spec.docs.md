@@ -1,0 +1,1 @@
+- **Design spec for the Work view additions: unattended spend today, per-job run history, instance-wide standing orders.** Approved build spec for #5618, now in docs/design/work-view-additions.md. Refs #5532.
