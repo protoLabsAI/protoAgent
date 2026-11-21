@@ -1,1 +1,0 @@
-- **Active chat presence.** The console now tells the hub when you are actively at a chat (window in front, that chat selected, mouse or key input in the last minute), refs #5669.

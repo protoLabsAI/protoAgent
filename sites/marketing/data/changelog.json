@@ -1,5 +1,41 @@
 [
   {
+    "version": "v0.259.0",
+    "date": "2026-11-21",
+    "changes": [
+      "Scheduler run history can be paged with a cursor (#5687).",
+      "Run history entries carry start, end, duration and whether the run reported (#5682).",
+      "Spend-cap status reports the daily notice limits (#5691).",
+      "Instance-wide standing orders show in Work → Your instructions, in every chat (#5685).",
+      "Work shows a scheduled job's health and its recent runs (#5688).",
+      "Work shows \"Unattended spend today\" (#5695).",
+      "Decisions record whether an answer was picked or typed (#5672).",
+      "Active chat presence (#5706).",
+      "The hub can now record whether you are actively at a chat in a console (#5698).",
+      "Decision push grace regression coverage (#5708).",
+      "Work: one \"Withdrawn everywhere.\" announcement after withdrawing an instance-wide standing order (#5699).",
+      "Answered decisions now record the real answer kind (#5674).",
+      "Decision cards are compact and sit in a card (#5673).",
+      "Decision cards say when you answered by typing (#5680).",
+      "A decision raised while you are at its chat waits about 75 seconds before it pushes to your phone (#5707).",
+      "Withdrew the unreleased \"composer answers the open decision\" change (#5690).",
+      "Withdrew the rest of the unreleased \"composer answers the open decision\" change (#5693).",
+      "The chat status rail is quieter: a still \"Doing now\" icon, and no repeats of the Work pane (#5694).",
+      "Settings ▸ Devices shows your devices first (#5696).",
+      "Settings ▸ Devices hides the notification key card until a key exists (#5684).",
+      "Settings ▸ Devices shows the notifications card only where you can act on it (#5686).",
+      "Settings ▸ Devices shows the \"Phone not on Tailscale?\" hint only while you pair a device (#5689).",
+      "Settings ▸ Fleet reads in plain language (#5697).",
+      "Settings ▸ Identity uses plain words for the agent's name and persona (#5700).",
+      "MCP settings explain outside apps and connection choices in plain language (#5701).",
+      "Clearer Skills settings (#5704).",
+      "Theme settings show when a look is not saved to the agent (#5702).",
+      "Settings ▸ Tools reads in plain words (#5703).",
+      "A self-improvement review is no longer refused when the finished goal's text names a tool (#5683).",
+      "Design spec for the Work view additions: unattended spend today, per-job run history, instance-wide standing orders (#5679)."
+    ]
+  },
+  {
     "version": "v0.258.1",
     "date": "2026-11-21",
     "changes": [

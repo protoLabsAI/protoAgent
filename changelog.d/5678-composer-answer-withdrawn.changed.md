@@ -1,1 +1,0 @@
-- **Withdrew the unreleased "composer answers the open decision" change.** A message typed in a chat with an open decision is no longer taken as the decision's answer; it is held as before, and "Reply in chat instead" on the card is again the way to answer in your own words. Refs #5678.
