@@ -354,6 +354,55 @@ def build_uvicorn_server(config: "uvicorn.Config", ready_line: str | None = None
     return _TreeReapingServer(config)
 
 
+_PRESENCE_ID_MAX = 200
+
+
+def _parse_presence_report(body: Any) -> tuple[str, str, bool, float] | None:
+    """Validate a ``POST /api/chat/presence`` body; None when it is malformed."""
+    import math
+
+    if not isinstance(body, dict):
+        return None
+    console_id, session = body.get("console_id"), body.get("session")
+    for value in (console_id, session):
+        if not isinstance(value, str) or not value or len(value) > _PRESENCE_ID_MAX:
+            return None
+    present, age = body.get("present"), body.get("input_age_s")
+    if not isinstance(present, bool):
+        return None
+    if isinstance(age, bool) or not isinstance(age, (int, float)):
+        return None
+    try:
+        age = float(age)
+    except OverflowError:
+        return None
+    if not math.isfinite(age) or age < 0:
+        return None
+    return console_id, session, present, age
+
+
+def _register_chat_presence_route(fastapi_app: Any) -> None:
+    """Mount ``POST /api/chat/presence`` (#5669): a console reports whether the operator is
+    actively at a chat. Under ``/api/`` so the bearer middleware gates it like every
+    operator route. 400 on a malformed body, 204 once stored."""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse, Response
+
+    from graph import operator_presence
+
+    @fastapi_app.post("/api/chat/presence", include_in_schema=False)
+    async def _chat_presence(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        report = _parse_presence_report(body)
+        if report is None:
+            return JSONResponse({"error": "invalid presence report"}, status_code=400)
+        operator_presence.record(*report)
+        return Response(status_code=204)
+
+
 # Chat backend (ADR 0023 phase 2) — the turn loop, tool/interrupt shaping, and
 # slash-command parsing/execution live in server/chat.py. Re-exported here so
 # server.<symbol> keeps resolving for the OpenAI-compat + A2A wiring in _main and
@@ -1546,6 +1595,11 @@ def _main():
             attendance_stream(session, is_disconnected=request.is_disconnected),
             media_type="text/event-stream",
         )
+
+    # Console presence report (#5669): which chat a console is focused on and how recently
+    # the operator typed or clicked there. Stored in memory; see graph/operator_presence.py.
+    # The attend stream above is not presence evidence and is left as it is.
+    _register_chat_presence_route(fastapi_app)
 
     # Core media output channel (#1929): ONE route serves every artifact a plugin
     # tool saved via registry.save_media() — signed-URL / opt-in-public access is
