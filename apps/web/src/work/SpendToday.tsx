@@ -12,6 +12,10 @@ import "./spend-today.css";
  * (docs/design/work-view-additions.md §1, accessibility §4). It reads
  * `GET /api/telemetry/spend-cap` on open, every 60 s while open and on `decision.*` events.
  *
+ * The block shows only while the spend cap is on. With the cap off (`enabled: false`), and
+ * before the first reading says which it is, the component stays mounted and renders nothing,
+ * so a later reading can still show or hide it.
+ *
  * A spend-cap pause is ONE agent-wide state, shown here with its decision to answer (§1.5):
  * no job row changes because of it. Resume answers that decision with option `resume`
  * through the caller's normal decision answer path.
@@ -63,7 +67,8 @@ export function noticeLimit(value: number | null | undefined): number | null {
 
 export type SpendState = "cap-off" | "resumed" | "paused" | "running";
 
-/** Read in the spec's order: `enabled` → `approved_today` → `paused` → running (§1.4). */
+/** Read in the spec's order: `enabled` → `approved_today` → `paused` → running (§1.4).
+ *  "cap-off" is the hide signal: the block is not shown at all while the cap is off. */
 export function spendState(reading: SpendCapStatus): SpendState {
   if (!reading.enabled) return "cap-off";
   if (reading.approved_today) return "resumed";
@@ -71,12 +76,13 @@ export function spendState(reading: SpendCapStatus): SpendState {
   return "running";
 }
 
-const STATE_WORD: Record<SpendState, string> = {
-  "cap-off": "Cap off", resumed: "Resumed for today", paused: "Paused", running: "Running",
+type ShownState = Exclude<SpendState, "cap-off">;
+
+const STATE_WORD: Record<ShownState, string> = {
+  resumed: "Resumed for today", paused: "Paused", running: "Running",
 };
 
-const STATE_ANNOUNCEMENT: Record<SpendState, string> = {
-  "cap-off": "The spend cap is off.",
+const STATE_ANNOUNCEMENT: Record<ShownState, string> = {
   resumed: "Unattended work resumed for today.",
   paused: "Unattended work is paused.",
   running: "Unattended work is running.",
@@ -159,11 +165,10 @@ type Load = { reading: SpendCapStatus | null; readAt: number | null; failed: boo
 
 const NO_DECISION_YET = "A decision to resume appears in Needs you the next time unattended work tries to start.";
 
-export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now = Date.now }: {
+export function SpendToday({ answerDecision, onOpenDecision, now = Date.now }: {
   /** The decision's normal answer path (the shared decisions store's `answer`). */
   answerDecision: (id: string, optionId: string) => Promise<AnswerResult>;
   onOpenDecision: (id: string) => void;
-  onOpenSettings: () => void;
   now?: () => number;
 }) {
   const headingId = useId();
@@ -181,7 +186,7 @@ export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now
   // region stays silent for that one transition (§4).
   const ownResume = useRef(false);
   const focusHeading = useRef(false);
-  const previous = useRef<SpendState | null>(null);
+  const previous = useRef<ShownState | null>(null);
 
   const refresh = useCallback(async () => {
     const mine = ++seq.current;
@@ -210,8 +215,19 @@ export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now
   }, [refresh]);
 
   const { reading, readAt, failed } = load;
-  const state = reading ? spendState(reading) : null;
+  const read = reading ? spendState(reading) : null;
+  // Cap off: nothing is shown, so there is no state word, live region or Resume.
+  const state: ShownState | null = read === "cap-off" ? null : read;
+  const hidden = read === "cap-off" || (!reading && !failed);
   useEffect(() => {
+    if (read === "cap-off") {
+      // The block (and its live region) is gone. When the cap comes back on, the block
+      // appearing is not a state change to announce.
+      previous.current = null;
+      ownResume.current = false;
+      setAnnouncement("");
+      return;
+    }
     if (!state) return;
     if (previous.current && previous.current !== state) {
       if (ownResume.current && state === "resumed") setAnnouncement("");
@@ -219,7 +235,7 @@ export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now
     }
     ownResume.current = false;
     previous.current = state;
-  }, [state]);
+  }, [read, state]);
 
   const decisionId = reading?.decision_id ?? null;
   const canResume = state === "paused" && !!decisionId;
@@ -265,7 +281,11 @@ export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now
   const warn = (value: number | null, hard: number, notice: number | null) =>
     state === "paused" ? reached(value, hard) : state === "running" && reached(value, notice);
 
-  return <section className="spend-today" aria-labelledby={headingId} data-state={state ?? (failed ? "error" : "loading")}>
+  // Cap off, or no reading yet to say the cap is on: no block at all (§1.4). A failed first
+  // load still shows its Alert, because it can't tell whether the cap is on.
+  if (hidden) return null;
+
+  return <section className="spend-today" aria-labelledby={headingId} data-state={state ?? "error"}>
     <header className="spend-today__header">
       <h2 className="spend-today__title" id={headingId} ref={headingRef} tabIndex={-1}>Unattended spend today</h2>
       {state && <Badge status="neutral">{STATE_WORD[state]}</Badge>}
@@ -275,16 +295,10 @@ export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now
     {!reading && failed && <Alert status="warning" action={retry}>
       Couldn&apos;t load today&apos;s spend. Unattended work still follows the cap. Only this view failed to load.
     </Alert>}
-    {!reading && !failed && <p className="spend-today__muted">Loading today&apos;s spend…</p>}
 
     {reading && failed && <Callout tone="warning">
       Showing the {formatReadingTime(readAt ?? now())} reading. Couldn&apos;t refresh. {retry}
     </Callout>}
-
-    {reading && state === "cap-off" && <>
-      <p className="spend-today__text">The spend cap is off. Unattended work has no daily limit.</p>
-      <p className="spend-today__text">{hasMeter ? formatSpent(reading.cost_usd, reading.total_tokens) : "Spent so far today: unknown."}</p>
-    </>}
 
     {reading && state === "resumed" && (hasMeter
       ? <p className="spend-today__text">You resumed unattended work for today. It runs with no daily limit until 00:00 UTC, then the limits apply again.</p>
@@ -304,7 +318,7 @@ export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now
 
     {pastNotice && <p className="spend-today__text">{pastNotice}</p>}
 
-    {reading && state !== "cap-off" && hasMeter && <div className="spend-today__meters">
+    {reading && hasMeter && <div className="spend-today__meters">
       <SpendMeter kind="cost" label="Cost" value={reading.cost_usd} limit={reading.daily_cost_hard_limit}
         notice={costNotice} warning={warn(reading.cost_usd, reading.daily_cost_hard_limit, costNotice)} />
       <SpendMeter kind="tokens" label="Tokens" value={reading.total_tokens} limit={reading.daily_token_hard_limit}
@@ -319,9 +333,6 @@ export function SpendToday({ answerDecision, onOpenDecision, onOpenSettings, now
     {canResume && resumeError && <p className="spend-today__text" role="alert">
       Couldn&apos;t send your answer. Nothing changed, and unattended work is still paused.
     </p>}
-    {state === "cap-off" && <div className="spend-today__actions">
-      <Button size="sm" variant="ghost" onClick={onOpenSettings}>Open Settings › Spend cap</Button>
-    </div>}
 
     {reading && <p className="spend-today__muted">
       Counts turns started by the scheduler, watches, the inbox, webhooks and background jobs. Your own chat turns don&apos;t count.
