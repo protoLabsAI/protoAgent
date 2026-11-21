@@ -1,1 +1,0 @@
-- **Clearer Skills settings.** Explain skills as step-by-step guides, label shared skills plainly, and add buttons to create a first skill or turn skills on, with restart guidance when needed.

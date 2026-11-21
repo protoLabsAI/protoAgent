@@ -15,6 +15,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.259.0] - 2026-11-21
+
+### Added
+- **Scheduler run history can be paged with a cursor (#5687).** `GET /api/scheduler/jobs/{id}/runs`
+  now returns `next_cursor` beside `runs`: an opaque string when the page came back full,
+  `null` otherwise. Send it back as `?before=` to get the next older runs, so a client can
+  read past the 200-run limit. An unreadable cursor is a 400. The console still uses
+  `limit` for "Show older runs". Refs #5543.
+
+- **Run history entries carry start, end, duration and whether the run reported (#5682).** Each run from `GET /api/scheduler/jobs/{id}/runs` now also returns `started_at` (when the fire was sent), `ended_at` (when it settled), `duration_s`, and `reported`: `true` when a completed run posted its result card, `false` when it completed with nothing to report (an empty answer, a `NO_UPDATE` reply or a repeat of its last card), `null` when unknown. Existing scheduler databases upgrade in place and their earlier runs read `null` for all four. Refs #5543.
+
+- **Spend-cap status reports the daily notice limits (#5691).** `GET /api/telemetry/spend-cap` now
+  also returns `daily_cost_soft_limit` and `daily_token_soft_limit`, so the console can show
+  where the notice limit sits and when unattended spend has passed it. A value of 0 means no
+  notice limit is set. The existing fields and the pause behaviour are unchanged. Refs #5540.
+
+- **Instance-wide standing orders show in Work → Your instructions, in every chat (#5685).** An order that applies to every chat and every unattended turn is listed first, tagged "Instance-wide", and counts in each chat's instructions count and rail chip. Its detail says where it applies, where and when you said it (with "(your time)" in the text), lets you edit it, and withdraws it everywhere with an optional reason. Cancelling a withdraw now returns keyboard focus to Withdraw…, and after a withdraw focus moves to the next instruction instead of being lost. Long instructions no longer make the Work list scroll sideways on a phone. Refs #5542.
+
+- **Work shows a scheduled job's health and its recent runs (#5688).** A job in Coming up whose last runs failed now shows a warning dot and "· failed the last N runs" in its row, and its detail gains a Health field ("Failed the last 3 runs. Last worked …") with the last error. Below the actions, a Recent runs list reads the job's run history newest first: each run says whether it ran, failed, is still running, was skipped or canceled, how long it took and whether it stayed silent, with Show older runs for a longer history. Every time in the detail uses the job's own timezone (UTC when it has none) and names it. Refs #5543.
+
+- **Work shows "Unattended spend today" (#5695).** While the spend cap is on, a block above the
+  four groups reads the daily spend cap: the UTC day and when it resets, a state badge
+  (Running, Paused or Resumed for today), and Cost and Tokens meters with the value as
+  text, plus a notice mark when a notice limit is set. A paused cap says why and offers
+  **Resume unattended work for today**, which answers the spend-cap decision. Jobs in
+  Coming up look the same during a pause. With the spend cap off, Work shows no spend
+  block. Refs #5540.
+
+- **Decisions record whether an answer was picked or typed (#5672).** An answered decision now
+  stores `answer_kind`: "option" when a listed option was picked, "text" when the answer
+  was typed. It is empty while the decision is pending, and on an expired, withdrawn or
+  cancelled one. Every answer is recorded as "text" until the answer paths pass the real
+  kind in a follow-up change. Refs #5668.
+
+- **Active chat presence (#5706).** The console now tells the hub when you are actively at a chat (window in front, that chat selected, mouse or key input in the last minute), refs #5669.
+
+- **The hub can now record whether you are actively at a chat in a console (#5698).** Nothing uses
+  it yet. Refs #5669.
+
+- **Decision push grace regression coverage (#5708).** Real hub tests verify immediate delivery without matching fresh presence, delayed delivery for unanswered decisions, and no delivery after an answer at the desk. Refs #5669.
+
+### Changed
+- **Work: one "Withdrawn everywhere." announcement after withdrawing an instance-wide standing order (#5699).** Screen readers now hear a single polite "Withdrawn everywhere." from its own live region, repeated for each withdraw, instead of a toast followed by "Your instructions, N items."; the list region skips only the count change the withdraw causes and still announces a Needs you item that arrives with it. Withdrawing a chat instruction keeps its toast. Refs #5542.
+
+- **Answered decisions now record the real answer kind (#5674).** Picking a listed option through
+  the answer route records `answer_kind` "option"; a typed answer, including one typed into
+  the chat composer, records "text". Restart-recovery and spend-cap decisions record the
+  kind the same way. Refs #5668.
+
+- **Decision cards are compact and sit in a card (#5673).** In a chat transcript and in the Decisions
+  panel, an agent's question now has its own bordered card, so it reads as a separate block
+  from the surrounding text. The Work decision detail and the Needs you rail keep their own
+  frame. Everywhere, the options are smaller on desktop (unchanged at phone width), each
+  option's explanation sits right under it, a long question is cut at four lines with "Show
+  full question", and a footer below the options holds the one "If nobody answers by…" line
+  plus "Reply in chat instead" and "Dismiss" in a single row. Answering, dismissing and every
+  card state work as before. Refs #5668.
+
+- **Decision cards say when you answered by typing (#5680).** A decision answered with a typed reply
+  now reads "You replied in chat" in the chat transcript, and "Already answered in chat" with
+  the reply (cut at 80 characters) in the Decisions panel, instead of quoting the reply as a
+  chosen option. Decisions answered by picking an option, and older records, read "You chose"
+  as before. Refs #5668.
+
+- **A decision raised while you are at its chat waits about 75 seconds before it pushes to your phone (#5707).** If the console is in front, that chat is selected and you typed or clicked there recently when the hub raises a decision, the phone push is held for about 75 seconds and skipped if you answer in that time. If you do not answer, or you were not at the chat, it pushes as before. A member agent's decisions still push at once. Refs #5669.
+
+- **Withdrew the unreleased "composer answers the open decision" change (#5690).** A message typed in a chat with an open decision is no longer taken as the decision's answer; it is held as before, and "Reply in chat instead" on the card is again the way to answer in your own words. Refs #5678.
+
+- **Withdrew the rest of the unreleased "composer answers the open decision" change (#5693).** The composer placeholder no longer switches to "Type your answer…" while a decision is open, and the decision card in the chat transcript shows its "Reply in chat instead" button again. Refs #5678.
+
+- **The chat status rail is quieter: a still "Doing now" icon, and no repeats of the Work pane (#5694).**
+  With no goal, the "Doing now" chip now shows a play icon that does not animate, so a tracked
+  task with nothing running no longer looks like live work. On desktop, while the Work pane is
+  on screen (open in the side panel, the bottom dock or a window), the rail no longer shows the
+  "Doing now", "Coming up", "Instructions" and "Needs you" chips, since the pane already lists
+  them; the people chips stay and get the whole row. Hide the pane or switch its tab and every
+  chip returns, and the row keeps its height so the transcript and composer do not move.
+  Mobile is unchanged.
+
+- **Settings ▸ Devices shows your devices first (#5696).** The device list now comes right after any
+  pairing in progress and its notices, followed by "Notifications on this device". The rarely
+  used tools moved into a closed "Advanced" section at the end: "Access token for a script"
+  (with the "New access token" button, which left the header), the notification key and the
+  notification tap log. Advanced is hidden when it has nothing to show, such as on a
+  limited-access device. The intro paragraph is now a one-line subtitle under the title.
+
+- **Settings ▸ Devices hides the notification key card until a key exists (#5684).** The card now
+  shows only when you are signed in with full access and the agent has a notification key
+  (active or retiring). "No notification key yet…" and "Only full-access sign-ins can manage
+  the notification key." no longer appear: an empty card with no button is not shown. With a
+  key, the card and "Rotate key…" work as before, and a failed read still offers "Try again".
+
+- **Settings ▸ Devices shows the notifications card only where you can act on it (#5686).** The desktop
+  app no longer shows "Notifications on this device": it shows alerts itself, so the card had
+  nothing to press there. "What leaves this machine" is now "What leaves this computer", has
+  shorter text, and appears only under **Turn on notifications** or **Renew notifications**,
+  the two places where you decide whether to send anything. The off state now reads "Get
+  notifications on this device even when the console is closed."
+
+- **Settings ▸ Devices shows the "Phone not on Tailscale?" hint only while you pair a device (#5689).**
+  With no pairing under way the hint is gone, so the page shows only what you can act on. While
+  you add a device and no public URL is set, it reads "Phone not on Tailscale? Use your own
+  HTTPS address instead." with the **Set up a public URL** link. The text no longer names a
+  config key or lists proxy products. The warning shown when a public URL is set is unchanged.
+
+- **Settings ▸ Fleet reads in plain language (#5697).** The pane is titled "Fleet" to match its nav
+  entry, and each agent row shows at most two badges: a paired agent's status, then one of
+  "Main" (was "this instance"), "Remote" or "Delegate". Port, process id, a version mismatch
+  and "active" moved into a tooltip on the agent's name. Tooltips say "Let this agent hand
+  work to …" and "Stop handing work to …" with no tool name, the "Box runtime" chip is now
+  "Network & ports", and the token field reads "Its access token, if it has one". Behaviour
+  is unchanged.
+
+- **Settings ▸ Identity uses plain words for the agent's name and persona (#5700).** The subtitle now
+  reads "Name and persona", the editor is labelled "Persona" and the button reads "Save". The
+  line explaining what saving does internally is gone, and an empty persona shows "No persona
+  yet. Select **Edit** to write one." The page no longer names a file or internal terms. Saving
+  works exactly as before.
+
+- **MCP settings explain outside apps and connection choices in plain language (#5701).** Browse servers or add your own, connect older web servers through Advanced, and see which servers are shared with every agent on this computer.
+
+- **Clearer Skills settings (#5704).** Explain skills as step-by-step guides, label shared skills plainly, and add buttons to create a first skill or turn skills on, with restart guidance when needed.
+
+- **Theme settings show when a look is not saved to the agent (#5702).** An inline hint tracks changes until they are saved or reset, and “Reset to default” makes the reset action explicit.
+
+- **Settings ▸ Tools reads in plain words (#5703).** The header now says "What the agent can do" with
+  how many tools are on and off. Each tool leads with its description, with the code name
+  small underneath, and a tool held for subagents says "Only subagents can use this". Plugin
+  and MCP groups say which plugin or server they came from. The Work folders dialog's intro,
+  its "the agent can't open any files" warnings and the folders-saved message no longer quote
+  config keys or tool names, and each warning says how to fix it.
+
+### Fixed
+- **A self-improvement review is no longer refused when the finished goal's text names a tool (#5683).**
+  The check that stops a subagent prompt asking for a tool the subagent lacks now skips
+  fenced code blocks, so quoted JSON, logs and diffs do not count as asking for a tool.
+  Tool names outside a fence are still caught as before. Fixes #5677.
+
+### Docs
+- **Design spec for the Work view additions: unattended spend today, per-job run history, instance-wide standing orders (#5679).** Approved build spec for #5618, now in docs/design/work-view-additions.md. Refs #5532.
+
 ## [0.258.1] - 2026-11-21
 
 ### Changed
