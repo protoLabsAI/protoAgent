@@ -48,7 +48,8 @@ class CancelRequest(BaseModel):
     reason: str = ""
 
 
-async def _restart_recovery_action(rec, ref: dict, *, answer: str, answered_by: str, answered_surface: str):
+async def _restart_recovery_action(rec, ref: dict, *, answer: str, answered_by: str, answered_surface: str,
+                                   answer_kind: str = "option"):
     """Deliver a restart-recovery decision's answer (ADR 0129 D7 S7): Resume / Re-run /
     Drop on the occurrence a restart left ``interrupted_needs_operator``. There is no
     parked checkpoint interrupt to resume — the server-owned handler performs the action
@@ -68,7 +69,8 @@ async def _restart_recovery_action(rec, ref: dict, *, answer: str, answered_by: 
         raise HTTPException(status_code=503, detail="restart recovery is unavailable on this server")
     try:
         await recovery.operator_action(
-            rec, ref, answer=answer, answered_by=answered_by, answered_surface=answered_surface
+            rec, ref, answer=answer, answered_by=answered_by, answered_surface=answered_surface,
+            answer_kind=answer_kind,
         )
     except DecisionClosed as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -218,6 +220,8 @@ def register_decision_routes(app) -> None:
         # _resolve_answer rejects a blank option_id, so a non-None one here names an option.
         text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id is not None else answer
         actor = getattr(request.state, "device_id", None) or "operator"
+        # Picked from the listed options, or typed (#5668): recorded on the answered record.
+        answer_kind = "option" if body.option_id is not None else "text"
 
         async def deliver_answer():
             try:
@@ -230,7 +234,8 @@ def register_decision_routes(app) -> None:
                     # Admission is resumed by the durable answer; no model turn is started.
                     try:
                         await asyncio.to_thread(store.answer, decision_id, answer,
-                                                answered_by=actor, answered_surface=body.surface)
+                                                answered_by=actor, answered_surface=body.surface,
+                                                answer_kind=answer_kind)
                     except DecisionClosed as exc:
                         raise HTTPException(status_code=409, detail=str(exc)) from exc
                     return
@@ -240,11 +245,13 @@ def register_decision_routes(app) -> None:
                     delivery = asyncio.create_task(_restart_recovery_action(
                         current, recovery_ref, answer=answer,
                         answered_by=actor, answered_surface=body.surface,
+                        answer_kind=answer_kind,
                     ))
                 else:
                     delivery = asyncio.create_task(_resume_parked_turn(rec.session_id, text, decision_id, resolution={
                         "answer": answer, "answered_by": actor,
                         "answered_surface": body.surface, "state": "answered",
+                        "answer_kind": answer_kind,
                     }))
                 deliveries.add(delivery)
                 delivery.add_done_callback(delivery_done)

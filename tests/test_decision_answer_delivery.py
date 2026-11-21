@@ -11,6 +11,7 @@ what a real client timeout does.
 
 import asyncio
 import importlib
+import json
 import logging
 import threading
 import uuid
@@ -23,7 +24,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from graph.decisions import DecisionStore
+from graph.decisions import RESTART_RECOVERY_PREFIX, SPEND_CAP_PREFIX, DecisionStore
 from operator_api import decision_routes
 from runtime.state import STATE
 
@@ -256,6 +257,80 @@ async def test_retry_after_consumption_returns_the_record_and_starts_no_turn(har
         turn.release.set()
         await asyncio.wait_for(turn.finished.wait(), 2)
     assert turn.a2a_calls == [rec.id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body, kind, answer", [
+    ({"option_id": "yes"}, "option", "yes"),
+    ({"text": "ship it after lunch"}, "text", "ship it after lunch"),
+])
+async def test_answer_route_records_whether_the_answer_was_picked_or_typed(harness, body, kind, answer):
+    """#5668: the route passes the real kind through the resume to the store."""
+    store, build = harness
+    turn, rec, client = await build()
+    async with client:
+        r = await asyncio.wait_for(client.post(f"/api/decisions/{rec.id}/answer", json=body), 2)
+        assert r.status_code == 200, r.text
+        assert r.json()["decision"]["answer_kind"] == kind
+        turn.release.set()
+        await asyncio.wait_for(turn.finished.wait(), 2)
+    settled = store.get(rec.id)
+    assert (settled.state, settled.answer, settled.answer_kind) == ("answered", answer, kind)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolution, kind", [
+    (None, "text"),  # typed into the chat composer: hitl_resume carries no resolution
+    ({"answer": "yes", "answer_kind": "option"}, "option"),
+    ({"answer": "yes"}, "text"),
+    ({"answer": "yes", "answer_kind": "bogus"}, "text"),  # caller-supplied metadata never fails the settle
+])
+async def test_settle_path_records_text_unless_the_resolution_names_a_kind(harness, resolution, kind):
+    store, build = harness
+    turn, rec, client = await build()
+    await client.aclose()
+    turn.release.set()
+    cfg = turn.config
+    if resolution is not None:
+        cfg = {**cfg, "configurable": {**cfg["configurable"], "decision_resolution": {**resolution, "id": rec.id}}}
+    async with turn_control.decision_resume(cfg, "yes"):
+        await turn.graph.ainvoke(Command(resume="yes"), cfg)
+    settled = store.get(rec.id)
+    assert (settled.state, settled.answer, settled.answer_kind) == ("answered", "yes", kind)
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_answer_records_its_kind(harness):
+    store, build = harness
+    turn, _, client = await build()
+    rec = store.create(SESSION, "Raise the cap?", ["yes", "no"], interrupt_id=f"{SPEND_CAP_PREFIX}today")
+    async with client:
+        r = await asyncio.wait_for(client.post(f"/api/decisions/{rec.id}/answer", json={"option_id": "no"}), 2)
+        assert r.status_code == 200, r.text
+    assert turn.a2a_calls == []
+    assert store.get(rec.id).answer_kind == "option"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body, kind", [({"option_id": "yes"}, "option"), ({"text": "yes"}, "text")])
+async def test_restart_recovery_answer_hands_its_kind_to_the_recovery_handler(harness, monkeypatch, body, kind):
+    store, build = harness
+    turn, _, client = await build()
+    ref = json.dumps({"job_id": "job-1", "next_fire": "", "created_at": ""})
+    rec = store.create(SESSION, "Recover?", ["yes", "no"], interrupt_id=f"{RESTART_RECOVERY_PREFIX}{ref}")
+    seen = []
+
+    class Recovery:
+        async def operator_action(self, rec, ref, **kwargs):
+            seen.append(kwargs)
+            store.answer(rec.id, kwargs["answer"], answer_kind=kwargs["answer_kind"])
+
+    monkeypatch.setattr(STATE, "interrupted_recovery", Recovery(), raising=False)
+    async with client:
+        r = await asyncio.wait_for(client.post(f"/api/decisions/{rec.id}/answer", json=body), 2)
+        assert r.status_code == 200, r.text
+    assert [k["answer_kind"] for k in seen] == [kind]
+    assert turn.a2a_calls == [] and store.get(rec.id).answer_kind == kind
 
 
 @pytest.mark.asyncio
