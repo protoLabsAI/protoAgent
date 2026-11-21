@@ -15,6 +15,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.258.0] - 2026-11-21
+
+### Changed
+- **A real-process test shows a hub restart raises no "member down" page (#5662).** A real hub with `fleet.health` on spawns a real member, then restarts two ways: stopped and relaunched on the same instance home (as an app update does), and in place through `POST /api/restart`. After the member is started again, there is no down, wedged or gave-up fleet-health inbox item and no row in the hub's push ledger. Killing the member's process directly then does raise one down page and one high-importance push row, so the check can fail. Tests only; no runtime behavior changes. Refs #5648.
+
+- **A real-process test now checks which notices from your other agents reach your phone (#5658).**
+  A real main app starts a real second agent and confirms that only its questions are
+  queued for push, while its routine notices are accepted and kept off push. Tests only;
+  nothing changes in how the app behaves. Refs #5648.
+
+### Fixed
+- **A decision that is already closed no longer reaches your phone (#5660).** If you answer a
+  decision, or it is withdrawn, cancelled or expires, before its push goes out (after a
+  failed first try, a quiet-hours hold or a restart), the push is dropped instead of
+  sent. Decisions that are still open, decisions raised by another agent in the fleet
+  and every other notice push as before. Refs #5648.
+
+- **Quiet hours use local time by default (#5659).** Quiet hours now follow this computer's local time unless you set a timezone. Before, they used UTC. Refs #5648.
+
+- **A decision a fleet member asks for now shows on every device the hub serves (#5661).** A member's notice handed to its hub is now raised through the hub's own notice path, so it reaches the desktop app's native banner and the hub's chat adapters as well as your phone. Before, only the phone push got it. The member's text and link still never leave the member: the hub shows "A notice from" and the member's name. Quiet hours and the push policy apply as before: a member's routine notice held by quiet hours raises no desktop banner either, and waits for the hub's digest. Trade-off: if one adapter fails, the hub logs it and still accepts the handoff, so the member no longer retries after a push-ledger write error. Refs #5648.
+
+- **A decision you are already looking at in the console no longer also buzzes your phone (#5663).**
+  When an agent asks for a decision in a chat that is open in a console, the phone push for
+  it is dropped. A decision in a chat nobody has open still pushes as before. If you close
+  the chat without answering, the push does not arrive later; the decision stays in your
+  Needs-you list. Refs #5648.
+
+- **A scheduled result in Home now has "View full result" (#5657).** The Home card for a
+  scheduled job showed only the 500-character summary, with no way to read the rest
+  short of finding the run in Work. The card now opens the job's whole answer in the
+  document viewer. When that run can't be read, the viewer shows the card's own text:
+  its body, or its heading when a one-line summary left no body.
+  Entries written before the run reference was recorded show no button.
+
+- **A scheduled result's Home entry now records which run produced it (#5656).** The entry's
+  metadata gains the run's `activity_context` and `task_id` next to `kind`, `importance`,
+  `source` and `notice_id`, and `/api/home/entries` returns them as-is. This is the
+  server half of opening a job's whole answer from its Home card; the console button
+  follows. Every other notice's Home entry is unchanged. Refs bd-0p4d8.
+
+- **Quiet hours set on the main app now also hold routine notices from your other agents (#5653).**
+  Before, only the other agent's own quiet hours applied, so its routine notices could
+  still reach your phone during the main app's quiet hours. Questions and urgent notices
+  still come through straight away. Refs #5648.
+
+- **A push for a job result no longer says it is a decision (#5652).** Only a question you
+  need to answer says "view a decision". Every other push, including a scheduled job
+  result, now says "Open the console to view an update". The title, the route and the
+  rest of the push are unchanged. Refs #5648.
+
+- **"View full result" on a scheduled result now shows the job's whole answer (#5655).** It
+  used to open the same 500-character summary the card already shows. It now reads the
+  run's own turn and shows its full text, and falls back to the summary when that turn
+  can't be read.
+
+- **A message typed while the agent is working no longer shows up below the reply it caused (#5654).**
+  When a mid-turn message started or joined a task whose reply was already on screen, the
+  chat appended your message after that reply, as if you had sent it afterwards. It now
+  sits directly above that task's reply, below the previous turn. The same applies when a
+  reply was split into several bubbles: a message whose exact position is unknown lands
+  above the first of them, or directly below any message you sent earlier in that reply,
+  so your messages always keep the order you sent them in.
+  Refs #5467.
+
 ## [0.257.0] - 2026-11-20
 
 ### Added

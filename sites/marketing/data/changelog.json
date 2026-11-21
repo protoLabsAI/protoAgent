@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.258.0",
+    "date": "2026-11-21",
+    "changes": [
+      "A real-process test shows a hub restart raises no \"member down\" page (#5662).",
+      "A real-process test now checks which notices from your other agents reach your phone (#5658).",
+      "A decision that is already closed no longer reaches your phone (#5660).",
+      "Quiet hours use local time by default (#5659).",
+      "A decision a fleet member asks for now shows on every device the hub serves (#5661).",
+      "A decision you are already looking at in the console no longer also buzzes your phone (#5663).",
+      "A scheduled result in Home now has \"View full result\" (#5657).",
+      "A scheduled result's Home entry now records which run produced it (#5656).",
+      "Quiet hours set on the main app now also hold routine notices from your other agents (#5653).",
+      "A push for a job result no longer says it is a decision (#5652).",
+      "\"View full result\" on a scheduled result now shows the job's whole answer (#5655).",
+      "A message typed while the agent is working no longer shows up below the reply it caused (#5654)."
+    ]
+  },
+  {
     "version": "v0.257.0",
     "date": "2026-11-20",
     "changes": [
