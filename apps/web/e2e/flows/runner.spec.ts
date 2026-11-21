@@ -85,7 +85,7 @@ test("flows project is collected independently and live config disables mock sta
     expect(config.webServer).toBeUndefined();
     expect(config.use?.baseURL).toBe(process.env.FLOW_BASE_URL);
   } else {
-    expect(config.webServer).toHaveProperty("command", expect.stringContaining("mock-server.mjs"));
+    expect(config.webServer).toHaveProperty("command", expect.stringContaining("mock-server-run.mjs"));
   }
 });
 
