@@ -35,6 +35,10 @@ for (const colorScheme of ["light", "dark"] as const) {
     await openDevices(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
     await expect(page.getByRole("button", { name: "Remove studio-hub" })).toBeVisible();
+    await expect(page.getByTestId("public-console-hint")).toHaveCount(0);
+    await expectNoAxeViolations(page, { include: ".settings-overlay" });
+    // The hint belongs to a device pairing in progress; scan it there too.
+    await page.getByRole("button", { name: "Add a device" }).click();
     await expect(page.getByTestId("public-console-hint")).toBeVisible();
     await expectNoAxeViolations(page, { include: ".settings-overlay" });
   });
@@ -432,15 +436,34 @@ test("a device-scope refusal from the server reads as a sentence, not a code", a
 
 // ── ADR 0121 S7.4: a phone without Tailscale, through your own public URL ──────────────────
 
-test("no public URL: the panel says how to set one up, and nothing warns", async ({ page }) => {
+test("no public URL: the hint shows only while a device pairing is in progress, and nothing warns", async ({ page }) => {
   await openDevices(page);
   const hint = page.getByTestId("public-console-hint");
-  await expect(hint).toContainText("network.public_console_url");
+  // Nothing to act on until a phone is being paired.
+  await expect(hint).toHaveCount(0);
+  await expect(page.getByTestId("public-console-warning")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Add a device" }).click();
+  const card = page.getByRole("region", { name: "Pair a new device" });
+  await expect(card).toBeVisible();
+  await expect(hint).toHaveText("Phone not on Tailscale? Use your own HTTPS address instead. Set up a public URL");
   await expect(hint.getByRole("link", { name: "Set up a public URL" })).toHaveAttribute(
     "href",
     /guides\/phone-access#without-tailscale$/,
   );
+  // No config key in visible text.
+  await expect(page.locator(".settings-overlay")).not.toContainText("network.public_console_url");
   await expect(page.getByTestId("public-console-warning")).toHaveCount(0);
+
+  // Cancelling ends the pairing and the hint with it. name:"Cancel" is EXACT — see the
+  // agent-pairing test above.
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(hint).toHaveCount(0);
+
+  // An agent pairing is not a phone: no hint there.
+  await page.getByRole("button", { name: "Pair an agent" }).click();
+  await expect(page.getByTestId("agent-pair-code")).toBeVisible();
+  await expect(hint).toHaveCount(0);
 });
 
 test("public URL set: a persistent warning, and 'Phone without Tailscale' points the QR and URL at it", async ({ page }) => {

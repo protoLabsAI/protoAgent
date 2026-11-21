@@ -488,13 +488,16 @@ export function DevicesPanel() {
           </Alert>
         </div>
       ) : (
-        <p className="setting-desc" data-testid="public-console-hint">
-          No Tailscale on the phone? Put this console behind your own HTTPS address (Cloudflare
-          Tunnel, nginx or Caddy) and set it as <code>network.public_console_url</code>.{" "}
-          <a href={PUBLIC_URL_GUIDE} target="_blank" rel="noreferrer">
-            Set up a public URL
-          </a>
-        </p>
+        // Only while a device pairing is under way: that is the one moment a phone that isn't
+        // on Tailscale is the operator's problem, and the link is the thing to do about it.
+        pairing?.kind === "device" && (
+          <p className="setting-desc" data-testid="public-console-hint">
+            Phone not on Tailscale? Use your own HTTPS address instead.{" "}
+            <a href={PUBLIC_URL_GUIDE} target="_blank" rel="noreferrer">
+              Set up a public URL
+            </a>
+          </p>
+        )
       )}
       {limited && (
         <p className="setting-desc" data-testid="devices-limited-note">
