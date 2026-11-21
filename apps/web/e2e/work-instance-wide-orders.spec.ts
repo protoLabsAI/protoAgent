@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Instance-wide standing orders in Work → Your instructions (docs/design/work-view-additions.md
 // §3, §4): an order recorded in ONE chat lists and counts in every chat, sorted first; its
@@ -87,6 +87,11 @@ async function openInstructions(page: Page) {
   return rail;
 }
 
+/** The two polite regions of the Work view: the list's "<group>, N items." (the view's own
+ *  first one — the spend block has a region of the same class) and the withdraw's own. */
+const listRegion = (rail: Locator) => rail.locator(':scope > .work-view__announcement[role="status"]').first();
+const withdrawnRegion = (rail: Locator) => rail.locator("[data-withdrawn-announcement]");
+
 /** Names every box that scrolls sideways: the page, the Work view, its list and its detail. */
 const sidewaysScroll = (page: Page) => page.evaluate(() => {
   const view = document.querySelector('.work-view[data-frame="rail"]')!;
@@ -165,7 +170,10 @@ for (const width of [1440, 390]) {
       expect(await sidewaysScroll(page)).toEqual([]);
       await page.screenshot({ path: info.outputPath("confirm.png"), fullPage: true, animations: "disabled" });
       await confirm.getByRole("button", { name: "Withdraw everywhere" }).click();
-      await expect(page.locator(".pl-toast__msg").filter({ hasText: "Withdrawn." })).toBeVisible();
+      // One announcement only (§3.4, §4): its own polite region says "Withdrawn everywhere.",
+      // the list region never follows it with "Your instructions, 2 items.", and no toast.
+      await expect(withdrawnRegion(rail)).toHaveText("Withdrawn everywhere.");
+      await expect(withdrawnRegion(rail)).toHaveAttribute("aria-atomic", "true");
       expect(withdrawals).toEqual([{ id: "dir-i1", instanceWide: "true", reason: "moving the summary to the weekly digest" }]);
 
       // The detail closes, the row and the count drop, and focus lands on the NEXT row.
@@ -174,6 +182,8 @@ for (const width of [1440, 390]) {
       await expect(rail.locator("h2.work-heading")).toHaveAttribute("aria-label", "Your instructions, 2");
       await expect(rows.nth(0)).toContainText("Never push to main");
       await expect(rows.nth(0)).toBeFocused();
+      await expect(listRegion(rail)).toHaveText("Your instructions, 3 items.");
+      await expect(page.locator(".pl-toast__msg")).toHaveCount(0);
       expect(await sidewaysScroll(page)).toEqual([]);
       await page.screenshot({ path: info.outputPath("withdrawn.png"), fullPage: true, animations: "disabled" });
       // The rail chip drops with it (on the phone Work covers the chat, so step back first).
@@ -209,6 +219,15 @@ test("after a withdraw focus goes to the previous row, then to the group heading
   await withdraw();
   await expect(rows).toHaveCount(1);
   await expect(rows.nth(0)).toBeFocused();
+  // Two withdraws in a row are each announced: mark the first one's text node, which the
+  // second withdraw must REPLACE (the span is keyed on the withdraw counter) inside the same,
+  // still-mounted region.
+  const region = withdrawnRegion(rail);
+  await expect(region).toHaveText("Withdrawn everywhere.");
+  await region.evaluate((node) => {
+    node.setAttribute("data-e2e-region", "first");
+    node.firstElementChild!.setAttribute("data-e2e-text", "first");
+  });
 
   // The group empties: its heading takes focus (tabindex -1) — never body.
   await rows.nth(0).click();
@@ -218,6 +237,59 @@ test("after a withdraw focus goes to the previous row, then to the group heading
   await expect(heading).toHaveAttribute("aria-label", "Your instructions, 0");
   await expect(heading).toHaveAttribute("tabindex", "-1");
   await expect(heading).toBeFocused();
+  await expect(region).toHaveText("Withdrawn everywhere.");
+  await expect(region).toHaveAttribute("data-e2e-region", "first");
+  await expect(region.locator("[data-e2e-text]")).toHaveCount(0);
+  await expect(page.locator(".pl-toast__msg")).toHaveCount(0);
+});
+
+test("a Needs you item arriving around a withdraw is announced, the withdraw's count is not", async ({ page }) => {
+  const orders = [
+    order("dir-i1", "Always post a summary before you stop", "2026-11-18T09:40:00+00:00"),
+    order("dir-i2", "Never push to main without a green gate", "2026-11-19T08:05:00+00:00"),
+  ];
+  const own: Row[] = [];
+  const decisions: unknown[] = [];
+  await page.route("**/api/decisions**", (route) => {
+    if (new URL(route.request().url()).pathname !== "/api/decisions" || route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ json: { pending: decisions.length, decisions } });
+  });
+  await boot(page, orders, own);
+  // Hold the withdraw response, so the Needs you item provably lands before the count drops.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/directives/*/withdraw**", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  const rail = await openInstructions(page);
+  const rows = rail.locator(".work-view__list .work-row");
+  const detail = rail.locator(".work-view__detail");
+  await expect(listRegion(rail)).toHaveText("Your instructions, 2 items.");
+  await rows.nth(0).click();
+  await detail.getByRole("button", { name: "Withdraw…" }).click();
+  await detail.getByRole("button", { name: "Withdraw everywhere" }).click();
+
+  // A decision is raised while the withdraw is in flight: announced as usual.
+  decisions.push({
+    id: "dec-during-withdraw", question: "Ship the release notes?", state: "pending", session_id: ORIGIN,
+    agent: "protoAgent", created_at: new Date().toISOString(), options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }],
+  });
+  await expect(listRegion(rail)).toHaveText("Your instructions, 2 items. 1 new Needs you items.", { timeout: 20_000 });
+  await expect(withdrawnRegion(rail)).toHaveText("");
+
+  // The withdraw lands: its own region speaks, and the list region does not add the count —
+  // that earlier run did not use up the skip.
+  release();
+  await expect(withdrawnRegion(rail)).toHaveText("Withdrawn everywhere.");
+  await expect(rows).toHaveCount(1);
+  await expect(rail.locator("h2.work-heading")).toHaveAttribute("aria-label", "Your instructions, 1");
+  await expect(listRegion(rail)).toHaveText("Your instructions, 2 items. 1 new Needs you items.");
+  await expect(page.locator(".pl-toast__msg")).toHaveCount(0);
+
+  // The next unrelated count change announces as usual.
+  own.push({ ...order("dir-own", OWN_QUOTE, "2026-11-07T17:14:02+00:00"), session_id: SESSION, instance_wide: false });
+  await expect(listRegion(rail)).toHaveText("Your instructions, 2 items.", { timeout: 20_000 });
 });
 
 test("a 409 keeps the detail read-only with the closing sentence; a failed request offers Try again", async ({ page }) => {
