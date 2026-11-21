@@ -20,16 +20,23 @@
  *  whose first section is "Needs you · N": the shared DecisionCard (answer logic and the
  *  shared decisions store, not a fork) for the first decision, one-line rows for the rest,
  *  neutral rows for undelivered human-needed pages and stopped goals (Keep going / Drop the
- *  goal). Results hold in the OPEN panel until it closes; the count stays pending-only. */
+ *  goal). Results hold in the OPEN panel until it closes; the count stays pending-only.
+ *
+ *  While the Work pane is on screen (desktop: Work open in the right panel, the bottom dock or
+ *  the surface modal — uiStore `workPaneVisible`), the work chips, the Needs you marker and
+ *  their details panels leave the DOM: the pane beside the chat already shows them. The
+ *  people chips and their picker stay and get the whole row; with no people the rail renders
+ *  nothing. Every chip returns when the pane closes. The phone never hides them. */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefAttributes } from "react";
 import { Button, type ButtonProps } from "@protolabsai/ui/primitives";
-import { Skeleton, Spinner, StatusDot } from "@protolabsai/ui/data";
+import { Skeleton, StatusDot } from "@protolabsai/ui/data";
 import { Drawer, Popover } from "@protolabsai/ui/overlays";
-import { Clock, Target, Users } from "lucide-react";
+import { Clock, Play, Target, Users } from "lucide-react";
 
 import { openView } from "../app/palette/nav";
-import { useUI } from "../state/uiStore";
+import { useUI, useWorkPaneVisible } from "../state/uiStore";
+import { useKbIntents } from "../keybindings/intents";
 import { useIsMobile } from "../lib/useIsMobile";
 import type { GoalState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
@@ -167,13 +174,14 @@ export function trapTab(event: ReactKeyboardEvent<HTMLElement>) {
 }
 
 /** The chip's leading glyph. The goal stays visible inside the Doing now chip; with no goal
- *  it uses the spinner. DS Spinner/StatusDot carry their own status semantics — wrapped
+ *  it uses a still Play icon: nothing in the chip animates, so a tracked task with nothing
+ *  running never reads as live work. DS StatusDot carries its own status semantics — wrapped
  *  aria-hidden so the rail keeps exactly ONE live region (§6). */
 function chipIcon(chip: RailChip): ReactNode {
   if (chip.problem) return <span aria-hidden="true"><StatusDot status="warning" /></span>;
   switch (chip.id) {
     case "doing-now":
-      return chip.goal ? <Target size={12} aria-hidden /> : <span aria-hidden="true"><Spinner size={12} /></span>;
+      return chip.goal ? <Target size={12} aria-hidden /> : <Play size={12} aria-hidden />;
     case "coming-up":
       return <Clock size={12} aria-hidden />;
     case "instructions":
@@ -354,6 +362,10 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   onToggleMention: (name: string, source?: "picker") => void;
 }) {
   const mobile = useIsMobile();
+  // The work side of the rail hides ONLY while the Work pane is on screen (Josh, 2026-11-21):
+  // the pane beside the chat already shows the same rows, so the chips would repeat it. People
+  // chips and their `+K` picker stay. Always true on the phone (the selector is desktop-only).
+  const showWork = !useWorkPaneVisible();
   const sources = useWorkItems({ sessionId, thisChatOnly: false });
   // The shared decisions store (useDecisions) overlays the Work rows exactly like the Work
   // view does, so an answer drops the marker's count the moment it lands — the two surfaces
@@ -365,7 +377,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   );
   const flat = useMemo(() => flattenWorkItems(merged), [merged]);
   const groups = useMemo(() => workGroups(flat, { thisChatOnly: true, sessionId }), [flat, sessionId]);
-  const chips = railChips(groups);
+  const chips = showWork ? railChips(groups) : [];
   // Fleet-wide Needs you (S7): the selector never chat-scopes this group, so the marker's
   // count is every pending decision, undelivered human-needed page, stopped goal and
   // `waiting` task (ADR 0129 Q1) anywhere — EXACTLY the kinds the section draws
@@ -400,7 +412,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   };
   // The failed-instructions chip: THIS chat's ledger never loaded, so the count is unknowable —
   // it renders without one and the details panel carries the preserved "Load again" path.
-  if (ledgerStatus === "error" && !chips.some((chip) => chip.id === "instructions")) {
+  if (showWork && ledgerStatus === "error" && !chips.some((chip) => chip.id === "instructions")) {
     chips.push({ id: "instructions", label: "Instructions", count: 0, problem: true });
   }
 
@@ -459,7 +471,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     const boxes = children.slice(1, -1).map((el) => ({ left: el.offsetLeft, width: el.offsetWidth }));
     setMeasured(fitCount(boxes, more.offsetWidth, available));
   }, [available, orderedKey]);
-  const visibleCount = Math.min(measured ?? fallbackCap(mobile, chips.length > 0, needsYou.count > 0), ordered.length);
+  const visibleCount = Math.min(measured ?? fallbackCap(mobile, chips.length > 0, showWork && needsYou.count > 0), ordered.length);
   const visible = ordered.slice(0, visibleCount);
   const hiddenCount = ordered.length - visibleCount;
 
@@ -474,16 +486,24 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   // A WORK chip whose group empties does NOT auto-close (§1 "emptied while open"): the panel
   // stays open with a role="status" line until dismissed, so it stays rendered as its anchor.
   const emptiedChipId: RailChip["id"] | null =
-    open !== null && open !== "people" && open !== "needs-you" && !chips.some((chip) => chip.id === open)
+    showWork && open !== null && open !== "people" && open !== "needs-you" && !chips.some((chip) => chip.id === open)
       ? open
       : null;
+  // A work or Needs-you panel also closes when the Work pane comes on screen (its opener has
+  // left the rail), so it cannot reopen by itself when the pane closes again.
+  const hiddenByWorkPane = !showWork && open !== null && open !== "people";
   const openGone = open !== null
     && (open === "people" ? hiddenCount === 0
-      : open === "needs-you" ? needsYou.count === 0 && held.size === 0
-        : false);
+      : hiddenByWorkPane ? true
+        : open === "needs-you" ? needsYou.count === 0 && held.size === 0
+          : false);
   useEffect(() => {
-    if (openGone) setOpen(null);
-  }, [openGone]);
+    if (!openGone) return;
+    setOpen(null);
+    // The opener is gone with the panel, so focus has nowhere to return to: hand it to the
+    // composer instead of dropping it on <body>.
+    if (hiddenByWorkPane) useKbIntents.getState().focusComposer();
+  }, [openGone, hiddenByWorkPane]);
   // The hold lives exactly as long as a panel is open: closing any panel releases it.
   useEffect(() => {
     if (open === null) setHeld((prev) => (prev.size ? new Map() : prev));
@@ -537,8 +557,9 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     else if (lastOpen.current) chipRefs.current.get(lastOpen.current)?.focus();
   };
 
-  const hasContent = chips.length > 0 || cast.length > 0 || needsYou.count > 0
-    || (open === "needs-you" && held.size > 0) || emptiedChipId !== null;
+  // Work pane on screen and no people leaves nothing to show: the rail renders no DOM.
+  const hasContent = cast.length > 0 || (showWork && (chips.length > 0 || needsYou.count > 0
+    || (open === "needs-you" && held.size > 0) || emptiedChipId !== null));
   // The chips actually rendered: the live set, plus — when a work chip emptied while open —
   // a label-only placeholder so its popover/sheet stays mounted as the open panel's anchor.
   const chipsToRender: RailChip[] = emptiedChipId !== null
@@ -623,7 +644,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
       {needsYou.count > 0 && <span className="chat-status-chip__count">{needsYou.count}</span>}
     </RefButton>
   );
-  const needsYouMarker = needsYou.count === 0 && !(needsYouExpanded && held.size > 0)
+  const needsYouMarker = !showWork || (needsYou.count === 0 && !(needsYouExpanded && held.size > 0))
     ? null
     : mobile ? needsYouButton : (
       <Popover

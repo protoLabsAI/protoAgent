@@ -7,6 +7,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useUI } from "../state/uiStore";
 import type { WorkItems } from "../work/useWorkItems";
 import { ChatStatusRail } from "./ChatStatusRail";
 import { toggleMention } from "./mentionRun";
@@ -62,6 +63,7 @@ let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   Object.assign(state, { mobile: false, sources: mkSources(0) });
+  useUI.setState({ rightCollapsed: true }); // Work off screen, so the status chips render
   calls.length = FakeRO.all.length = 0;
   vi.stubGlobal("ResizeObserver", FakeRO);
   Element.prototype.hasPointerCapture = Element.prototype.hasPointerCapture ?? (() => false);

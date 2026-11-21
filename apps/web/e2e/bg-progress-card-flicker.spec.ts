@@ -60,6 +60,13 @@ function sse(frames: { topic: string; data: Record<string, unknown> }[]) {
 
 test("a background delegation's progress card never blinks out while its job runs", async ({ page }) => {
   test.setTimeout(60_000);
+  // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+  // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
+  });
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(

@@ -80,6 +80,7 @@ let root: Root;
 beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(state, { mobile: false });
+  useUI.setState({ rightCollapsed: true }); // Work off screen, so the Needs you marker renders
   dec.records = {};
   dec.missing = {};
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
