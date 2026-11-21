@@ -113,7 +113,7 @@ def test_lead_minimal_within_budget():
     assert "`task`" not in s["Guidelines"]
 
 
-BATCH_LEAD = "Make independent reads, searches and edits in the same step"
+BATCH_LEAD = "Make independent file reads, file searches and edits in the same step"
 
 
 def _guidelines(*tools: str) -> str:
@@ -141,6 +141,20 @@ def test_batching_guideline_names_only_bound_list_arguments():
         full = _sections(include_subagents=True, bound_tool_names=bound)["Guidelines"]
         assert full.count(BATCH_LEAD) == 1
         assert "`edit_file`'s `edits` list" in full and "`search_files`' `queries` list" in full
+
+
+def test_batching_guideline_is_scoped_to_file_tools():
+    """The line names FILE reads and searches, so it cannot be read as "run your web
+    searches yourself, in one step" — real research is delegated (web-research skill)."""
+    for bound in (ALL_BOUND, None):
+        line = next(
+            ln
+            for ln in _sections(include_subagents=True, bound_tool_names=bound)["Guidelines"].splitlines()
+            if BATCH_LEAD in ln
+        )
+        assert "file reads, file searches and edits" in line
+        assert "independent reads" not in line and ", searches" not in line
+        assert "web" not in line.lower()
 
 
 def test_batching_guideline_absent_without_file_tools():

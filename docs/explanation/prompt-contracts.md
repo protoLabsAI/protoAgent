@@ -45,7 +45,7 @@ bound at the model API, never rendered into prose.
 - `bound_tool_names` — the capability map `graph/prompts.py::CAPABILITY_GROUPS`
   (goal / tasks / schedule / watch / wait → tool names) decides which operating-model
   paragraphs appear; the shared async-work guideline is gated on delegation, schedule, watch or wait capabilities.
-  The batching guideline ("make independent reads, searches and edits in the same step") is gated on
+  The batching guideline ("make independent file reads, file searches and edits in the same step") is gated on
   `read_file`, `search_files` or `edit_file`, and names `edit_file`'s `edits` list and `search_files`'
   `queries` list only when that tool is bound, so an agent without file tools gets no such guidance.
   Each tool is checked individually, including partial groups. `None` retains legacy
@@ -171,8 +171,8 @@ billing).
 |--------------------|------:|---------:|
 | Lead · `Subagents` (3 lead-visible entries) | 1,612 | 403 |
 | Lead · `Operating model` (all capabilities) | 1,732 | 433 |
-| Lead · `Guidelines` (all capabilities) | 919 | 229 |
-| **Lead · doctrine total (ex-SOUL)** | **4,263** | **1,065** |
+| Lead · `Guidelines` (all capabilities) | 929 | 232 |
+| **Lead · doctrine total (ex-SOUL)** | **4,273** | **1,068** |
 | Lead · minimal (no subagents, no autonomous tools) | 340 | 85 |
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |
@@ -198,15 +198,20 @@ could not fit under the old ceiling. The line is one sentence and is bound only 
 directive tools are.
 
 The `Guidelines` ceiling rose from 900 to 1,150, and the doctrine total from 4,200 to
-4,500, for the batching line (#5098): "Make independent reads, searches and edits in the
-same step, not one per turn", plus the `edit_file` `edits` / `search_files` `queries`
+4,500, for the batching line (#5098): "Make independent file reads, file searches and edits
+in the same step, not one per turn", plus the `edit_file` `edits` / `search_files` `queries`
 hints. In the measured coding session 31 of 50 model messages carried exactly one tool
-call, so each file read, search or edit cost a full model round trip. The line is 201
-characters and takes `Guidelines` from 718 to 919 (1,011 for a legacy caller that passes
+call, so each file read, search or edit cost a full model round trip. The line is 211
+characters and takes `Guidelines` from 718 to 929 (1,021 for a legacy caller that passes
 `bound_tool_names=None` and also gets the runtime qualifier, which the same ceiling
 covers). It is bound only when a file tool is, so the minimal prompt is unchanged at 340.
 The budget test now binds the three file tools so the line is measured. No other
 guideline was trimmed to make room.
+
+The line says "file reads, file searches" rather than "reads, searches" so it cannot be
+read as an instruction to run web searches in the chat: real research is delegated as a
+background task (the `web-research` skill), and this line is about file tools only. The
+reword added 10 characters.
 
 ## Budget ceilings
 

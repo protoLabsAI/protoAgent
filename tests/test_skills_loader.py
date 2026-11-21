@@ -215,3 +215,57 @@ def test_user_only_implies_user_facing_at_the_dataclass(tmp_path: Path) -> None:
     index.add_skill(parsed, source="disk")
     assert "deploy" not in [s["name"] for s in index.skill_summaries()]
     assert "deploy" in [s["slash"] for s in index.user_facing_skills()]
+
+
+# ── the shipped web-research skill: research is delegated, lookups stay direct ──
+
+
+def _section(body: str, heading: str) -> str:
+    """The text under one ``## heading``, up to the next ``## `` heading."""
+    _, _, rest = body.partition(f"## {heading}\n")
+    assert rest, f"web-research skill has no '## {heading}' section"
+    return rest.split("\n## ", 1)[0]
+
+
+def test_shipped_web_research_skill_delegates_real_research() -> None:
+    """Structure, not wording: which tool each section routes to, and what it must not."""
+    art = parse_skill_md(Path(__file__).resolve().parent.parent / "config/skills/web-research/SKILL.md")
+    assert art is not None and art.name == "web-research"
+
+    # Every tool the body routes to is declared; the quick-lookup tools are kept.
+    for name in ("task", "task_batch", "run_workflow", "web_search", "fetch_url"):
+        assert name in art.tools_used
+    assert "background" in art.description and "gap-check" not in art.description
+
+    body = art.prompt_template
+    scale = _section(body, "Scale to the ask")
+    delegate = _section(body, "Real research: delegate, then carry on")
+    brief = _section(body, "What to put in the brief")
+    lookup = _section(body, "Quick lookup: answer directly")
+
+    # The lookup/research line lives in "Scale to the ask".
+    assert "lookup" in scale.lower() and "delegate" in scale.lower()
+
+    # Research goes to the background researcher; searching is not the lead's job here.
+    for token in ("`task`", "`task_batch`", "run_in_background=true", 'subagent_type="researcher"'):
+        assert token in delegate
+    assert "web_search" not in delegate and "fetch_url" not in delegate
+
+    # run_workflow blocks and no helper is bound it (docs/guides/workflows.md), so the
+    # skill must never route it through a helper: it is only ever named as the lead's
+    # own call, and never alongside a background flag.
+    workflow_paras = [para for para in delegate.split("\n\n") if "run_workflow" in para]
+    assert len(workflow_paras) == 1
+    assert "run_in_background" not in workflow_paras[0] and "`task`" not in workflow_paras[0]
+    assert "run_workflow" not in brief
+
+    # The research method is brief content for the helper, not numbered lead steps, and
+    # names no tool: the dispatch guard (#4327) refuses a brief naming an unbound tool.
+    for word in ("Gather", "Gap-check", "Synthesize", "Cite", "Confidence"):
+        assert f"**{word}**" in brief
+    for tool in ("memory_search", "knowledge_search", "memory_save", "web_search", "fetch_url"):
+        assert tool not in brief
+    assert "## 2. Gather" not in body
+
+    assert "`web_search`" in lookup and "`fetch_url`" in lookup
+    assert "`task`" not in lookup and len(lookup) < len(brief)
