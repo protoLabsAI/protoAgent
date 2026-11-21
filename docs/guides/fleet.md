@@ -188,7 +188,7 @@ it from its checkpoint; **New agent** opens the archetype picker.
 Open **Settings → Fleet** to create, start, stop, rename, or remove members.
 **Discover** finds protoAgents on this machine and your tailnet, and on the LAN
 when mDNS is enabled. **mDNS is off by default**; enable **mDNS discovery** under
-**Box runtime** to advertise and browse LAN agents. This does not affect the
+**Network & ports** to advertise and browse LAN agents. This does not affect the
 local roster, which reads your members from disk.
 
 For quick start/stop controls, press **⌘⇧K → Fleet Room**. Only other local

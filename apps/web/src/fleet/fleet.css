@@ -159,7 +159,7 @@
 }
 
 /* .fleet-delegate-tag retired (#832) — now DS <Badge status="info"> (wrapped in a
-   titled span to keep the "A delegate of this agent" tooltip). */
+   titled span that carries its tooltip). */
 
 /* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
 .fleet-discover {

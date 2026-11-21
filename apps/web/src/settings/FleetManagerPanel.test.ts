@@ -17,7 +17,10 @@ import {
   dropBeforeIndex,
   fleetAutostartRoster,
   FleetGroupsPanel,
+  FleetManagerPanel,
+  fleetNameTooltip,
   fleetOrderIds,
+  fleetRowBadges,
   GROUP_NAME_MAX,
   groupHomeKey,
   groupNameError,
@@ -944,5 +947,210 @@ describe("FleetGroupsPanel — gated like the rest of Fleet settings", () => {
     expect(container.textContent).toContain("Fleet settings are managed from the host instance");
     expect(document.querySelector(".fleet-groups")).toBeFalsy(); // the editor body is not rendered
     expect(byText("Add group")).toBeFalsy();
+  });
+});
+
+// ── Settings ▸ Fleet copy (designSystem Settings phase 1) ────────────────────────────────
+// The roster row shows state at a glance: at most two badges, and no port, process id or tool
+// name in its visible text — those read from the name's hover text instead.
+
+describe("fleetRowBadges — at most two badges per row, in priority order", () => {
+  it('badges the host row "Main" and nothing else', () => {
+    expect(fleetRowBadges({ host: true }, false).map((b) => b.label)).toEqual(["Main"]);
+    // Even a host that somehow reads as a delegate keeps the one type badge.
+    expect(fleetRowBadges({ host: true }, true).map((b) => b.label)).toEqual(["Main"]);
+  });
+
+  it("puts a remote's pairing status first, then Remote", () => {
+    expect(fleetRowBadges({ remote: true, auth: "ok" }, false).map((b) => b.key)).toEqual(["status", "remote"]);
+    expect(fleetRowBadges({ remote: true, auth: "rejected" }, false).map((b) => b.label)).toEqual([
+      "token rejected — re-pair",
+      "Remote",
+    ]);
+    // An older hub reports no verdict → just the type badge.
+    expect(fleetRowBadges({ remote: true }, false).map((b) => b.label)).toEqual(["Remote"]);
+  });
+
+  it("badges a local delegate, and a plain local member not at all", () => {
+    expect(fleetRowBadges({}, true).map((b) => b.label)).toEqual(["Delegate"]);
+    expect(fleetRowBadges({}, false)).toEqual([]);
+  });
+
+  it("never exceeds two, whatever the combination", () => {
+    for (const host of [true, false]) {
+      for (const remote of [true, false]) {
+        for (const auth of ["ok", "none", "rejected", "open", undefined] as const) {
+          for (const isDelegate of [true, false]) {
+            const badges = fleetRowBadges({ host, remote, auth }, isDelegate);
+            expect(badges.length).toBeLessThanOrEqual(2);
+            // Exactly one of Main / Remote / Delegate at most.
+            expect(badges.filter((b) => b.key !== "status").length).toBeLessThanOrEqual(1);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("fleetNameTooltip — what left the visible row", () => {
+  it("carries a local agent's port and process id", () => {
+    expect(fleetNameTooltip({ port: 7801, pid: 4242 })).toBe("Port 7801\nProcess ID 4242");
+    expect(fleetNameTooltip({ port: 7801, pid: null })).toBe("Port 7801"); // stopped: no process
+  });
+
+  it("names a version mismatch and the active agent", () => {
+    const tip = fleetNameTooltip({ port: 7801, pid: 1, version: "1.2.0" }, { hubVersion: "1.3.0", isActive: true });
+    expect(tip).toContain("You're viewing this agent");
+    expect(tip).toContain("Version mismatch: this agent runs v1.2.0, the main agent runs v1.3.0");
+    expect(fleetNameTooltip({ port: 7801, pid: 1, version: "1.3.0" }, { hubVersion: "1.3.0" })).not.toContain("mismatch");
+  });
+
+  it("names a remote's delegate link (its second badge is Remote) and skips its port", () => {
+    const tip = fleetNameTooltip({ remote: true, port: 0, pid: null }, { isDelegate: true });
+    expect(tip).toBe("This agent can hand work to it");
+    // A LOCAL delegate has the Delegate badge, so the tooltip doesn't repeat it.
+    expect(fleetNameTooltip({ port: 7801, pid: null }, { isDelegate: true })).toBe("Port 7801");
+  });
+});
+
+describe("FleetManagerPanel — the roster's visible text", () => {
+  const agent = (id: string, name: string, extra: Partial<FleetAgent> = {}): FleetAgent => ({
+    id,
+    name,
+    port: 7800,
+    pid: null,
+    running: false,
+    bundle: "",
+    ...extra,
+  });
+  const fleetStatus: FleetStatus = {
+    agents: [
+      agent("host", "atlas", { host: true, running: true, pid: 4100, version: "1.3.0" }),
+      agent("n1", "nova", { port: 7801, pid: 4242, running: true, version: "1.2.0", a2a: "http://127.0.0.1:7801/a2a" }),
+      agent("n2", "orion", { port: 7802, a2a: "http://127.0.0.1:7802/a2a" }),
+      agent("r1", "pulsar", { remote: true, running: true, url: "http://100.64.0.9:7870", auth: "ok", version: "1.1.0" }),
+    ],
+  };
+
+  async function mountManager() {
+    (api.fleet as ReturnType<typeof vi.fn>).mockResolvedValue(fleetStatus);
+    vi.spyOn(api, "settingsSchema").mockResolvedValue({ groups: [] });
+    vi.spyOn(api, "delegates").mockResolvedValue({
+      delegates: [
+        { name: "nova", type: "a2a", url: "http://127.0.0.1:7801/a2a" },
+        { name: "pulsar", type: "a2a", url: "http://127.0.0.1:7800/agents/r1/a2a" },
+      ],
+    } as unknown as Awaited<ReturnType<typeof api.delegates>>);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() => {
+      root.render(h(QueryClientProvider, { client }, h(ToastProvider, null, h(FleetManagerPanel, {}))));
+    });
+    await flush();
+    await flush();
+  }
+  const row = (name: string) =>
+    [...document.querySelectorAll<HTMLElement>(".fleet-row")].find((li) =>
+      (li.querySelector(".fleet-name")?.textContent || "").startsWith(name),
+    )!;
+  const badges = (name: string) => [...row(name).querySelectorAll(".pl-badge")].map((b) => b.textContent);
+  const button = (name: string, title: string) => row(name).querySelector(`button[title="${title}"]`);
+
+  it('titles the pane "Fleet", with the count in the kicker', async () => {
+    await mountManager();
+    expect(container.querySelector("h1, h2, h3")?.textContent).toBe("Fleet");
+    expect(container.textContent).toContain("Agents on this computer and the ones you've paired · 4");
+  });
+
+  it('shows at most two badges per row — "Main" on the host, status then Remote, Delegate', async () => {
+    await mountManager();
+    expect(badges("atlas")).toEqual(["Main"]); // the active host: no "active", no version badge
+    expect(badges("nova")).toEqual(["Delegate"]); // version skew is NOT a badge any more
+    expect(badges("orion")).toEqual([]);
+    expect(badges("pulsar")).toEqual(["paired", "Remote"]); // a remote delegate: still two
+    for (const li of document.querySelectorAll(".fleet-row")) {
+      expect(li.querySelectorAll(".pl-badge").length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("keeps port, process id and internal names out of every row's visible text", async () => {
+    await mountManager();
+    const rows = [...document.querySelectorAll<HTMLElement>(".fleet-row")];
+    expect(rows.length).toBe(4);
+    for (const li of rows) {
+      const text = li.textContent || "";
+      expect(text).not.toMatch(/pid/i);
+      expect(text).not.toContain("delegate_to");
+      expect(text).not.toContain("this instance");
+      expect(text).not.toContain("Box runtime");
+      expect(text).not.toMatch(/4242|4100|:780\d/); // no process id, no bare local port
+    }
+    // Nor anywhere else on the pane — the header chip included.
+    expect(container.textContent).not.toMatch(/pid|delegate_to|this instance|Box runtime/);
+    expect(container.innerHTML).not.toContain("delegate_to");
+    expect(container.innerHTML).not.toContain("Box runtime");
+    // A remote's address still identifies it.
+    expect(row("pulsar").querySelector(".fleet-meta")?.textContent).toBe("http://100.64.0.9:7870");
+  });
+
+  it("moves port, process id, version mismatch and 'active' into the name tooltip", async () => {
+    await mountManager();
+    const tip = (name: string) => row(name).querySelector('[data-testid="fleet-name-tip"]')?.getAttribute("title") || "";
+    expect(tip("atlas")).toBe("You're viewing this agent\nPort 7800\nProcess ID 4100");
+    expect(tip("nova")).toContain("Open nova\nPort 7801\nProcess ID 4242\nVersion mismatch: this agent runs v1.2.0");
+    expect(tip("orion")).toBe("Open orion\nPort 7802");
+    expect(tip("pulsar")).toContain("Version mismatch: this remote runs v1.1.0, the main agent runs v1.3.0");
+    expect(tip("pulsar")).toContain("This agent can hand work to it");
+  });
+
+  it("words the hand-work, pair and chip tooltips in plain language", async () => {
+    await mountManager();
+    expect(button("orion", "Let this agent hand work to orion")).toBeTruthy();
+    expect(button("nova", "Stop handing work to nova")).toBeTruthy();
+    expect(button("pulsar", "Stop handing work to pulsar")).toBeTruthy();
+    expect(button("pulsar", "Re-pair using a fresh code from the other agent")).toBeTruthy();
+    const chip = container.querySelector('button[aria-label="Network and port settings"]');
+    expect(chip?.getAttribute("title")).toBe("Network and port settings");
+  });
+
+  it("words the mid-flow copy in plain language (a discovered agent, the add form, an unpaired remote)", async () => {
+    const unpaired = agent("r2", "quasar", { remote: true, running: true, url: "http://100.64.0.11:7870", auth: "none" });
+    fleetStatus.agents.push(unpaired);
+    try {
+      vi.spyOn(api, "discoverAgents").mockResolvedValue({
+        discovered: [{ name: "vega", url: "http://192.168.1.20:7870" }],
+      } as unknown as Awaited<ReturnType<typeof api.discoverAgents>>);
+      await mountManager();
+      // A remote that was added without pairing offers Pair, not Re-pair.
+      expect(button("quasar", "Pair using a code from the other agent")).toBeTruthy();
+
+      const named = (text: string) =>
+        [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => (b.textContent || "").includes(text))!;
+      clickEl(named("Discover agents on the network"));
+      await flush();
+      const found = container.querySelector<HTMLElement>(".fleet-row--found")!;
+      expect(found.querySelector(".fleet-name")?.textContent).toBe("vega");
+      expect(found.querySelector('button[title="Pair using a code from the other agent"]')).toBeTruthy();
+      expect(found.querySelector('button[title="Pair, then let this agent hand work to vega"]')).toBeTruthy();
+
+      clickEl(named("Add a remote by URL"));
+      await flush();
+      const form = container.querySelector<HTMLElement>(".fleet-add-remote")!;
+      expect(form.querySelector('[placeholder="Its access token, if it has one"]')).toBeTruthy();
+
+      // None of it — visible text, tooltips or placeholders — names the tool or the old wording.
+      expect(container.innerHTML).not.toContain("delegate_to");
+      expect(container.innerHTML).not.toContain("operator token, if it's gated");
+    } finally {
+      fleetStatus.agents.pop();
+    }
+  });
+});
+
+describe("FleetGroupsPanel — the host row reads Main", () => {
+  it('badges the host "Main", never "this instance"', async () => {
+    await mount();
+    const host = [...document.querySelectorAll<HTMLElement>(".fleet-arow")].find((li) => (li.textContent || "").includes("atlas"))!;
+    expect(host.querySelector(".pl-badge")?.textContent).toBe("Main");
+    expect(container.textContent).not.toContain("this instance");
   });
 });

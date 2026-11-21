@@ -44,7 +44,7 @@ export function careerCoachFlow(live: boolean): Flow {
         await page.getByTestId("header-menu").click();
         await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
         await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
-        await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "Fleet", exact: true })).toBeVisible();
       } },
       { name: "New agent", async run(page: Page) {
         await page.getByRole("button", { name: "New agent", exact: true }).click();

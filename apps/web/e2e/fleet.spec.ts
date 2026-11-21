@@ -43,13 +43,27 @@ async function closeOverlay(page) {
   await expect(page.locator(".settings-overlay")).toHaveCount(0);
 }
 
-test("Agents tab lists the host (this instance) + peers, host active by default", async ({ page }) => {
+test("Fleet tab lists the host (Main) + peers, host active by default", async ({ page }) => {
   await openAgents(page);
-  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
-  // The host self-registers — it's always present + marked "this instance", and focused
+  // The pane title matches its nav entry.
+  await expect(page.getByRole("heading", { name: "Fleet", exact: true })).toBeVisible();
+  await expect(page.getByText(/^Agents on this computer and the ones you've paired · \d+$/)).toBeVisible();
+  // The host self-registers — it's always present + badged "Main", and focused
   // (active) when no peer is — so the panel is never "0 agents".
-  await expect(page.getByText("this instance").first()).toBeVisible(); // DS Badge (#832)
-  await expect(page.locator(".fleet-row.active .fleet-name")).toContainText("main");
+  const hostRow = page.locator(".fleet-row.active");
+  await expect(hostRow.locator(".fleet-name")).toContainText("main");
+  await expect(hostRow.locator(".pl-badge")).toHaveText(["Main"]); // DS Badge (#832) — no "active" badge
+  // Port and process id are in the name's hover text, never on the row; nor is any internal name.
+  await expect(hostRow.getByTestId("fleet-name-tip")).toHaveAttribute("title", /Port \d+/);
+  const rows = page.locator(".fleet-list").first();
+  await expect(rows).not.toContainText(/pid|delegate_to|this instance|Box runtime/);
+  for (const row of await page.locator(".fleet-row:not(.fleet-row--found)").all()) {
+    expect(await row.locator(".pl-badge").count()).toBeLessThanOrEqual(2);
+  }
+  // The header chip names what it holds.
+  await page.getByRole("button", { name: "Network and port settings" }).click();
+  await expect(page.getByRole("dialog", { name: "Network & ports" })).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(page.locator(".fleet-row", { hasText: "ava" })).toBeVisible();
   await expect(page.locator(".fleet-row", { hasText: "roxy" })).toBeVisible();
   // The host row has no stop/remove (can't act on itself); peers do.
@@ -106,7 +120,7 @@ test("Fleet Config: dragging a member's handle onto another row reorders the ros
   // Drive the pointer directly rather than locator.dragTo(): dragTo goes through Playwright's own
   // drag helper, so it can pass over an interaction a real mouse would not start. These are plain
   // mouse events — the browser's native HTML5 drag machinery does the rest, or nothing does.
-  const host = page.locator(".fleet-row", { hasText: "this instance" });
+  const host = page.locator(".fleet-row", { has: page.getByTestId("fleet-badge-main") });
   const from = (await reorderHandle(page, "roxy").boundingBox())!;
   const to = (await host.boundingBox())!;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
@@ -480,13 +494,13 @@ test("a member that IS a delegate can be unlinked from its row (#2266)", async (
 
   await openAgents(page);
   const ava = page.locator(".fleet-row", { hasText: "ava" });
-  await expect(ava.getByText("delegate")).toBeVisible(); // the state badge
-  await ava.getByRole("button", { name: "Remove as a delegate of this agent (delegate_to)" }).click();
+  await expect(ava.getByTestId("fleet-badge-delegate")).toHaveText("Delegate"); // the state badge
+  await ava.getByRole("button", { name: "Stop handing work to ava" }).click();
 
   await expect.poll(() => deleted).toBe("ava"); // removal lands on the FOCUSED agent's registry
-  await expect(ava.getByText("delegate")).toHaveCount(0);
+  await expect(ava.getByTestId("fleet-badge-delegate")).toHaveCount(0);
   // ...and the add button is back, so the gesture is symmetric rather than one-way.
-  await expect(ava.getByRole("button", { name: "Add as a delegate of this agent (delegate_to)" })).toBeVisible();
+  await expect(ava.getByRole("button", { name: "Let this agent hand work to ava" })).toBeVisible();
 });
 
 test("host without delegates: add → 404 → Enable delegates → retried add succeeds (#797)", async ({ page }, testInfo) => {
@@ -523,7 +537,7 @@ test("host without delegates: add → 404 → Enable delegates → retried add s
   await openAgents(page);
   await page
     .locator(".fleet-row", { hasText: "ava" })
-    .getByRole("button", { name: "Add as a delegate of this agent (delegate_to)" })
+    .getByRole("button", { name: "Let this agent hand work to ava" })
     .click();
 
   const error = page.locator(".pl-alert--error");
@@ -572,7 +586,7 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
   // Now a fleet member: remote tag + its URL, no start/stop controls.
   const member = page.locator(".fleet-row:not(.fleet-row--found)", { hasText: "http://192.168.5.50:7871" });
   await expect(member).toBeVisible();
-  await expect(member.getByText("remote", { exact: true })).toBeVisible();
+  await expect(member.getByText("Remote", { exact: true })).toBeVisible();
   await expect(member.getByRole("button", { name: "Stop" })).toHaveCount(0);
 
   // And switchable: the topbar switcher navigates to its slug window, where the hub
@@ -712,7 +726,7 @@ test("discovered row: the delegate link pairs first, then links the hub's proxy 
   await page.getByRole("button", { name: /Discover agents/ }).click();
   await page
     .locator(".fleet-row--found", { hasText: "remy" })
-    .getByRole("button", { name: "Pair, then add as a delegate of this agent (delegate_to)" })
+    .getByRole("button", { name: "Pair, then let this agent hand work to remy" })
     .click();
   const dialog = page.getByRole("dialog", { name: "Pair with remy" });
   await expect(dialog.getByLabel("Also add it as a delegate of this agent")).toBeChecked();
@@ -965,7 +979,7 @@ test("a sister agent's window: Fleet settings opens the fleet panel from the swi
   await page.goto("/app/agent/ava/", { waitUntil: "load" });
   await page.getByTestId("fleet-switcher").click();
   await page.getByRole("button", { name: "Fleet settings", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fleet", exact: true })).toBeVisible();
 });
 
 test("a sister agent's window: New agent opens the archetype picker from the switcher", async ({ page }) => {
