@@ -228,42 +228,44 @@ def _section(body: str, heading: str) -> str:
 
 
 def test_shipped_web_research_skill_delegates_real_research() -> None:
+    """Structure, not wording: which tool each section routes to, and what it must not."""
     art = parse_skill_md(Path(__file__).resolve().parent.parent / "config/skills/web-research/SKILL.md")
     assert art is not None and art.name == "web-research"
 
-    # Delegation tools are listed, and the quick-lookup tools are kept.
-    for name in ("task", "task_batch", "web_search", "fetch_url"):
+    # Every tool the body routes to is declared; the quick-lookup tools are kept.
+    for name in ("task", "task_batch", "run_workflow", "web_search", "fetch_url"):
         assert name in art.tools_used
-
-    # The description no longer claims the skill runs the research loop itself.
-    assert "gap-check" not in art.description and "Drives" not in art.description
-    assert "background" in art.description
+    assert "background" in art.description and "gap-check" not in art.description
 
     body = art.prompt_template
-    delegate = _section(body, "Real research: delegate, then carry on")
-    assert "`task`" in delegate and "run_in_background=true" in delegate
-    assert "`task_batch`" in delegate and "workflow" in delegate
-    assert "Do **not** run the searches yourself in the chat" in delegate
-    assert "Tell the operator it has started" in delegate
-    assert "Report when the result arrives" in delegate
-
-    # The line between a lookup and research is stated in "Scale to the ask".
     scale = _section(body, "Scale to the ask")
-    assert "Quick lookup — do it directly" in scale and "One fact, or one page" in scale
-    assert "Real research — delegate it" in scale
-
-    # The gather / gap-check / synthesize / cite detail is brief content for the
-    # helper, not numbered steps the lead performs.
+    delegate = _section(body, "Real research: delegate, then carry on")
     brief = _section(body, "What to put in the brief")
+    lookup = _section(body, "Quick lookup: answer directly")
+
+    # The lookup/research line lives in "Scale to the ask".
+    assert "lookup" in scale.lower() and "delegate" in scale.lower()
+
+    # Research goes to the background researcher; searching is not the lead's job here.
+    for token in ("`task`", "`task_batch`", "run_in_background=true", 'subagent_type="researcher"'):
+        assert token in delegate
+    assert "web_search" not in delegate and "fetch_url" not in delegate
+
+    # run_workflow blocks and no helper is bound it (docs/guides/workflows.md), so the
+    # skill must never route it through a helper: it is only ever named as the lead's
+    # own call, and never alongside a background flag.
+    workflow_paras = [para for para in delegate.split("\n\n") if "run_workflow" in para]
+    assert len(workflow_paras) == 1
+    assert "run_in_background" not in workflow_paras[0] and "`task`" not in workflow_paras[0]
+    assert "run_workflow" not in brief
+
+    # The research method is brief content for the helper, not numbered lead steps, and
+    # names no tool: the dispatch guard (#4327) refuses a brief naming an unbound tool.
     for word in ("Gather", "Gap-check", "Synthesize", "Cite", "Confidence"):
         assert f"**{word}**" in brief
-    # The brief text names no tool: the dispatch guard (#4327) refuses a delegation
-    # whose prompt names a tool the helper was never bound, and the lead copies from here.
     for tool in ("memory_search", "knowledge_search", "memory_save", "web_search", "fetch_url"):
         assert tool not in brief
-    for old_step in ("## 2. Gather", "## 3. Gap-check", "## 4. Synthesize"):
-        assert old_step not in body
+    assert "## 2. Gather" not in body
 
-    lookup = _section(body, "Quick lookup: answer directly")
     assert "`web_search`" in lookup and "`fetch_url`" in lookup
-    assert len(lookup) < len(brief)
+    assert "`task`" not in lookup and len(lookup) < len(brief)
