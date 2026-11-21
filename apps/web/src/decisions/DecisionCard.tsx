@@ -89,6 +89,9 @@ export type DecisionCardProps = {
   onOpenChat?: (decision: DecisionRow) => void;
   /** Open the chat with the composer focused, for a free-text reply (§4.3). */
   onReplyInChat?: (decision: DecisionRow) => void;
+  /** An option answer or dismissal is in flight or being confirmed (sending / checking /
+   *  dismissing). The source chat's composer stops answering this decision meanwhile (#5668 §4). */
+  onBusyChange?: (busy: boolean) => void;
   /** Title of the source chat for "Open chat: {title}"; falls back to the agent name. */
   chatTitle?: string;
   /** Agent presence. Default online; offline adds a neutral StatusDot + line (§5.7). */
@@ -133,8 +136,11 @@ const TERMINAL: ReadonlySet<DecisionRow["state"]> = new Set(["answered", "expire
 
 /** Longest typed answer quoted in the "Already answered in chat" callout (#5668 spec v5 §4). */
 const TYPED_ANSWER_MAX = 80;
-const clipTyped = (text: string) =>
-  text.length > TYPED_ANSWER_MAX ? `${text.slice(0, TYPED_ANSWER_MAX)}…` : text;
+// Counted and cut by code point, so an emoji at the cut is never split into a lone surrogate.
+const clipTyped = (text: string) => {
+  const chars = Array.from(text);
+  return chars.length > TYPED_ANSWER_MAX ? `${chars.slice(0, TYPED_ANSWER_MAX).join("")}…` : text;
+};
 
 export function DecisionCard({
   decision,
@@ -145,6 +151,7 @@ export function DecisionCard({
   onResolved,
   onOpenChat,
   onReplyInChat,
+  onBusyChange,
   chatTitle,
   agentOnline = true,
   agentHoldsOffline = true,
@@ -202,6 +209,16 @@ export function DecisionCard({
     const timer = setTimeout(() => onResolvedRef.current?.(decision.id), 4000);
     return () => clearTimeout(timer);
   }, [isTranscript, phase.kind, decision.id]);
+
+  // Read through a ref (hosts pass a fresh closure every render); released on unmount.
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  const interacting = phase.kind === "sending" || phase.kind === "checking" || phase.kind === "dismissing";
+  useEffect(() => {
+    if (!interacting) return;
+    onBusyChangeRef.current?.(true);
+    return () => onBusyChangeRef.current?.(false);
+  }, [interacting]);
 
   async function dismiss() {
     if (!onDismiss) return;
@@ -298,43 +315,6 @@ export function DecisionCard({
     if (next !== "unknown") setPhase(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the record only
   }, [decision.state, decision.answer]);
-
-  // A typed reply is being delivered (#5668 spec v5 §4): the record says an answer is on its
-  // way and no option was picked on this card. The options give way to "Sending your reply…".
-  // A record read once can go stale (the delivery failed and nothing changed on the bus), so the
-  // card re-reads it on the same backoff until the server says the delivery is over.
-  const [deliveryOver, setDeliveryOver] = useState(false);
-  const [replyAttempt, setReplyAttempt] = useState(0);
-  useEffect(() => {
-    if (!decision.delivering) {
-      setDeliveryOver(false);
-      setReplyAttempt(0);
-    }
-  }, [decision.delivering]);
-  const replySending = phase.kind === "idle" && decision.state === "pending"
-    && decision.delivering === true && !deliveryOver;
-  useEffect(() => {
-    if (!replySending) return;
-    let live = true;
-    const timer = setTimeout(() => {
-      onCheck(decision.id).then(
-        (record) => {
-          if (!live) return;
-          if (record === null || TERMINAL.has(record.state)) setPhase({ kind: "answeredElsewhere", record });
-          else if (record.delivering) setReplyAttempt((n) => n + 1);
-          else setDeliveryOver(true);
-        },
-        () => {
-          if (live) setReplyAttempt((n) => n + 1);
-        },
-      );
-    }, CHECK_DELAYS_MS[Math.min(replyAttempt, CHECK_DELAYS_MS.length - 1)]);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-armed per attempt only
-  }, [replySending, replyAttempt, decision.id]);
 
   const firstWords = decision.question.replace(/\s+/g, " ").trim().slice(0, 80);
 
@@ -444,13 +424,6 @@ export function DecisionCard({
         <StatusDot status="success" label={sent} />
       </div>
     );
-  } else if (replySending) {
-    // A typed reply is on its way: no options to pick while it lands.
-    body = (
-      <div aria-live="polite">
-        <StatusDot status="neutral" pulse label="Sending your reply…" />
-      </div>
-    );
   } else if ((phase.kind === "idle" || phase.kind === "error") && TERMINAL.has(decision.state)) {
     // A failed send leaves the error phase, but a record that has since settled elsewhere is
     // final: show it as closed rather than offering "Try again" on a decision nobody can answer.
@@ -526,7 +499,7 @@ export function DecisionCard({
     );
   }
 
-  const showExpiry = Boolean(decision.expires_at) && phase.kind === "idle" && !replySending && !TERMINAL.has(decision.state);
+  const showExpiry = Boolean(decision.expires_at) && phase.kind === "idle" && !TERMINAL.has(decision.state);
 
   return (
     <article aria-label={`${agent}: ${firstWords}`} className={contained ? "pl-card" : undefined} style={card}>
@@ -565,7 +538,9 @@ export function DecisionCard({
           )}
           {(answerable || !isTranscript) && (
             <div style={footerActions}>
-              {answerable && (
+              {/* The source chat's transcript passes no handler: its composer already answers
+                  the decision (#5668 §4). Every other host keeps the action. */}
+              {answerable && (!isTranscript || onReplyInChat) && (
                 <Button variant="ghost" size={optionSize} onClick={() => onReplyInChat?.(decision)}>
                   Reply in chat instead
                 </Button>

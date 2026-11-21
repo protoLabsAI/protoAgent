@@ -1112,68 +1112,47 @@ describe("DecisionCard", () => {
     expect(document.body.textContent).toContain('Already answered: you chose "Hold the release" at ');
   });
 
-  it("swaps the options for 'Sending your reply…' while a typed answer is on its way, then restores them if it never lands", async () => {
+  it("panel: the 80-character cut never splits an emoji", async () => {
+    const typed = `${"a".repeat(79)}😀TAIL`;
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { state: "answered", answer: typed, answer_kind: "text", answered_at: "2026-11-08T14:52:00+00:00" })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain(`Already answered in chat: "${"a".repeat(79)}😀…" at `);
+    expect(document.body.textContent).not.toContain("TAIL");
+  });
+
+  // `delivering` says an answer is on its way, not which kind: an option picked in another tab
+  // sets it too. The card therefore never claims a typed reply from it (#5668 review).
+  it("a pending record with an answer in flight from elsewhere keeps its options and footer actions", async () => {
     vi.useFakeTimers();
     try {
-      const onCheck = vi.fn()
-        .mockResolvedValueOnce(decision("a", { delivering: true }))
-        .mockResolvedValueOnce(decision("a", { delivering: false }));
-      await renderNode(
-        <DecisionCard
-          decision={decision("a", { delivering: true, expires_at: "2026-11-08T15:45:00+00:00" })}
-          presentation="transcript"
-          onAnswer={vi.fn()}
-          onCheck={onCheck}
-        />,
-      );
-      expect(document.body.textContent).toContain("Sending your reply…");
-      expect(document.querySelector('[role="group"][aria-label="Answer"]')).toBeFalsy();
-      expect(document.body.textContent).not.toContain("Reply in chat instead");
-      expect(document.body.textContent).not.toContain("Dismiss");
-      expect(document.body.textContent).not.toContain("If nobody answers by");
-
-      // Still on its way at the first re-read; the second says the delivery ended unanswered.
+      const onCheck = vi.fn();
+      for (const presentation of ["panel", "transcript"] as const) {
+        await renderNode(
+          <DecisionCard
+            key={presentation}
+            decision={decision("a", { delivering: true, expires_at: "2026-11-08T15:45:00+00:00" })}
+            presentation={presentation}
+            onAnswer={vi.fn()}
+            onCheck={onCheck}
+          />,
+        );
+        expect(document.body.textContent).not.toContain("Sending your reply…");
+        expect(document.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
+        expect(buttons().some((b) => b.textContent?.trim() === "Dismiss")).toBe(true);
+        expect(document.body.textContent).toContain("If nobody answers by");
+      }
+      // No background re-read loop starts from the flag alone.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(1000);
+        await vi.advanceTimersByTimeAsync(6000);
       });
-      expect(document.body.textContent).toContain("Sending your reply…");
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
-      });
-      expect(onCheck).toHaveBeenCalledTimes(2);
-      expect(document.body.textContent).not.toContain("Sending your reply…");
-      expect(document.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
+      expect(onCheck).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("a typed reply that lands freezes the sending card on 'You replied in chat'", async () => {
-    vi.useFakeTimers();
-    try {
-      const onCheck = vi.fn().mockResolvedValue(
-        decision("a", { state: "answered", answer: "Wait for the fix", answer_kind: "text", answered_at: "2026-11-08T14:52:00+00:00" }),
-      );
-      await renderNode(
-        <DecisionCard decision={decision("a", { delivering: true })} presentation="transcript" onAnswer={vi.fn()} onCheck={onCheck} />,
-      );
-      expect(document.body.textContent).toContain("Sending your reply…");
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1000);
-      });
-      expect(document.body.textContent).toContain("You replied in chat ·");
-      expect(document.body.textContent).not.toContain("Sending your reply…");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("an option picked on this card keeps its own spinner, never 'Sending your reply…'", async () => {
-    const onAnswer = vi.fn().mockReturnValue(new Promise(() => {}));
-    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} onCheck={vi.fn()} />);
-    await click("Merge with the WARN");
-    expect(document.body.textContent).not.toContain("Sending your reply…");
-    expect(document.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
   });
 
   it("transcript: an expired record freezes on its closed line, not a callout", async () => {
@@ -1222,7 +1201,9 @@ describe("DecisionCard", () => {
     const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
     await renderNode(<DecisionCard decision={decision("a")} presentation="transcript" onAnswer={onAnswer} />);
     expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(true);
-    expect(document.body.textContent).toContain("Reply in chat instead");
+    // No "Reply in chat instead" in the source chat: its composer answers directly (#5668 §4).
+    expect(document.body.textContent).not.toContain("Reply in chat instead");
+    expect(buttons().some((b) => b.textContent?.trim() === "Dismiss")).toBe(true);
     expect(document.body.textContent).not.toContain("You chose");
   });
 
