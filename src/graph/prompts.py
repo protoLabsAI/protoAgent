@@ -293,7 +293,7 @@ def build_system_prompt_parts(
         return bound_tool_names is None or name in bound_tool_names
 
     if _bound("read_file") or _bound("search_files") or _bound("edit_file"):
-        batching = "- Make independent reads, searches and edits in the same step, not one per turn."
+        batching = "- Make independent file reads, file searches and edits in the same step, not one per turn."
         hints = []
         if _bound("edit_file"):
             hints.append("`edit_file`'s `edits` list for several changes to one file")

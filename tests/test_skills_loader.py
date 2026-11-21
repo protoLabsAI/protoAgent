@@ -215,3 +215,55 @@ def test_user_only_implies_user_facing_at_the_dataclass(tmp_path: Path) -> None:
     index.add_skill(parsed, source="disk")
     assert "deploy" not in [s["name"] for s in index.skill_summaries()]
     assert "deploy" in [s["slash"] for s in index.user_facing_skills()]
+
+
+# ── the shipped web-research skill: research is delegated, lookups stay direct ──
+
+
+def _section(body: str, heading: str) -> str:
+    """The text under one ``## heading``, up to the next ``## `` heading."""
+    _, _, rest = body.partition(f"## {heading}\n")
+    assert rest, f"web-research skill has no '## {heading}' section"
+    return rest.split("\n## ", 1)[0]
+
+
+def test_shipped_web_research_skill_delegates_real_research() -> None:
+    art = parse_skill_md(Path(__file__).resolve().parent.parent / "config/skills/web-research/SKILL.md")
+    assert art is not None and art.name == "web-research"
+
+    # Delegation tools are listed, and the quick-lookup tools are kept.
+    for name in ("task", "task_batch", "web_search", "fetch_url"):
+        assert name in art.tools_used
+
+    # The description no longer claims the skill runs the research loop itself.
+    assert "gap-check" not in art.description and "Drives" not in art.description
+    assert "background" in art.description
+
+    body = art.prompt_template
+    delegate = _section(body, "Real research: delegate, then carry on")
+    assert "`task`" in delegate and "run_in_background=true" in delegate
+    assert "`task_batch`" in delegate and "workflow" in delegate
+    assert "Do **not** run the searches yourself in the chat" in delegate
+    assert "Tell the operator it has started" in delegate
+    assert "Report when the result arrives" in delegate
+
+    # The line between a lookup and research is stated in "Scale to the ask".
+    scale = _section(body, "Scale to the ask")
+    assert "Quick lookup — do it directly" in scale and "One fact, or one page" in scale
+    assert "Real research — delegate it" in scale
+
+    # The gather / gap-check / synthesize / cite detail is brief content for the
+    # helper, not numbered steps the lead performs.
+    brief = _section(body, "What to put in the brief")
+    for word in ("Gather", "Gap-check", "Synthesize", "Cite", "Confidence"):
+        assert f"**{word}**" in brief
+    # The brief text names no tool: the dispatch guard (#4327) refuses a delegation
+    # whose prompt names a tool the helper was never bound, and the lead copies from here.
+    for tool in ("memory_search", "knowledge_search", "memory_save", "web_search", "fetch_url"):
+        assert tool not in brief
+    for old_step in ("## 2. Gather", "## 3. Gap-check", "## 4. Synthesize"):
+        assert old_step not in body
+
+    lookup = _section(body, "Quick lookup: answer directly")
+    assert "`web_search`" in lookup and "`fetch_url`" in lookup
+    assert len(lookup) < len(brief)
