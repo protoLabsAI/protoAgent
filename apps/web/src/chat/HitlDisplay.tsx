@@ -1,5 +1,5 @@
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
-import { createContext, useContext, useEffect, useRef, type RefObject } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type RefObject } from "react";
 import { DecisionCard } from "../decisions/DecisionCard";
 import { useDecision, useDecisions } from "../decisions/useDecisions";
 import type { ChatMessage, HitlPayload, HitlDisplayTable } from "../lib/types";
@@ -63,35 +63,49 @@ export function hasDecisionTranscript(payload: HitlPayload | null, messages: Cha
     && messages.some((message) => message.role === "assistant" && message.decisionId === payload.decision_id);
 }
 
-/** Slot-local bridge: historical cards cannot arm a reply to a different live interrupt. */
+/** Slot-local bridge: historical cards can neither answer nor clear a different live interrupt. */
 export const DecisionTranscriptContext = createContext<{
-  reply: (id: string) => void;
+  busy: (id: string, busy: boolean) => void;
   settled: (id: string) => void;
 } | null>(null);
 
+/**
+ * The composer answers the open decision directly (#5668 §4): no "Reply in chat" arming.
+ * `awaitingAnswer` holds only while the pending pause is a decision with a durable id, this
+ * chat's transcript holds its card, and that card is idle (no option answer or dismissal in
+ * flight). Approval gates, legacy/table forms and id-less decisions never qualify, so typed
+ * text keeps today's hold there and can never approve a command.
+ */
 export function useLiveDecisionTranscript(
   hitlRef: RefObject<HitlPayload | null>,
   updateHitl: (payload: HitlPayload | null) => void,
   resumeHitl: (response: string) => Promise<void>,
+  messages: ChatMessage[],
 ) {
-  const replyId = useRef<string | null>(null);
+  // Cards report their in-flight interaction; a ref for send-time reads, a tick to re-render.
+  const busyIds = useRef(new Set<string>());
+  const [, rerender] = useState(0);
   const matches = (id: string) => hitlRef.current?.kind === "decision" && hitlRef.current.decision_id === id;
+  const awaiting = () => {
+    const payload = hitlRef.current;
+    const id = payload?.decision_id;
+    return Boolean(id) && hasDecisionTranscript(payload, messages) && matches(id!) && !busyIds.current.has(id!);
+  };
   return {
-    reply(id: string) {
-      if (matches(id)) replyId.current = id;
+    awaitingAnswer: awaiting(),
+    busy(id: string, busy: boolean) {
+      if (busyIds.current.has(id) === busy) return;
+      if (busy) busyIds.current.add(id);
+      else busyIds.current.delete(id);
+      rerender((n) => n + 1);
     },
     settled(id: string) {
-      if (replyId.current === id) replyId.current = null;
       // Clearing local UI is not another resume: server arbitration already owns that.
       if (matches(id)) updateHitl(null);
     },
     submitReply(text: string): boolean {
-      const id = replyId.current;
-      if (!id || !matches(id)) return false;
-      if (text.trim()) {
-        replyId.current = null;
-        void resumeHitl(text.trim());
-      }
+      if (!awaiting()) return false;
+      if (text.trim()) void resumeHitl(text.trim());
       return true;
     },
   };
@@ -118,10 +132,7 @@ export function DecisionTranscript({ id }: { id: string }) {
           contained
           onAnswer={(optionId) => answer(id, optionId)}
           onOpenChat={focusComposer}
-          onReplyInChat={() => {
-            live?.reply(id);
-            focusComposer();
-          }}
+          onBusyChange={(busy) => live?.busy(id, busy)}
         />
       ) : (
         <p role="status">{state === "missing" ? "This decision is no longer available." : "Loading decision…"}</p>
