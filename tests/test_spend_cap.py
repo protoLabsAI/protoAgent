@@ -264,3 +264,50 @@ async def test_refused_scheduled_fire_preserves_job_until_answer(cap, tmp_path, 
     await tick()
     assert len(ran) == 1
     assert scheduler.get_job(job.id) is None  # Now the one-shot/max_fires is consumed.
+
+
+_STATUS_KEYS = {"day", "cost_usd", "total_tokens", "enabled", "meter_available", "daily_cost_hard_limit",
+                "daily_token_hard_limit", "approved_today", "decision_id", "paused"}
+_SOFT_KEYS = {"daily_cost_soft_limit", "daily_token_soft_limit"}
+
+
+def test_spend_cap_route_returns_configured_soft_limits(cap):
+    config, telemetry, _decisions, client = cap
+    config.spend_cap_daily_cost_soft_limit, config.spend_cap_daily_token_soft_limit = 5.0, 600000
+    record(telemetry, cost=0.5, tokens=10)
+    status = client.get("/api/telemetry/spend-cap").json()
+    assert set(status) == _STATUS_KEYS | _SOFT_KEYS
+    assert status["daily_cost_soft_limit"] == 5.0 and isinstance(status["daily_cost_soft_limit"], float)
+    assert status["daily_token_soft_limit"] == 600000 and isinstance(status["daily_token_soft_limit"], int)
+
+
+def test_spend_cap_route_soft_limits_are_zero_when_unset(cap):
+    config, _telemetry, _decisions, client = cap
+    status = client.get("/api/telemetry/spend-cap").json()
+    assert (status["daily_cost_soft_limit"], status["daily_token_soft_limit"]) == (0, 0)
+    # None (a cleared settings field) reads as 0 too.
+    config.spend_cap_daily_cost_soft_limit = config.spend_cap_daily_token_soft_limit = None
+    status = client.get("/api/telemetry/spend-cap").json()
+    assert (status["daily_cost_soft_limit"], status["daily_token_soft_limit"]) == (0, 0)
+
+
+@pytest.mark.parametrize("cost,tokens", [(0.5, 10), (2, 0), (0, 100)])
+def test_soft_limits_leave_existing_status_keys_and_paused_unchanged(cap, cost, tokens):
+    config, telemetry, _decisions, _client = cap
+    record(telemetry, cost=cost, tokens=tokens)
+    before = turn_control.spend_cap_status()
+    # Soft limits already passed: they still must not move the pause or any existing value.
+    config.spend_cap_daily_cost_soft_limit, config.spend_cap_daily_token_soft_limit = 0.1, 1
+    after = turn_control.spend_cap_status()
+    assert {key: after[key] for key in _STATUS_KEYS} == {key: before[key] for key in _STATUS_KEYS}
+    assert after["paused"] is (cost >= 2 or tokens >= 100)
+
+
+def test_spend_cap_route_returns_soft_limits_without_a_meter(cap, monkeypatch):
+    config, _telemetry, _decisions, client = cap
+    config.spend_cap_daily_cost_soft_limit, config.spend_cap_daily_token_soft_limit = 5.0, 600000
+    monkeypatch.setattr(STATE, "telemetry_store", None)
+    status = client.get("/api/telemetry/spend-cap").json()
+    assert set(status) == _STATUS_KEYS | _SOFT_KEYS
+    assert status["meter_available"] is False and status["paused"] is True
+    assert (status["daily_cost_soft_limit"], status["daily_token_soft_limit"]) == (5.0, 600000)
