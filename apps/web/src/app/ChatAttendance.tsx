@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 
 import { chatStore } from "../chat/chat-store";
 import { setAttendedSession } from "../chat/attendSession";
+import { notifySessionChanged, startPresenceReport } from "../chat/presenceReport";
 
 // Session attendance (#3110). Holds an SSE presence stream open to the server for the chat
 // session currently on screen (`currentSessionId`), so a completed background job push-resuming
@@ -18,6 +19,14 @@ export function ChatAttendance() {
     () => chatStore.getSnapshot().currentSessionId,
     () => null,
   );
+
+  useEffect(() => {
+    return startPresenceReport(() => chatStore.getSnapshot().currentSessionId);
+  }, []);
+
+  useEffect(() => {
+    notifySessionChanged();
+  }, [currentSessionId]);
 
   useEffect(() => {
     setAttendedSession(currentSessionId);

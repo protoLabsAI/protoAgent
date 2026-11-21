@@ -211,6 +211,10 @@ export type ChatSessionSummary = {
 };
 
 export const chatApi = {
+  reportPresence(body: { console_id: string; session: string; present: boolean; input_age_s: number }) {
+    return request<void>("/api/chat/presence", { method: "POST", host: true, body });
+  },
+
   /** The agent's OTHER conversations (docs/design/other-conversations.md S2): every outside A2A
    *  thread, newest-active first, `for_you` before `automated`. `before=<iso>` pages older, 50 at
    *  a time (the server caps `limit` at 50); `group` filters to one group. Degrades to an empty

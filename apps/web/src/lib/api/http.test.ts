@@ -51,3 +51,21 @@ it.each(["beforeunload", "pagehide"])("cancels an in-flight read on %s and prese
   await expect(next).rejects.toMatchObject({ name: "AbortError" });
   await expect(request("/api/fleet", { signal: caller.signal })).rejects.toMatchObject({ name: "AbortError" });
 });
+
+it("posts presence to the hub from a member console and accepts its empty 204 response", async () => {
+  const { api } = await import("../api");
+  const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetch);
+  const previousUrl = window.location.href;
+  window.history.replaceState(null, "", "/app/agent/member/");
+  try {
+    await expect(api.reportPresence({ console_id: "console", session: "chat", present: true, input_age_s: 0 }))
+      .resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith("/api/chat/presence", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ console_id: "console", session: "chat", present: true, input_age_s: 0 }),
+    }));
+  } finally {
+    window.history.replaceState(null, "", previousUrl);
+  }
+});
