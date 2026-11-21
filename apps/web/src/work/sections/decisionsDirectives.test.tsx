@@ -806,6 +806,8 @@ describe("Instance-wide standing orders (work-view-additions §3, §4)", () => {
   };
   const heading = () => host.querySelector<HTMLElement>(".work-view__list h2.work-heading");
   const detail = () => host.querySelector<HTMLElement>(".work-view__detail");
+  const withdrawnRegion = () => host.querySelector<HTMLElement>("[data-withdrawn-announcement]")!;
+  const listRegion = () => host.querySelector<HTMLElement>(".work-view__announcement[role=\"status\"]")!;
   const type = (el: HTMLTextAreaElement, value: string) => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -967,6 +969,43 @@ describe("Instance-wide standing orders (work-view-additions §3, §4)", () => {
     expect(rows().map((row) => row.querySelector(".work-row__title")?.textContent)).toEqual(["Order dir-i2", "Chat instruction"]);
     expect(heading()?.getAttribute("aria-label")).toBe("Your instructions, 2");
     expect(document.activeElement).toBe(rowFor("Order dir-i2"));
+    // One announcement (§3.4): its own polite region says it, the list region's count stays
+    // unsaid, and there is no toast.
+    expect(withdrawnRegion().textContent).toBe("Withdrawn everywhere.");
+    expect(listRegion().textContent).toBe("Your instructions, 3 items.");
+    expect(document.querySelector(".pl-toast__msg")).toBeNull();
+  });
+
+  it("announces each of two withdraws in a row by replacing the region's text node", async () => {
+    setItems([wideRow("dir-i1"), wideRow("dir-i2")]);
+    await openConfirm("dir-i1");
+    expect(withdrawnRegion().textContent).toBe("");
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+    const region = withdrawnRegion();
+    const first = region.firstElementChild;
+    expect(region.textContent).toBe("Withdrawn everywhere.");
+
+    await act(async () => rowFor("Order dir-i2")!.click());
+    await act(async () => buttons("Withdraw…")[0].click());
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+    expect(rows()).toHaveLength(0);
+    expect(withdrawnRegion()).toBe(region);
+    expect(region.textContent).toBe("Withdrawn everywhere.");
+    expect(region.firstElementChild).not.toBe(first);
+    expect(listRegion().textContent).toBe("Your instructions, 2 items.");
+    expect(document.querySelector(".pl-toast__msg")).toBeNull();
+  });
+
+  it("falls back to the toast on a host that passes no withdraw announcement", async () => {
+    const row = wideRow("dir-i1");
+    setItems([row]);
+    const onBack = vi.fn();
+    await act(async () => root.render(<ToastProvider>{sections.get("directives")!.render({
+      sources: data.sources, state: { itemId: "directive:dir-i1" }, onOpen: vi.fn(), onBack, sessionId: "here",
+    })}</ToastProvider>));
+    await act(async () => buttons("Withdraw…")[0].click());
+    await act(async () => buttons("Withdraw everywhere")[0].click());
+    expect(onBack).toHaveBeenCalled();
     expect(document.querySelector(".pl-toast__msg")?.textContent).toContain("Withdrawn.");
   });
 
@@ -1064,6 +1103,9 @@ describe("Instance-wide standing orders (work-view-additions §3, §4)", () => {
     await act(async () => buttons("Withdraw")[0].click());
     expect(dir.revoke).toHaveBeenCalledWith("mine", "");
     expect(withdrawApi).not.toHaveBeenCalled();
+    // The chat path keeps its toast and never uses the withdraw region.
+    expect(document.querySelector(".pl-toast__msg")?.textContent).toBe("Withdrawn. The agent won't treat it as approved from its next turn.");
+    expect(withdrawnRegion().textContent).toBe("");
   });
 });
 
