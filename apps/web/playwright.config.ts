@@ -10,9 +10,11 @@ const BASE = process.env.FLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   // The console CSP (bd-9ih.13): the mock server enforces it and logs any violation; the teardown
-  // fails the run if anything was blocked.
-  globalSetup: "./e2e/csp-setup.mjs",
-  globalTeardown: "./e2e/csp-teardown.mjs",
+  // fails the run if anything was blocked. The same pair also fails the run, with the exit code
+  // or signal and the last error, if the mock server process exited part-way (#5712); it calls
+  // csp-teardown.mjs, which still does the CSP half.
+  globalSetup: "./e2e/mock-server-setup.mjs",
+  globalTeardown: "./e2e/mock-server-exit.mjs",
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
   fullyParallel: true,
@@ -87,7 +89,8 @@ export default defineConfig({
     },
   ],
   webServer: process.env.FLOW_BASE_URL ? undefined : {
-    command: `node e2e/mock-server.mjs ${PORT}`,
+    // The supervisor runs mock-server.mjs and reports it if that process exits mid-run (#5712).
+    command: `node e2e/mock-server-run.mjs ${PORT}`,
     url: `${BASE}/app/`,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
