@@ -1598,6 +1598,21 @@ def _remember_scheduled_card(fingerprint: dict | None) -> None:
                 marker(fingerprint["job_id"], fingerprint["generation"])
 
 
+def _record_run_report(job_id: str, task_id: str, reported: bool) -> None:
+    """Stamp a completed scheduled run's history entry with whether it reported
+    (#5543): its result card posted (``True``) or it had nothing to report
+    (``False``). The scheduler's ``occurrences`` ledger is the one run-history
+    source (ADR 0135 D8), so this only hands it the decision made here. Best-effort:
+    a backend without the method, or any failure, just leaves the run unknown."""
+    recorder = getattr(getattr(STATE, "scheduler", None), "record_run_report", None)
+    if not callable(recorder) or not job_id or not task_id:
+        return
+    try:
+        recorder(job_id, task_id, reported)
+    except Exception:  # noqa: BLE001 — history bookkeeping never breaks a delivery
+        log.exception("[scheduler] could not record whether job %s reported", job_id)
+
+
 def _job_origin_session(job_id: str) -> str:
     """The ``origin_session`` stamped on scheduler job ``job_id``, or ``""``.
 
@@ -1683,8 +1698,9 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
     Also ``None`` when a COMPLETED run has nothing new to report (bd-x66jt): an empty
     final answer or an explicit ``NO_UPDATE`` quiet reply, or a normalized answer equal
     to the last card delivered for the same job generation. The run itself is still
-    recorded (occurrence, Activity entry) — only the chat card is suppressed. Errors
-    and failed turns always post."""
+    recorded (occurrence, Activity entry) — only the chat card is suppressed, and the
+    run's history entry is stamped ``reported: false`` (#5543). Errors and failed turns
+    always post."""
     if getattr(outcome, "origin", "") != "scheduler":
         return None
     job_id = (getattr(outcome, "trigger", "") or "").strip()
@@ -1727,12 +1743,14 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
             # Nothing new to report: no empty card, no NO_UPDATE card. The occurrence
             # and the Activity entry still record the run.
             log.info("[scheduler] job %s reported nothing new — skipping the result card", job_id)
+            _record_run_report(job_id, getattr(outcome, "task_id", "") or "", False)
             return None
         if _SCHEDULED_CARD_HASHES.get(job_id) == (generation, digest):
             log.info(
                 "[scheduler] job %s repeated its last delivered result — skipping the result card",
                 job_id,
             )
+            _record_run_report(job_id, getattr(outcome, "task_id", "") or "", False)
             return None
     if len(summary) > _SCHEDULED_SUMMARY_CAP:
         summary = summary[:_SCHEDULED_SUMMARY_CAP].rstrip() + "…"
@@ -2081,6 +2099,11 @@ def _post_scheduled_card(payload: dict, fingerprint: dict | None) -> None:
     payload = {**payload, "notice_id": uuid4().hex}
     _event_bus.publish("scheduler.completed", payload)
     _remember_scheduled_card(fingerprint)
+    # Run history (#5543): the run's OWN result card posted. A fingerprint-less
+    # payload is the follow-up "still waiting" card — that run itself stayed quiet
+    # and was already recorded so. Failed and canceled runs keep ``reported`` unknown.
+    if fingerprint and str(payload.get("status") or "") == "completed":
+        _record_run_report(str(payload.get("job_id") or ""), str(payload.get("task_id") or ""), True)
     _notify_scheduled_card(payload)
 
 
