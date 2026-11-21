@@ -197,14 +197,21 @@ describe("chips", () => {
     expect(state.ledgerSessions[0]).toBe(SESSION);
   });
 
-  it("uses the spinner with no goal, pluralizes Instructions, and keeps only started blocked work in Doing now", async () => {
+  it("uses the still Play icon (no spinner) with no goal, pluralizes Instructions, and keeps only started blocked work in Doing now", async () => {
     await render(rail([bg("bg-run", "running", SESSION), directive("d1", SESSION), directive("d2", SESSION)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");
-    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeTruthy();
+    const play = chip("doing-now")!.querySelector(".lucide-play");
+    expect(play).toBeTruthy();
+    expect(play!.getAttribute("aria-hidden")).toBe("true");
+    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull(); // nothing in the chip animates
+    expect(chip("doing-now")!.querySelector(".lucide-target")).toBeNull();
     expect(chip("instructions")!.getAttribute("aria-label"))
       .toBe("Instructions: 2 instructions in force in this chat. Show details");
     await render(rail(MIXED));
-    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull(); // goal → target icon
+    expect(chip("doing-now")!.querySelector(".lucide-target")).toBeTruthy(); // goal → target icon
+    expect(chip("doing-now")!.querySelector(".lucide-play")).toBeNull();
+    expect(chip("doing-now")!.querySelector(".pl-spinner")).toBeNull();
+    expect(chip("doing-now")!.textContent).toContain("goal 3/8");
     // started: false is the selector's only "never ran" proof — absent means it did start.
     await render(rail([task("t-blocked", "blocked", SESSION, true), task("t-waiting", "blocked", SESSION, false)]));
     expect(chip("doing-now")!.textContent).toBe("Doing now 1");

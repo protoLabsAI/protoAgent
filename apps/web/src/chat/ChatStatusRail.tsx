@@ -24,9 +24,9 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefAttributes } from "react";
 import { Button, type ButtonProps } from "@protolabsai/ui/primitives";
-import { Skeleton, Spinner, StatusDot } from "@protolabsai/ui/data";
+import { Skeleton, StatusDot } from "@protolabsai/ui/data";
 import { Drawer, Popover } from "@protolabsai/ui/overlays";
-import { Clock, Target, Users } from "lucide-react";
+import { Clock, Play, Target, Users } from "lucide-react";
 
 import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
@@ -167,13 +167,14 @@ export function trapTab(event: ReactKeyboardEvent<HTMLElement>) {
 }
 
 /** The chip's leading glyph. The goal stays visible inside the Doing now chip; with no goal
- *  it uses the spinner. DS Spinner/StatusDot carry their own status semantics — wrapped
+ *  it uses a still Play icon: nothing in the chip animates, so a tracked task with nothing
+ *  running never reads as live work. DS StatusDot carries its own status semantics — wrapped
  *  aria-hidden so the rail keeps exactly ONE live region (§6). */
 function chipIcon(chip: RailChip): ReactNode {
   if (chip.problem) return <span aria-hidden="true"><StatusDot status="warning" /></span>;
   switch (chip.id) {
     case "doing-now":
-      return chip.goal ? <Target size={12} aria-hidden /> : <span aria-hidden="true"><Spinner size={12} /></span>;
+      return chip.goal ? <Target size={12} aria-hidden /> : <Play size={12} aria-hidden />;
     case "coming-up":
       return <Clock size={12} aria-hidden />;
     case "instructions":
