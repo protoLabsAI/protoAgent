@@ -567,3 +567,20 @@ def test_registry_override_editor_reads_preserves_and_respects_locked_config():
     cfg.settings_hidden = ["subagents"]
     assert not any(f["key"] == "subagents" for g in build_schema(cfg) for f in g["fields"])
     assert validate_flat({"subagents": overrides}, hidden=cfg.settings_hidden)[0] is False
+
+
+def test_mcp_sharing_field_reads_in_plain_words():
+    """Settings ▸ MCP's "Sharing" chip renders this field verbatim (label, description and
+    option text), so the storage vocabulary must not reach it. The stored values stay
+    ``scoped`` / ``layered`` — only what the picker shows is relabelled."""
+    import re
+
+    field = next(f for g in build_schema(LangGraphConfig()) for f in g["fields"] if f["key"] == "mcp.scope")
+    assert field["options"] == ["scoped", "layered"]
+    assert set(field["option_labels"]) == set(field["options"])
+    shown = " ".join([field["label"], field["description"], *field["option_labels"].values()])
+    assert not re.search(r"\b(commons|box|layered|scoped|stdio)\b", shown, re.I), shown
+    assert validate_flat({"mcp.scope": "layered"}) == (True, None)
+    # A select without labels keeps the wire shape it always had.
+    skills = next(f for g in build_schema(LangGraphConfig()) for f in g["fields"] if f["key"] == "skills.scope")
+    assert "option_labels" not in skills

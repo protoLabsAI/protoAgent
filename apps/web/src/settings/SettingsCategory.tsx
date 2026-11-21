@@ -858,7 +858,7 @@ export function SettingInput({ field, value, onChange, parentChain, inheritanceD
         className="setting-input"
         value={String(value ?? "")}
         onValueChange={(v) => onChange(v)}
-        options={field.options.map((opt) => ({ value: opt, label: opt }))}
+        options={field.options.map((opt) => ({ value: opt, label: field.option_labels?.[opt] ?? opt }))}
       />
     );
   }

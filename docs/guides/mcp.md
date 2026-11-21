@@ -7,10 +7,13 @@ OS sandbox.
 
 ## Add a server
 
-1. Open **Settings → MCP**. Use the catalog for a listed integration, or **Add server**.
-2. For a local `stdio` server, enter its command and arguments. The command must
-   be available on the machine running protoAgent. For `http` or `sse`, enter
-   the server URL; `localhost` refers to that machine, not your browser.
+1. Open **Settings → MCP**. Choose **Browse servers** for a listed integration, or
+   **Add your own** (**Add server** once at least one server is connected).
+2. For a server that **Runs on this computer**, enter its command and arguments.
+   The command must be available on the machine running protoAgent. For a
+   **Web address**, enter the server URL; `localhost` refers to that machine, not
+   your browser. If the provider says the server uses the older SSE connection,
+   open **Advanced** and set **Connection type** to **Older servers (SSE)**.
 3. If the provider supplies configuration, choose **Paste JSON**. It accepts a
    standard `mcpServers` object or a single server definition. Include required
    environment values or headers in the supplied configuration.

@@ -3,13 +3,17 @@ import { act, createElement as h, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
-import { runtimeStatusQuery } from "../lib/queries";
+import { runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { McpPanel } from "./McpPanel";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("@protolabsai/ui/overlays", () => ({
   useToast: () => toast,
+  // The REAL QuickSetting (the "Sharing" chip) renders through this, so its dialog copy
+  // is part of the panel's visible text under test.
+  Dialog: ({ open, title, children, footer }: { open: boolean; title: string; children: ReactNode; footer?: ReactNode }) =>
+    open ? h("div", { role: "dialog" }, h("h2", null, title), children, footer) : null,
   ConfirmDialog: ({ open, title, children, onConfirm, confirmLabel }: {
     open: boolean; title: string; children: ReactNode; onConfirm: () => void; confirmLabel: string;
   }) => open ? h("div", { role: "dialog" }, title, children, h("button", { onClick: onConfirm }, confirmLabel)) : null,
@@ -23,7 +27,6 @@ vi.mock("@protolabsai/ui/forms", () => ({
     options.map(({ value, label }) => h("option", { key: value, value }, label))),
 }));
 vi.mock("./NodeRuntimeCard", () => ({ NodeRuntimeCard: () => null }));
-vi.mock("../settings/QuickSetting", () => ({ QuickSetting: ({ label }: { label: string }) => h("button", null, label) }));
 vi.mock("./McpCatalogDialog", () => ({
   McpCatalogDialog: ({ open }: { open: boolean }) => open ? h("div", { role: "dialog" }, "Server catalog") : null,
 }));
@@ -133,4 +136,27 @@ it("labels shared servers and preserves share, refresh, and confirmed unshare ac
   act(() => button("Unshare").click());
   await vi.waitFor(() => expect(forget).toHaveBeenCalledWith("example"));
   await vi.waitFor(() => expect(button("Share")).toBeDefined());
+});
+it("opens Sharing with plain choices that still save the stored value", async () => {
+  // The field as the server's settings schema emits it (pinned by
+  // tests/test_settings_schema.py::test_mcp_sharing_field_reads_in_plain_words).
+  const field = {
+    key: "mcp.scope", label: "MCP server sharing", type: "select", section: "MCP", restart: false,
+    description: "Which MCP servers this agent uses: only the ones added to this agent, or those plus the servers shared with every agent on this computer.",
+    options: ["scoped", "layered"],
+    option_labels: { scoped: "Only this agent's servers", layered: "This agent's servers and shared ones" },
+    value: "scoped", default: "", scope: "agent", source: "default",
+  };
+  const save = vi.spyOn(api, "saveSettings").mockResolvedValue({ ok: true, messages: [] } as unknown as Awaited<ReturnType<typeof api.saveSettings>>);
+  mount();
+  client.setQueryData<unknown>(settingsSchemaQuery().queryKey, { groups: [{ section: "MCP", fields: [field] }] });
+  act(() => (container.querySelector('button[aria-label="Sharing"]') as HTMLButtonElement).click());
+  const dialog = container.querySelector('[role="dialog"]')!;
+  expect(dialog.querySelector("h2")?.textContent).toBe("Sharing");
+  const select = dialog.querySelector("select") as HTMLSelectElement;
+  expect([...select.options].map((o) => o.textContent)).toEqual(["Only this agent's servers", "This agent's servers and shared ones"]);
+  expectPlainCopy();
+  change('[role="dialog"] select', "layered");
+  act(() => button("Save").click());
+  await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ "mcp.scope": "layered" }, "agent"));
 });

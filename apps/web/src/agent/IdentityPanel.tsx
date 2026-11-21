@@ -94,7 +94,7 @@ export function IdentityPanel() {
     <section className="panel stage-panel">
       <PanelHeader
         title="Identity"
-        kicker="who this agent is — its name and persona (SOUL.md)"
+        kicker="Name and persona"
         actions={
           <Button
             variant="primary"
@@ -103,7 +103,7 @@ export function IdentityPanel() {
             onClick={() => save.mutate()}
             data-testid="identity-save"
           >
-            <Save size={15} /> {save.isPending ? "Saving…" : "Save & reload"}
+            <Save size={15} /> {save.isPending ? "Saving…" : "Save"}
           </Button>
         }
       />
@@ -116,15 +116,11 @@ export function IdentityPanel() {
               <span>Agent name</span>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-agent" data-testid="identity-name" />
             </label>
-            {/* What saving does — kept ABOVE the editor so the SOUL.md editor runs to the panel
-                bottom. Save success/failure is reported via toast, not an inline strip. */}
-            <p className="muted soul-hint">
-              Saving updates the name (settings cascade) and writes SOUL.md, then hot-reloads the agent.
-              The name updates the A2A card and console.
-            </p>
+            {/* No "what saving does" hint here: the copy names no file or internal mechanism.
+                Save success/failure is reported via toast, not an inline strip. */}
             <div className="field soul-field">
               <div className="soul-head">
-                <span>SOUL.md — the agent's persona &amp; system identity</span>
+                <span>Persona</span>
                 <div className="soul-head-actions">
                   <SoulHistoryButton onRestored={handleRestored} />
                   <Button variant="ghost" type="button" onClick={() => setEditing((e) => !e)} data-testid="identity-soul-toggle">
@@ -144,7 +140,7 @@ export function IdentityPanel() {
                 />
               ) : (
                 <div className="soul-preview markdown-body" data-testid="identity-soul-preview" onDoubleClick={() => setEditing(true)}>
-                  <Markdown>{soul.trim() || "_Empty — click **Edit** to write this agent's persona._"}</Markdown>
+                  <Markdown>{soul.trim() || "No persona yet. Select **Edit** to write one."}</Markdown>
                 </div>
               )}
             </div>
