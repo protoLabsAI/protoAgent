@@ -74,6 +74,8 @@ class PushTransport:
 
     ``eligible`` can consult authoritative decision state before each attempt;
     false discards obsolete prompts without persisting a second notice record.
+    ``delay`` is asked once per notice, when its rows are first written, how long to
+    hold the first attempt (#5669); it never drops a row and is not read again.
     Queue overflow raises visibly before any part of that fanout is inserted.
     """
 
@@ -82,6 +84,7 @@ class PushTransport:
         jitter: Callable[[], float] = random.random, max_attempts: int = 5,
         capacity: int = 10000, concurrency: int = 8, timeout: float = 15,
         eligible: Callable[[str], bool] = lambda notice_id: True,
+        delay: Callable[[str], float] = lambda notice_id: 0.0,
     ):
         if not 1 <= max_attempts <= 5 or capacity < 1 or concurrency < 1:
             raise ValueError("invalid push delivery bounds")
@@ -89,6 +92,7 @@ class PushTransport:
             raise ValueError("timeout must be positive and finite")
         self.provider = provider
         self.clock, self.jitter, self.eligible = clock, jitter, eligible
+        self.delay = delay
         self.max_attempts, self.capacity, self.timeout = max_attempts, capacity, timeout
         self._slots = asyncio.Semaphore(concurrency)
         self._wake = asyncio.Event()
@@ -170,6 +174,7 @@ class PushTransport:
             device = devices.get_device(view["id"])
             if device and device.kind == devices.KIND_DEVICE and not device.is_expired(now) and device.push:
                 recipients.append(device)
+        first_at = now + self._first_delay(notice.notice_id)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM attempts WHERE expires_at <= ?", (now,))
@@ -180,11 +185,20 @@ class PushTransport:
                     (notice_id, device_id, generation, kind, importance, created_at, expires_at, next_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (notice.notice_id, device.id, device.push.generation, notice.kind,
-                     notice.importance, notice.created_at, notice.expires_at, now),
+                     notice.importance, notice.created_at, notice.expires_at, first_at),
                 ).rowcount
             if db.execute("SELECT count(*) FROM attempts").fetchone()[0] > self.capacity:
                 raise OverflowError("push delivery ledger capacity reached")
         return added
+
+    def _first_delay(self, notice_id: str) -> float:
+        """Seconds to hold a new row's first attempt; anything unusable means no hold."""
+        try:
+            held = float(self.delay(notice_id))
+        except Exception:
+            logger.debug("Push delay for %s could not be read; sending at once", notice_id, exc_info=True)
+            return 0.0
+        return held if math.isfinite(held) and held > 0 else 0.0
 
     async def deliver(self, notice: ChatNotice) -> None:
         """Notice-adapter entrypoint; enqueue durably before attempting delivery."""

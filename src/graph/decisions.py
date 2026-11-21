@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import secrets
 import sqlite3
 import contextlib
@@ -689,3 +691,48 @@ def push_eligible(notice_id: str) -> bool:
         return True
     rec = decision_store().get(notice_id[len(prefix):])
     return rec is None or rec.pending
+
+
+def _env_grace_s(default: float) -> float:
+    raw = os.environ.get("PA_DECISION_PUSH_GRACE_S")
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+#: How long a hub decision's first phone push waits when the operator is at that chat
+#: (#5669). Test seam: ``PA_DECISION_PUSH_GRACE_S``, read once at import, overrides it when
+#: it is a positive finite float; anything else is ignored.
+GRACE_S = _env_grace_s(75.0)
+
+
+def push_delay(notice_id: str) -> float:
+    """Seconds to hold the FIRST phone push for ``notice_id`` (#5669): delay, never drop.
+
+    ``GRACE_S`` only when ``notice_id`` is a ``decision-<id>`` this hub's store holds, the
+    decision is pending, and a console freshly reports the operator active in its chat
+    (``operator_presence.operator_at``). Everything else is 0.0: another notice, a member's
+    relayed decision (its id is not in the hub's store), nobody at the chat, or any error
+    here (fail open: push at once).
+
+    The transport reads this once, when it writes the push row, and it only moves that
+    row's first ``next_at`` later. Presence is never read at send time and never makes a
+    row obsolete: ``push_eligible`` alone decides that, from the decision's own state.
+    """
+    prefix = "decision-"
+    try:
+        if not notice_id.startswith(prefix):
+            return 0.0
+        rec = decision_store().get(notice_id[len(prefix):])
+        if rec is None or not rec.pending:
+            return 0.0
+        from graph import operator_presence
+
+        return GRACE_S if operator_presence.operator_at(rec.session_id) else 0.0
+    except Exception:
+        log.debug("push_delay(%r) failed; pushing at once", notice_id, exc_info=True)
+        return 0.0
