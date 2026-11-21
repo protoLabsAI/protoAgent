@@ -23,7 +23,7 @@ test("MCP tab lists servers and adds one inline", async ({ page }) => {
   await page.locator(".pl-sidenav").getByRole("tab", { name: "MCP", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
-  await expect(page.getByText("echo · stdio")).toBeVisible();
+  await expect(page.locator(".mcp-server-name").filter({ hasText: "echo" })).toBeVisible();
 
   // Add a stdio server inline.
   await page.getByRole("button", { name: /Add server/ }).click();
@@ -52,7 +52,7 @@ test("MCP catalog quick-adds a common server that needs an input", async ({ page
   await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "MCP", exact: true }).click();
 
-  await page.getByRole("button", { name: /Browse common servers/ }).click();
+  await page.getByRole("button", { name: /Browse servers/ }).click();
   // Scope to the dialog — the panel behind it has its own "Add server" trigger. The
   // catalog search field renders only in the dialog's browse view (a clean open signal).
   const dialog = page.getByRole("dialog", { name: "Add a common MCP server" });
@@ -66,7 +66,7 @@ test("MCP catalog quick-adds a common server that needs an input", async ({ page
   // A successful add closes the dialog, hints, and the server joins the list.
   await expect(page.getByLabel("search MCP servers")).toHaveCount(0);
   await expect(page.locator(".pl-toast", { hasText: "Connected filesystem" })).toBeVisible();
-  await expect(page.getByText("filesystem · stdio")).toBeVisible();
+  await expect(page.locator(".mcp-server-name").filter({ hasText: "filesystem" })).toBeVisible();
 });
 
 test("MCP catalog adds a no-input server in one click", async ({ page }) => {
@@ -74,7 +74,7 @@ test("MCP catalog adds a no-input server in one click", async ({ page }) => {
   await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "MCP", exact: true }).click();
 
-  await page.getByRole("button", { name: /Browse common servers/ }).click();
+  await page.getByRole("button", { name: /Browse servers/ }).click();
   const dialog = page.getByRole("dialog", { name: "Add a common MCP server" });
   await expect(dialog.getByLabel("search MCP servers")).toBeVisible();
 
@@ -82,7 +82,7 @@ test("MCP catalog adds a no-input server in one click", async ({ page }) => {
   await dialog.locator(".mcp-catalog-card", { hasText: "Memory" }).getByRole("button", { name: "Add" }).click();
   await expect(page.getByLabel("search MCP servers")).toHaveCount(0);
   await expect(page.locator(".pl-toast", { hasText: "Connected memory" })).toBeVisible();
-  await expect(page.getByText("memory · stdio")).toBeVisible();
+  await expect(page.locator(".mcp-server-name").filter({ hasText: "memory" })).toBeVisible();
 });
 
 // Box-commons sharing (ADR 0041): when the agent is layered, each server shows a
@@ -97,16 +97,16 @@ test("MCP servers show tier badges and share / unshare", async ({ page }, testIn
 
   const sharedRow = page.locator(".table-row", { hasText: "shared-fs" });
   const localRow = page.locator(".table-row", { hasText: "local-fs" });
-  await expect(sharedRow.getByText("commons")).toBeVisible();
+  await expect(sharedRow.locator(".pl-badge").filter({ hasText: "Shared" })).toBeVisible();
   await expect(localRow.getByText("private")).toBeVisible();
 
   // Share the private server → it joins the commons (badge flips).
   await page.getByRole("button", { name: "share local-fs" }).click();
-  await expect(localRow.getByText("commons")).toBeVisible();
+  await expect(localRow.locator(".pl-badge").filter({ hasText: "Shared" })).toBeVisible();
 
   // Unshare a commons server → confirm → it goes private again.
   await page.getByRole("button", { name: "unshare shared-fs" }).click();
-  await page.getByRole("dialog", { name: "Unshare from the box commons?" })
+  await page.getByRole("dialog", { name: "Stop sharing shared-fs?" })
     .getByRole("button", { name: "Unshare", exact: true }).click();
   await expect(sharedRow.getByText("private")).toBeVisible();
 });

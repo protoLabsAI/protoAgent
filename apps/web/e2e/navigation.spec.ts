@@ -43,7 +43,7 @@ test("settings dialog: Identity, then Tools and MCP sections", async ({ page }) 
   await expect(page.getByText("web_search")).toBeVisible();
 
   await page.locator(".pl-sidenav").getByRole("tab", { name: "MCP", exact: true }).click();
-  await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
+  await expect(page.locator(".mcp-server-name").filter({ hasText: /^echo$/ })).toBeVisible(); // MCP server
 });
 
 test("plugins section: Installed / Discover (config + advanced install folded in)", async ({ page }) => {

@@ -537,6 +537,10 @@ export type SettingsField = {
   description?: string;
   restart: boolean;
   options: string[];
+  // Plain-language text for a "select" field's options ({stored value: visible text}).
+  // The saved value is still the option itself; an option with no entry — or a core
+  // that predates this key — shows its raw value.
+  option_labels?: Record<string, string>;
   // Where `options` come from: "models" / "models+acp" → the gateway's model list. The Model
   // settings "Get models" action (#1386) merges a freshly-probed list into these fields.
   options_source?: string;

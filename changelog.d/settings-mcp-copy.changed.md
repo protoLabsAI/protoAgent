@@ -1,0 +1,1 @@
+- **MCP settings explain outside apps and connection choices in plain language.** Browse servers or add your own, connect older web servers through Advanced, and see which servers are shared with every agent on this computer.
