@@ -4,10 +4,8 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, ApiError, type PushKeys, type PushKeyVersion } from "../lib/api";
 
 export const KEY_COPY = {
-  fullAccessOnly: "Only full-access sign-ins can manage the notification key.",
   loadFailed: "Couldn't load the notification key.",
   rotateFailed: "Couldn't rotate the notification key. Try again.",
-  none: "No notification key yet. This agent creates one when a device first turns on notifications.",
 } as const;
 
 type View =
@@ -39,6 +37,11 @@ function retiringLine(key: PushKeyVersion, count: number, now: number): string {
  *  how many devices still sit on a version that is on its way out, and "Rotate key…". Shows
  *  versions and dates only: never a key, public or private. There is deliberately no control
  *  here for retiring a compromised key.
+ *
+ *  The card renders nothing unless the caller has full access AND a key exists (active or
+ *  retiring): an empty state shows only when it has a button, so "no key yet", a refused
+ *  (403) sign-in and the first load all leave no DOM. The one keyless state that stays is a
+ *  failed read, because it carries "Try again".
  *
  *  `fullAccess` is the `caller` of `GET /api/devices`: a device-scope sign-in gets no card
  *  and makes no request, since the server refuses it the rotation anyway. */
@@ -109,7 +112,7 @@ function KeyCard() {
     } catch (err) {
       if (!alive.current) return;
       if (forbidden(err)) {
-        // Not this sign-in's to do: the sentence replaces the button for good.
+        // Not this sign-in's to do: the card goes away for good.
         ticket.current++;
         setView({ kind: "forbidden" });
         setConfirming(false);
@@ -127,16 +130,15 @@ function KeyCard() {
   const retiring = keys.filter((k) => !k.active && typeof k.retire_after === "number");
   const now = Date.now() / 1000;
 
+  // Nothing to act on (no key yet, not this sign-in's to manage, or still loading): no card.
+  const hasKey = Boolean(active) || retiring.length > 0;
+  if (view.kind !== "trouble" && !hasKey) return null;
+
   return (
     <section className="devices-push" data-testid="notification-key-card" data-state={view.kind} aria-labelledby={headingId}>
       <h3 id={headingId} className="devices-push-heading">
         Notification key
       </h3>
-      {view.kind === "forbidden" && (
-        <p className="devices-pair-hint" data-testid="notification-key-forbidden">
-          {KEY_COPY.fullAccessOnly}
-        </p>
-      )}
       {view.kind === "trouble" && (
         <>
           <p className="devices-pair-hint">{KEY_COPY.loadFailed}</p>
@@ -150,7 +152,7 @@ function KeyCard() {
       {data && (
         <>
           <div className="devices-push-state">
-            {active ? <strong>Key version {active.version} · active</strong> : <p>{KEY_COPY.none}</p>}
+            {active && <strong>Key version {active.version} · active</strong>}
             {retiring.map((k) => (
               <p key={k.version} data-testid={`notification-key-retiring-${k.version}`}>
                 {retiringLine(k, data.bindings_by_version?.[String(k.version)] ?? 0, now)}
