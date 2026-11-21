@@ -965,6 +965,15 @@ def _policy_tool_map(config, subagent_type: str, tool_map: dict) -> dict:
     return {name: tool for name, tool in tool_map.items() if name in allowed}
 
 
+# A CLOSED fenced code block: an opening run of 3+ backticks or tildes at line start (up
+# to 3 spaces of indent, optional info string), through a closing line of the same run or
+# longer. An opener with no closer does not match, so it cannot swallow the prose after it.
+_FENCED_BLOCK_RE = re.compile(
+    r"^[ ]{0,3}(?P<fence>(?P<ch>[`~])(?P=ch){2,})[^`\n]*\n(?:.*?\n)??[ ]{0,3}(?P=fence)(?P=ch)*[ \t\r]*$",
+    re.MULTILINE | re.DOTALL,
+)
+
+
 def _prompt_missing_tools(prompt: str, lead_tool_names, sub_tool_names) -> list[str]:
     """Lead tool names a delegation PROMPT asks for that the subagent was never bound (#4327).
 
@@ -976,8 +985,13 @@ def _prompt_missing_tools(prompt: str, lead_tool_names, sub_tool_names) -> list[
     require explicit backticks or call syntax: `` `calculator` `` or ``calculator(...)``.
     Structured names such as ``read_file`` match bare whole identifiers. A name the lead
     itself lacks is never flagged. Returned in first-mention order for stable messages.
+
+    Closed fenced code blocks (``` … ``` / ``~~~ … ~~~``, any language tag) are skipped:
+    they carry quoted DATA — JSON, logs, diffs — not a request to call a tool. Without
+    that, a self-improvement review was refused because the finished goal's JSON record
+    happened to name ``request_decision`` (#5677). An unclosed fence hides nothing.
     """
-    text = prompt or ""
+    text = _FENCED_BLOCK_RE.sub("\n", prompt or "")
     gap = {str(n) for n in lead_tool_names} - {str(n) for n in sub_tool_names}
     hits: list[tuple[int, str]] = []
     for name in gap:

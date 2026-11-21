@@ -136,6 +136,66 @@ def test_scan_matches_whole_identifiers_only():
     assert missing == []
 
 
+# ── #5677: fenced code blocks are quoted data, not a request for a tool ───────
+
+_FENCE_LEAD = [*RESEARCHER_TOOLS, "request_decision", "read_file", "run_command"]
+_FENCED_RECORD = '{"condition": "call request_decision, then read_file and run_command"}'
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        f"```json\n{_FENCED_RECORD}\n```",
+        f"```\n{_FENCED_RECORD}\n```",
+        f"~~~json\n{_FENCED_RECORD}\n~~~",
+        f"~~~\n{_FENCED_RECORD}\n~~~",
+        f"````diff\n```\n{_FENCED_RECORD}\n```\n````",
+        f"```json\r\n{_FENCED_RECORD}\r\n```",
+    ],
+    ids=["backtick-json", "backtick-bare", "tilde-json", "tilde-bare", "nested-longer-fence", "crlf"],
+)
+def test_scan_skips_closed_fenced_blocks(block):
+    prompt = f"Review the record below; it is data.\n{block}\nSummarize what you find."
+    assert _prompt_missing_tools(prompt, _FENCE_LEAD, RESEARCHER_TOOLS) == []
+
+
+def test_scan_still_flags_prose_outside_any_fence():
+    prompt = "use request_decision to ask"
+    assert _prompt_missing_tools(prompt, _FENCE_LEAD, RESEARCHER_TOOLS) == ["request_decision"]
+    tool_map = {t.name: t for t in _lead_tools(["request_decision"])}
+    gap = _dispatch_tool_gap(LangGraphConfig(), "researcher", prompt, tool_map, set(tool_map))
+    assert gap is not None and gap.startswith("Not dispatched: subagent 'researcher'")
+    assert "request_decision" in gap
+
+
+def test_scan_flags_a_name_mentioned_both_inside_and_outside_a_fence():
+    prompt = f"```json\n{_FENCED_RECORD}\n```\nNow use request_decision to ask the operator."
+    assert _prompt_missing_tools(prompt, _FENCE_LEAD, RESEARCHER_TOOLS) == ["request_decision"]
+    # Each fence closes on its own: prose BETWEEN two blocks is still scanned.
+    between = f"```\n{_FENCED_RECORD}\n```\nThen run_command the build.\n```\nread_file\n```"
+    assert _prompt_missing_tools(between, _FENCE_LEAD, RESEARCHER_TOOLS) == ["run_command"]
+
+
+@pytest.mark.parametrize("opener", ["```json", "```", "~~~"])
+def test_unclosed_fence_does_not_hide_later_prose(opener):
+    prompt = f"Record:\n{opener}\n{_FENCED_RECORD}\nThen use read_file on the result."
+    assert _prompt_missing_tools(prompt, _FENCE_LEAD, RESEARCHER_TOOLS) == [
+        "request_decision",
+        "read_file",
+        "run_command",
+    ]
+
+
+def test_inline_backticks_are_not_a_fence():
+    # Single-backtick handling is untouched: an inline reference is still explicit.
+    assert _prompt_missing_tools("Use `calculator` and `read_file`.", ["calculator", "read_file"], []) == [
+        "calculator",
+        "read_file",
+    ]
+    # A triple-backtick span on ONE line is inline code, not a fenced block.
+    assert _prompt_missing_tools("Call ```read_file``` now.", ["read_file"], []) == ["read_file"]
+
+
 # ── r1: a prompt naming a missing lead tool refuses, graph never invoked ───────
 
 
