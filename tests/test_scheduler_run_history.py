@@ -9,7 +9,7 @@ ones the dispatch path itself wrote.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -177,3 +177,144 @@ def test_unresolved_and_outcome_less_runs_never_read_as_ok_or_failed(state, task
            "task_state": task_state, "diagnostic": diagnostic, "task_id": "t", "message_id": "m"}
     run = _row_to_run(row)
     assert (run["ok"], run["error"]) == (ok, error)
+
+
+# ── run timing + reported (#5543 S2) ─────────────────────────────────────────
+
+
+def _done(task_id: str) -> dict:
+    return {"result": {"task": {"id": task_id, "status": {"state": "TASK_STATE_COMPLETED"}}}}
+
+
+def _utc(stamp: str) -> datetime:
+    parsed = datetime.fromisoformat(stamp)
+    assert parsed.utcoffset() == timedelta(0)  # ISO, and UTC
+    return parsed
+
+
+@pytest.mark.asyncio
+async def test_a_sent_and_completed_run_carries_start_end_and_duration(history):
+    client, sched, fire = history
+    sched.add_job("nightly sweep", "0 9 * * *", job_id="j1")
+    before = datetime.now(UTC)
+    await fire("j1", _OK)
+    (run,) = client.get("/api/scheduler/jobs/j1/runs").json()["runs"]
+    started, ended = _utc(run["started_at"]), _utc(run["ended_at"])
+    assert before <= started <= ended <= datetime.now(UTC)
+    assert run["duration_s"] == (ended - started).total_seconds()
+    assert (run["state"], run["ok"], run["reported"]) == ("settled", True, None)  # no card decision yet
+
+    # A failure settled on the fire path itself (no task handle) is timed the same way.
+    await fire("j1", _FAILED_NO_HANDLE)
+    failed = sched.list_runs("j1")[0]
+    assert failed["ok"] is False and failed["duration_s"] >= 0 and failed["reported"] is None
+
+
+@pytest.mark.asyncio
+async def test_unsettled_runs_have_no_end_and_no_duration(history, monkeypatch):
+    import scheduler.local as local
+
+    _, sched, fire = history
+    working = {"result": {"task": {"id": "t-long", "status": {"state": "TASK_STATE_WORKING"}}}}
+    no_handle = {"result": {"status": {"state": "TASK_STATE_WORKING"}}}
+    monkeypatch.setattr(local, "_POLL_INTERVAL_S", 0.01)
+    sched._fire_timeout_s = 0.05  # the bounded wait runs out while the turn still works
+    for job_id, body in (("running", working), ("unknown", no_handle)):
+        sched.add_job("nightly sweep", "0 9 * * *", job_id=job_id)
+        await fire(job_id, body)
+    sched.add_job("nightly sweep", "0 9 * * *", job_id="claimed")
+    assert sched._claim_occurrence(sched.get_job("claimed"))  # claimed, never sent
+
+    for job_id in ("running", "unknown", "claimed"):
+        (run,) = sched.list_runs(job_id)
+        assert run["state"] == job_id
+        assert (run["ended_at"], run["duration_s"], run["reported"]) == (None, None, None)
+        # Sent runs know when they started; a merely claimed one does not.
+        assert (run["started_at"] is None) == (job_id == "claimed")
+
+
+@pytest.mark.asyncio
+async def test_reported_follows_the_result_card_decision(history, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from server import a2a
+
+    _, sched, fire = history
+    events: list = []
+    monkeypatch.setattr(a2a, "_SCHEDULED_CARD_HASHES", {})
+    monkeypatch.setattr(a2a, "_SCHEDULED_UNCHANGED_RUNS", {})
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda ev, d, **_kw: events.append((ev, d)))
+    monkeypatch.setattr(a2a, "_notify_scheduled_card", lambda _payload: None)
+    monkeypatch.setattr(a2a, "_followup_waiting_on_operator", lambda _sid: False)
+    monkeypatch.setattr(a2a, "_scheduled_home_session", lambda: "")
+
+    async def run(job_id: str, body: dict, text: str, state: str = "completed") -> None:
+        await fire(job_id, body)
+        pending = set(a2a._BG_WAKE_TASKS)
+        a2a._handle_scheduled_delivery(SimpleNamespace(
+            origin="scheduler", trigger=job_id, context_id=f"job:{job_id}", text=text,
+            state=state, task_id=body["result"]["task"]["id"],
+            error="model stream died" if state == "failed" else "",
+        ))
+        await asyncio.gather(*(a2a._BG_WAKE_TASKS - pending))
+
+    sched.add_job("watch the queue", "0 9 * * *", job_id="j1", origin_session="chat-42")
+    await run("j1", _done("t1"), "Two reviews landed.")
+    await run("j1", _done("t2"), "Checked again.\nNO_UPDATE")
+    await run("j1", _done("t3"), "")
+    await run("j1", _done("t4"), "Two reviews landed.")  # a repeat of the last card
+    await run("j1", _FAILED, "", state="failed")  # the failure card posts; not a report
+    assert sched._claim_occurrence(sched.get_job("j1"))  # an unsettled run
+
+    runs = sched.list_runs("j1")
+    assert [r["reported"] for r in runs] == [None, None, False, False, False, True]
+    assert [r["ok"] for r in runs] == [None, False, True, True, True, True]
+    cards = [d for ev, d in events if ev == "scheduler.completed"]
+    assert [c["status"] for c in cards] == ["completed", "failed"]
+
+    # A job with no chat to report to completes without a card decision: unknown.
+    sched.add_job("silent sweep", "0 9 * * *", job_id="j2")
+    await run("j2", _done("t5"), "NO_UPDATE")
+    assert [(r["ok"], r["reported"]) for r in sched.list_runs("j2")] == [(True, None)]
+
+
+@pytest.mark.asyncio
+async def test_record_run_report_matches_the_run_by_task_or_pending_claim(history):
+    _, sched, fire = history
+    sched.add_job("nightly sweep", "0 9 * * *", job_id="j1")
+    await fire("j1", _done("t1"))
+    assert sched.record_run_report("j1", "t-other", True) is False  # no such run, nothing claimed
+    assert sched.record_run_report("j1", "", True) is False
+    assert sched.list_runs("j1")[0]["reported"] is None
+
+    # The turn can end before the fire stored its task handle: the claimed slot takes it.
+    assert sched._claim_occurrence(sched.get_job("j1"))
+    assert sched.record_run_report("j1", "t2", False) is True
+    with sqlite3.connect(str(sched.path)) as db:
+        assert [r[0] for r in db.execute("SELECT reported FROM occurrences ORDER BY next_fire")] == [None, 0]
+    # ...and a quiet run stays unknown in history until it has actually completed.
+    assert [r["reported"] for r in sched.list_runs("j1")] == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_a_ledger_from_before_the_timing_columns_upgrades_in_place(history, tmp_path):
+    client, sched, fire = history
+    sched.add_job("nightly sweep", "0 9 * * *", job_id="j1")
+    await fire("j1", _OK)
+    with sqlite3.connect(str(sched.path)) as db:  # back to the pre-change table shape
+        for column in ("started_at", "ended_at", "reported"):
+            db.execute(f"ALTER TABLE occurrences DROP COLUMN {column}")
+        legacy = {r[1] for r in db.execute("PRAGMA table_info(occurrences)")}
+    assert not legacy & {"started_at", "ended_at", "reported"}
+
+    reopened = LocalScheduler("t", invoke_url="http://test", db_dir=tmp_path)
+    (run,) = reopened.list_runs("j1")
+    assert (run["started_at"], run["ended_at"], run["duration_s"], run["reported"]) == (None,) * 4
+    # Every key the entry already had keeps its value.
+    assert (run["state"], run["task_state"], run["ok"], run["error"], run["task_id"]) == (
+        "settled", "completed", True, None, "t-ok")
+    # ...and the upgraded store records the new fields for the next run.
+    slot = await fire("j1", _OK)
+    newest = client.get("/api/scheduler/jobs/j1/runs").json()["runs"][0]
+    assert newest["scheduled_for"] == slot and newest["duration_s"] >= 0

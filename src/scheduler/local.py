@@ -679,6 +679,11 @@ class LocalScheduler:
             # counted in the same transaction that claims the resume. At most one —
             # a second interruption goes to the operator instead of looping.
             ("auto_resumes", "INTEGER NOT NULL DEFAULT 0"),
+            # Run history timing (#5543): when the fire was SENT, when the occurrence
+            # settled, and whether a completed run posted its result card (1), had
+            # nothing to report (0), or that is unknown (NULL). Rows written before
+            # these columns existed read NULL for all three.
+            ("started_at", "TEXT"), ("ended_at", "TEXT"), ("reported", "INTEGER"),
         ))
         # Additive migrations for stores created before each column existed. Only the
         # missing ones are ALTERed, and a failed ALTER raises: a lock timeout used to
@@ -1102,7 +1107,16 @@ class LocalScheduler:
           recorded, else ``None`` (still unresolved, canceled, dropped, or settled
           before the ledger kept outcomes);
         - ``error`` — the run's failure or unresolved-delivery diagnostic, ``None``
-          for a run that succeeded or is simply still running.
+          for a run that succeeded or is simply still running;
+        - ``started_at`` / ``ended_at`` — when the fire was sent and when the
+          occurrence settled (ISO UTC), ``None`` until each happens, and
+          ``duration_s`` — their difference in seconds, ``None`` unless both are set;
+        - ``reported`` — ``True`` when a completed run posted its result card to its
+          chat, ``False`` when it completed with nothing to report (an empty answer,
+          a ``NO_UPDATE`` reply, a repeat of its last card), else ``None`` (not
+          settled, not completed, no chat to report to, or not recorded).
+
+        Rows written before the ledger kept times read ``None`` for all four.
 
         Read-only. Unlike :meth:`list_jobs`, a DB read failure RAISES: an empty list
         would read as "this job never ran" (or as an unknown job at the API)."""
@@ -1117,7 +1131,8 @@ class LocalScheduler:
             # run is hidden only when a live job of that id belongs to ANOTHER agent.
             rows = db.execute(
                 "SELECT o.job_id, o.next_fire, o.created_at, o.state, o.task_state, "
-                "o.diagnostic, o.task_id, o.message_id FROM occurrences o "
+                "o.diagnostic, o.task_id, o.message_id, o.started_at, o.ended_at, o.reported "
+                "FROM occurrences o "
                 "WHERE o.job_id = ? AND NOT EXISTS (SELECT 1 FROM jobs j "
                 "WHERE j.id = o.job_id AND j.agent_name != ?) "
                 "ORDER BY o.next_fire DESC, o.created_at DESC, o.rowid DESC LIMIT ?",
@@ -1366,8 +1381,9 @@ class LocalScheduler:
             return notice_due
         # Commit the known result and its dispatch state together: a crash
         # must not leave a quarantined claim with a cleared diagnostic.
-        db.execute("UPDATE occurrences SET state = 'settled' WHERE job_id = ? AND next_fire = ? AND created_at = ?",
-                   (job.id, job.next_fire, job.created_at))
+        db.execute("UPDATE occurrences SET state = 'settled', ended_at = COALESCE(ended_at, ?) "
+                   "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                   (_utc_now_iso(), job.id, job.next_fire, job.created_at))
         if failure:
             # Keep the failure on the run's own ledger row too (ADR 0135 D8):
             # ``jobs.last_error`` holds only the LATEST outcome, so a fire settled
@@ -1699,8 +1715,11 @@ class LocalScheduler:
                         "WHERE job_id = ? AND next_fire = ? AND created_at = ?) WHERE id = ? AND last_error = ?",
                         (job.id, job.next_fire, job.created_at, job.id, _DELIVERY_UNKNOWN),
                     )
-                db.execute("UPDATE occurrences SET state = ? WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state != 'settled'",
-                           (state, job.id, job.next_fire, job.created_at))
+                # ``ended_at`` is stamped only by a settle (run history, #5543).
+                db.execute("UPDATE occurrences SET state = ?, ended_at = COALESCE(ended_at, ?) "
+                           "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state != 'settled'",
+                           (state, _utc_now_iso() if state == "settled" else None,
+                            job.id, job.next_fire, job.created_at))
                 db.commit()
             except sqlite3.DatabaseError:
                 # Leaving 'claimed' is safe: recovery must not resend it.
@@ -1986,6 +2005,53 @@ class LocalScheduler:
                 (task_id, job.id, job.next_fire, job.created_at),
             )
 
+    def _mark_sent(self, job: Job, sent_at: str) -> None:
+        """Stamp the run's ``started_at`` (run history, #5543) once its send was
+        accepted. Best-effort: a missing start time never disturbs the fire, and a
+        resume of the same occurrence keeps the first send's time."""
+        try:
+            with self._lock, closing(self._connect()) as db, db:
+                db.execute(
+                    "UPDATE occurrences SET started_at = COALESCE(started_at, ?) "
+                    "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
+                    (sent_at, job.id, job.next_fire, job.created_at),
+                )
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not record the send time for job %s", job.id)
+
+    def record_run_report(self, job_id: str, task_id: str, reported: bool) -> bool:
+        """Record on a run's own ledger row whether it reported (ADR 0135 D8, #5543):
+        ``True`` — its result card was posted to its chat; ``False`` — it completed
+        with nothing to report. The server decides that after the turn ends (the
+        scheduler never sees the answer) and calls this with the fire's job id and
+        A2A task id. Matches the occurrence by its task handle; a turn that ended
+        before the handle was stored falls back to that job's newest still-``claimed``
+        handle-less occurrence. Returns whether a row was stamped. Best-effort —
+        never raises; an unmatched run just keeps ``reported`` unknown."""
+        if not job_id or not task_id:
+            return False
+        try:
+            with self._lock, closing(self._connect()) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                agent_guard = ("AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = occurrences.job_id "
+                               "AND j.agent_name != ?)")
+                cur = db.execute(
+                    f"UPDATE occurrences SET reported = ? WHERE job_id = ? AND task_id = ? {agent_guard}",
+                    (int(bool(reported)), job_id, task_id, self.agent_name),
+                )
+                if not cur.rowcount:
+                    cur = db.execute(
+                        "UPDATE occurrences SET reported = ? WHERE rowid = ("
+                        "SELECT rowid FROM occurrences WHERE job_id = ? AND task_id IS NULL "
+                        "AND state = 'claimed' ORDER BY next_fire DESC, rowid DESC LIMIT 1) "
+                        f"{agent_guard}",
+                        (int(bool(reported)), job_id, self.agent_name),
+                    )
+                return cur.rowcount > 0
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] could not record whether job %s reported", job_id)
+            return False
+
     async def _get_task(self, client, task_id: str) -> dict:
         response = await client.post(
             f"{self._invoke_url}/a2a",
@@ -2052,12 +2118,15 @@ class LocalScheduler:
                         settled_action = "finished"
             elif owns and not still_running:
                 db.execute("UPDATE jobs SET last_error = ? WHERE id = ?", (diagnostic, job.id))
+            settled = terminal and not refused
             db.execute(
-                "UPDATE occurrences SET state = ?, task_state = ?, diagnostic = ? "
+                "UPDATE occurrences SET state = ?, task_state = ?, diagnostic = ?, "
+                "ended_at = COALESCE(ended_at, ?) "
                 "WHERE job_id = ? AND next_fire = ? AND created_at = ?",
                 ("retryable" if refused else "settled" if terminal else ("running" if still_running else "unknown"),
                  "admission_refused" if refused else state if valid else "missing",
-                 (failure or None) if terminal else diagnostic, job.id, job.next_fire, job.created_at),
+                 (failure or None) if terminal else diagnostic,
+                 _utc_now_iso() if settled else None, job.id, job.next_fire, job.created_at),
             )
         if notice_due:
             self._notify_failure(job)
@@ -2364,9 +2433,10 @@ class LocalScheduler:
             try:
                 db.execute("BEGIN IMMEDIATE")
                 dropped = db.execute(
-                    "UPDATE occurrences SET state = 'settled', task_state = 'dropped', diagnostic = ? "
+                    "UPDATE occurrences SET state = 'settled', task_state = 'dropped', diagnostic = ?, "
+                    "ended_at = COALESCE(ended_at, ?) "
                     "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
-                    (diagnostic, job_id, next_fire, created_at),
+                    (diagnostic, _utc_now_iso(), job_id, next_fire, created_at),
                 ).rowcount > 0
                 if dropped:
                     row = db.execute(
@@ -2403,12 +2473,13 @@ class LocalScheduler:
             try:
                 db.execute("BEGIN IMMEDIATE")
                 cur = db.execute(
-                    "UPDATE occurrences SET state = 'settled', task_state = 'failed', diagnostic = ? "
+                    "UPDATE occurrences SET state = 'settled', task_state = 'failed', diagnostic = ?, "
+                    "ended_at = COALESCE(ended_at, ?) "
                     "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
                     (
                         "superseded by an operator re-run after a restart interruption (ADR 0129 D7); "
                         "the original dispatch was never recovered",
-                        job_id, next_fire, created_at,
+                        _utc_now_iso(), job_id, next_fire, created_at,
                     ),
                 )
                 if cur.rowcount:
@@ -2449,9 +2520,11 @@ class LocalScheduler:
             try:
                 db.execute("BEGIN IMMEDIATE")
                 cur = db.execute(
-                    "UPDATE occurrences SET state = ?, task_state = COALESCE(?, task_state), diagnostic = ? "
+                    "UPDATE occurrences SET state = ?, task_state = COALESCE(?, task_state), diagnostic = ?, "
+                    "ended_at = COALESCE(ended_at, ?) "
                     "WHERE job_id = ? AND next_fire = ? AND created_at = ? AND state = 'interrupted_needs_operator'",
-                    (state, task_state, diagnostic, job_id, next_fire, created_at),
+                    (state, task_state, diagnostic, _utc_now_iso() if state == "settled" else None,
+                     job_id, next_fire, created_at),
                 )
                 if cur.rowcount and state == "settled":
                     row = db.execute(
@@ -2617,10 +2690,13 @@ class LocalScheduler:
         ok: bool | None = False
         task_id = ""
         dispatch_state = "unknown"
+        sent_at = _utc_now_iso()
         try:
             async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
                 r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
                 if r.status_code < 400:
+                    # Sent, not merely claimed: the receiver answered this dispatch.
+                    self._mark_sent(job, sent_at)
                     initial = r.json()
                     task_id = task_id_from_response(initial)
                     if task_id:
@@ -2766,6 +2842,12 @@ def _row_to_run(row: Any) -> dict[str, Any]:
             ok = True
         elif task_state in ("failed", "rejected") or (task_state is None and diagnostic):
             ok = False
+    # Rows read before the timing columns existed (or shaped by hand) carry none of them.
+    keys = row.keys()
+    started_at = row["started_at"] if "started_at" in keys else None
+    reported = row["reported"] if "reported" in keys else None
+    # An end time belongs to a settled run only; a re-opened row never shows a stale one.
+    ended_at = row["ended_at"] if state == "settled" and "ended_at" in keys else None
     return {
         "job_id": row["job_id"],
         "scheduled_for": row["next_fire"],
@@ -2779,7 +2861,26 @@ def _row_to_run(row: Any) -> dict[str, Any]:
         "message_id": row["message_id"],
         # The job generation this run belongs to (a re-created id starts a new one).
         "job_created_at": row["created_at"],
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_s": _duration_s(started_at, ended_at),
+        # Only a COMPLETED run reported or stayed quiet; anything else is unknown.
+        "reported": bool(reported) if ok and reported is not None else None,
     }
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _duration_s(started_at: Any, ended_at: Any) -> float | None:
+    """Seconds from a run's send to its settle; ``None`` unless both are readable."""
+    if not started_at or not ended_at:
+        return None
+    try:
+        return (datetime.fromisoformat(ended_at) - datetime.fromisoformat(started_at)).total_seconds()
+    except (TypeError, ValueError):
+        return None
 
 
 def _row_to_job(row: Any) -> Job:

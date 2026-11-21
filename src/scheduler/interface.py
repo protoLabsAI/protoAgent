@@ -175,7 +175,18 @@ class SchedulerBackend(Protocol):
         OPTIONAL — like ``set_enabled``, callers check for it with ``getattr``. The
         local backend reads its ``occurrences`` ledger, the one run-history source;
         each run carries ``scheduled_for``, ``state``, ``task_state``, ``ok`` and
-        ``error``. An id with no recorded runs returns ``[]``."""
+        ``error``, plus ``started_at`` / ``ended_at`` / ``duration_s`` and ``reported``
+        (each ``None`` when unknown). An id with no recorded runs returns ``[]``."""
+        ...
+
+    def record_run_report(self, job_id: str, task_id: str, reported: bool) -> bool:
+        """Record on a run's history entry whether it posted its result card
+        (``True``) or completed with nothing to report (``False``).
+
+        OPTIONAL — like ``list_runs``, callers check for it with ``getattr``. The
+        server calls it once it decides to post or skip a scheduled fire's card;
+        the local backend stamps the matching ``occurrences`` row. Returns whether
+        a run was matched; never raises."""
         ...
 
     def list_jobs(self) -> list[Job]:
