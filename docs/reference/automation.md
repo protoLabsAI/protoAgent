@@ -10,7 +10,7 @@ Use [Automate](/guides/automate-work) to choose a mechanism and follow its app p
 | `POST` | `/api/scheduler/jobs` | Create: `{prompt, schedule, job_id?, timezone?}` |
 | `PUT` | `/api/scheduler/jobs/{id}` | Partial update: `{prompt?, schedule?, timezone?}` |
 | `DELETE` | `/api/scheduler/jobs/{id}` | Cancel |
-| `GET` | `/api/scheduler/jobs/{id}/runs` | Run history, newest first: `{job_id, runs}`; `?limit=` (default 50, max 200) |
+| `GET` | `/api/scheduler/jobs/{id}/runs` | Run history, newest first: `{job_id, runs, next_cursor}`; `?limit=` (default 50, max 200), `?before=<next_cursor>` for the next older page |
 
 Omitted update fields keep their values. `timezone: null` or `""` resets to UTC.
 Invalid schedules/timezones, empty prompts or schedules, and empty updates return
