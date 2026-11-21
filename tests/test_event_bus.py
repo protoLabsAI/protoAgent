@@ -110,6 +110,8 @@ def test_sse_event_stream_preamble_and_frame():
     body = json.loads(frame[len("id: 1\ndata: ") :])
     ts = body.pop("ts")  # when it happened, for a replaying client (the deck's work feed)
     assert isinstance(ts, float) and abs(time.time() - ts) < 60
+    age = body.pop("age_s")  # how old it is on the server's clock as it leaves (live: about zero)
+    assert isinstance(age, float) and 0 <= age < 60
     assert body == {"topic": "activity.message", "data": {"text": "hi"}, "seq": 1}
 
 
