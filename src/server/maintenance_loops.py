@@ -880,9 +880,11 @@ def _start_push_delivery(provider: Any = None) -> Any:
         return None
     from graph.push_transport import NOTICE_ADAPTER_KEY, PushTransport, WebPushProvider, set_active_transport
 
-    from graph.decisions import push_eligible
+    from graph.decisions import push_delay, push_eligible
 
-    transport = PushTransport(provider if provider is not None else WebPushProvider(), eligible=push_eligible)
+    transport = PushTransport(
+        provider if provider is not None else WebPushProvider(), eligible=push_eligible, delay=push_delay,
+    )
     set_active_transport(transport)
     register_notice_adapter(NOTICE_ADAPTER_KEY, transport.accept)
     STATE.push_delivery_task = asyncio.create_task(_push_delivery_loop(transport))
