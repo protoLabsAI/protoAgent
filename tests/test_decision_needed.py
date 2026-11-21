@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import sqlite3
 from datetime import UTC, datetime
 
 import pytest
@@ -20,9 +21,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from graph.decisions import (
+    RESTART_RECOVERY_PREFIX,
     STATE_ANSWERED,
     STATE_PENDING,
     DecisionClosed,
+    DecisionError,
     DecisionStore,
     normalize_options,
 )
@@ -930,3 +933,71 @@ def test_in_memory_store_reads_are_safe_across_threads():
     for t in threads:
         t.join()
     assert errors == []
+
+
+# ── answer_kind (#5668): a typed answer is recorded apart from a picked option ──────────
+
+
+def test_answer_records_its_kind_and_defaults_to_text(store):
+    assert store.create("s-kind", "Deploy?", ["yes", "no"]).to_dict()["answer_kind"] is None
+    picked = store.create("s-kind", "Deploy?", ["yes", "no"])
+    assert store.answer(picked.id, "yes", answer_kind="option").answer_kind == "option"
+    assert store.get(picked.id).to_dict()["answer_kind"] == "option"
+    # Typed text equal to an option id stays "text": the kind is stored, never guessed.
+    typed = store.create("s-kind", "Deploy?", ["yes", "no"])
+    assert store.answer(typed.id, "yes").answer_kind == "text"
+    assert store.get(typed.id).to_dict()["answer_kind"] == "text"
+
+
+@pytest.mark.parametrize("kind", ["", "Option", "free", None])
+def test_answer_rejects_an_unknown_kind_and_leaves_the_record_pending(store, kind):
+    rec = store.create("s-kind", "Deploy?", ["yes", "no"])
+    with pytest.raises(DecisionError):
+        store.answer(rec.id, "yes", answer_kind=kind)
+    assert store.get(rec.id).state == STATE_PENDING
+
+
+def test_only_an_answer_carries_a_kind(store):
+    cancelled = store.create("s-kind", "Deploy?", ["yes", "no"])
+    withdrawn = store.create("s-kind", "Deploy?", ["yes", "no"])
+    expiring = store.create(
+        "s-kind", "Deploy?", ["yes", "no"], default_option="no", expires_at="2026-11-08T11:00:00+00:00"
+    )
+    closed = [store.cancel(cancelled.id), store.withdraw(withdrawn.id, "moot"), store.expire(expiring.id)]
+    assert [rec.answer_kind for rec in closed] == [None, None, None]
+    assert [store.get(rec.id).answer_kind for rec in closed] == [None, None, None]
+
+
+@pytest.mark.platform_sensitive
+def test_database_without_answer_kind_gains_the_column_on_open(tmp_path):
+    path = tmp_path / "decisions.db"
+    DecisionStore(path, clock=_fixed_clock)
+    db = sqlite3.connect(path)
+    db.execute("ALTER TABLE decisions DROP COLUMN answer_kind")
+    db.execute(
+        "INSERT INTO decisions (id, session_id, agent, question, options, created_at, state, answer, answered_at) "
+        "VALUES ('old-1', 's-old', 'engineer', 'Deploy?', '[]', '2026-11-01T00:00:00+00:00', 'answered', 'yes', "
+        "'2026-11-01T00:05:00+00:00')"
+    )
+    db.commit()
+    assert "answer_kind" not in {r[1] for r in db.execute("PRAGMA table_info(decisions)")}
+    db.close()
+
+    migrated = DecisionStore(path, clock=_fixed_clock)
+    old = migrated.get("old-1")
+    assert (old.state, old.answer, old.answer_kind) == (STATE_ANSWERED, "yes", None)
+    assert old.to_dict()["answer_kind"] is None
+    fresh = migrated.create("s-old", "Again?", ["yes", "no"])
+    assert migrated.answer(fresh.id, "yes", answer_kind="option").answer_kind == "option"
+    assert DecisionStore(path, clock=_fixed_clock).get(fresh.id).answer_kind == "option"
+
+
+def test_reopening_an_answered_decision_clears_its_kind(store):
+    rec = store.create(
+        "s-kind", "Resume the run?", ["resume", "drop"], interrupt_id=RESTART_RECOVERY_PREFIX + '{"job":"j1"}'
+    )
+    assert store.answer(rec.id, "resume", answer_kind="option").answer_kind == "option"
+    assert store.reopen(rec.id).answer_kind is None
+    again = store.get(rec.id)
+    assert (again.state, again.answer, again.answer_kind) == (STATE_PENDING, None, None)
+    assert store.answer(rec.id, "something else").answer_kind == "text"
