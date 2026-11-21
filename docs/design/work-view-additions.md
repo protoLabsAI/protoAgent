@@ -36,7 +36,7 @@ No server gap blocks §3 (instance-wide orders): list, edit and withdraw routes 
 
 ### 1.1 Where
 
-A summary block at the top of Work, above the four groups, on every Work surface (rail, window, phone). It is not a group and has no count. It shows only when the server registers the route (`server/__init__.py:1321-1323`) — that is always, today.
+A summary block at the top of Work, above the four groups, on every Work surface (rail, window, phone), **only while the spend cap is enabled**. With the cap off there is no block at all (§1.4). It is not a group and has no count. The server registers the route (`server/__init__.py:1321-1323`) always, today.
 
 - The block is **not** a Needs you row. The spend-cap decision already lands in Needs you as an ordinary decision (`turn_control.py:469-477`); the block links to it.
 - Chat status rail: unchanged. The decision's Needs you chip already covers the paused case.
@@ -48,7 +48,7 @@ A summary block at the top of Work, above the four groups, on every Work surface
 ### 1.3 Layout
 
 - Heading `h2` "Unattended spend today", then `.pl-chip-meta` "UTC day 2026-11-19 · resets at 00:00 UTC, in 6 h". **The day is UTC and the UI says so** everywhere a day appears.
-- A neutral `Badge` with the state word: Running · Paused · Resumed for today · Cap off. Status words, never colour alone.
+- A neutral `Badge` with the state word: Running · Paused · Resumed for today. Status words, never colour alone.
 - Two meters, **Cost** and **Tokens**, side by side at ≥ 40rem, stacked below. Each has a caption with the text value ("$6.35 of $10.00", "541,000 of 1,000,000"), the bar, and (after S1) a tick at the notice limit plus `.pl-chip-meta` "Notice at $5.00 · passed".
 - A muted line: "Counts turns started by the scheduler, watches, the inbox, webhooks and background jobs. Your own chat turns don't count."
 - Copy calls the soft limit the **notice limit**: the setting's own description says it only sends a notice (`settings_schema.py:1510-1511`).
@@ -65,8 +65,7 @@ The console reads the fields in this order: `enabled` → `approved_today` → `
 
 | State | When (route fields) | Shows | Actions |
 |---|---|---|---|
-| Cap off | `enabled: false`, meter available | "The spend cap is off. Unattended work has no daily limit." "Spent so far today: $3.40 and 412,000 tokens." No meters. | **Open Settings › Spend cap** (ghost link) |
-| Cap off, no meter | `enabled: false`, `meter_available: false` | Same first line, then "Spent so far today: unknown." | Open Settings › Spend cap |
+| Cap off | `enabled: false`, with or without a meter | **The block is not shown at all**: no heading, badge, text or meters. Nothing renders before the first reading either, so a cap-off instance never flashes the block. A later reading with `enabled: true` shows it; one with `enabled: false` removes it. | None. Turning the cap on is in Settings. |
 | Under the notice limit | enabled, not paused, below both soft limits — and **every** running reading before S1 | Meters, neutral fill (accent) | — |
 | Past the notice limit | enabled, not paused, ≥ a soft limit (**needs S1**) | "Past today's $5.00 notice limit. Unattended work keeps running until $10.00 or 1,000,000 tokens, then pauses." That meter's fill is warning. | — |
 | Paused at a limit | `paused`, `decision_id` set, meter available | Warning `Callout`: "Unattended work is paused for the rest of today (UTC). ‹why› Scheduled jobs, watches, inbox and webhook turns won't start. Your own chat turns aren't affected, and job settings are unchanged." ‹why› comes from the reading: `cost_usd ≥ daily_cost_hard_limit` → "It reached the $10.00 daily limit."; `total_tokens ≥ daily_token_hard_limit` → "It reached the 1,000,000-token daily limit."; both → "It reached the $10.00 and 1,000,000-token daily limits."; neither (the decision is still pending after the limits were raised, or it carried over from an earlier UTC day) → "It hit a daily limit and hasn't been resumed yet." That last sentence is true in both cases; don't say "today" or "earlier today", because a carried-over decision was raised yesterday or before. The meter at its limit gets warning fill; the other stays neutral. | **Resume unattended work for today** (answers the decision with option `resume`, the label the server uses, `turn_control.py:472`) · **Open the decision** |

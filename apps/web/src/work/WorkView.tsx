@@ -23,7 +23,6 @@ import { WorkCreateDialog } from "./WorkCreateDialog";
 import type { SavedWork } from "./workPersistence";
 import { WorkDetail } from "./WorkDetail";
 import { SpendToday } from "./SpendToday";
-import { navigate } from "../app/palette/nav";
 import { WorkOverview, WorkGroupNew, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
 import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
@@ -374,9 +373,9 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       }}>
         <div className="work-view__content">
           {/* Unattended spend today (work-view-additions §1.1): above the four groups on every
-              Work surface. Not a group, no count; a pause shows here once, never job by job. */}
-          <SpendToday answerDecision={decisions.answer} onOpenDecision={onOpenDecision}
-            onOpenSettings={() => navigate({ kind: "global", section: "behavior" })} />
+              Work surface, only while the spend cap is on. Not a group, no count; a pause shows
+              here once, never job by job. */}
+          <SpendToday answerDecision={decisions.answer} onOpenDecision={onOpenDecision} />
           {section !== "overview" && group && <WorkHeading label={group.label} count={group.count}
             action={<WorkGroupNew group={group} onNew={(id) => onNew(id)} />} />}
           {section === "overview" || !group

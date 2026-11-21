@@ -37,11 +37,10 @@ let host: HTMLDivElement;
 let root: Root;
 const answerDecision = vi.fn<(id: string, option: string) => Promise<AnswerResult>>();
 const onOpenDecision = vi.fn();
-const onOpenSettings = vi.fn();
 
 async function render() {
   await act(async () => root.render(<SpendToday answerDecision={answerDecision} onOpenDecision={onOpenDecision}
-    onOpenSettings={onOpenSettings} now={() => NOW} />));
+    now={() => NOW} />));
 }
 async function show(patch: Partial<SpendCapStatus> = {}) {
   spendCap.mockResolvedValue(reading(patch));
@@ -54,6 +53,16 @@ const button = (label: string) => Array.from(host.querySelectorAll("button")).fi
 const meter = (kind: "cost" | "tokens") => host.querySelector<HTMLElement>(`[data-meter="${kind}"] [role="meter"]`)!;
 const fillWarns = (kind: "cost" | "tokens") => !!meter(kind).querySelector(".pl-progress__fill--warning");
 const live = () => host.querySelector('.spend-today [role="status"]')!.textContent;
+/** The cap is off (or not yet known to be on): no block at all, nothing left behind. */
+function expectNoBlock() {
+  expect(host.querySelector("section.spend-today")).toBeNull();
+  expect(host.querySelector("h2")).toBeNull();
+  expect(host.textContent).not.toContain("Unattended spend today");
+  expect(host.textContent).not.toMatch(/cap off|spend cap is off|Open Settings/i);
+  expect(host.querySelector(".pl-badge")).toBeNull();
+  expect(buttons()).toEqual([]);
+  expect(host.textContent).toBe("");
+}
 const emit = (topic: string) => act(async () => bus.listeners.get(topic)?.forEach((fn) => fn()));
 
 beforeEach(() => {
@@ -174,22 +183,63 @@ describe("states (§1.4)", () => {
     expect(host.querySelector(".spend-today__tick")).toBeNull();
   });
 
-  it("cap off: spent so far, no meters, a link to Settings", async () => {
+  it("cap off: no block at all, with a meter", async () => {
     await show({ enabled: false, cost_usd: 3.4, total_tokens: 412000 });
-    expect(badge()).toBe("Cap off");
-    expect(text()).toContain("The spend cap is off. Unattended work has no daily limit.");
-    expect(text()).toContain("Spent so far today: $3.40 and 412,000 tokens.");
-    expect(host.querySelector('[role="meter"]')).toBeNull();
-    expect(buttons()).toEqual(["Open Settings › Spend cap"]);
-    await act(async () => button("Open Settings › Spend cap").click());
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(spendCap).toHaveBeenCalledTimes(1);
+    expectNoBlock();
   });
 
-  it("cap off with no meter says unknown", async () => {
+  it("cap off: no block at all, with no meter", async () => {
     await show({ enabled: false, ...noMeter });
-    expect(text()).toContain("The spend cap is off. Unattended work has no daily limit.");
-    expect(text()).toContain("Spent so far today: unknown.");
-    expect(host.querySelector('[role="meter"]')).toBeNull();
+    expectNoBlock();
+  });
+
+  it("cap off wins over a pause with a decision: still no block and no Resume", async () => {
+    await show({ enabled: false, paused: true, approved_today: true, decision_id: "dec-1" });
+    expectNoBlock();
+  });
+
+  it("nothing renders before the first reading resolves", async () => {
+    let resolve!: (value: SpendCapStatus) => void;
+    spendCap.mockReturnValue(new Promise<SpendCapStatus>((done) => { resolve = done; }));
+    await render();
+    expect(spendCap).toHaveBeenCalledTimes(1);
+    expectNoBlock();
+    await act(async () => resolve(reading()));
+    expect(host.querySelector("section.spend-today h2")!.textContent).toBe("Unattended spend today");
+    expect(badge()).toBe("Running");
+  });
+
+  it("a refresh that turns the cap off removes the block, and one that turns it on shows it again", async () => {
+    await show();
+    expect(badge()).toBe("Running");
+    spendCap.mockResolvedValue(reading({ enabled: false }));
+    await emit("decision.*");
+    expectNoBlock();
+    spendCap.mockResolvedValue(reading({ paused: true, decision_id: "dec-1", cost_usd: 10 }));
+    await emit("decision.*");
+    expect(host.querySelector("section.spend-today h2")!.textContent).toBe("Unattended spend today");
+    expect(badge()).toBe("Paused");
+    expect(buttons()).toEqual(["Resume unattended work for today", "Open the decision"]);
+    // The block appearing is not a state change to announce.
+    expect(live()).toBe("");
+  });
+
+  it("a cap-off block keeps refreshing every 60 s, so turning the cap on shows it", async () => {
+    vi.useFakeTimers();
+    await show({ enabled: false });
+    expectNoBlock();
+    spendCap.mockResolvedValue(reading());
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(spendCap).toHaveBeenCalledTimes(2);
+    expect(badge()).toBe("Running");
+  });
+
+  it("a failed refresh while the cap is off stays hidden", async () => {
+    await show({ enabled: false });
+    spendCap.mockRejectedValueOnce(new Error("down"));
+    await emit("decision.*");
+    expectNoBlock();
   });
 
   it("paused at a limit: the callout with its why, a warning fill on that meter, Resume and Open the decision", async () => {
