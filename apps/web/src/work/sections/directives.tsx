@@ -25,19 +25,21 @@
  * a projection supplies it explicitly (`tiedJob`) — never parsed from prose. See the PR for the
  * schema gap this interim stands in for.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, Callout, type Status } from "@protolabsai/ui/primitives";
 import { Alert, Skeleton, StatusDot } from "@protolabsai/ui/data";
 import { FormField, Textarea } from "@protolabsai/ui/forms";
+import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 import { useWorkActionSize } from "../../shell/SurfaceFrame";
 import { WorkEmpty as Empty } from "../WorkEmpty";
 
-import type { DirectiveRow } from "../../lib/api/chat";
+import { isInstanceWide, type DirectiveRow } from "../../lib/api/chat";
 import type { DecisionRow } from "../../lib/api/decisions";
 import { chatStore } from "../../chat/chat-store";
 import { useDecisions } from "../../decisions/useDecisions";
-import { useDirectives } from "../../chat/useDirectives";
+import { useDirectives, type RevokeResult } from "../../chat/useDirectives";
+import { instanceDirectiveStore } from "../instanceDirectives";
 import { closingSentence } from "../../chat/DirectiveEntry";
 import { localStampTitle, parseInstant } from "../../lib/format";
 import { linkDecision } from "../linkDecision";
@@ -101,6 +103,27 @@ function provenance(row: DirectiveRow, focused: string | undefined): string {
   return `You said "${row.quote}"${where ? ` ${where}` : ""}${when ? ` · ${when}` : ""}`;
 }
 
+/** An instance-wide order's row meta (work-view-additions §3.2): its reach first, then the
+ *  usual provenance — the operator's words (or the option they chose) and when. No chat is
+ *  named: the order applies to every chat, and the detail says where it was recorded. */
+function instanceRowMeta(row: DirectiveRow, decision: DecisionRow | null): string {
+  const when = decision ? clock(decision.answered_at) : provenanceWhen(row.created_at);
+  const words = decision ? `You chose “${chosenLabel(decision)}”` : `You said “${row.quote}”`;
+  return `Applies to every chat and unattended turn · ${words}${when ? ` · ${when}` : ""}`;
+}
+
+/** An instance-wide order's **Your words** line (§3.3): the chat it was recorded in by title,
+ *  and the stamp with its zone IN the visible text — the stamp is the viewer's local time,
+ *  and a hover title alone can't be read by keyboard or touch. A chat this console no longer
+ *  holds reads as since deleted. */
+function instanceProvenance(row: DirectiveRow, focused: string | undefined): string {
+  const title = chatStore.getSnapshot().sessions.find((s) => s.id === row.session_id)?.title;
+  const where = title ? `in “${title}”`
+    : row.session_id && row.session_id === focused ? "in this chat" : "in a chat that's since been deleted";
+  const when = provenanceWhen(row.created_at);
+  return `You said “${row.quote}” ${where}${when ? ` · ${when} (your time)` : ""}`;
+}
+
 /** The tied job's human name from the shared sources (title), falling back to its id. */
 function jobName(sources: WorkSectionContext["sources"], tiedJob: WorkJobRef | undefined): string {
   if (!tiedJob) return "";
@@ -127,9 +150,21 @@ function rowMeta(
 export function instructionRowPresentation(
   item: Pick<InstructionItem, "raw" | "tiedJob">, answered: readonly DecisionRow[],
   sources: WorkSectionContext["sources"], focused: string | undefined,
-): { tag: string; tone: Status; icon: ReactNode; title: string; meta: string } {
+): { tag: string; tone: Status; icon: ReactNode; title: string; meta: string; scope?: string } {
   const row = item.raw as DirectiveRow;
   const decision = linkDecision(row, answered);
+  // An instance-wide order (§3.2): a second neutral badge BEFORE the kind, its reach leading
+  // the meta, and never a tied job. Approval linking still runs on it.
+  if (isInstanceWide(row)) {
+    return {
+      scope: "Instance-wide",
+      tag: decision ? "Approval" : "Instruction",
+      tone: "neutral",
+      icon: <StatusDot status="info" />,
+      title: row.scope?.trim() || row.quote,
+      meta: instanceRowMeta(row, decision),
+    };
+  }
   return {
     tag: decision ? "Approval" : "Instruction",
     tone: "neutral",
@@ -159,9 +194,13 @@ function InstructionDetail({ ctx, item, decision }: {
   const promptRef = useRef<HTMLParagraphElement>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   const actionRef = useRef<HTMLDivElement>(null);
+  const wasConfirming = useRef(false);
+  const promptId = useId();
 
   const inForce = row.status === "in_force";
-  const tiedJob = item.tiedJob;
+  // An instance-wide standing order (§3.3): its own copy, the instance routes, never a tied job.
+  const everywhere = isInstanceWide(row);
+  const tiedJob = everywhere ? undefined : item.tiedJob;
   const name = jobName(ctx.sources, tiedJob);
   // The tied job's own Work item, when the sources carry it — "Open the job" renders only then,
   // never as a dead button.
@@ -173,29 +212,68 @@ function InstructionDetail({ ctx, item, decision }: {
   useLayoutEffect(() => { if (confirm) promptRef.current?.focus(); }, [confirm]);
   useLayoutEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
 
+  // Keep it / Escape return focus to Withdraw… (§4). The actions row isn't mounted while the
+  // confirm shows, so this runs after it re-renders — and ONLY on a true → false transition
+  // of `confirm`: never on first open (focus belongs to the detail heading) and never after a
+  // successful withdraw, which clears the ref first.
+  useLayoutEffect(() => {
+    if (wasConfirming.current && !confirm) actionRef.current?.querySelector<HTMLElement>("[data-withdraw]")?.focus();
+    wasConfirming.current = confirm;
+  }, [confirm]);
+
   function cancel() {
     setConfirm(false);
-    actionRef.current?.querySelector("button")?.focus();
   }
-  async function withdraw() {
-    setBusy(true);
-    setError(false);
-    const result = await revoke(row.id, reason);
+  const WITHDRAWN = "Withdrawn. The agent won't treat it as approved from its next turn.";
+  /** A closing sentence for the "already closed" notice. An instance-wide order's carries the
+   *  zone of its time in the visible text (§3.4). */
+  function closedHow(closed: DirectiveRow): string {
+    const sentence = closingSentence(closed);
+    return everywhere && parseInstant(closed.closed_at) !== null ? `${sentence} (your time)` : sentence;
+  }
+  function settle(result: RevokeResult) {
     setBusy(false);
     if ("ok" in result) {
+      wasConfirming.current = false;
       setConfirm(false);
-      toast({ tone: "neutral", message: "Withdrawn. The agent won't treat it as approved from its next turn." });
     } else if ("conflict" in result) {
       // The refreshed ledger re-lists the row as closed, so this same detail (keyed by id)
       // stays mounted, now read-only, and the notice shows in place.
       setNotice(result.conflict
-        ? `This was already closed: ${closingSentence(result.conflict)}. Nothing changed.`
+        ? `This was already closed: ${closedHow(result.conflict)}. Nothing changed.`
         : "This was already closed. Nothing changed.");
     } else if ("gone" in result) {
       // A 404 removes the row from the ledger entirely, so this detail is about to unmount —
       // the feedback must outlive it.
-      toast({ tone: "neutral", message: "This instruction is no longer in the list. The list has been refreshed." });
+      toast({ tone: "neutral", message: everywhere
+        ? "This order is no longer in the list. The list has been refreshed."
+        : "This instruction is no longer in the list. The list has been refreshed." });
     } else setError(true);
+  }
+  async function withdraw() {
+    setBusy(true);
+    setError(false);
+    if (!everywhere) {
+      const result = await revoke(row.id, reason);
+      if ("ok" in result) toast({ tone: "neutral", message: WITHDRAWN });
+      settle(result);
+      return;
+    }
+    // The row leaves the group on success, so the detail closes and focus follows the §4 rule:
+    // the next row in Your instructions, else the previous one, else the group heading. The
+    // order is read off the same shared projection the list draws, BEFORE the row leaves it.
+    const keys = workGroups(ctx.sources, { thisChatOnly: ctx.state.filters?.thisChat === true, sessionId: ctx.sessionId })
+      .find((g) => g.id === "instructions")!.items.map((listed) => `${listed.kind}:${listed.id}`);
+    const at = keys.indexOf(`${item.kind}:${item.id}`);
+    const rows = at < 0 ? keys : [...keys.slice(at + 1), ...keys.slice(0, at).reverse()];
+    settle(await instanceDirectiveStore.withdraw(row.id, reason, () => {
+      // Runs in the store's own synchronous step: the row drop, the count and the closed
+      // detail commit in one render. (Card bd-7969u swaps this toast for the announcement.)
+      wasConfirming.current = false;
+      toast({ tone: "neutral", message: WITHDRAWN });
+      if (ctx.onCloseTo) ctx.onCloseTo({ rows, group: "instructions" });
+      else ctx.onBack();
+    }));
   }
 
   if (notice) {
@@ -217,6 +295,7 @@ function InstructionDetail({ ctx, item, decision }: {
     <header className="work-detail__header">
       <StatusDot status={tone} />
       <h2 className="work-detail__title" data-surface-focus tabIndex={-1}>{title}</h2>
+      {everywhere && <Badge status="neutral">Instance-wide</Badge>}
       <Badge status={tone}>{decision ? "Approval" : "Instruction"}</Badge>
     </header>
     <dl className="work-detail__fields">
@@ -224,10 +303,18 @@ function InstructionDetail({ ctx, item, decision }: {
         <div className="work-detail__field"><dt>You were asked</dt><dd>{decision.question}</dd></div>
         <div className="work-detail__field"><dt>You chose</dt><dd>{`"${chosenLabel(decision)}" · ${clock(decision.answered_at)}`}</dd></div>
       </>}
+      {everywhere && inForce && <div className="work-detail__field">
+        <dt>Applies to</dt>
+        <dd>Every chat and every unattended turn on this instance: scheduled jobs, watches, the inbox and webhooks.</dd>
+      </div>}
       <div className="work-detail__field">
         <dt>Your words</dt>
-        <dd><span title={localStampTitle(row.created_at)}>{provenance(row, ctx.sessionId)}</span></dd>
+        <dd><span title={localStampTitle(row.created_at)}>{everywhere ? instanceProvenance(row, ctx.sessionId) : provenance(row, ctx.sessionId)}</span></dd>
       </div>
+      {everywhere && inForce && <div className="work-detail__field">
+        <dt>Lasts</dt>
+        <dd>Until you withdraw it</dd>
+      </div>}
       {inForce && tiedJob && <div className="work-detail__field">
         <dt>Lasts</dt>
         <dd>{`until "${name}" finishes. Then it closes itself.`}</dd>
@@ -239,18 +326,22 @@ function InstructionDetail({ ctx, item, decision }: {
       {!inForce && row.close_reason && !(row.closed_by === "operator" && row.close_reason === "revoked by the operator")
         && <div className="work-detail__field"><dt>Note</dt><dd>{row.close_reason}</dd></div>}
     </dl>
-    {confirm && inForce ? <div className="work-detail__confirm" role="group" aria-label="Withdraw this instruction" onKeyDown={(e) => {
-      if (e.key === "Escape") { e.preventDefault(); if (!busy) cancel(); }
-    }}>
-      <p ref={promptRef} tabIndex={-1} className="work-detail__confirm-prompt">Withdraw this instruction?</p>
-      <p>The agent will stop treating it as approved from its next turn. Anything it has already scheduled keeps running until you cancel it.</p>
+    {confirm && inForce ? <div className="work-detail__confirm" role="group"
+      {...(everywhere ? { "aria-labelledby": promptId } : { "aria-label": "Withdraw this instruction" })} onKeyDown={(e) => {
+        if (e.key === "Escape") { e.preventDefault(); if (!busy) cancel(); }
+      }}>
+      <p ref={promptRef} id={promptId} tabIndex={-1} className="work-detail__confirm-prompt">{everywhere ? "Withdraw this standing order everywhere?" : "Withdraw this instruction?"}</p>
+      <p>{everywhere
+        ? "Every chat and every unattended turn stops following it from its next turn. Anything it already scheduled keeps running until you cancel it."
+        : "The agent will stop treating it as approved from its next turn. Anything it has already scheduled keeps running until you cancel it."}</p>
       <FormField label="Reason (optional)">
-        <Textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={2000} disabled={busy} placeholder="For example: holding the release until Monday" />
+        <Textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={2000} disabled={busy}
+          placeholder={everywhere ? "For example: moving the summary to the weekly digest" : "For example: holding the release until Monday"} />
       </FormField>
-      {error && <Alert status="warning">Couldn&apos;t withdraw it. It&apos;s still active. <Button variant="ghost" size={size} onClick={() => void withdraw()} disabled={busy}>Try again</Button></Alert>}
+      {error && <Alert status="warning">{everywhere ? "Couldn't withdraw it. It's still in force everywhere." : "Couldn't withdraw it. It's still active."} <Button variant="ghost" size={size} onClick={() => void withdraw()} disabled={busy}>Try again</Button></Alert>}
       <div className="work-detail__confirm-actions">
         {size === "md" && <Button size="md" disabled={busy} onClick={cancel}>Keep it</Button>}
-        <Button variant="danger" size={size} loading={busy} onClick={() => void withdraw()}>Withdraw</Button>
+        <Button variant="danger" size={size} loading={busy} onClick={() => void withdraw()}>{everywhere ? "Withdraw everywhere" : "Withdraw"}</Button>
         {size !== "md" && <Button size={size} disabled={busy} onClick={cancel}>Keep it</Button>}
       </div>
     </div> : <div className="work-detail__actions" ref={actionRef}>
@@ -259,11 +350,24 @@ function InstructionDetail({ ctx, item, decision }: {
       {inForce && <Button size={size} onClick={() => setEditing(true)}>Edit</Button>}
       {decision && <Button size={size} onClick={openDecision}>Open decision</Button>}
       {jobItem && <Button size={size} onClick={() => ctx.onOpen(jobItem)}>Open the job</Button>}
-      {inForce && <Button variant="danger" size={size} onClick={() => { setError(false); setConfirm(true); }}>Withdraw…</Button>}
+      {inForce && <Button variant="danger" size={size} data-withdraw="" onClick={() => { setError(false); setConfirm(true); }}>Withdraw…</Button>}
     </div>}
+    {everywhere && <Accordion>
+      <AccordionItem title="Technical details">
+        <dl className="work-detail__tech">
+          {([["id", row.id], ["instance_wide", "true"], ["recorded in", row.session_id || "—"],
+            ["status", row.status], ["created_at", row.created_at]] as const).map(([key, value]) => (
+            <div className="work-detail__tech-row" key={key}>
+              <dt>{key}</dt>
+              <dd className="work-detail__tech-value">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </AccordionItem>
+    </Accordion>}
     {editing && <WorkEditDialog
       draft={draftFromDirective(row)}
-      target={{ kind: "instruction", id: row.id, sessionId: row.session_id }}
+      target={{ kind: "instruction", id: row.id, sessionId: row.session_id, instanceWide: everywhere }}
       onClose={() => setEditing(false)}
       onSaved={() => toast({ tone: "success", message: "Instruction updated." })}
     />}
@@ -314,7 +418,11 @@ function DirectivesSection({ ctx }: { ctx: WorkSectionContext }): ReactNode {
         <Empty title="This instruction is no longer here." />
       </>;
     }
-    return <InstructionDetail key={selected.id} ctx={ctx} item={selected} decision={linkDecision(selected.raw as DirectiveRow, answered)} />;
+    return <>
+      {/* §3.4 stale list: an instance-wide order's detail says when it may be out of date. */}
+      {source.status === "stale" && isInstanceWide(selected.raw as DirectiveRow) && staleNote}
+      <InstructionDetail key={selected.id} ctx={ctx} item={selected} decision={linkDecision(selected.raw as DirectiveRow, answered)} />
+    </>;
   }
 
   if (source.status === "loading") return loadingView;
@@ -337,7 +445,8 @@ function DirectivesSection({ ctx }: { ctx: WorkSectionContext }): ReactNode {
       return <li key={`${item.kind}:${item.id}`}><WorkRow
         status={item.status}
         tone="info"
-        badge={row.tag}
+        // An instance-wide row carries two NEUTRAL badges (§3.2): its reach, then its kind.
+        {...(row.scope ? { tag: row.tag, scope: row.scope } : { badge: row.tag })}
         title={row.title}
         meta={row.meta}
         focusKey={`${item.kind}:${item.id}`}

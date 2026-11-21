@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   createDirective: vi.fn(async (_body: Record<string, unknown>) => ({ directive: { id: "d-9", session_id: "chat-1", quote: "q", scope: "s", conditions: "", status: "in_force" } })),
   updateDirective: vi.fn(async (_sid: string, _id: string, _body: Record<string, unknown>) => ({ directive: {} })),
   listDirectives: vi.fn(async (_sid: string) => ({ directives: [] as Record<string, unknown>[], in_force: 0 })),
+  updateInstanceDirective: vi.fn(async (_id: string, _body: Record<string, unknown>) => ({ directive: {} })),
+  listInstanceDirectives: vi.fn(async () => ({ directives: [] as Record<string, unknown>[], in_force: 0 })),
 }));
 vi.mock("../lib/api", () => ({ api: mocks, currentSlug: () => "test" }));
 vi.mock("../chat/useDirectives", () => ({ directiveStore: () => ({ refresh: async () => null }) }));
@@ -298,4 +300,19 @@ it("Edit instruction keeps the quote immutable and PATCHes scope/conditions only
   expect(mocks.updateDirective).toHaveBeenCalledExactlyOnceWith("chat-1", "d-1", {
     scope: "deploys and releases", conditions: "until Friday",
   });
+});
+
+it("Edit on an instance-wide order PATCHes the instance ledger, never a chat's", async () => {
+  const row = { id: "dir-i1", session_id: "chat-1", quote: "exact words", scope: "summaries", conditions: "",
+    status: "in_force", created_at: "", closed_by: null, closed_at: null, close_reason: null, instance_wide: true } as const;
+  await act(async () => root.render(
+    <WorkEditDialog draft={draftFromDirective(row)} target={{ kind: "instruction", id: "dir-i1", sessionId: "chat-1", instanceWide: true }} onClose={onClose} onSaved={onSaved} />,
+  ));
+  await setValue(field("What it covers").querySelector("input")!, "summaries and digests");
+  mocks.updateDirective.mockClear();
+  await act(async () => button("Save changes").click());
+  expect(mocks.updateInstanceDirective).toHaveBeenCalledExactlyOnceWith("dir-i1", { scope: "summaries and digests", conditions: "" });
+  expect(mocks.updateDirective).not.toHaveBeenCalled();
+  // The instance list is re-read so the edited scope shows without waiting for the bus.
+  expect(mocks.listInstanceDirectives).toHaveBeenCalled();
 });
