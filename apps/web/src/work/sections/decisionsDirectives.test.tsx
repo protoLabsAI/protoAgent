@@ -28,6 +28,9 @@ import type { DirectivesSnapshot } from "../../chat/useDirectives";
 
 // The Work view's data hook, driven by hand.
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
+// The spend block has its own suite (SpendToday.test.tsx); a stub keeps this file's heading,
+// alert and button queries on the groups it is about.
+vi.mock("../SpendToday", () => ({ SpendToday: () => null }));
 vi.mock("../useWorkItems", () => ({ useWorkItems: () => data.sources }));
 
 // The directive ledger's store (the section's withdraw path), driven by hand.

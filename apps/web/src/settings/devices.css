@@ -300,7 +300,28 @@
   }
 }
 
-/* "What happened to the last notification tap" (PushToggle.tsx TapLog): a diagnostic, so it
+/* Advanced: the rare admin tools (a script's access token, the notification key, the tap log),
+   folded under one closed disclosure after the device list and the notifications card. */
+.devices-advanced {
+  margin-top: var(--pl-space-4);
+}
+.devices-advanced .pl-accordion__panel {
+  color: var(--pl-color-fg);
+  padding-top: var(--pl-space-2);
+}
+.devices-advanced-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  min-width: 0;
+  margin-bottom: var(--pl-space-4);
+}
+.devices-advanced-row .setting-desc,
+.devices-advanced-row .devices-notice {
+  margin: 0;
+}
+
+/* "What happened to the last notification tap" (TapLog.tsx, under Advanced): a diagnostic, so it
    stays folded and small; the lines scroll sideways instead of widening the phone page. */
 .devices-tap-log {
   margin-top: var(--pl-space-2);

@@ -1112,13 +1112,37 @@ describe("FleetManagerPanel — the roster's visible text", () => {
     expect(chip?.getAttribute("title")).toBe("Network and port settings");
   });
 
-  it("pins the copy that only renders mid-flow (discovered rows, the add form, an unpaired remote)", () => {
-    expect(fleetPanelSrc).toContain("`Pair, then let this agent hand work to ${d.name}`");
-    expect(fleetPanelSrc).toContain('"Pair using a code from the other agent"');
-    expect(fleetPanelSrc).toContain('"Its access token, if it has one"');
-    expect(fleetPanelSrc).toContain('title="Network & ports"');
-    expect(fleetPanelSrc).not.toContain("(delegate_to)");
-    expect(fleetPanelSrc).not.toContain("operator token, if it's gated");
+  it("words the mid-flow copy in plain language (a discovered agent, the add form, an unpaired remote)", async () => {
+    const unpaired = agent("r2", "quasar", { remote: true, running: true, url: "http://100.64.0.11:7870", auth: "none" });
+    fleetStatus.agents.push(unpaired);
+    try {
+      vi.spyOn(api, "discoverAgents").mockResolvedValue({
+        discovered: [{ name: "vega", url: "http://192.168.1.20:7870" }],
+      } as unknown as Awaited<ReturnType<typeof api.discoverAgents>>);
+      await mountManager();
+      // A remote that was added without pairing offers Pair, not Re-pair.
+      expect(button("quasar", "Pair using a code from the other agent")).toBeTruthy();
+
+      const named = (text: string) =>
+        [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => (b.textContent || "").includes(text))!;
+      clickEl(named("Discover agents on the network"));
+      await flush();
+      const found = container.querySelector<HTMLElement>(".fleet-row--found")!;
+      expect(found.querySelector(".fleet-name")?.textContent).toBe("vega");
+      expect(found.querySelector('button[title="Pair using a code from the other agent"]')).toBeTruthy();
+      expect(found.querySelector('button[title="Pair, then let this agent hand work to vega"]')).toBeTruthy();
+
+      clickEl(named("Add a remote by URL"));
+      await flush();
+      const form = container.querySelector<HTMLElement>(".fleet-add-remote")!;
+      expect(form.querySelector('[placeholder="Its access token, if it has one"]')).toBeTruthy();
+
+      // None of it — visible text, tooltips or placeholders — names the tool or the old wording.
+      expect(container.innerHTML).not.toContain("delegate_to");
+      expect(container.innerHTML).not.toContain("operator token, if it's gated");
+    } finally {
+      fleetStatus.agents.pop();
+    }
   });
 });
 
