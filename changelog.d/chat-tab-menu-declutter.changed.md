@@ -1,1 +1,0 @@
-- **Chat-tab right-click menu is shorter.** A tab's menu no longer lists "Standing instructions" (open them from the strip above the composer or with `/directives`) or "New incognito chat" (use "Turn incognito on" for that tab, right-click empty tab-bar space, or Shift+click the tab bar's +). The empty tab-bar space menu is unchanged.
