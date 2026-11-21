@@ -42,9 +42,15 @@ Do **not** run the searches yourself in the chat. Hand the work to a helper:
   ecosystem · adoption) → one `task_batch` with `run_in_background=true`, one
   researcher per angle. Don't invent angles a narrow question doesn't have.
 - **A research workflow fits** (e.g. a deep-research recipe that adds a
-  critique pass) → start it with `run_workflow` instead.
+  critique pass) → delegate its execution with `task` and
+  `run_in_background=true` to a registered helper whose available tools include
+  `run_workflow`. Include the recipe name and inputs in its brief. If no such
+  helper is available, use the background `researcher` path above with the
+  same research scope and review requirements. Do not call `run_workflow` from
+  the chat: it waits for the entire workflow and has no background option.
 
-Then:
+After the tool confirms that a background job started (not if dispatch was
+refused):
 
 1. **Tell the operator it has started** — one line: what is being researched
    and that you will report back.
