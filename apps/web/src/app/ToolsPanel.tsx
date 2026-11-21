@@ -159,14 +159,14 @@ function ToolsBody() {
     return a.localeCompare(b);
   });
 
+  // The header counts the switches the list shows: every row is either on or off, so the
+  // two numbers always add up to the rows below (a subagent-only row is on, just not the
+  // lead's — its row says so).
   const off = data.tools.filter((t) => !t.enabled).length;
-  const held = data.tools.filter((t) => t.enabled && t.subagent_only).length;
+  const on = data.tools.length - off;
   return (
     <>
-      <PanelHeader
-        title="Tools"
-        kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""}${held ? ` · ${held} subagent-only` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
-      />
+      <PanelHeader title="Tools" kicker={`What the agent can do · ${on} on · ${off} off`} />
       <div className="stage-body">
         {/* Managed Python runtime (ADR 0094) — only renders on a frozen desktop build with
             a gap to close (unprovisioned / stale baseline / install in flight), so source
@@ -197,17 +197,12 @@ function ToolsBody() {
                   title={
                     <span className="tools-group-head">
                       {cat}
-                      {/* A group that carries contextual settings flags it — the terminal glyph
-                          the shell/fs config used to wear, now on the group it belongs to. */}
-                      {cat === "Filesystem" ? (
-                        <TerminalSquare size={13} className="tools-group-cog" aria-label="has settings" />
-                      ) : null}
                       <Badge status="neutral">{items.length}</Badge>
                       {/* The group is homogeneous in source, so the source belongs on the
                           GROUP, not repeated on every row. Core is the baseline (no chip);
-                          plugin/MCP groups get a chip so what an extension added stands out. */}
+                          plugin/MCP groups get a chip naming where the tools came from. */}
                       {groupSource(cat) !== "core" ? (
-                        <Badge status="neutral">{groupSource(cat)}</Badge>
+                        <Badge status="neutral">{sourceLabel(groupSource(cat), cat)}</Badge>
                       ) : null}
                       {offCount ? <Badge status="warning">{offCount} off</Badge> : null}
                     </span>
@@ -244,10 +239,12 @@ function ToolsBody() {
                         key={t.name}
                         ref={t.name === highlight ? scrollToTarget : undefined}
                       >
+                        {/* What the tool does leads, in body text; its code name sits under it,
+                            small and muted (still monospace — it's what search and chat show). */}
                         <div className="tools-row-main">
-                          <code className="tools-name">{t.name}</code>
                           {t.description ? <span className="tools-desc">{t.description}</span> : null}
-                          {t.subagent_only ? <span className="tools-desc">Subagents only</span> : null}
+                          <code className="tools-name">{t.name}</code>
+                          {t.subagent_only ? <span className="tools-note">Only subagents can use this</span> : null}
                         </div>
                         <Switch
                           checked={t.enabled}
@@ -283,6 +280,14 @@ function ToolsBody() {
       </ConfirmDialog>
     </>
   );
+}
+
+// The chip on a plugin / MCP group. The backend stamps the group's category with the plugin's
+// display name or the MCP server's name, falling back to a bare "Plugin" / "MCP" when it
+// can't tell which one — say "a plugin" then, never "From Plugin".
+function sourceLabel(source: string, category: string): string {
+  if (source === "mcp") return category === "MCP" ? "From an MCP server" : `From ${category}`;
+  return category === "Plugin" ? "From a plugin" : `From ${category}`;
 }
 
 const RUN_CODE_TOOL = "execute_code";
@@ -373,9 +378,7 @@ export function ManagedProjectsList() {
     <div className="fs-projects">
       <p className="fleet-section-label">Managed projects</p>
       <p className="setup-hint">
-        Declared in <code>projects:</code> — one entry per project, feeding the folder fence, the
-        GitHub repo picker, and the board. Switch a project between read-only and read-write here;
-        edit everything else in your config file.
+        Projects from your config file. Switch each between read-only and read-write.
       </p>
       {shadowed ? (
         <p className="fs-projects-warning" role="alert">
@@ -396,16 +399,15 @@ export function ManagedProjectsList() {
                 mistake — say how to fix it). */}
             {data.projects.every((p) => isNo(p.fs)) ? (
               <>
-                Every project sets <code>fs: false</code>, so the filesystem tools are{" "}
-                <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
-                <code>list_dir</code> at all. That's what <code>fs: false</code> means;
-                drop it from a project to fence that folder.
+                The agent can't open any files. No project allows file access. To allow it,
+                turn file access on for a project in your config file.
               </>
             ) : (
+              // These paths live in the config file, not in an editor below — so the fix
+              // points there (the Work folders editor's own warning says "the paths below").
               <>
-                None of these projects' folders exist, so the agent's filesystem tools{" "}
-                <strong>can't reach anything</strong> until one is back. Restore the folders
-                or fix the paths in your config file.
+                The agent can't open any files. None of these projects' folders exist. Restore
+                them, or fix the paths in your config file.
               </>
             )}
           </span>
@@ -498,7 +500,7 @@ function ManagedProjectRow({ project: p, index, shadowed }: { project: ManagedPr
 // Work-folder editor for the fenced fs roots (`filesystem.projects`, ADR 0007) — the fenced
 // roots list (the shell/fs policy chip covers the scalar toggles). Replace-list semantics, same
 // as the MCP servers editor. Saving with any folder present also enables fs tools.
-function FsProjectsEditor() {
+export function FsProjectsEditor() {
   const toast = useToast();
   const qc = useQueryClient();
   const query = useQuery({ queryKey: ["fs-projects"], queryFn: () => api.fsProjects() });
@@ -518,7 +520,7 @@ function FsProjectsEditor() {
       // would keep showing the pre-save shadowing state — stale about the action the
       // operator just took.
       void qc.invalidateQueries({ queryKey: ["managed-projects"] });
-      toast({ tone: "success", title: "Folders saved", message: "Filesystem tools cover the listed folders." });
+      toast({ tone: "success", title: "Folders saved", message: "The agent can open files in these folders." });
     },
     onError: (e: Error) => toast({ tone: "error", title: "Couldn't save folders", message: errMsg(e) }),
   });
@@ -548,7 +550,7 @@ function FsProjectsEditor() {
           <AlertTriangle size={14} />
           <span>
             {allMissing
-              ? "None of these folders exist, so the agent's filesystem tools can't reach anything until one is back. Restore the folders, or fix or remove the paths below."
+              ? "The agent can't open any files. None of these folders exist. Restore them, or fix or remove the paths below."
               : `${missing.length} folder${missing.length > 1 ? "s are" : " is"} missing and skipped — the agent can't reach ${missing.length > 1 ? "them" : "it"}.`}
           </span>
         </p>
