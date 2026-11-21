@@ -1819,8 +1819,48 @@ function recordLifecycle(req, res, pathname) {
   res.once("close", () => record("close"));
 }
 
-const server = createServer(async (req, res) => {
+/** Log one line (plus the stack) for a mock-server failure. stderr on purpose: Playwright's
+ *  `webServer` pipes it into the run output as `[WebServer] …`, and the supervisor
+ *  (mock-server-run.mjs) keeps its tail as the "last error" if the process then exits. */
+function logFailure(what, err) {
+  console.error(`[e2e mock] ${what}: ${err?.stack || err}`);
+}
+
+/** A request handler rejected or threw (#5712). Before this existed the rejection was unhandled
+ *  and ended the node process, so one bad request turned into "Connection refused" for every
+ *  later test. Now the failure costs that request only: it is logged with its method and path
+ *  and answered 500, and the server keeps serving. */
+function failRequest(req, res, err) {
+  const where = `${req.method} ${req.url}`;
+  // The client closed the connection before its request body arrived (WebKit does this to an
+  // in-flight POST when the page closes or reloads): reading the body rejects with
+  // `Error: aborted` / ECONNRESET. Nobody is left to answer; say so and release the socket.
+  if (!req.complete && req.destroyed) {
+    console.error(`[e2e mock] ${where}: client closed the connection mid-request (${err?.code || err?.message || err})`);
+    res.destroy();
+    return;
+  }
+  logFailure(`${where} handler failed`, err);
+  try {
+    if (res.headersSent) res.destroy();
+    else sendJson(res, { detail: "e2e mock handler error", error: String(err?.message || err) }, 500);
+  } catch (e) {
+    logFailure(`${where} could not answer 500`, e);
+  }
+}
+
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+  // Deliberate failure, for the resilience spec (mock-server-resilience.spec.ts): a handler
+  // that throws must cost this request a logged 500, not the process.
+  if (url.pathname === "/__e2e/throw") {
+    if (url.searchParams.get("late") === "1") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("partial");
+    }
+    await null;
+    throw new Error("e2e deliberate handler failure");
+  }
   if (url.pathname === "/csp-report" && req.method === "POST") {
     let body = "";
     for await (const chunk of req) {
@@ -3013,6 +3053,16 @@ const server = createServer(async (req, res) => {
     }
     // POST/PATCH/DELETE writes → generic ok so the UI doesn't error.
     const body = await readBody(req);
+    // The console's presence report (#5669): 204 once stored, 400 on a malformed body, as
+    // server/__init__.py answers it. It used to fall through to the generic ok below.
+    if (pathname === "/api/chat/presence" && req.method === "POST") {
+      const ok =
+        typeof body.console_id === "string" && body.console_id && typeof body.session === "string" &&
+        body.session && typeof body.present === "boolean" && Number.isFinite(body.input_age_s) && body.input_age_s >= 0;
+      if (!ok) return sendJson(res, { error: "invalid presence report" }, 400);
+      res.writeHead(204).end();
+      return;
+    }
     const fleet = fleetFor(req);
     if (pathname === "/api/__test__/bus" && req.method === "POST") {
       // Feed the named tap's streams (see busTaps): `frames` = [{topic, data}], in order.
@@ -3730,7 +3780,32 @@ const server = createServer(async (req, res) => {
     return sendJson(res, { detail: "method not allowed" }, 405);
   }
   return serveStatic(pathname, res, req, url.search);
+}
+
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch((err) => failRequest(req, res, err));
 });
+
+// A malformed request or a socket error on one connection: log it, answer 400 when the socket
+// can still take it (node's default for this event), and keep serving everyone else.
+server.on("clientError", (err, socket) => {
+  // A browser closing its connection (a reset, or EOF in the middle of a message) is routine
+  // and has no request to name here; when a request was in flight, failRequest logs it by path.
+  const hungUp = err?.code === "ECONNRESET" || err?.code === "HPE_INVALID_EOF_STATE";
+  if (!hungUp) logFailure("client connection error", err);
+  if (hungUp || !socket.writable) socket.destroy();
+  else socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+});
+// The listener itself failed (the port is taken, say). Nothing can be served: say why and exit
+// non-zero, so the supervisor and Playwright report a dead server instead of a silent one.
+server.on("error", (err) => {
+  logFailure(`server error on port ${PORT}`, err);
+  process.exit(1);
+});
+// An error outside any request (a timer, a stream callback). Logged, never swallowed; the mock
+// keeps serving, because exiting here fails every later test for an unrelated reason.
+process.on("uncaughtException", (err) => logFailure("uncaughtException (still serving)", err));
+process.on("unhandledRejection", (err) => logFailure("unhandledRejection (still serving)", err));
 
 server.listen(PORT, "127.0.0.1", () => {
   // Playwright's webServer waits on this readiness line / the port.
