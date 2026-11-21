@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.259.1",
+    "date": "2026-11-21",
+    "changes": [
+      "The web-research skill delegates real research as a background task instead of running the searches in the chat (#5715).",
+      "The end-to-end mock server no longer dies when a browser closes a page with a request still being sent (#5713).",
+      "A long decision no longer pushes the Needs-you panel off the top of the window (#5710).",
+      "Opening the console no longer replays every alert since your last visit (#5711)."
+    ]
+  },
+  {
     "version": "v0.259.0",
     "date": "2026-11-21",
     "changes": [

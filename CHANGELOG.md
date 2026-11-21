@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.259.1] - 2026-11-21
+
+### Changed
+- **The `web-research` skill delegates real research as a background task instead of running the searches in the chat (#5715).** When you ask for a briefing, a survey, a comparison across several dimensions, or to "research it properly", the agent now hands the work to the `researcher` helper (`task` with `run_in_background=true`, or `task_batch` for independent angles), tells you it has started, carries on, and reports the sourced result when it arrives. A research workflow is used only when you ask for one by name: it cannot run in the background, so the agent says the chat will be busy before it starts one and never picks one on its own. If the background run cannot start, the agent says so and does the research in the chat instead of going quiet. A quick lookup (one fact, one page) is still answered directly with `web_search` / `fetch_url`. The gather, gap-check, synthesis and citation rules moved into what the agent puts in the helper's brief. The lead prompt's batching guideline now reads "Make independent file reads, file searches and edits in the same step", so it cannot be read as an instruction to run web searches itself; it is still present whenever a file tool is bound. This targets the nightly `research_delegation` eval case, which has failed since 18 November.
+
+### Fixed
+- **The end-to-end mock server no longer dies when a browser closes a page with a request still being sent (#5713).** WebKit closing or reloading a page aborted the console's in-flight `POST /api/chat/presence`; the mock server's handler rejected, nothing caught it, and the node process exited, so every later test failed with "Connection refused" on 127.0.0.1:4319. A failing request handler now answers 500 and is logged with its method and path while the server keeps serving, the mock answers the presence report like the real route (204, or 400 when malformed), and if the server process does exit mid-run a supervisor reports the exit code or signal and its last error and the run fails naming it. Refs #5712.
+
+- **A long decision no longer pushes the Needs-you panel off the top of the window (#5710).** In the chat's Needs-you panel, a decision with several options and explanations grew the panel past the window's top edge and cut off its heading. The cards and rows now scroll inside the panel, with "Needs you" above and "Open in Work" below staying in view.
+
+- **Opening the console no longer replays every alert since your last visit (#5711).** A console that was closed or asleep catches up on the events it missed, and each one fired its toast and system notification again: goals achieved or failed, watches met or expired, background agents starting and finishing, scheduled results, resumed turns. Catch-up still happens, so chats and Work show what happened, but an event more than two minutes old no longer raises a toast or a notification. The age is measured on the agent's own clock (each event frame now carries `age_s`), so a phone whose clock is off is not affected.
+
 ## [0.259.0] - 2026-11-21
 
 ### Added
