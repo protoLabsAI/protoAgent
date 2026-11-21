@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.258.1] - 2026-11-21
+
+### Changed
+- **Chat-tab right-click menu is shorter (#5666).** A tab's menu no longer lists "Standing instructions" (open them from the strip above the composer or with `/directives`) or "New incognito chat" (use "Turn incognito on" for that tab, right-click empty tab-bar space, or Shift+click the tab bar's +). The empty tab-bar space menu is unchanged.
+
+### Fixed
+- **Decisions reach your phone again while the chat is open in a console (#5670).** v0.258.0
+  dropped the phone push for a decision whose chat was open in any console, so a desktop
+  app that keeps a chat open stopped every decision push. That change (#5663) is reverted:
+  a pending decision always pushes. A decision that is already answered, withdrawn,
+  cancelled or expired still does not. Refs #5648.
+
+### Docs
+- **Manage-memory guide points to where "New incognito chat" actually is (#5667).** The "Use incognito" section now says to right-click an empty spot in the tab bar (or Shift+click the tab bar's +), since a chat tab's own right-click menu no longer lists the item.
+
 ## [0.258.0] - 2026-11-21
 
 ### Changed

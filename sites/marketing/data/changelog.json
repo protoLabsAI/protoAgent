@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.258.1",
+    "date": "2026-11-21",
+    "changes": [
+      "Chat-tab right-click menu is shorter (#5666).",
+      "Decisions reach your phone again while the chat is open in a console (#5670).",
+      "Manage-memory guide points to where \"New incognito chat\" actually is (#5667)."
+    ]
+  },
+  {
     "version": "v0.258.0",
     "date": "2026-11-21",
     "changes": [

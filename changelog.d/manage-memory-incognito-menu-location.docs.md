@@ -1,1 +1,0 @@
-- **Manage-memory guide points to where "New incognito chat" actually is.** The "Use incognito" section now says to right-click an empty spot in the tab bar (or Shift+click the tab bar's +), since a chat tab's own right-click menu no longer lists the item.
