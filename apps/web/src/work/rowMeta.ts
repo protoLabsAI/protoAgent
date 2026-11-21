@@ -84,3 +84,75 @@ export function scheduleWhen(schedule: ScheduledJob["schedule"]): string {
   }
   return "Custom schedule";
 }
+
+/** A job's own clock (work-view-additions §2.3): its `timezone`, or UTC when that is null.
+ *  An unusable zone name falls back to UTC rather than throwing out of a render. */
+export function jobZone(job: Pick<ScheduledJob, "timezone">): string {
+  const zone = (job.timezone || "").trim();
+  if (!zone) return "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return zone;
+  } catch {
+    return "UTC";
+  }
+}
+
+/** The scheduler holds a zone-less ISO stamp as UTC, so it is read as UTC here too —
+ *  never as the viewer's local time. */
+function parseStamp(iso: string): Date {
+  const text = (iso || "").trim();
+  const naive = /^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}/.test(text) && !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(text);
+  return new Date(naive ? `${text.replace(" ", "T")}Z` : text);
+}
+
+function zoneParts(date: Date, zone: string): Record<string, string> {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, year: "numeric", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+/** One time in a job's clock, zone name included: "Today 14:00 UTC", "Nov 16 09:00
+ *  Europe/Berlin" (the year joins the date once it isn't this year). `capital: false`
+ *  lowers "today" for mid-sentence use. "" for an unreadable stamp. */
+export function jobClockTime(iso: string | null | undefined, zone: string, now: number = Date.now(), capital = true): string {
+  const date = parseStamp(iso ?? "");
+  if (!Number.isFinite(date.getTime())) return "";
+  const at = zoneParts(date, zone);
+  const current = zoneParts(new Date(now), zone);
+  const sameYear = at.year === current.year;
+  const day = sameYear && at.month === current.month && at.day === current.day
+    ? (capital ? "Today" : "today")
+    : `${at.month} ${at.day}${sameYear ? "" : ` ${at.year}`}`;
+  return `${day} ${at.hour}:${at.minute} ${zone}`;
+}
+
+/** The health note a failing job's row meta ends with (§2.2): "failed the last N runs", or
+ *  "the last run failed" for one. "" while the job is healthy. */
+export function scheduleFailureNote(job: Pick<ScheduledJob, "consecutive_failures">): string {
+  const failures = Math.floor(Number(job.consecutive_failures) || 0);
+  if (failures < 1) return "";
+  return failures === 1 ? "the last run failed" : `failed the last ${failures} runs`;
+}
+
+/** {@link scheduleWhen} in the job's own clock (§2.3 "one clock"): a recurring job's cron
+ *  already reads in its zone; a one-shot is an instant, so it is placed in the job's clock
+ *  and carries the zone name. `withZone` names the zone on a recurring job's time too. */
+export function scheduleWhenInJobClock(job: Pick<ScheduledJob, "schedule" | "timezone">, withZone = false, now: number = Date.now()): string {
+  const when = scheduleWhen(job.schedule);
+  if (parseSchedule(job.schedule).mode === "once") {
+    const at = jobClockTime(job.schedule, jobZone(job), now);
+    return at ? `Once, ${at}` : when;
+  }
+  return withZone && when !== "Custom schedule" ? `${when} (${jobZone(job)})` : when;
+}
+
+/** A schedule row's meta: its timing in the job's clock, ending with the health note when
+ *  the job is failing ("Every day at 09:00 · failed the last 3 runs", §2.2). */
+export function scheduleMeta(job: Pick<ScheduledJob, "schedule" | "timezone" | "consecutive_failures">, now: number = Date.now()): string {
+  const note = scheduleFailureNote(job);
+  const when = scheduleWhenInJobClock(job, false, now);
+  return note ? `${when} · ${note}` : when;
+}

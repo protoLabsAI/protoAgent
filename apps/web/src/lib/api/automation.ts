@@ -12,6 +12,7 @@ import type {
   Task,
   GoalState,
   ScheduledJob,
+  ScheduledJobRun,
   Subagent,
   ToolInfo,
   WatchState,
@@ -161,6 +162,15 @@ export const automationApi = {
     return request<{ job: ScheduledJob }>(
       `/api/scheduler/jobs/${encodeURIComponent(jobId)}/enabled`,
       { method: "POST", body: { enabled } },
+    );
+  },
+
+  // A job's past runs, newest first (ADR 0135 D8). `limit` is clamped server-side to
+  // 1–200. An id with neither a job nor a run is a 404; a backend that keeps no run
+  // history is a 501 — both reach the caller as an `ApiError` carrying the status.
+  scheduleRuns(jobId: string, limit: number) {
+    return request<{ job_id: string; runs: ScheduledJobRun[] }>(
+      `/api/scheduler/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}`,
     );
   },
 

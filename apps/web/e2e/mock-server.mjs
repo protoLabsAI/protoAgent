@@ -1986,6 +1986,11 @@ const server = createServer(async (req, res) => {
   if (/^\/api\/watches\/[^/]+$/.test(pathname) && req.method === "PATCH") {
     return sendJson(res, { ok: true, watch: null });
   }
+  // A job's run history (work-view-additions §2.3). Empty by default so every schedule
+  // detail loads its Recent runs clean; the job-runs spec serves its own rows via `page.route`.
+  if (/^\/api\/scheduler\/jobs\/[^/]+\/runs$/.test(pathname) && req.method === "GET") {
+    return sendJson(res, { job_id: decodeURIComponent(pathname.split("/")[4]), runs: [] });
+  }
   if (pathname === "/api/scheduler/jobs" && req.method === "POST") {
     const body = await readBody(req);
     return sendJson(res, { job: {

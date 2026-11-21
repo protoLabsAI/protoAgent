@@ -17,6 +17,8 @@ const apiMock = vi.hoisted(() => ({
   setScheduleEnabled: vi.fn(async () => ({ job: {} })),
   cancelSchedule: vi.fn(async () => ({ canceled: true, undo_token: "tok-sched" })),
   updateSchedule: vi.fn(async () => ({ job: {} })),
+  // The schedule detail's Recent runs list (work-view-additions §2.3); empty unless a case sets rows.
+  scheduleRuns: vi.fn(async () => ({ job_id: "job-7", runs: [] as unknown[] })),
   deleteTask: vi.fn(async () => ({ deleted: "task-3", undo_token: "tok-task" })),
   updateTask: vi.fn(async () => ({ issue: {} })),
   closeTask: vi.fn(async () => ({ issue: {} })),
@@ -45,6 +47,8 @@ import type { WorkSectionContext } from "../WorkView";
 import { sections } from "../sectionRegistry";
 import { workGroups } from "../workGroups";
 import { groupFor, type GroupableWorkItem } from "../tone";
+import { WorkGroupRows } from "../WorkOverview";
+import { scheduleMeta } from "../rowMeta";
 
 vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../schedule/schedule-builder")>(),
@@ -120,6 +124,7 @@ type ScheduledJobRaw = {
   id: string; prompt: string; schedule: string;
   next_fire: string | null; last_fire: string | null;
   enabled: boolean; timezone: string | null; created_at: string;
+  consecutive_failures?: number; last_error?: string | null; last_ok?: string | null;
 };
 
 function taskItem(over: Partial<TaskRaw> = {}): WorkItem {
@@ -219,12 +224,18 @@ describe("Schedules section (§2.8)", () => {
     expect(allText()).toContain("job-7");
   });
 
-  it("shows the timezone in When only when it differs from local, and hides it in local time", async () => {
+  it("When names the job's own zone — its timezone, or UTC when it has none (one clock, §2.3)", async () => {
     await mount(h(SchedulesSection, ctx({
       sources: sources({ schedules: src([scheduleItem({ timezone: "Asia/Tokyo" })]) }),
       state: { itemId: "schedule:job-7" },
     })));
-    expect(allText()).toContain("(Asia/Tokyo)");
+    expect(allText()).toContain("Weekdays at 09:00 (Asia/Tokyo)");
+    await act(async () => root?.unmount());
+    await mount(h(SchedulesSection, ctx({
+      sources: sources({ schedules: src([scheduleItem({ timezone: null })]) }),
+      state: { itemId: "schedule:job-7" },
+    })));
+    expect(allText()).toContain("Weekdays at 09:00 (UTC)");
   });
 
   it.each([null, "Asia/Tokyo"])("Edit preserves stored timezone %s on a prompt-only save", async (timezone) => {
@@ -325,6 +336,112 @@ describe("Schedules section (§2.8)", () => {
     await act(async () => button("Undo").click());
     await flush();
     expect(apiMock.undo).toHaveBeenCalledWith("tok-sched");
+  });
+});
+
+describe("Job health and Recent runs (work-view-additions §2)", () => {
+  const field = (label: string) => Array.from(host!.querySelectorAll(".work-detail__field"))
+    .find((el) => el.querySelector("dt")?.textContent === label)?.querySelector("dd");
+  const settle = async () => {
+    for (let i = 0; i < 3; i++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  };
+  const detail = (item: WorkItem) => mount(h(SchedulesSection, ctx({
+    sources: sources({ schedules: src([item]) }), state: { itemId: `schedule:${item.id}` },
+  })));
+
+  it("a failing job's row meta ends with the failure note; one failure reads 'the last run failed'", () => {
+    const base = { schedule: "0 9 * * *", timezone: null };
+    expect(scheduleMeta({ ...base, consecutive_failures: 3 })).toBe("Every day at 09:00 · failed the last 3 runs");
+    expect(scheduleMeta({ ...base, consecutive_failures: 1 })).toBe("Every day at 09:00 · the last run failed");
+    expect(scheduleMeta({ ...base, consecutive_failures: 0 })).toBe("Every day at 09:00");
+    expect(scheduleMeta(base)).toBe("Every day at 09:00");
+    // A one-shot is an instant: it reads in the job's clock (UTC without a timezone), zone named.
+    expect(scheduleMeta({ schedule: "2026-11-21T14:30:00Z", timezone: null }, Date.parse("2026-11-20T10:00:00Z")))
+      .toBe("Once, Nov 21 14:30 UTC");
+  });
+
+  it("a failing job's section row shows a warning dot and the failure note", async () => {
+    await mount(h(SchedulesSection, ctx({ sources: sources({ schedules: src([
+      scheduleItem({ consecutive_failures: 3 }), scheduleItem({ id: "job-8" }),
+    ]) }) })));
+    const [failing, healthy] = Array.from(host!.querySelectorAll(".work-row"));
+    expect(failing.querySelector(".pl-dot--warning")).not.toBeNull();
+    expect(failing.querySelector(".work-row__meta")?.textContent).toBe("Weekdays at 09:00 · failed the last 3 runs");
+    expect(healthy.querySelector(".pl-dot--warning")).toBeNull();
+    expect(healthy.querySelector(".work-row__meta")?.textContent).toBe("Weekdays at 09:00");
+  });
+
+  it("in Coming up a failing job swaps its clock for a warning dot and keeps the Time badge", async () => {
+    const raw = { ...(scheduleItem({ consecutive_failures: 1 }).raw as ScheduledJobRaw) };
+    const failing = { ...scheduleItem({ consecutive_failures: 1 }), meta: scheduleMeta(raw) };
+    const paused = { ...scheduleItem({ id: "job-9", enabled: false, consecutive_failures: 2 }) };
+    const [group] = workGroups([failing, scheduleItem({ id: "job-8" }), paused]).filter((g) => g.id === "coming-up");
+    await mount(h(WorkGroupRows, { group, sources: sources({}), onOpen: vi.fn() }));
+    const [first, second, third] = Array.from(host!.querySelectorAll(".work-row"));
+    expect(first.querySelector(".pl-dot--warning")).not.toBeNull();
+    expect(first.querySelector(".work-row__meta")?.textContent).toBe("Weekdays at 09:00 · the last run failed");
+    expect(first.querySelector(".pl-badge")?.textContent).toBe("Time");
+    expect(first.querySelector(".pl-badge")?.className).not.toContain("warning");
+    expect(second.querySelector(".pl-dot--warning")).toBeNull();
+    // A paused job keeps its pause glyph: it must never pass for an active one.
+    expect(third.querySelector(".pl-dot--warning")).toBeNull();
+  });
+
+  it("Health says how many runs failed, when it last worked (job clock) and the last error; full error in Technical details", async () => {
+    await detail(scheduleItem({
+      timezone: "Europe/Berlin", consecutive_failures: 3,
+      last_ok: "2020-11-16T13:00:00+00:00", last_error: "Gateway timed out after 30 s",
+    }));
+    await settle();
+    expect(field("Health")?.firstChild?.textContent).toBe("Failed the last 3 runs. Last worked Nov 16 2020 14:00 Europe/Berlin.");
+    expect(field("Health")?.querySelector(".job-health__error")?.textContent).toBe("Gateway timed out after 30 s");
+    expect(Array.from(host!.querySelectorAll(".work-detail__tech-row dt")).map((dt) => dt.textContent)).not.toContain("Last error");
+    const summaries = Array.from(document.querySelectorAll("button")).filter((b) => b.textContent?.trim() === "Technical details");
+    await act(async () => summaries[summaries.length - 1].click());
+    expect(Array.from(host!.querySelectorAll(".work-detail__tech-row dt")).map((dt) => dt.textContent)).toContain("Last error");
+  });
+
+  it("Health reads 'Last worked …' on a healthy job, 'Hasn't run yet.' before a first run, and one failure in words", async () => {
+    await detail(scheduleItem({ last_ok: "2020-11-16T14:00:00Z" }));
+    expect(field("Health")?.textContent).toBe("Last worked Nov 16 2020 14:00 UTC.");
+    await act(async () => root?.unmount());
+    await detail(scheduleItem({ last_fire: null }));
+    expect(field("Health")?.textContent).toBe("Hasn't run yet.");
+    await act(async () => root?.unmount());
+    await detail(scheduleItem({ consecutive_failures: 1 }));
+    expect(field("Health")?.textContent).toBe("The last run failed.");
+  });
+
+  it("Next run and Last run read in the job's clock with the zone name", async () => {
+    await detail(scheduleItem({ timezone: "Europe/Berlin", last_fire: "2020-11-07T09:00:00Z" }));
+    expect(field("Last run")?.textContent).toBe("Ran Nov 7 2020 10:00 Europe/Berlin");
+    expect(field("Next run")?.textContent).toMatch(/\(Jan 1 2099 10:00 Europe\/Berlin\)$/);
+  });
+
+  it("a scheduled job's detail mounts Recent runs between the actions and Technical details, asking for 20", async () => {
+    apiMock.scheduleRuns.mockResolvedValueOnce({ job_id: "job-7", runs: [
+      { scheduled_for: "2020-11-07T09:00:00+00:00", state: "settled", task_state: "failed", ok: false, error: "Gateway timed out" },
+    ] });
+    await detail(scheduleItem());
+    await settle();
+    expect(apiMock.scheduleRuns).toHaveBeenCalledWith("job-7", 20);
+    const runs = host!.querySelector("section.job-runs")!;
+    expect(runs.querySelector("h3")?.textContent).toBe("Recent runs");
+    expect(runs.querySelector("li .job-run__word")?.textContent).toBe("Failed");
+    expect(runs.querySelector("li .pl-chip-meta")?.textContent).toBe("Nov 7 2020 09:00 UTC");
+    const order = (a: Element, b: Element) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(order(host!.querySelector(".work-detail__actions")!, runs)).toBeTruthy();
+    const technical = Array.from(host!.querySelectorAll(".work-detail > .pl-accordion")).pop()!;
+    expect(order(runs, technical)).toBeTruthy();
+  });
+
+  it("a wait rides the schedule detail but gets no Recent runs", async () => {
+    await detail(scheduleItem({ id: "wait:abc" }));
+    await settle();
+    expect(host!.querySelector(".work-detail")).not.toBeNull();
+    expect(host!.querySelector(".job-runs")).toBeNull();
+    expect(allText()).not.toContain("Recent runs");
+    expect(apiMock.scheduleRuns).not.toHaveBeenCalled();
   });
 });
 

@@ -29,7 +29,7 @@ import {
 } from "./tone";
 import { inWorkScope } from "./workGroups";
 import { directiveStore } from "../chat/useDirectives";
-import { scheduleWhen, summaryTitle, typeAndPriority, watchKind } from "./rowMeta";
+import { scheduleMeta, summaryTitle, typeAndPriority, watchKind } from "./rowMeta";
 
 /** The eight work sources, in the order the Work view lays them out (§5). `activity` is a
  *  source only — its Work section was removed in S4c (the feed lives on the utility-bar
@@ -158,7 +158,7 @@ function mapSchedule(row: ScheduledJob): WorkItem {
     id: row.id,
     status: fromSchedule(row),
     title: row.prompt,
-    meta: scheduleWhen(row.schedule),
+    meta: scheduleMeta(row),
     sessionId: row.origin_session || row.context_id || undefined,
     raw: row,
   };
