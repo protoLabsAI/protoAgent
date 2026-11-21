@@ -134,6 +134,14 @@ const CHECK_DELAYS_MS = [1000, 2000, 3000, 5000];
 
 const TERMINAL: ReadonlySet<DecisionRow["state"]> = new Set(["answered", "expired", "cancelled", "withdrawn"]);
 
+/** Longest typed answer quoted in the "Already answered in chat" callout (#5668 spec v5 §4). */
+const TYPED_ANSWER_MAX = 80;
+// Counted and cut by code point, so an emoji at the cut is never split into a lone surrogate.
+const clipTyped = (text: string) => {
+  const chars = Array.from(text);
+  return chars.length > TYPED_ANSWER_MAX ? `${chars.slice(0, TYPED_ANSWER_MAX).join("")}…` : text;
+};
+
 export function DecisionCard({
   decision,
   onAnswer,
@@ -316,7 +324,9 @@ export function DecisionCard({
     const when = record.answered_at ? ` at ${formatGivenAt(record.answered_at)}` : "";
     return (
       <Callout tone="info">
-        {`Already answered: you chose "${chosen}"${when}. Nothing else changed.`}
+        {record.answer_kind === "text"
+          ? `Already answered in chat: "${clipTyped(record.answer ?? record.answer_label ?? "")}"${when}. Nothing else changed.`
+          : `Already answered: you chose "${chosen}"${when}. Nothing else changed.`}
       </Callout>
     );
   }
@@ -341,9 +351,12 @@ export function DecisionCard({
   }
 
   // The frozen transcript sentence for a settled record (§5.5–5.6): one plain muted line, never
-  // a callout. Answered reads "You chose …"; expired and withdrawn keep the panel's closed text.
+  // a callout. Answered reads "You chose …" (or "You replied in chat" for a typed answer: the
+  // reply is the user bubble right below, so the line does not repeat it); expired and withdrawn
+  // keep the panel's closed text.
   function transcriptLine(record: DecisionRow) {
     if (record.state === "answered") {
+      if (record.answer_kind === "text") return `You replied in chat · ${formatGivenAt(record.answered_at)}`;
       const chosen = record.answer_label ?? record.answer ?? "an option";
       return `You chose "${chosen}" · ${formatGivenAt(record.answered_at)}`;
     }

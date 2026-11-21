@@ -1032,6 +1032,129 @@ describe("DecisionCard", () => {
     expect(onResolved).not.toHaveBeenCalled();
   });
 
+  it("transcript: a typed answer freezes as 'You replied in chat', an option or old record as 'You chose'", async () => {
+    const answered = (patch: Partial<DecisionRow>) => decision("a", {
+      state: "answered",
+      answer: "merge",
+      answer_label: "Merge with the WARN",
+      answered_at: "2026-11-08T14:52:00+00:00",
+      ...patch,
+    });
+    await renderNode(
+      <DecisionCard
+        decision={answered({ answer_kind: "text", answer: "Wait for the fix", answer_label: "Wait for the fix" })}
+        presentation="transcript"
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain("You replied in chat ·");
+    // The reply is the user bubble below the card: the line does not repeat it.
+    expect(document.body.textContent).not.toContain("Wait for the fix");
+    expect(document.body.textContent).not.toContain("You chose");
+    expect(document.querySelector(".pl-callout")).toBeFalsy();
+
+    for (const answer_kind of ["option", null, undefined] as const) {
+      await renderNode(
+        <DecisionCard key={String(answer_kind)} decision={answered({ answer_kind })} presentation="transcript" onAnswer={vi.fn()} />,
+      );
+      expect(document.body.textContent).toContain('You chose "Merge with the WARN" ·');
+      expect(document.body.textContent).not.toContain("You replied in chat");
+    }
+  });
+
+  it("panel: a typed answer reads 'Already answered in chat' with the text cut at 80 characters", async () => {
+    const typed = `${"a".repeat(80)}TAIL`;
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", {
+          state: "answered",
+          answer: typed,
+          answer_label: typed,
+          answer_kind: "text",
+          answered_at: "2026-11-08T14:52:00+00:00",
+        })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain(`Already answered in chat: "${"a".repeat(80)}…" at `);
+    expect(document.body.textContent).toContain("Nothing else changed.");
+    expect(document.body.textContent).not.toContain("TAIL");
+    expect(document.body.textContent).not.toContain("you chose");
+    expect(document.querySelector(".pl-callout--info")).toBeTruthy();
+
+    // A short typed answer is quoted whole, with no ellipsis.
+    await renderNode(
+      <DecisionCard
+        key="short"
+        decision={decision("a", { state: "answered", answer: "Wait for the fix", answer_kind: "text", answered_at: "2026-11-08T14:52:00+00:00" })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain('Already answered in chat: "Wait for the fix" at ');
+  });
+
+  it("panel: a 409 carrying a typed answer shows the in-chat callout; an option keeps 'you chose'", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({
+      answered_elsewhere: true,
+      decision: decision("a", { state: "answered", answer: "Wait for the fix", answer_label: "Wait for the fix", answer_kind: "text", answered_at: "2026-11-08T14:52:00+00:00" }),
+    });
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    await click("Merge with the WARN");
+    expect(document.body.textContent).toContain('Already answered in chat: "Wait for the fix" at ');
+
+    await renderNode(
+      <DecisionCard
+        key="option"
+        decision={decision("a", { state: "answered", answer: "hold", answer_label: "Hold the release", answer_kind: "option", answered_at: "2026-11-08T14:52:00+00:00" })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain('Already answered: you chose "Hold the release" at ');
+  });
+
+  it("panel: the 80-character cut never splits an emoji", async () => {
+    const typed = `${"a".repeat(79)}😀TAIL`;
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { state: "answered", answer: typed, answer_kind: "text", answered_at: "2026-11-08T14:52:00+00:00" })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).toContain(`Already answered in chat: "${"a".repeat(79)}😀…" at `);
+    expect(document.body.textContent).not.toContain("TAIL");
+  });
+
+  // `delivering` says an answer is on its way, not which kind: an option picked in another tab
+  // sets it too. The card therefore never claims a typed reply from it (#5668 review).
+  it("a pending record with an answer in flight from elsewhere keeps its options and footer actions", async () => {
+    vi.useFakeTimers();
+    try {
+      const onCheck = vi.fn();
+      for (const presentation of ["panel", "transcript"] as const) {
+        await renderNode(
+          <DecisionCard
+            key={presentation}
+            decision={decision("a", { delivering: true, expires_at: "2026-11-08T15:45:00+00:00" })}
+            presentation={presentation}
+            onAnswer={vi.fn()}
+            onCheck={onCheck}
+          />,
+        );
+        expect(document.body.textContent).not.toContain("Sending your reply…");
+        expect(document.querySelector('[role="group"][aria-label="Answer"]')).toBeTruthy();
+        expect(buttons().some((b) => b.textContent?.trim() === "Dismiss")).toBe(true);
+        expect(document.body.textContent).toContain("If nobody answers by");
+      }
+      // No background re-read loop starts from the flag alone.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+      expect(onCheck).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("transcript: an expired record freezes on its closed line, not a callout", async () => {
     await renderNode(
       <DecisionCard
