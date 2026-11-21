@@ -321,6 +321,30 @@
       for collapsed decisions, waiting tasks and undelivered pages; the stopped goal keeps its
       own controls in the same frame ───────────────────────────────────────────────────────── */
 
+/* A decision card can be taller than the window (several options, each with an explanation,
+   plus the expiry note). The cards and rows scroll inside the panel; the heading and "Open in
+   Work" stay outside this box. The cap leaves room for the chip the panel hangs from and
+   the window's top edge. */
+.chat-needs-you__scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-3);
+  min-height: 0;
+  max-height: min(60vh, calc(100dvh - 220px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Inside it the row list no longer needs its own cap: one scroller, not two. */
+.chat-needs-you__scroll .chat-status-group__rows {
+  max-height: none;
+  overflow: visible;
+}
+/* The phone sheet's body is the scroller. */
+.chat-status-sheet .chat-needs-you__scroll {
+  max-height: none;
+  overflow: visible;
+}
+
 .chat-needs-you__card {
   display: flex;
   flex-direction: column;

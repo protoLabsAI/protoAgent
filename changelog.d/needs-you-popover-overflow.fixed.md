@@ -1,0 +1,1 @@
+- **A long decision no longer pushes the Needs-you panel off the top of the window.** In the chat's Needs-you panel, a decision with several options and explanations grew the panel past the window's top edge and cut off its heading. The cards and rows now scroll inside the panel, with "Needs you" above and "Open in Work" below staying in view.

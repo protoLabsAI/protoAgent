@@ -128,6 +128,10 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
         Needs you{count > 0 && <span aria-hidden="true"> · {count}</span>}
       </h2>
       {note && <p className="chat-status-details__problem" role="presentation">{note}</p>}
+      {/* The one scroller: a long decision (many options, long explanations) scrolls here, so
+          the heading above and "Open in Work" below stay in view and the panel never grows
+          past the window. */}
+      <div className="chat-needs-you__scroll">
       {rows.map((row, index) => {
         // The first pending decision stays the expanded DecisionCard; so does any the operator
         // has opened (expanded) or interacted with (held, §5.5). The rest are quiet rows.
@@ -258,6 +262,7 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
           })}
         </ul>
       )}
+      </div>
       <div className="chat-status-details__actions">
         <Button
           size={size}
