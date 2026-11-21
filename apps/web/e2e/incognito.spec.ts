@@ -58,7 +58,7 @@ test("/incognito toggles the tab: chip shows, every send carries metadata.incogn
   expect(sent[2].metadata?.incognito).toBeUndefined();
 });
 
-test("the chat-tab context menu offers New incognito chat + a per-tab toggle", async ({ page }) => {
+test("a tab's context menu toggles incognito; empty tab-bar space offers New incognito chat", async ({ page }) => {
   const tabs = page.locator(".pl-tabbar__tab");
   const menu = page.locator(".pl-menu");
 
@@ -75,8 +75,30 @@ test("the chat-tab context menu offers New incognito chat + a per-tab toggle", a
   await menu.getByText("Turn incognito off", { exact: true }).click();
   await expect(page.locator(".composer-incognito-toggle")).toHaveCount(0);
 
-  // "New incognito chat" opens a NEW tab already in incognito.
+  // A tab's menu no longer offers "New incognito chat" — the toggle above covers the tab.
   await tabs.first().click({ button: "right" });
+  await expect(menu.getByText("New chat", { exact: true })).toBeVisible();
+  await expect(menu.getByText("New incognito chat", { exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  // Right-click EMPTY tab-bar space (a point in the bar that is neither a tab nor a button):
+  // "New incognito chat" opens a NEW tab already in incognito.
+  const spot = await page.evaluate(() => {
+    const bar = document.querySelector(".pl-tabbar");
+    if (!bar) return null;
+    const r = bar.getBoundingClientRect();
+    const y = r.top + r.height / 2;
+    for (let x = r.right - 4; x > r.left; x -= 4) {
+      const el = document.elementFromPoint(x, y);
+      if (el && bar.contains(el) && !el.closest(".pl-tabbar__tab, button")) return { x, y };
+    }
+    return null;
+  });
+  expect(spot, "the tab bar has empty space to right-click").not.toBeNull();
+  await page.mouse.click(spot!.x, spot!.y, { button: "right" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("New chat", { exact: true })).toBeVisible();
   await menu.getByText("New incognito chat", { exact: true }).click();
   await expect(tabs).toHaveCount(2);
   await expect(page.locator(".composer-incognito-toggle")).toBeVisible();
