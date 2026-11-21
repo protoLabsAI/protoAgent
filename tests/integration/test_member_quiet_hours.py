@@ -76,7 +76,11 @@ def test_hub_quiet_hours_hold_a_real_members_routine_notice(fleet, monkeypatch):
         # 2xx for the held one too: the member must not retry it.
         assert st == 200 and json.loads(raw) == {"ok": True, "queued": True}, (notice_id, st, raw[:300])
 
-    ledger = _column(hub.home / "push" / "delivery.sqlite3", "SELECT DISTINCT notice_id FROM attempts")
+    # The hub's notice seam queues the push adapter and answers the handoff without
+    # waiting for the ledger write, so the row is polled for.
+    path = hub.home / "push" / "delivery.sqlite3"
+    poll(lambda: _column(path, "SELECT 1 FROM attempts"), timeout=15, interval=0.25)
+    ledger = _column(path, "SELECT DISTINCT notice_id FROM attempts")
     assert ledger == ["question-1"], f"only the question may reach the push ledger, got {ledger}"
     held = _column(hub.home / "notices" / "hold.sqlite3", "SELECT text FROM held")
     assert held == [f"A notice from {member['name']}"], held
