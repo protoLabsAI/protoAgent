@@ -4,7 +4,8 @@ A real hub boots with quiet hours covering the current time and ``push.all_notic
 (so the push policy is not what keeps a notice off the ledger), and spawns a real member.
 Two member handoffs are posted to the hub's ``/api/fleet/notices`` with that member's
 workspace id and the fleet service token: a routine one, which the hub must hold, and a
-question, which must reach the push ledger.
+question, which must reach the push ledger. The held one must stay off the hub's event
+stream as well: the desktop app shows every ``notice`` event there as a native banner.
 
 No push service is contacted: the seeded device's client keys are not a real
 subscription, so the sender ends the attempt before any request. The ledger row stays.
@@ -22,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from infra.paths import reset_instance_paths
 from security import devices
 from tests.integration.conftest import http_get, http_post, poll, requires_integration
+from tests.integration.test_member_push_policy import _replayed_notices
 
 pytestmark = requires_integration
 
@@ -84,3 +86,8 @@ def test_hub_quiet_hours_hold_a_real_members_routine_notice(fleet, monkeypatch):
     assert ledger == ["question-1"], f"only the question may reach the push ledger, got {ledger}"
     held = _column(hub.home / "notices" / "hold.sqlite3", "SELECT text FROM held")
     assert held == [f"A notice from {member['name']}"], held
+    # The held notice is not on the hub's event stream either: the desktop app has no
+    # quiet-hours check of its own. The question was raised after it, so once the replay
+    # reaches the question, a published routine notice would already have been read.
+    replayed = _replayed_notices(hub.base, until=lambda notices: "question-1" in notices)
+    assert sorted(replayed) == ["question-1"], f"quiet hours let a held notice onto the stream: {sorted(replayed)}"

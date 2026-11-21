@@ -17,8 +17,9 @@ Two halves, one per side of the loopback call:
   notice adapter the hub runs: its chat plugins and the push ledger its own notices use.
 
 Only the notice's identity crosses: id, kind, importance and times. No text, no link.
-The hub's quiet hours apply to a member's notice as to its own: a routine one is held
-for the hub's digest, under the hub's own wording ("A notice from <member>").
+The hub's quiet hours apply to a member's notice: a routine one is held for the hub's
+digest, under the hub's own wording ("A notice from <member>"), and while held it is
+kept off the event stream too, so the desktop app raises no banner for it.
 The origin is kept on the hub and read back after authentication (``GET
 /api/notices/<id>``), so the push payload still names no member (ADR 0135, "What leaves
 the machine").
@@ -128,7 +129,8 @@ async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
     The seam (``notify_chat_surfaces``) publishes it on the hub bus as a ``notice``
     event and queues it to every registered notice adapter, the push ledger included.
     True when it was raised or held by the hub's quiet hours (``graph.notice_hold``; a
-    question or high-importance notice is never held), False when this hub has no push
+    question or high-importance notice is never held, and a held one reaches neither
+    the bus nor an adapter until the hub's digest), False when this hub has no push
     sender running (nothing to do, not an error). Raises :class:`NoticeRefused` for a
     member this hub does not run or a notice that is not well formed. Times are clamped
     to the kind's own lifetime: a member can shorten a notice's life, never extend it.
@@ -168,14 +170,18 @@ async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
         return False
     await asyncio.to_thread(transport.remember_origin, notice_id, member, expires_at)
     # Raised through the hub's own notice seam, off the event loop (the seam reads the
-    # quiet-hours store). The seam publishes the bus event the desktop app reads, applies
-    # the hub's quiet hours (#5648) and queues every adapter, the push ledger included.
-    # The text is the hub's own wording and names the member only: nothing the member
-    # sent is in it, and the link is empty. Held is still taken: the member must not
-    # retry it. No Home entry: Home is not part of the relay.
+    # quiet-hours store). The seam applies the hub's quiet hours (#5648), publishes the
+    # bus event the desktop app reads and queues every adapter, the push ledger included.
+    # publish_held=False: a routine notice held by quiet hours stays off the bus too,
+    # because the desktop app shows every `notice` event as a native banner with no
+    # quiet-hours check of its own. The text is the hub's own wording and names the
+    # member only: nothing the member sent is in it, and the link is empty. Held is
+    # still taken: the member must not retry it. No Home entry: Home is not part of
+    # the relay.
     await asyncio.to_thread(
         notify_chat_surfaces, f"A notice from {workspace.get('name') or member}", "",
         kind=kind, importance=importance, notice_id=notice_id,
         ttl_seconds=max(0.0, expires_at - now), source="fleet-relay", home_entry=False,
+        publish_held=False,
     )
     return True

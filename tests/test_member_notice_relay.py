@@ -344,20 +344,36 @@ async def test_a_members_notice_reaches_every_notice_adapter_and_still_the_push_
         await loops._stop_push_delivery()
 
 
-async def test_quiet_hours_keep_a_members_routine_notice_from_every_adapter(hub_hold):
+async def test_quiet_hours_keep_a_members_routine_notice_from_every_adapter(hub_hold, bus):
     transport = loops._start_push_delivery(Provider())
     seen = second_adapter()
     try:
         routine = notice_body(notice_id="job-9", kind="notify", importance="normal")
         assert await notice_relay.accept_member_notice(routine) is True  # held is still taken
         assert hub_hold.held() == ["A notice from protoEngineer"]
+        # Not on the bus either: the desktop app shows every `notice` event as a native
+        # banner and has no quiet-hours check of its own.
+        assert bus == []
         # A question raised after it is not held, and is the only one any adapter gets.
         assert await notice_relay.accept_member_notice(notice_body(notice_id="decision-dec-3")) is True
         await settle(lambda: seen and rows(transport) == [("decision-dec-3", "question", "high", "accepted")])
         assert [notice.notice_id for notice in seen] == ["decision-dec-3"]
+        assert [(topic, data["notice_id"]) for topic, data in bus] == [("notice", "decision-dec-3")]
         assert hub_hold.held() == ["A notice from protoEngineer"]
     finally:
         chat_surface.unregister_notice_adapter("second-adapter")
+        await loops._stop_push_delivery()
+
+
+async def test_outside_quiet_hours_a_members_routine_notice_is_on_the_hub_bus(hub_hold, bus):
+    hub_hold.config.quiet_hours_enabled = False
+    loops._start_push_delivery(Provider())
+    try:
+        routine = notice_body(notice_id="job-9", kind="notify", importance="normal")
+        assert await notice_relay.accept_member_notice(routine) is True
+        assert [(topic, data["notice_id"]) for topic, data in bus] == [("notice", "job-9")]
+        assert hub_hold.held() == []
+    finally:
         await loops._stop_push_delivery()
 
 

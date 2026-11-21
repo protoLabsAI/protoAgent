@@ -35,6 +35,23 @@ def delivery(tmp_path, monkeypatch):
     return SimpleNamespace(cfg=cfg, clock=clock, bus=bus, sent=sent, service=service, loop=loop)
 
 
+def test_publish_held_false_keeps_a_held_notice_off_the_bus_and_stores_it_once(delivery):
+    d = delivery
+    d.service.start()
+    chat_surface.notify_chat_surfaces("relayed routine", "", publish_held=False, home_entry=False)
+    assert d.bus == [] and not d.sent
+    assert [text for _, text in d.service.store.rows()] == ["relayed routine"]
+    # Never held: published and dispatched exactly once, as with the default.
+    chat_surface.notify_chat_surfaces("approve?", "", kind="question", publish_held=False, home_entry=False)
+    assert [data["text"] for _, data in d.bus] == ["approve?"]
+    assert [n.text for n in d.sent] == ["approve?"]
+    # Outside the window nothing is held, so the routine one is on the bus too.
+    d.cfg.quiet_hours_enabled = False
+    chat_surface.notify_chat_surfaces("daytime", "", publish_held=False, home_entry=False)
+    assert [data["text"] for _, data in d.bus] == ["approve?", "daytime"]
+    assert d.sent[-1].text == "daytime"
+
+
 def test_hold_bus_bypasses_and_one_expired_digest_at_timer_end(delivery):
     d = delivery
     d.service.start()
