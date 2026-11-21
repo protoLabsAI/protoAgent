@@ -23,7 +23,7 @@ type McpServer = { name: string; transport: string; tool_count: number; tier?: "
 
 type Transport = "stdio" | "http" | "sse";
 
-function AddServerForm() {
+function AddServerForm({ empty }: { empty: boolean }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -62,7 +62,7 @@ function AddServerForm() {
   if (!open) {
     return (
       <Button type="button" variant="ghost" onClick={() => setOpen(true)}>
-        <Plus size={14} /> Add server
+        <Plus size={14} /> {empty ? "Add your own" : "Add server"}
       </Button>
     );
   }
@@ -102,12 +102,12 @@ function AddServerForm() {
             <Input className="playbook-search" placeholder="name (e.g. echo)" value={name} onChange={(e) => setName(e.target.value)} />
             <DropdownSelect
               className="playbook-search"
-              value={transport}
+              aria-label="Server location"
+              value={transport === "stdio" ? "stdio" : "http"}
               onValueChange={(v) => setTransport(v as Transport)}
               options={[
-                { value: "stdio", label: "stdio" },
-                { value: "http", label: "http" },
-                { value: "sse", label: "sse" },
+                { value: "stdio", label: "Runs on this computer" },
+                { value: "http", label: "Web address" },
               ]}
             />
           </div>
@@ -119,6 +119,23 @@ function AddServerForm() {
           ) : (
             <Input className="playbook-search" placeholder="url (https://…)" value={url} onChange={(e) => setUrl(e.target.value)} />
           )}
+          {transport !== "stdio" ? (
+            <details>
+              <summary>Advanced</summary>
+              <label>
+                Connection type
+                <DropdownSelect
+                  aria-label="Connection type"
+                  value={transport}
+                  onValueChange={(v) => setTransport(v as Transport)}
+                  options={[
+                    { value: "http", label: "Standard" },
+                    { value: "sse", label: "Older servers (SSE)" },
+                  ]}
+                />
+              </label>
+            </details>
+          ) : null}
         </>
       )}
 
@@ -139,7 +156,6 @@ function McpBody() {
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [forgetPending, setForgetPending] = useState<McpServer | null>(null);
   const servers = (runtime.mcp?.servers ?? []) as McpServer[];
-  const total = runtime.mcp?.tool_count ?? 0;
   // The agent participates in the box commons (mcp.scope: layered) when any server
   // carries a tier — then we surface tier badges + share/unshare (ADR 0041).
   const layered = servers.some((s) => s.tier);
@@ -158,7 +174,7 @@ function McpBody() {
     mutationFn: (n: string) => api.promoteMcpServer(n),
     onSuccess: (_res, n) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      toast({ tone: "success", title: "Shared to the box commons", message: `Every layered agent on this box now runs ${n}.` });
+      toast({ tone: "success", title: "Shared", message: `Shared ${n} with every agent on this computer.` });
     },
     onError: (err: unknown, n) => toast({ tone: "error", title: "Couldn't share server", message: `${n}: ${errMsg(err)}` }),
   });
@@ -176,17 +192,18 @@ function McpBody() {
     <>
       <PanelHeader
         title="MCP servers"
-        kicker={`${servers.length} server${servers.length === 1 ? "" : "s"} · ${total} tool${total === 1 ? "" : "s"}`}
+        kicker={`Outside apps that give the agent extra tools · ${servers.length} server${servers.length === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
         <NodeRuntimeCard />
+        {!servers.length ? <h3>No servers connected yet.</h3> : null}
         <div className="mcp-browse-row">
-          <Button type="button" variant="ghost" onClick={() => setCatalogOpen(true)} title="Add a common MCP server from a curated list">
-            <Boxes size={14} /> Browse common servers
+          <Button type="button" variant={servers.length ? "ghost" : "primary"} onClick={() => setCatalogOpen(true)} title="Add a common MCP server from a curated list">
+            <Boxes size={14} /> Browse servers
           </Button>
-          <QuickSetting keys={["mcp.scope"]} title="MCP server sharing" label="MCP server sharing" icon={<Share2 size={16} />} />
+          <QuickSetting keys={["mcp.scope"]} title="Sharing" label="Sharing" icon={<Share2 size={16} />} />
         </div>
-        <AddServerForm />
+        <AddServerForm empty={!servers.length} />
         <McpCatalogDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} />
         <div className="table-list">
           {servers.length ? (
@@ -194,32 +211,32 @@ function McpBody() {
               <div className="table-row" key={server.name}>
                 <span className="mcp-server-name">
                   {layered && server.tier === "commons" ? (
-                    <span title="Shared commons — runs on every layered agent on this box">
-                      <Badge status="neutral"><Library size={12} /> commons</Badge>
+                    <span title="Shared with every agent on this computer">
+                      <Badge status="neutral"><Library size={12} /> Shared</Badge>
                     </span>
                   ) : layered && server.tier === "private" ? (
-                    <span title="Private to this agent — share to run it on every layered agent on this box">
+                    <span title="Private to this agent — share to run it on every agent on this computer">
                       <Badge status="neutral">private</Badge>
                     </span>
                   ) : null}
-                  {server.name} · {server.transport}
+                  {server.name}
                 </span>
                 <div className="plugin-row-actions">
                   <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
                   {layered && server.tier === "private" ? (
                     <Button type="button" variant="ghost" loading={busyName === server.name}
                       onClick={() => promote.mutate(server.name)}
-                      title={`Share ${server.name} to the box commons`} aria-label={`share ${server.name}`}
+                      title="Shared with every agent on this computer" aria-label={`share ${server.name}`}
                     >
-                      {busyName === server.name ? null : <ArrowUpToLine size={14} />}
+                      {busyName === server.name ? null : <ArrowUpToLine size={14} />} Share
                     </Button>
                   ) : null}
                   {layered && server.tier === "commons" ? (
                     <Button type="button" variant="ghost" disabled={busyName === server.name}
                       onClick={() => setForgetPending(server)}
-                      title={`Unshare ${server.name} from the box commons`} aria-label={`unshare ${server.name}`}
+                      title="Shared with every agent on this computer" aria-label={`unshare ${server.name}`}
                     >
-                      <ArrowDownFromLine size={14} />
+                      <ArrowDownFromLine size={14} /> Shared
                     </Button>
                   ) : null}
                   <Button type="button"
@@ -235,7 +252,6 @@ function McpBody() {
             ))
           ) : (
             <div className="table-row">
-              <span>no MCP servers configured — add one above</span>
               <StatusPill label={runtime.mcp?.enabled ? "enabled" : "off"} tone="muted" />
             </div>
           )}
@@ -244,14 +260,14 @@ function McpBody() {
 
       <ConfirmDialog
         open={forgetPending !== null}
-        title="Unshare from the box commons?"
+        title={`Stop sharing ${forgetPending?.name ?? "server"}?`}
         confirmLabel="Unshare"
         destructive
         onConfirm={() => { if (forgetPending) forget.mutate(forgetPending.name); setForgetPending(null); }}
         onClose={() => setForgetPending(null)}
       >
         {forgetPending
-          ? `"${forgetPending.name}" will be removed from the box commons and become private to this agent — no other agent on this box will run it.`
+          ? `"${forgetPending.name}" will become private to this agent — no other agent on this computer will run it.`
           : undefined}
       </ConfirmDialog>
     </>
