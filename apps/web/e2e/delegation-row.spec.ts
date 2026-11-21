@@ -23,6 +23,13 @@ function sse(frames: { topic: string; data: Record<string, unknown> }[]) {
 test("a background delegation is one row that tracks its job, and the chat shows work is running", async ({
   page,
 }) => {
+  // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+  // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
+  });
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(
@@ -126,17 +133,23 @@ test("a background delegation is one row that tracks its job, and the chat shows
   await row.getByRole("button", { name: "Hide brief" }).click();
   await expect(page.locator(".chat-delegation-brief")).toHaveCount(0);
 
-  // The job starts: the row spins, and the chat says it has work running — on the row and
-  // the tab. (Desktop hides the status rail's work chips; the Doing now chip is phone-only.)
+  // The job starts: the row spins, and the chat says it has work running — the status
+  // rail's Doing now chip, whose grouped details carry the job's label.
   phase = "running";
   startReleased = true;
   await expect(row.getByRole("img", { name: "running in the background" })).toBeVisible();
   const chip = page.getByTestId("chat-status-chip-doing-now");
-  await expect(chip).toHaveCount(0);
+  await expect(chip).toHaveText("Doing now 1");
+  await chip.click();
+  const details = page.locator(".chat-status-details");
+  await expect(details).toContainText("Land PR #13 and close #12");
+  await page.keyboard.press("Escape");
+  await expect(details).toHaveCount(0);
   await expect(page.locator(".pl-tabbar__tab .session-dot.processing")).toHaveCount(1); // the tab reads busy too
 
   // It finishes: ✓ on the row, and NO note repeats the result — the delegate's reply arrives
-  // as its own message through the drain.
+  // as its own message through the drain. The terminal job leaves the counts, so the Doing
+  // now chip goes with it.
   phase = "done";
   doneReleased = true;
   await expect(row.getByRole("img", { name: "finished" })).toBeVisible();
@@ -149,6 +162,13 @@ test("a background delegation is one row that tracks its job, and the chat shows
 test("a FAILED delegation keeps its reason in the chat", async ({ page }) => {
   // The row's ✕ says it failed; only the note says why — so a failure keeps the note a
   // successful delegation no longer needs.
+  // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+  // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
+  });
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(

@@ -22,6 +22,8 @@ import { withSharedDecisions, workGroups } from "./workGroups";
 import { WorkCreateDialog } from "./WorkCreateDialog";
 import type { SavedWork } from "./workPersistence";
 import { WorkDetail } from "./WorkDetail";
+import { SpendToday } from "./SpendToday";
+import { navigate } from "../app/palette/nav";
 import { WorkOverview, WorkGroupNew, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
 import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
 import { sections, subscribe, getSnapshot } from "./sectionRegistry";
@@ -244,7 +246,9 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       const heading = Array.from(listRef.current?.querySelectorAll<HTMLElement>("h2.work-heading") ?? [])
         .find((node) => node.getAttribute("aria-label")?.startsWith(`${WORK_GROUP_LABELS[groupId]},`));
       if (!row && heading) heading.tabIndex = -1;
-      (row ?? heading ?? nodes[0] ?? listRef.current?.querySelector<HTMLElement>("button"))?.focus({ preventScroll: true });
+      // The spend block's own buttons sit above the groups; the fallback is a group control.
+      (row ?? heading ?? nodes[0] ?? Array.from(listRef.current?.querySelectorAll<HTMLElement>("button") ?? [])
+        .find((button) => !button.closest(".spend-today")))?.focus({ preventScroll: true });
     } else if (returnTo.current) {
       // The opened item can finish while its detail shows (an answered decision, a completed
       // job) and leave every group — fall back to the first row so focus never drops to body.
@@ -286,6 +290,13 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       itemId: itemKey(item),
       scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop,
     });
+  };
+  // The spend-cap decision is an ordinary Needs you decision; the spend block links to it.
+  // A row that isn't listed (yet) still opens: the decision renderer loads it by id.
+  const onOpenDecision = (id: string) => {
+    const row = sources.decisions.items.find((item) => item.id === id);
+    if (row) onOpen(row);
+    else update({ itemId: `decision:${id}`, scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop });
   };
   const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, onCloseTo, sessionId,
     decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
@@ -338,6 +349,10 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
         }
       }}>
         <div className="work-view__content">
+          {/* Unattended spend today (work-view-additions §1.1): above the four groups on every
+              Work surface. Not a group, no count; a pause shows here once, never job by job. */}
+          <SpendToday answerDecision={decisions.answer} onOpenDecision={onOpenDecision}
+            onOpenSettings={() => navigate({ kind: "global", section: "behavior" })} />
           {section !== "overview" && group && <WorkHeading label={group.label} count={group.count}
             action={<WorkGroupNew group={group} onNew={(id) => onNew(id)} />} />}
           {section === "overview" || !group

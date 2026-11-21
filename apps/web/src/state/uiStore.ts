@@ -13,6 +13,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { persistStorage } from "../lib/storage";
+import { useIsMobile } from "../lib/useIsMobile";
 import type { SurfaceState } from "../shell/surfaceState";
 
 // Per-agent layout (ADR 0042). Each fleet agent keeps its OWN layout — rail order, widths,
@@ -664,3 +665,25 @@ export const useUI = create<UIState>()(
     },
   ),
 );
+
+/** Is the Work pane on screen beside the chat? Desktop only (the phone shows one surface at a
+ *  time, so its Work view never sits beside the chat). True while Work is the open tab of an
+ *  uncollapsed right panel or bottom dock, or while Work is expanded in the surface modal.
+ *  False for a collapsed dock, another tab on that dock (Code, a plugin view), or a Work that
+ *  was moved off the dock in question. The chat status rail reads this to stop repeating what
+ *  the Work pane already shows. */
+export function workPaneVisible(
+  s: Pick<UIState, "rightPanel" | "rightCollapsed" | "bottomPanel" | "bottomCollapsed" | "railOrder" | "surfaceModal">,
+  mobile: boolean,
+): boolean {
+  if (mobile) return false;
+  if (s.surfaceModal?.viewId === "work") return true;
+  if (s.rightPanel === "work" && !s.rightCollapsed && s.railOrder.right.includes("work")) return true;
+  return s.bottomPanel === "work" && !s.bottomCollapsed && s.railOrder.bottom.includes("work");
+}
+
+/** `workPaneVisible` as a hook: re-renders only when the answer flips. */
+export function useWorkPaneVisible(): boolean {
+  const mobile = useIsMobile();
+  return useUI((s) => workPaneVisible(s, mobile));
+}

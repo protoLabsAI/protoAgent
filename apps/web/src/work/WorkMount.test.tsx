@@ -24,6 +24,9 @@ import type { WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
 import "./sections";
 
 const data = vi.hoisted(() => ({ sources: {} as WorkItems }));
+// The spend block has its own suite (SpendToday.test.tsx); a stub keeps this file's heading,
+// alert and button queries on the groups it is about.
+vi.mock("./SpendToday", () => ({ SpendToday: () => null }));
 vi.mock("./useWorkItems", () => ({ useWorkItems: () => data.sources }));
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

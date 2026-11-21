@@ -57,7 +57,9 @@ See [Steering](/explanation/steering) for pending-message behavior.
 - **Status rail:** a strip above the composer sums up this chat's work — a **Needs
   you** marker and a chip for each non-empty [Work](#work) group (**Doing now**,
   **Coming up**, **Instructions**). A chip opens that group's rows; **Needs you**
-  is never limited to one chat.
+  is never limited to one chat. On desktop these chips step aside while the Work
+  pane is on screen, since it already shows the same rows; they return when you
+  hide the pane or switch its tab. The chips for who is in the chat always stay.
 
 On desktop, a failed streaming relay can fall back to showing the completed reply.
 If a reply stalls or fails, follow [Chat fails](/guides/troubleshooting#chat-fails).
@@ -113,8 +115,7 @@ sorts that work into four groups, with an **Overview** that lists them together:
 - **Your instructions** — standing instructions you've given that are still in force.
 
 Opening a group from the chat [status rail](#chat) scopes that visit to the
-current conversation. (The rail's work chips show on the phone; on desktop the
-rail shows only who is in the chat.) Choosing another section in Work ends that scope.
+current conversation. Choosing another section in Work ends that scope.
 **Needs you** is the exception: it always counts everything waiting on you,
 across the agent's chats.
 

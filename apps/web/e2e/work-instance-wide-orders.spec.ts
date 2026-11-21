@@ -25,6 +25,13 @@ const order = (id: string, quote: string, created_at: string): Row => ({
 async function boot(page: Page, orders: Row[], own: Row[], onWithdraw?: (row: Row) => { status: number } | void) {
   const withdrawals: { id: string; instanceWide: string | null; reason: string | null }[] = [];
   await page.emulateMedia({ reducedMotion: "reduce" });
+  // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+  // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
+  });
   await page.addInitScript(({ session, origin }) => {
     localStorage.setItem("protoagent.chat.sessions", JSON.stringify({
       version: 1, currentSessionId: session,
@@ -71,19 +78,11 @@ async function boot(page: Page, orders: Row[], own: Row[], onWithdraw?: (row: Ro
   return withdrawals;
 }
 
-/** Open Work on Your instructions: on the phone through the rail chip's "this chat" scope;
- *  on desktop — which hides the rail's work chips — through /directives. */
+/** Open Work on Your instructions under the rail chip's "this chat" scope. */
 async function openInstructions(page: Page) {
+  await page.getByTestId("chat-status-chip-instructions").click();
+  await page.locator(".chat-status-details").getByRole("button", { name: "Open in Work", exact: true }).click();
   const rail = page.locator('.work-view[data-frame="rail"]');
-  if ((page.viewportSize()?.width ?? 1280) < 768) {
-    await page.getByTestId("chat-status-chip-instructions").click();
-    await page.locator(".chat-status-details").getByRole("button", { name: "Open in Work", exact: true }).click();
-  } else {
-    await expect(page.getByTestId("chat-status-chip-instructions")).toHaveCount(0);
-    const composer = page.getByPlaceholder(/Message protoAgent/i);
-    await composer.fill("/directives ");
-    await composer.press("Enter");
-  }
   await expect(rail.locator(".work-section--directives")).toBeVisible();
   return rail;
 }
@@ -111,7 +110,7 @@ for (const width of [1440, 390]) {
 
       // Both orders were recorded in ANOTHER chat, yet they count in this chat's chip…
       const chip = page.getByTestId("chat-status-chip-instructions");
-      if (width === 390) await expect(chip).toHaveText("3", { useInnerText: true });
+      await expect(chip).toHaveText(width === 390 ? "3" : "Instructions 3", { useInnerText: true });
       const rail = await openInstructions(page);
       // …and in Work's own count, from the same selector.
       await expect(rail.locator("h2.work-heading")).toHaveAttribute("aria-label", "Your instructions, 3");
@@ -179,8 +178,13 @@ for (const width of [1440, 390]) {
       await page.screenshot({ path: info.outputPath("withdrawn.png"), fullPage: true, animations: "disabled" });
       // The rail chip drops with it (on the phone Work covers the chat, so step back first).
       if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
-      if (width === 390) await expect(chip).toHaveText("2", { useInnerText: true });
-      else await expect(chip).toHaveCount(0);
+      // On desktop the Work pane is on screen, so the rail's chip is out of the DOM until the
+      // pane is hidden again.
+      if (width === 1440) {
+        await expect(chip).toHaveCount(0);
+        await page.getByTestId("toggle-right").click();
+      }
+      await expect(chip).toHaveText(width === 390 ? "2" : "Instructions 2", { useInnerText: true });
     });
   }
 }

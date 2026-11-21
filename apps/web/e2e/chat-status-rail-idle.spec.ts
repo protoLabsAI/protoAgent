@@ -4,13 +4,19 @@ import { expect, test } from "@playwright/test";
 // it takes no space at all. The old background strip reserved its ~38px line permanently
 // (#4247), which left a blank band between the transcript and the composer most of the time
 // (Josh, 2026-10-22). While a job runs, the rail renders the Doing now chip (S6a) — counted
-// from the same workGroups selector the Work view reads, this chat only. The work chips are
-// phone-only: on desktop the same running job leaves the rail absent.
+// from the same workGroups selector the Work view reads, this chat only.
 
 const SESSION = "chat-bgwork-idle-e2e";
 
-test("an idle rail is absent; a running job brings up the Doing now chip on the phone only", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 800 });
+test("an idle rail is absent; a running job brings up the Doing now chip", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+  // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
+  });
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(
@@ -70,10 +76,4 @@ test("an idle rail is absent; a running job brings up the Doing now chip on the 
   await expect(chip).toHaveText("Doing now 1");
   await expect(chip).toHaveAttribute("aria-label", "Doing now, 1 running in this chat. Show details");
   expect((await chip.boundingBox())?.height ?? 0).toBeGreaterThan(16);
-
-  // Desktop hides the work chips: with no people in the chat the rail is absent again, so it
-  // takes no height above the composer while the job is still running.
-  await page.setViewportSize({ width: 900, height: 800 });
-  await expect(page.getByTestId("chat-status-rail")).toHaveCount(0);
-  await expect(chip).toHaveCount(0);
 });

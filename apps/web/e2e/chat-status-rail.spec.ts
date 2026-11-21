@@ -1,10 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 // The chat status rail (work consolidation v2 §5, S6a) against the real shell: mixed chips
-// counted this-chat-only, the grouped details (the bottom sheet at 390), the absent empty
-// rail, the preserved instructions failure state — light and dark, with screenshots for each
-// state. Also pins "no sideways scroll at 390px". Desktop (1440) hides the work chips: there
-// the same data leaves the rail absent, or people-only when the chat has a cast.
+// counted this-chat-only, the grouped details (popover at 1440, bottom sheet at 390), the
+// absent empty rail, the preserved instructions failure state — at both widths, light and
+// dark, with screenshots for each state. Also pins "no sideways scroll at 390px".
 
 const SESSION = "chat-status-rail-e2e";
 
@@ -72,6 +71,11 @@ function routes(page: import("@playwright/test").Page, mode: string, opts: { fai
 
 function seedSession(page: import("@playwright/test").Page, messages: object[] = []) {
   return page.addInitScript(({ session, messages }) => {
+    // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+    // is on screen (the desktop default). Seeded once, so a later open keeps its state.
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
     localStorage.setItem("protoagent.chat.sessions", JSON.stringify({
       version: 1, currentSessionId: session,
       sessions: [{ id: session, title: "Rail chat", createdAt: 1, updatedAt: 2, messages }],
@@ -100,20 +104,6 @@ for (const width of [1440, 390]) {
       const doing = page.getByTestId("chat-status-chip-doing-now");
       const coming = page.getByTestId("chat-status-chip-coming-up");
       const told = page.getByTestId("chat-status-chip-instructions");
-      if (width === 1440) {
-        // Desktop hides the work chips; this chat has no cast, so the rail is absent.
-        // (Reload behind the work reads, so "absent" is asserted after the data has landed.)
-        await Promise.all([
-          page.waitForResponse((r) => r.url().includes("/api/background")),
-          page.waitForResponse((r) => r.url().includes(`/sessions/${SESSION}/directives`)),
-          page.reload({ waitUntil: "load" }),
-        ]);
-        await page.getByPlaceholder(/Message protoAgent/i).waitFor({ state: "visible" });
-        await expect(page.getByTestId("chat-status-rail")).toHaveCount(0);
-        for (const chip of [doing, coming, told]) await expect(chip).toHaveCount(0);
-        await page.screenshot({ path: info.outputPath("rail-desktop-absent.png"), fullPage: true, animations: "disabled" });
-        return;
-      }
       // useInnerText: the phone hides the wordy spans with CSS; textContent would still see them.
       await expect(doing).toHaveText(width === 390 ? "2" : "Doing now · goal 3/8 · 2", { useInnerText: true });
       await expect(coming).toHaveText(width === 390 ? "1" : "Coming up 1", { useInnerText: true });
@@ -189,17 +179,6 @@ for (const width of [1440, 390]) {
       // The ledger failed: the Instructions chip renders in its problem state without a count.
       // (Its exact spoken label is pinned once, in ChatStatusRail.test.tsx.)
       const told = page.getByTestId("chat-status-chip-instructions");
-      if (width === 1440) {
-        // Desktop hides the work chips, the failed-ledger one included: the rail is absent.
-        await Promise.all([
-          page.waitForResponse((r) => r.url().includes(`/sessions/${SESSION}/directives`)),
-          page.reload({ waitUntil: "load" }),
-        ]);
-        await page.getByPlaceholder(/Message protoAgent/i).waitFor({ state: "visible" });
-        await expect(page.getByTestId("chat-status-rail")).toHaveCount(0);
-        await expect(told).toHaveCount(0);
-        return;
-      }
       await expect(told).toHaveClass(/chat-status-chip--problem/);
       await expect(told.locator(".chat-status-chip__count")).toHaveCount(0);
       await page.screenshot({ path: info.outputPath("rail-instruction-failure.png"), fullPage: true, animations: "disabled" });
@@ -229,7 +208,11 @@ for (const width of [1440, 390]) {
   }
 }
 
-test("desktop keeps the people chips and their picker, with no work chip beside them", async ({ page }) => {
+// Layout only a real browser can show: opening the Work pane takes the work chips off the rail
+// (the pane already shows them) and the people keep the row — and because the row has a fixed
+// min-height, neither the rail nor the composer moves. (Which chips hide when is pinned in
+// ChatStatusRail.test.tsx.)
+test("opening the Work pane hides the work chips without moving the rail row or the composer", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await seedSession(page, castMessages);
@@ -237,13 +220,22 @@ test("desktop keeps the people chips and their picker, with no work chip beside 
   await page.goto("/app/", { waitUntil: "load" });
 
   const rail = page.getByTestId("chat-status-rail");
+  const doing = page.getByTestId("chat-status-chip-doing-now");
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await expect(doing).toBeVisible(); // side panel collapsed: every chip, as before
   await expect(rail.locator("button.chat-roster-chip").first()).toHaveText("@opus");
+  const before = { rail: (await rail.boundingBox())!, composer: (await composer.boundingBox())! };
+
+  await page.getByTestId("toggle-right").click(); // the side panel opens on Work
+  await expect(page.locator('.work-view[data-frame="rail"]')).toBeVisible();
   await expect(rail.locator(".chat-status-chip")).toHaveCount(0);
-  await expect(page.getByTestId("chat-status-chip-needs-you")).toHaveCount(0);
-  // The mention toggle still works from the rail.
-  const chip = rail.locator("button.chat-roster-chip").first();
-  await chip.click();
-  await expect(chip).toHaveAttribute("aria-pressed", "true");
+  await expect(rail.locator("button.chat-roster-chip").first()).toHaveText("@opus");
+  const after = { rail: (await rail.boundingBox())!, composer: (await composer.boundingBox())! };
+  expect(after.rail.height).toBe(before.rail.height);
+  expect([after.rail.y, after.composer.y]).toEqual([before.rail.y, before.composer.y]);
+
+  await page.getByTestId("toggle-right").click(); // hidden again: the chips return
+  await expect(doing).toBeVisible();
 });
 
 // S6b touch floor (review round 1): the roster clips SIDEWAYS only. On touch devices each

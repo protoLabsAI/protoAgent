@@ -79,8 +79,8 @@ let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   vi.clearAllMocks();
-  // The Needs you marker is phone-only (desktop hides the work side of the rail).
-  Object.assign(state, { mobile: true });
+  Object.assign(state, { mobile: false });
+  useUI.setState({ rightCollapsed: true }); // Work off screen, so the Needs you marker renders
   dec.records = {};
   dec.missing = {};
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -288,13 +288,6 @@ describe("answer states (shared DecisionCard + store, no fork)", () => {
     expect(dec.openChat).toHaveBeenLastCalledWith("chat-q1", true);
     expect(panel()).toBeNull(); // success closes the panel
   });
-});
-
-it("desktop: no Needs you marker and no rail, however many things need you", async () => {
-  state.mobile = false;
-  await render(rail([decision(row("q1")), delivery(71), stoppedGoal("g1")]));
-  expect(expectedCount()).toBe(3);
-  expect([marker(), host.querySelector('[data-testid="chat-status-rail"]'), panel()]).toEqual([null, null, null]);
 });
 
 it("stopped goal: Keep going re-arms; Drop confirms then clears; a failure says so in place", async () => {

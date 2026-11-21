@@ -22,9 +22,11 @@
  *  neutral rows for undelivered human-needed pages and stopped goals (Keep going / Drop the
  *  goal). Results hold in the OPEN panel until it closes; the count stays pending-only.
  *
- *  Phone only, for now: on desktop the work chips, the Needs you marker and their details
- *  panels do not render — only the people chips and their picker do, and with no people the
- *  rail renders no DOM at all. */
+ *  While the Work pane is on screen (desktop: Work open in the right panel, the bottom dock or
+ *  the surface modal — uiStore `workPaneVisible`), the work chips, the Needs you marker and
+ *  their details panels leave the DOM: the pane beside the chat already shows them. The
+ *  people chips and their picker stay and get the whole row; with no people the rail renders
+ *  nothing. Every chip returns when the pane closes. The phone never hides them. */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefAttributes } from "react";
 import { Button, type ButtonProps } from "@protolabsai/ui/primitives";
@@ -33,7 +35,8 @@ import { Drawer, Popover } from "@protolabsai/ui/overlays";
 import { Clock, Play, Target, Users } from "lucide-react";
 
 import { openView } from "../app/palette/nav";
-import { useUI } from "../state/uiStore";
+import { useUI, useWorkPaneVisible } from "../state/uiStore";
+import { useKbIntents } from "../keybindings/intents";
 import { useIsMobile } from "../lib/useIsMobile";
 import type { GoalState } from "../lib/types";
 import type { DecisionRow } from "../lib/api/decisions";
@@ -359,12 +362,10 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
   onToggleMention: (name: string, source?: "picker") => void;
 }) {
   const mobile = useIsMobile();
-  // Desktop hides the work side of the rail (Josh, 2026-11-21): the work chips, the Needs you
-  // marker and their details panels render on the phone only — desktop already carries the
-  // same facts in notification toasts, the Work panel and the utility bar. People chips and
-  // their `+K` picker stay on both. The desktop Popover hosts below are kept (unreached while
-  // this is false on desktop) so the hide is this one switch.
-  const showWork = mobile;
+  // The work side of the rail hides ONLY while the Work pane is on screen (Josh, 2026-11-21):
+  // the pane beside the chat already shows the same rows, so the chips would repeat it. People
+  // chips and their `+K` picker stay. Always true on the phone (the selector is desktop-only).
+  const showWork = !useWorkPaneVisible();
   const sources = useWorkItems({ sessionId, thisChatOnly: false });
   // The shared decisions store (useDecisions) overlays the Work rows exactly like the Work
   // view does, so an answer drops the marker's count the moment it lands — the two surfaces
@@ -488,16 +489,21 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     showWork && open !== null && open !== "people" && open !== "needs-you" && !chips.some((chip) => chip.id === open)
       ? open
       : null;
-  // A work or Needs-you panel also closes when the viewport leaves the phone layout (its
-  // opener is no longer on the rail), so it cannot reopen by itself on the way back.
+  // A work or Needs-you panel also closes when the Work pane comes on screen (its opener has
+  // left the rail), so it cannot reopen by itself when the pane closes again.
+  const hiddenByWorkPane = !showWork && open !== null && open !== "people";
   const openGone = open !== null
     && (open === "people" ? hiddenCount === 0
-      : !showWork ? true
+      : hiddenByWorkPane ? true
         : open === "needs-you" ? needsYou.count === 0 && held.size === 0
           : false);
   useEffect(() => {
-    if (openGone) setOpen(null);
-  }, [openGone]);
+    if (!openGone) return;
+    setOpen(null);
+    // The opener is gone with the panel, so focus has nowhere to return to: hand it to the
+    // composer instead of dropping it on <body>.
+    if (hiddenByWorkPane) useKbIntents.getState().focusComposer();
+  }, [openGone, hiddenByWorkPane]);
   // The hold lives exactly as long as a panel is open: closing any panel releases it.
   useEffect(() => {
     if (open === null) setHeld((prev) => (prev.size ? new Map() : prev));
@@ -551,8 +557,7 @@ export function ChatStatusRail({ sessionId, cast, draft, onToggleMention }: {
     else if (lastOpen.current) chipRefs.current.get(lastOpen.current)?.focus();
   };
 
-  // Desktop with no people leaves nothing to show: the rail renders no DOM, so it takes no
-  // height above the composer.
+  // Work pane on screen and no people leaves nothing to show: the rail renders no DOM.
   const hasContent = cast.length > 0 || (showWork && (chips.length > 0 || needsYou.count > 0
     || (open === "needs-you" && held.size > 0) || emptiedChipId !== null));
   // The chips actually rendered: the live set, plus — when a work chip emptied while open —

@@ -14,6 +14,17 @@
   padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
+/* Desktop only (the phone never hides its chips, so its row is left exactly as it was). */
+@media (min-width: 768px) {
+  .chat-status-rail {
+    /* A fixed row height: the tallest thing the row holds is the xs Needs you button (DS
+       .pl-btn--xs: 11px text on the app's 1.45 line, 0.2rem block padding, its border), plus the
+       row's own bottom padding (the rail is border-box). The people chips are a hair shorter,
+       so without this the transcript and composer would shift whenever the work chips leave
+       or rejoin the row as the Work pane opens and closes. */
+    min-height: calc(11px * 1.45 + 0.4rem + 2 * var(--pl-border-width) + var(--pl-space-1_5));
+  }
+}
 .chat-status-chip {
   flex: none;
 }

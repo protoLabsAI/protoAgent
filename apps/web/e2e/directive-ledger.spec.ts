@@ -28,6 +28,13 @@ for (const width of [1440, 390]) {
     test(`ledger withdrawal and entry points at ${width} ${mode}`, async ({ page }, info) => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.setViewportSize({ width, height: 900 });
+      // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+      // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+      await page.addInitScript(() => {
+        if (!localStorage.getItem("protoagent.ui")) {
+          localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+        }
+      });
       await page.addInitScript(({ session, note }) => {
         localStorage.setItem("protoagent.chat.sessions", JSON.stringify({
           version: 1, currentSessionId: session,
@@ -87,40 +94,30 @@ for (const width of [1440, 390]) {
       }));
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
-      // The Instructions chip (S6a) is phone-only — the number alone, the complete label
-      // spoken. Two in force: the instruction AND the §3.1 approval ride the same
-      // shared-selector count the Work rows show. Desktop hides the work chips, so there the
-      // way in is /directives.
+      // The Instructions chip (S6a): the full name on desktop, the number alone on the phone —
+      // the complete label is spoken either way. Two in force: the instruction AND the §3.1
+      // approval ride the same shared-selector count the Work rows show.
       const chip = page.getByTestId("chat-status-chip-instructions");
-      const phone = width === 390;
+      // useInnerText: the phone hides the wordy span with CSS; textContent would still see it.
+      await expect(chip).toHaveText(width === 390 ? "2" : "Instructions 2", { useInnerText: true });
+      await expect(chip).toHaveAttribute(
+        "aria-label",
+        "Instructions: 2 instructions in force in this chat. Show details",
+      );
       await expect(page.locator(".pl-message--system").filter({ hasText: NOTE })).toBeVisible();
       await expect(page.locator(".pl-message--user").filter({ hasText: NOTE })).toHaveCount(0);
+      await page.screenshot({ path: info.outputPath("strip.png"), fullPage: true, animations: "disabled" });
+      // Grouped details — a popover at 1440, the bottom sheet at 390 — then Open in Work.
+      await chip.click();
+      const details = page.locator(".chat-status-details");
+      await expect(details).toContainText("Your instructions · 2");
+      await expect(details).toContainText(QUOTE);
+      if (width === 390) await expect(page.locator(".pl-drawer--bottom")).toBeVisible();
+      await page.screenshot({ path: info.outputPath("details.png"), fullPage: true, animations: "disabled" });
+      // `exact`: each instruction row's accessible name ends with ". Open in Work" (§1 Rows),
+      // so a substring match would also catch the rows — target the lone action button.
+      await details.getByRole("button", { name: "Open in Work", exact: true }).click();
       const rail = page.locator('.work-view[data-frame="rail"]');
-      if (phone) {
-        // useInnerText: the phone hides the wordy span with CSS; textContent would still see it.
-        await expect(chip).toHaveText("2", { useInnerText: true });
-        await expect(chip).toHaveAttribute(
-          "aria-label",
-          "Instructions: 2 instructions in force in this chat. Show details",
-        );
-        await page.screenshot({ path: info.outputPath("strip.png"), fullPage: true, animations: "disabled" });
-        // Grouped details — the bottom sheet — then Open in Work.
-        await chip.click();
-        const details = page.locator(".chat-status-details");
-        await expect(details).toContainText("Your instructions · 2");
-        await expect(details).toContainText(QUOTE);
-        await expect(page.locator(".pl-drawer--bottom")).toBeVisible();
-        await page.screenshot({ path: info.outputPath("details.png"), fullPage: true, animations: "disabled" });
-        // `exact`: each instruction row's accessible name ends with ". Open in Work" (§1 Rows),
-        // so a substring match would also catch the rows — target the lone action button.
-        await details.getByRole("button", { name: "Open in Work", exact: true }).click();
-      } else {
-        await expect(chip).toHaveCount(0);
-        const entry = page.getByPlaceholder(/Message protoAgent/i);
-        await entry.fill("/directives ");
-        await entry.press("Enter");
-        await expect(rail.locator(".work-section--directives")).toBeVisible();
-      }
       await expect(page.getByRole("dialog", { name: "Standing instructions" })).toHaveCount(0);
       // Work has no This chat / All toggle (Josh 2026-11-11): the toggle is gone from the rail.
       await expect(rail.getByRole("button", { name: "This chat", exact: true })).toHaveCount(0);
@@ -163,9 +160,14 @@ for (const width of [1440, 390]) {
       await page.screenshot({ path: info.outputPath("withdrawn.png"), fullPage: true, animations: "disabled" });
 
       if (width === 390) await page.getByRole("button", { name: "Back", exact: true }).click();
+      if (width === 1440) {
+        // "Open in Work" put the Work pane on screen, so the rail stopped repeating it: the
+        // chip is out of the DOM until the pane is hidden again.
+        await expect(chip).toHaveCount(0);
+        await page.getByTestId("toggle-right").click();
+      }
       // The withdrawn instruction leaves the count; the still-in-force approval keeps the chip up.
-      if (phone) await expect(chip).toHaveText("1", { useInnerText: true });
-      else await expect(chip).toHaveCount(0);
+      await expect(chip).toHaveText(width === 390 ? "1" : "Instructions 1", { useInnerText: true });
       await expect(page.locator(".pl-message--system").filter({ hasText: 'You withdrew: "' + QUOTE + '" — Hold until Monday' })).toBeVisible();
       const composer = page.getByPlaceholder(/Message protoAgent/i);
       await composer.fill("/directives ");

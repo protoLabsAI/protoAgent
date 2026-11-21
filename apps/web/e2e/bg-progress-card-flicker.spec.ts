@@ -60,6 +60,13 @@ function sse(frames: { topic: string; data: Record<string, unknown> }[]) {
 
 test("a background delegation's progress card never blinks out while its job runs", async ({ page }) => {
   test.setTimeout(60_000);
+  // Start with the side panel collapsed: the rail hides its work chips while the Work pane
+  // is on screen (the desktop default). Seeded once, so a later open or reload keeps its state.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("protoagent.ui")) {
+      localStorage.setItem("protoagent.ui", JSON.stringify({ state: { rightCollapsed: true }, version: 14 }));
+    }
+  });
   await page.addInitScript(
     ([session]) => {
       window.localStorage.setItem(
@@ -147,6 +154,6 @@ test("a background delegation's progress card never blinks out while its job run
   expect(frames.total).toBeGreaterThan(60);
   expect(frames.missing, `card missing in ${frames.missing} of ${frames.total} frames`).toBe(0);
   await expect(card).toContainText("gh pr checks 13");
-  // Desktop hides the status rail's work chips: the card itself is what says work is running.
-  await expect(page.getByTestId("chat-status-chip-doing-now")).toHaveCount(0);
+  // The chat still says it has work running — the status rail's Doing now chip (S6a).
+  await expect(page.getByTestId("chat-status-chip-doing-now")).toHaveText("Doing now 1");
 });
