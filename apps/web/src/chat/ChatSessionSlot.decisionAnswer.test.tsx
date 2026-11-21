@@ -1,11 +1,12 @@
-// The composer answers the open decision in its own chat (#5668 §4): no "Reply in chat"
-// button, the placeholder is the only visible change, and approval gates keep today's hold.
+// A typed message never answers the open decision just because one is pending (#5678; the
+// unreleased #5675 behaviour is withdrawn): it is held like any other message typed during a
+// pause, the placeholder stays the normal one, and the composer carries no "answers" description.
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PromptInput } from "@protolabsai/ui/ai";
-import { registerSlashCommand } from "../ext/slashRegistry";
 import { api } from "../lib/api";
+import { decisionsApi } from "../lib/api/decisions";
 import type { HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { ChatSessionSlot } from "./ChatSessionSlot";
@@ -34,9 +35,6 @@ vi.mock("./DirectiveStrip", () => ({ DirectiveWorkRequest: () => null }));
 vi.mock("./sessionListSync", () => ({ registerSessionOnSend: vi.fn() }));
 vi.mock("../lib/notify", () => ({ notifyIfHidden: vi.fn() }));
 
-const slashRuns = vi.fn((_ctx: { rest: string }) => true);
-registerSlashCommand({ name: "decisiontest", description: "test-only client command", run: slashRuns });
-
 const decision: HitlPayload = { kind: "decision", decision_id: "dec-1", question: "Ship?" };
 const approval: HitlPayload = { kind: "approval", description: "Run the deploy script", detail: "./deploy.sh" };
 
@@ -52,7 +50,6 @@ let park: HitlPayload | null;
 
 beforeEach(async () => {
   sessionStorage.clear();
-  slashRuns.mockClear();
   park = null;
   stream = spyStream().mockImplementation(async (_text, _session, callbacks) => {
     const payload = park;
@@ -92,40 +89,41 @@ async function parkOn(payload: HitlPayload) {
 }
 const field = () => host.querySelector("textarea")!;
 const hint = () => host.querySelector<HTMLElement>(".composer-wrap .conversations-announce");
-const queued = () => chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
 
-it("answers the open decision straight from the composer and restores the normal placeholder", async () => {
+it("does not answer the open decision with a typed message", async () => {
+  const answerRoute = vi.spyOn(decisionsApi, "answerDecision");
   expect(view.composer!.placeholder).toBe("Message Gina…");
-  expect(hint()).toBeNull();
-  expect(field().hasAttribute("aria-describedby")).toBe(false);
 
   await parkOn(decision);
-  // The placeholder is the only visible change; the hidden line is the screen-reader copy of it.
-  expect(view.composer!.placeholder).toBe("Type your answer…");
-  expect(hint()!.textContent).toBe("Your message answers Gina's question.");
-  expect(field().getAttribute("aria-describedby")).toBe(hint()!.id);
-  // The matching transcript card owns the pause: no generic form floats over the composer.
-  expect(host.querySelector(".hitl-float form, .hitl-float button")).toBeNull();
+  // Nothing about the composer says the next message is an answer.
+  expect(view.composer!.placeholder).toBe("Message Gina…");
+  expect(view.composer!.placeholder).not.toBe("Type your answer…");
+  expect(hint()).toBeNull();
+  expect(host.textContent).not.toContain("Your message answers");
+  expect(field().hasAttribute("aria-describedby")).toBe(false);
 
-  await send("  Hold it for review  ");
-  // Resumed with the typed text — not queued behind the form as a held steer.
-  expect(steer).not.toHaveBeenCalled();
-  expect(stream).toHaveBeenCalledTimes(1);
-  expect(stream.mock.calls[0][0]).toBe("Hold it for review");
-  expect(stream.mock.calls[0][3]?.hitlResume).toBe(true);
+  await send("hold on, one question first");
+  // Neither answer path fires: no decision answer route, no interrupt resume with the text.
+  expect(answerRoute).not.toHaveBeenCalled();
+  expect(stream).not.toHaveBeenCalled();
+  // It is held like any message typed during a pause, and the draft is consumed.
+  expect(steer).toHaveBeenCalledTimes(1);
+  expect(steer.mock.calls[0][2]).toBe("hold on, one question first");
   expect(view.composer!.value).toBe("");
 
-  // Answered: the placeholder and the hidden description go back with it.
+  // The decision is still pending, and a second message is treated the same way.
+  await send("Ship it");
+  expect(answerRoute).not.toHaveBeenCalled();
+  expect(stream).not.toHaveBeenCalled();
+  expect(steer).toHaveBeenCalledTimes(2);
   expect(view.composer!.placeholder).toBe("Message Gina…");
   expect(hint()).toBeNull();
-  expect(field().hasAttribute("aria-describedby")).toBe(false);
 });
 
 it("still holds typed text behind an approval gate, and never resumes it", async () => {
   await parkOn(approval);
   expect(view.composer!.placeholder).toBe("Message Gina…");
   expect(hint()).toBeNull();
-  expect(field().hasAttribute("aria-describedby")).toBe(false);
 
   await send("approved");
   expect(stream).not.toHaveBeenCalled();
@@ -133,38 +131,4 @@ it("still holds typed text behind an approval gate, and never resumes it", async
   expect(steer.mock.calls[0][2]).toBe("approved");
   // The gate is still open, waiting for its own buttons.
   expect([...host.querySelectorAll(".hitl-float button")].map((b) => b.textContent)).toContain("Approve");
-});
-
-it("holds typed text for a decision whose card is not in this chat's transcript", async () => {
-  // An id-less decision has no durable card: the generic form keeps the pause.
-  await parkOn({ kind: "decision", question: "Ship?" });
-  expect(view.composer!.placeholder).toBe("Message Gina…");
-  expect(hint()).toBeNull();
-  await send("Hold it");
-  expect(stream).not.toHaveBeenCalled();
-  expect(steer).toHaveBeenCalledTimes(1);
-});
-
-it("runs a leading-slash message as a slash command, never as the answer", async () => {
-  await parkOn(decision);
-  await send("/decisiontest now");
-  expect(slashRuns).toHaveBeenCalledTimes(1);
-  expect(slashRuns.mock.calls[0][0]).toMatchObject({ rest: "now" });
-  expect(stream).not.toHaveBeenCalled();
-  expect(steer).not.toHaveBeenCalled();
-  expect(view.composer!.value).toBe("");
-  // The decision is still open and still answerable.
-  expect(view.composer!.placeholder).toBe("Type your answer…");
-
-  // A slash message that is not a client command keeps today's hold: held, not an answer.
-  await send("/not-a-client-command");
-  expect(stream).not.toHaveBeenCalled();
-  expect(steer).toHaveBeenCalledTimes(1);
-  expect(steer.mock.calls[0][2]).toBe("/not-a-client-command");
-  expect(view.composer!.placeholder).toBe("Type your answer…");
-
-  await send("Ship it tomorrow");
-  expect(stream).toHaveBeenCalledTimes(1);
-  expect(stream.mock.calls[0][0]).toBe("Ship it tomorrow");
-  expect(queued().messages.some((m) => m.content === "Ship it tomorrow")).toBe(true);
 });
