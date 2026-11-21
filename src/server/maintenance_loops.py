@@ -880,8 +880,12 @@ def _start_push_delivery(provider: Any = None) -> Any:
         return None
     from graph.push_transport import NOTICE_ADAPTER_KEY, PushTransport, WebPushProvider, set_active_transport
 
-    from graph.decisions import push_eligible
+    from graph.decisions import push_eligible, set_attendance_reader
+    from server.turn_control import is_session_attended
 
+    # A decision whose chat is open in a console is not pushed (#5648): graph cannot
+    # import server, so the attendance read is handed to ``push_eligible`` here.
+    set_attendance_reader(is_session_attended)
     transport = PushTransport(provider if provider is not None else WebPushProvider(), eligible=push_eligible)
     set_active_transport(transport)
     register_notice_adapter(NOTICE_ADAPTER_KEY, transport.accept)
@@ -898,6 +902,9 @@ async def _stop_push_delivery() -> None:
     unregister_notice_adapter(NOTICE_ADAPTER_KEY)
     unregister_notice_adapter(RELAY_ADAPTER_KEY)
     set_active_transport(None)
+    from graph.decisions import set_attendance_reader
+
+    set_attendance_reader(None)
     task, STATE.push_delivery_task = STATE.push_delivery_task, None
     if task is not None:
         task.cancel()
