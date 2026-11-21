@@ -11,6 +11,7 @@ import { applyNavIntent } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
 import type { WorkItem, WorkItems, WorkSource, WorkSourceKind } from "./useWorkItems";
 import type { GroupableWorkItem } from "./tone";
+import { registerWorkSection, type WorkSectionContext } from "./sectionRegistry";
 import css from "./work-view.css?raw";
 
 Element.prototype.hasPointerCapture ??= () => false;
@@ -545,6 +546,110 @@ it("announces group totals and newly arriving Needs you items", async () => {
   data.sources.decisions.items = [decision("answer")];
   await render("modal");
   expect(host.querySelector('[role="status"]')?.textContent).toBe("Overview, 1 items. 1 new Needs you items.");
+});
+
+/** Render Your instructions with a probe in the directives slot, the way the real section
+ *  receives its context, and hand back the callback an instance-wide withdraw calls. */
+async function withdrawProbe(ids: string[]) {
+  const instruction = (id: string): WorkItem => ({ kind: "directive", id, status: "waiting", title: id, meta: "",
+    raw: { id, status: "in_force", quote: id } });
+  let context: WorkSectionContext | undefined;
+  const dispose = registerWorkSection("directives", { label: "Your instructions", group: "instructions",
+    render: (ctx) => { context = ctx; return null; } });
+  const list = (next: string[]) => { data.sources.directives.items = next.map(instruction); };
+  list(ids);
+  useUI.setState({ surfaceStates: { work: { section: "instructions" } }, surfaceModal: null });
+  await render();
+  const regions = () => host.querySelectorAll<HTMLElement>(".work-view__announcement[role=\"status\"]");
+  return {
+    dispose, list,
+    listRegion: () => regions()[0].textContent,
+    withdrawn: () => host.querySelector<HTMLElement>("[data-withdrawn-announcement]")!,
+    /** What directives.tsx does on a 200: the callback first, then the row leaves the list. */
+    withdraw: async (remaining: string[]) => {
+      await act(async () => { context!.onWithdrawnEverywhere!(); list(remaining); });
+      await render();
+    },
+  };
+}
+
+it("announces 'Withdrawn everywhere.' once in its own region and skips the list count the withdraw causes", async () => {
+  const probe = await withdrawProbe(["a", "b", "c"]);
+  try {
+    const region = probe.withdrawn();
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.getAttribute("aria-atomic")).toBe("true");
+    expect(region.textContent).toBe("");
+    expect(probe.listRegion()).toBe("Your instructions, 3 items.");
+
+    await probe.withdraw(["b", "c"]);
+    expect(host.querySelector("h2.work-heading")?.getAttribute("aria-label")).toBe("Your instructions, 2");
+    expect(probe.withdrawn()).toBe(region); // the region stays mounted; only its text node changes
+    expect(region.textContent).toBe("Withdrawn everywhere.");
+    expect(probe.listRegion()).toBe("Your instructions, 3 items."); // never "…, 2 items."
+    expect(document.querySelector(".pl-toast__msg")).toBeNull();
+
+    // A second withdraw replaces the keyed text node, so the same words are spoken again.
+    const first = region.firstElementChild;
+    await probe.withdraw(["c"]);
+    expect(probe.withdrawn()).toBe(region);
+    expect(region.textContent).toBe("Withdrawn everywhere.");
+    expect(region.firstElementChild).not.toBe(first);
+    expect(first?.isConnected).toBe(false);
+    expect(probe.listRegion()).toBe("Your instructions, 3 items.");
+
+    // The skip was used up: the next count change announces as usual.
+    probe.list(["c", "d"]);
+    await render();
+    expect(probe.listRegion()).toBe("Your instructions, 2 items.");
+  } finally { probe.dispose(); }
+});
+
+it("still announces a Needs you item that arrives with the withdraw, without the count", async () => {
+  const probe = await withdrawProbe(["a", "b"]);
+  try {
+    data.sources.decisions.items = [decision("ask")];
+    await probe.withdraw(["b"]);
+    expect(probe.withdrawn().textContent).toBe("Withdrawn everywhere.");
+    expect(probe.listRegion()).toBe("1 new Needs you items.");
+
+    // The next unrelated count change announces as usual.
+    probe.list(["b", "c"]);
+    await render();
+    expect(probe.listRegion()).toBe("Your instructions, 2 items.");
+  } finally { probe.dispose(); }
+});
+
+it("a loading or Needs you change before the count drops does not use up the withdraw's skip", async () => {
+  const probe = await withdrawProbe(["a", "b"]);
+  try {
+    // The callback has run, but the list hasn't dropped the row yet.
+    await probe.withdraw(["a", "b"]);
+    expect(probe.withdrawn().textContent).toBe("Withdrawn everywhere.");
+
+    // A Needs you item arrives first: announced as today, count included.
+    data.sources.decisions.items = [decision("ask")];
+    await render();
+    expect(probe.listRegion()).toBe("Your instructions, 2 items. 1 new Needs you items.");
+    // A source goes loading and comes back: the effect runs again at the old count.
+    data.sources.tasks.status = "loading";
+    await render();
+    data.sources.tasks.status = "ready";
+    data.sources.decisions.items = [decision("ask"), decision("ask-2")];
+    await render();
+    expect(probe.listRegion()).toBe("Your instructions, 2 items. 1 new Needs you items.");
+
+    // Now the count drops: this is the run the skip was armed for.
+    probe.list(["b"]);
+    await render();
+    expect(host.querySelector("h2.work-heading")?.getAttribute("aria-label")).toBe("Your instructions, 1");
+    expect(probe.listRegion()).toBe("Your instructions, 2 items. 1 new Needs you items.");
+
+    // And only that run: the next change is announced.
+    probe.list([]);
+    await render();
+    expect(probe.listRegion()).toBe("Your instructions, 0 items.");
+  } finally { probe.dispose(); }
 });
 
 async function openWaiting(source = "a2a-session", ask: string | null = "Can we ship?") {

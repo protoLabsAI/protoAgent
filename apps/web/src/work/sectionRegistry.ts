@@ -14,6 +14,11 @@ export type WorkSectionContext = {
    *  `group`'s heading — never back to the departed row, never to `body`. Optional: a host
    *  without it falls back to `onBack`. */
   onCloseTo?: (target: { rows: readonly string[]; group: WorkGroupId }) => void;
+  /** An instance-wide order was just withdrawn everywhere (work-view-additions §3.4). Call it
+   *  BEFORE the refetch: the host announces "Withdrawn everywhere." once, in its own polite
+   *  region, and skips the list region's "<group>, N items." for the count change the
+   *  withdraw causes. It replaces the toast. Optional: a host without it gets the toast. */
+  onWithdrawnEverywhere?: () => void;
   /** The focused chat, for the per-session sections (the directive ledger). */
   sessionId?: string;
   decisionActions?: {

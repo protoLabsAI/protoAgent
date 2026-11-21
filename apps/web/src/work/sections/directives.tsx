@@ -268,9 +268,12 @@ function InstructionDetail({ ctx, item, decision }: {
     const rows = at < 0 ? keys : [...keys.slice(at + 1), ...keys.slice(0, at).reverse()];
     settle(await instanceDirectiveStore.withdraw(row.id, reason, () => {
       // Runs in the store's own synchronous step: the row drop, the count and the closed
-      // detail commit in one render. (Card bd-7969u swaps this toast for the announcement.)
+      // detail commit in one render — and BEFORE the store refetches. The host's single
+      // "Withdrawn everywhere." announcement replaces the toast (§3.4); only a host without
+      // that region still toasts.
       wasConfirming.current = false;
-      toast({ tone: "neutral", message: WITHDRAWN });
+      if (ctx.onWithdrawnEverywhere) ctx.onWithdrawnEverywhere();
+      else toast({ tone: "neutral", message: WITHDRAWN });
       if (ctx.onCloseTo) ctx.onCloseTo({ rows, group: "instructions" });
       else ctx.onBack();
     }));

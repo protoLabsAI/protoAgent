@@ -176,6 +176,23 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   // "Saved to <group>." is spoken exactly once and the list region's routine "<group>, N
   // items." churn can never replace it mid-read.
   const [savedAnnouncement, setSavedAnnouncement] = useState("");
+  // The §3.4 withdraw announcement — its OWN polite region too. The text is keyed on a
+  // counter so a second "Withdrawn everywhere." replaces the text node and is spoken again.
+  const [withdrawnAnnouncement, setWithdrawnAnnouncement] = useState("");
+  const [withdrawCount, setWithdrawCount] = useState(0);
+  // The list count (and its label) the withdraw's own refetch will land on. Not a one-shot
+  // flag: a `loading` or `needs` change can run the count effect first, and only the run that
+  // sees this count may skip "<label>, N items.".
+  const skipCountAt = useRef<{ label: string; count: number } | null>(null);
+  // The count as last committed. A section calls `onWithdrawnEverywhere` after its request
+  // resolves, from a closure that can be older than the list now on screen.
+  const shown = useRef({ label, count });
+  useLayoutEffect(() => { shown.current = { label, count }; });
+  const onWithdrawnEverywhere = () => {
+    skipCountAt.current = { label: shown.current.label, count: shown.current.count - 1 };
+    setWithdrawCount((n) => n + 1);
+    setWithdrawnAnnouncement("Withdrawn everywhere.");
+  };
   // The §10.1 New flow: header New and the all-empty primary open it bare; a group "+"
   // seeds its placeholder. Per-mount state — an open step 1 is never worth persisting.
   const [create, setCreate] = useState<{ group?: WorkGroupId } | null>(null);
@@ -223,6 +240,13 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     const next = new Set(needs ? needs.split("\n") : []);
     const added = previousNeeds.current ? [...next].filter((id) => !previousNeeds.current!.has(id)).length : 0;
     previousNeeds.current = next;
+    if (skipCountAt.current?.count === count && skipCountAt.current.label === label) {
+      // The count change an instance-wide withdraw caused (§3.4): "Withdrawn everywhere." is
+      // the one announcement, so the count stays unsaid. A new Needs you item still is.
+      skipCountAt.current = null;
+      if (added) setAnnouncement(`${added} new Needs you items.`);
+      return;
+    }
     setAnnouncement(`${label}, ${count} items.${added ? ` ${added} new Needs you items.` : ""}`);
   }, [label, count, needs, loading]);
   useLayoutEffect(() => {
@@ -298,7 +322,7 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     if (row) onOpen(row);
     else update({ itemId: `decision:${id}`, scrollTop: listRef.current ? listScroller(listRef.current).scrollTop : state.scrollTop });
   };
-  const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, onCloseTo, sessionId,
+  const context = { sources, state: { ...viewState, itemId: selectedKey ?? state.itemId }, onOpen, onBack, onCloseTo, onWithdrawnEverywhere, sessionId,
     decisionActions: { agentOnline, openSourceChat, answerDecision: decisions.answer } };
   // The activity kind maps to no section (S4c removed it): an activity row can never be
   // selected (`useWorkItems` keeps that source rows-empty for the delivery group), and a
@@ -378,5 +402,6 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
     {create && <WorkCreateDialog group={create.group} sessionId={sessionId} onClose={() => setCreate(null)} onSaved={onSaved} />}
     <div className="work-view__announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
     <div className="work-view__announcement" role="status" aria-live="polite" aria-atomic="true">{savedAnnouncement}</div>
+    <div className="work-view__announcement" data-withdrawn-announcement="" role="status" aria-live="polite" aria-atomic="true"><span key={withdrawCount}>{withdrawnAnnouncement}</span></div>
   </div>;
 }
