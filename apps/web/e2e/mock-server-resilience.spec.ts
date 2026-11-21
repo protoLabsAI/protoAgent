@@ -67,16 +67,15 @@ test.describe("a request that fails costs that request, not the server", () => {
     server?.child.kill("SIGKILL");
   });
 
-  test("a handler that throws answers 500, logs the method, path and error, and the server keeps serving", async () => {
+  test("a handler that throws answers 500 (or is logged, once it started answering) and the server keeps serving", async () => {
     const res = await fetch(`http://127.0.0.1:${port}/__e2e/throw`);
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ error: "e2e deliberate handler failure" });
     expect(server.stderr()).toContain("[e2e mock] GET /__e2e/throw handler failed: Error: e2e deliberate handler failure");
     expect(await healthz(port)).toBe(200);
     expect(server.child.exitCode).toBeNull();
-  });
 
-  test("a handler that throws after it started answering is logged and the server keeps serving", async () => {
+    // The same failure after the handler started answering: no 500 can be sent, so it is logged.
     await fetch(`http://127.0.0.1:${port}/__e2e/throw?late=1`)
       .then((res) => res.text())
       .catch(() => "");
@@ -125,7 +124,7 @@ test.describe("a mock server that exits mid-run is reported", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("an exit code and the last error reach stderr and the teardown's failure", async () => {
+  test("an exit code or signal and the last error reach stderr and the teardown's failure", async () => {
     const file = join(dir, "code.json");
     const sup = run(SUPERVISOR, [], { E2E_MOCK_SERVER_SCRIPT: DYING, E2E_MOCK_EXIT_FILE: file });
     expect(await sup.exited).toEqual({ code: 3, signal: null });
@@ -139,14 +138,13 @@ test.describe("a mock server that exits mid-run is reported", () => {
     const error = mockServerExitError(file);
     expect(error?.message).toContain("exited during the run (exit code 3");
     expect(error?.message).toContain("[fixture] Error: the last thing the server said");
-  });
 
-  test("a signal is named", async () => {
-    const file = join(dir, "signal.json");
-    const sup = run(SUPERVISOR, ["signal"], { E2E_MOCK_SERVER_SCRIPT: DYING, E2E_MOCK_EXIT_FILE: file });
-    expect((await sup.exited).code).toBe(1);
-    expect(sup.stderr()).toContain("THE MOCK SERVER PROCESS EXITED (signal SIGKILL)");
-    expect(mockServerExitError(file)?.message).toContain("exited during the run (signal SIGKILL");
+    // A server ended by a signal is named by that signal.
+    const signalFile = join(dir, "signal.json");
+    const killed = run(SUPERVISOR, ["signal"], { E2E_MOCK_SERVER_SCRIPT: DYING, E2E_MOCK_EXIT_FILE: signalFile });
+    expect((await killed.exited).code).toBe(1);
+    expect(killed.stderr()).toContain("THE MOCK SERVER PROCESS EXITED (signal SIGKILL)");
+    expect(mockServerExitError(signalFile)?.message).toContain("exited during the run (signal SIGKILL");
   });
 
   test("a server that is still running, or was asked to stop, leaves no record", async () => {
