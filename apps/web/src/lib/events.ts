@@ -81,8 +81,24 @@ function setConnected(next: boolean) {
 /** Route a raw SSE frame to matching subscribers. Returns its topic and the server-assigned
  *  seq (for `?since=` replay / the resume cursor), or null when the frame is unparseable or
  *  carries no topic. `seq` is null for a frame the server sent without one. */
+// When the frame being dispatched HAPPENED (the server's `ts`, seconds), for the listeners
+// running right now; null outside a dispatch or for a frame without one.
+let dispatchingTs: number | null = null;
+/** Older than this, an event is catch-up, not news. A console that reopens resumes from its
+ *  saved cursor and the server replays everything it missed (ADR 0130 D3). */
+export const REPLAY_AGE_S = 120;
+
+/** True while a listener is handling an event that happened more than {@link REPLAY_AGE_S}
+ *  ago — one replayed to a console that was closed or asleep. Listeners still APPLY such an
+ *  event (state must catch up); they must not toast or raise a system notification for it,
+ *  or reopening the app replays every alert since the last visit. Call synchronously inside
+ *  the listener. An event with no timestamp counts as live. */
+export function eventIsReplay(nowMs: number = Date.now()): boolean {
+  return dispatchingTs !== null && nowMs / 1000 - dispatchingTs > REPLAY_AGE_S;
+}
+
 function dispatch(raw: string): { topic: string; seq: number | null } | null {
-  let frame: { topic?: string; data?: Record<string, unknown>; seq?: number } = {};
+  let frame: { topic?: string; data?: Record<string, unknown>; seq?: number; ts?: number } = {};
   try {
     frame = JSON.parse(raw || "{}");
   } catch {
@@ -102,13 +118,18 @@ function dispatch(raw: string): { topic: string; seq: number | null } | null {
   }
   // Each listener in its own try (ADR 0114 D1): one throwing subscriber must not starve
   // the ones after it, nor skip the caller's `lastSeq` update.
-  for (const sub of subs) {
-    if (!topicMatches(sub.pattern, topic)) continue;
-    try {
-      sub.fn(data, topic, seq);
-    } catch (err) {
-      console.error(`[events] listener for ${sub.pattern} threw on ${topic}`, err);
+  dispatchingTs = typeof frame.ts === "number" && Number.isFinite(frame.ts) ? frame.ts : null;
+  try {
+    for (const sub of subs) {
+      if (!topicMatches(sub.pattern, topic)) continue;
+      try {
+        sub.fn(data, topic, seq);
+      } catch (err) {
+        console.error(`[events] listener for ${sub.pattern} threw on ${topic}`, err);
+      }
     }
+  } finally {
+    dispatchingTs = null;
   }
   return { topic, seq: seq ?? null };
 }

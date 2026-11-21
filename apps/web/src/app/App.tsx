@@ -113,7 +113,7 @@ import { DocumentViewer } from "../docviewer";
 import { useGlobalKeybindings, useKbIntents } from "../keybindings";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { brandName } from "../lib/brand";
-import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
+import { eventIsReplay, onConnectionChange, onServerEvent, onTopic } from "../lib/events";
 import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { WorkView } from "../work/WorkView";
@@ -673,23 +673,28 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   );
 
   useEffect(() => {
-    const offDone = onServerEvent("goal.achieved", (d) =>
-      toast({ tone: "success", title: "Goal achieved", message: String(d.condition || "the goal") }));
-    const offFail = onServerEvent("goal.failed", (d) =>
+    // Toasts are for what is happening NOW. An event replayed to a console that was closed
+    // (`eventIsReplay`) is old news: Work already lists it, so it gets no toast.
+    const live = (show: (d: Record<string, unknown>) => void) => (d: Record<string, unknown>) => {
+      if (!eventIsReplay()) show(d);
+    };
+    const offDone = onServerEvent("goal.achieved", live((d) =>
+      toast({ tone: "success", title: "Goal achieved", message: String(d.condition || "the goal") })));
+    const offFail = onServerEvent("goal.failed", live((d) =>
       toast({
         tone: "error",
         title: "Goal failed",
         message: `${String(d.condition || "the goal")}${d.reason ? ` — ${String(d.reason)}` : ""}`,
-      }));
+      })));
     // Watch transitions (ADR 0067) surface the same way — watch.met / watch.expired on the bus.
-    const offMet = onServerEvent("watch.met", (d) =>
-      toast({ tone: "success", title: "Watch met", message: String(d.condition || "the watch") }));
-    const offExpired = onServerEvent("watch.expired", (d) =>
+    const offMet = onServerEvent("watch.met", live((d) =>
+      toast({ tone: "success", title: "Watch met", message: String(d.condition || "the watch") })));
+    const offExpired = onServerEvent("watch.expired", live((d) =>
       toast({
         tone: "error",
         title: "Watch expired",
         message: `${String(d.condition || "the watch")}${d.reason ? ` — ${String(d.reason)}` : ""}`,
-      }));
+      })));
     return () => { offDone(); offFail(); offMet(); offExpired(); };
   }, [toast]);
 
