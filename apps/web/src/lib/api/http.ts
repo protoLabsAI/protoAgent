@@ -209,6 +209,7 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
     throw new ApiError(response.status, message || "request failed", code);
   }
 
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
