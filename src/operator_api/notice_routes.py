@@ -61,9 +61,6 @@ def register_notice_routes(app) -> None:
             queued = await notice_relay.accept_member_notice(payload)
         except notice_relay.NoticeRefused as exc:
             return JSONResponse({"ok": False, "error": "invalid_notice", "detail": str(exc)}, status_code=400)
-        except OverflowError:
-            log.warning("[notices] push ledger is full; a member's notice was not queued")
-            return JSONResponse({"ok": False, "error": "busy"}, status_code=503)
         return {"ok": True, "queued": queued}
 
     @app.get("/api/notices/{notice_id}")

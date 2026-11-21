@@ -106,7 +106,7 @@ def notify_chat_surfaces(
     text: str, link: str, *, kind: NoticeKind = "notify", importance: NoticeImportance = "normal",
     ttl_seconds: float | None = None, notice_id: str | None = None,
     source: str = "notice", home_title: str | None = None, home_entry: bool = True,
-    home_meta: dict | None = None,
+    home_meta: dict | None = None, publish_held: bool = True,
 ) -> str:
     """Queue optional adapter notifications without waiting for network delivery.
 
@@ -131,6 +131,12 @@ def notify_chat_surfaces(
     run's ``activity_context`` and ``task_id``); it cannot replace ``kind``,
     ``importance``, ``source`` or ``notice_id``, and it reaches Home only, never an
     adapter or the bus event.
+
+    The bus event is published even for a notice quiet hours hold: the console shows
+    it in-app. ``publish_held=False`` keeps a held notice off the bus as well, for a
+    producer whose notice is only an interruption (a fleet member's notice relayed
+    to its hub: the desktop app turns every ``notice`` event into a native banner,
+    and the member's own console already shows the notice in-app).
     """
     lifetime = _NOTICE_LIFETIMES[kind]
     if ttl_seconds is not None:
@@ -142,19 +148,23 @@ def notify_chat_surfaces(
         kind=kind, importance=importance, text=text, link=link,
         notice_id=notice_id or uuid.uuid4().hex, created_at=created_at, expires_at=created_at + lifetime,
     )
+    from graph.notice_hold import DELIVERY
+
+    # Decided once: ``hold`` stores the notice for the digest when it holds it.
+    held = None if publish_held else DELIVERY.hold(notice)
     # The server wires HOST even without chat plugins; publish retains by default.
     from graph.plugins.host import HOST
 
     try:
-        if HOST.publish:
+        if HOST.publish and not held:
             HOST.publish("notice", asdict(notice))
     except Exception:  # noqa: BLE001 — a bus failure must not suppress adapters
         log.exception("Could not publish notice event")
     if home_entry:
         _post_home_entry(notice, source, home_title, home_meta)
-    from graph.notice_hold import DELIVERY
-
-    if not DELIVERY.hold(notice):
+    if held is None:
+        held = DELIVERY.hold(notice)
+    if not held:
         _dispatch_notice(notice)
     return notice.notice_id
 

@@ -11,12 +11,15 @@ Two halves, one per side of the loopback call:
   service token (ADR 0089) the supervisor already gave it. The hub's address arrives by
   env at spawn (:data:`HUB_URL_ENV`); a member started without one hands nothing over.
 * **Hub** (:func:`accept_member_notice`): checks the member is one of its own
-  workspaces, remembers which agent the notice came from, and queues it on the same
-  push ledger its own notices use.
+  workspaces, remembers which agent the notice came from, and raises it through the
+  hub's own notice seam (``notify_chat_surfaces``). So it is published on the hub's
+  event stream (the desktop app's native banner reads it there) and queued to every
+  notice adapter the hub runs: its chat plugins and the push ledger its own notices use.
 
 Only the notice's identity crosses: id, kind, importance and times. No text, no link.
-The hub's quiet hours apply to a member's notice as to its own: a routine one is held
-for the hub's digest, under the hub's own wording ("A notice from <member>").
+The hub's quiet hours apply to a member's notice: a routine one is held for the hub's
+digest, under the hub's own wording ("A notice from <member>"), and while held it is
+kept off the event stream too, so the desktop app raises no banner for it.
 The origin is kept on the hub and read back after authentication (``GET
 /api/notices/<id>``), so the push payload still names no member (ADR 0135, "What leaves
 the machine").
@@ -34,7 +37,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from graph.plugins.chat_surface import _NOTICE_LIFETIMES, ChatNotice
+from graph.plugins.chat_surface import _NOTICE_LIFETIMES, ChatNotice, notify_chat_surfaces
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,6 @@ _NOTICE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _IMPORTANCES = ("low", "normal", "high")
 _RETRY_DELAYS = (1.0, 4.0)  # after the first attempt; a decision's notice is worth 3 tries
 _TIMEOUT = 5.0
-_CLOCK_SKEW = 300.0  # same box, same clock: anything further off is not a real timestamp
 
 
 def loopback_hub_url(port: int) -> str:
@@ -122,15 +124,20 @@ class NoticeRefused(ValueError):
 
 
 async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
-    """Hub side: queue a member's notice for the operator's devices.
+    """Hub side: raise a member's notice through the hub's own notice seam.
 
-    True when it was queued or held by the hub's quiet hours (``graph.notice_hold``; a
-    question or high-importance notice is never held), False when this hub has no push
-    sender running (nothing to do, not an error). Raises :class:`NoticeRefused` for a member this hub does not run
-    or a notice that is not well formed. Times are clamped to the kind's own lifetime: a
-    member can shorten a notice's life, never extend it.
+    The seam (``notify_chat_surfaces``) publishes it on the hub bus as a ``notice``
+    event and queues it to every registered notice adapter, the push ledger included.
+    True when it was raised or held by the hub's quiet hours (``graph.notice_hold``; a
+    question or high-importance notice is never held, and a held one reaches neither
+    the bus nor an adapter until the hub's digest), False when this hub has no push
+    sender running (nothing to do, not an error). Raises :class:`NoticeRefused` for a
+    member this hub does not run or a notice that is not well formed. Times are clamped
+    to the kind's own lifetime: a member can shorten a notice's life, never extend it.
+    The hub stamps the creation time itself. An adapter that fails is logged by the seam
+    and does not fail the handoff.
     """
-    from graph import notice_hold, push_transport
+    from graph import push_transport
     from graph.workspaces import manager
 
     member = payload.get("member")
@@ -155,8 +162,6 @@ async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
         raise NoticeRefused("notice times are required") from exc
     if not (math.isfinite(created_at) and math.isfinite(expires_at)):
         raise NoticeRefused("notice times are not finite")
-    if abs(created_at - now) > _CLOCK_SKEW:
-        created_at = now
     expires_at = min(expires_at, now + _NOTICE_LIFETIMES[kind])
     if expires_at <= now:
         raise NoticeRefused("notice has already expired")
@@ -164,16 +169,19 @@ async def accept_member_notice(payload: dict, *, clock=time.time) -> bool:
     if transport is None:
         return False
     await asyncio.to_thread(transport.remember_origin, notice_id, member, expires_at)
-    # The text is the hub's own wording and names the member only: nothing the member
-    # sent is in it. The push payload never carries it; the quiet-hours hold keeps it
-    # for the digest the hub sends when the window ends.
-    notice = ChatNotice(
-        kind=kind, importance=importance, text=f"A notice from {workspace.get('name') or member}", link="",
-        notice_id=notice_id, created_at=created_at, expires_at=expires_at,
+    # Raised through the hub's own notice seam, off the event loop (the seam reads the
+    # quiet-hours store). The seam applies the hub's quiet hours (#5648), publishes the
+    # bus event the desktop app reads and queues every adapter, the push ledger included.
+    # publish_held=False: a routine notice held by quiet hours stays off the bus too,
+    # because the desktop app shows every `notice` event as a native banner with no
+    # quiet-hours check of its own. The text is the hub's own wording and names the
+    # member only: nothing the member sent is in it, and the link is empty. Held is
+    # still taken: the member must not retry it. No Home entry: Home is not part of
+    # the relay.
+    await asyncio.to_thread(
+        notify_chat_surfaces, f"A notice from {workspace.get('name') or member}", "",
+        kind=kind, importance=importance, notice_id=notice_id,
+        ttl_seconds=max(0.0, expires_at - now), source="fleet-relay", home_entry=False,
+        publish_held=False,
     )
-    # The hub's quiet hours hold a member's routine notice as they hold its own (#5648).
-    # Held is still taken: the member must not retry it.
-    if await asyncio.to_thread(notice_hold.DELIVERY.hold, notice):
-        return True
-    await transport.accept(notice)
     return True
