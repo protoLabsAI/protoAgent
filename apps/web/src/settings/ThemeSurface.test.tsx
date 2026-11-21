@@ -18,6 +18,7 @@ let container: HTMLElement;
 let root: Root;
 
 beforeEach(() => {
+  vi.spyOn(api, "getTheme").mockResolvedValue({ theme: null });
   localStorage.clear();
   document.documentElement.removeAttribute("style");
   document.documentElement.removeAttribute("data-theme");
@@ -47,13 +48,49 @@ describe("ThemeSurface — Reset", () => {
       root.render(h(QueryClientProvider, { client }, h(ToastProvider, null, h(ThemeSurface))));
     });
     expect(familyTile("amber").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => { familyTile("teal").click(); });
+    expect(container.textContent).toContain("Not saved to this agent");
 
     await act(async () => {
-      byText("Reset").click();
+      byText("Reset to default").click();
     });
 
     expect(api.resetTheme).toHaveBeenCalledOnce();
     expect(localStorage.getItem("pl-theme")).toBeNull();
+    expect(container.textContent).not.toContain("Not saved to this agent");
     expect(familyTile("amber").getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+
+describe("ThemeSurface — unsaved look", () => {
+  it.each([false, true])("tracks edits and only clears after a successful save (failure: %s)", async (fails) => {
+    const theme = themeFamilyBlob("amber", "dark");
+    let savedTheme: unknown = theme;
+    vi.mocked(api.getTheme).mockImplementation(async () => ({ theme: savedTheme }));
+    vi.spyOn(api, "saveTheme").mockImplementation(async (next) => {
+      if (fails) throw new Error("Offline");
+      savedTheme = next;
+      return { ok: true };
+    });
+    localStorage.setItem("pl-theme", JSON.stringify(theme));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    client.setQueryData(["theme"], { theme });
+    await act(async () => {
+      root.render(h(QueryClientProvider, { client }, h(ToastProvider, null, h(ThemeSurface))));
+    });
+    expect(container.textContent).toContain("How this agent's console looks.");
+    expect(byText("Reset to default")).toBeDefined();
+    expect(container.textContent).not.toContain("Not saved to this agent");
+
+    await act(async () => { familyTile("teal").click(); });
+    expect(container.textContent).toContain("Not saved to this agent");
+    await act(async () => { familyTile("amber").click(); });
+    expect(container.textContent).not.toContain("Not saved to this agent");
+    await act(async () => { familyTile("teal").click(); });
+    await act(async () => { byText("Save to this agent").click(); });
+    expect(container.textContent?.includes("Not saved to this agent")).toBe(fails);
+    expect(container.textContent).toContain(fails ? "Save failed" : "Theme saved");
+    expect((savedTheme as { preset: string }).preset).toBe(fails ? "amber" : "teal");
   });
 });

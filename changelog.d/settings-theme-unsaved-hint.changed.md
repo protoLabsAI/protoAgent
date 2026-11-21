@@ -1,0 +1,1 @@
+- **Theme settings show when a look is not saved to the agent.** An inline hint tracks changes until they are saved or reset, and “Reset to default” makes the reset action explicit.
