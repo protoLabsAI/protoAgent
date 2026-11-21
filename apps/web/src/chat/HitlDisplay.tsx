@@ -115,6 +115,7 @@ export function DecisionTranscript({ id }: { id: string }) {
           key={id}
           decision={record}
           presentation="transcript"
+          contained
           onAnswer={(optionId) => answer(id, optionId)}
           onOpenChat={focusComposer}
           onReplyInChat={() => {

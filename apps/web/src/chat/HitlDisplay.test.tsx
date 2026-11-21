@@ -233,6 +233,8 @@ describe("durable decision transcript", () => {
     await mount();
     expect(button("Ship it").disabled).toBe(false);
     expect(container.querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(1);
+    // The transcript card is sectioned off from the prose in the DS Card surface (#5668 §1).
+    expect(container.querySelector(".decision-transcript article")!.classList.contains("pl-card")).toBe(true);
     current = { ...current, state, answer_label: "Ship it", answered_at: "2026-11-08T15:00:00Z" };
     await act(async () => { decisionBus.forEach((fn) => fn({ id: current.id })); await flush(); });
     expect(button("Ship it")).toBeUndefined();

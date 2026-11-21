@@ -6,37 +6,64 @@ import { Tooltip } from "@protolabsai/ui/overlays";
 
 import type { AnswerResult, DecisionRow } from "../lib/api/decisions";
 import { formatGivenAt, localStampTitle } from "../lib/format";
+import { useIsMobile } from "../lib/useIsMobile";
 import { dismissDecision, recheckDecision } from "./useDecisions";
 
 // Tokens only (§5.10): question = --pl-color-fg; meta, option explanations and the "if nobody
 // answers" line = --pl-color-fg-muted (7.24:1 dark / 7.73:1 light on --pl-color-bg-raised).
 // Never --pl-color-fg-subtle for card text — it fails at 3.42:1 on the light surface.
-const card: CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--pl-space-3)" };
+// Compact layout (#5668 spec v5 §2): tighter gaps, a 4-line question clamp, options with their
+// explanation attached, and a bordered footer holding the expiry line and the secondary actions.
+const card: CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--pl-space-2_5)" };
 const metaRow: CSSProperties = {
   display: "flex",
   alignItems: "center",
   flexWrap: "wrap",
   gap: "var(--pl-space-2)",
+  fontSize: "var(--pl-font-size-xs)",
   color: "var(--pl-color-fg-muted)",
 };
-const agentName: CSSProperties = { color: "var(--pl-color-fg)" };
+const agentName: CSSProperties = { color: "var(--pl-color-fg)", fontWeight: "var(--pl-font-weight-medium)" };
 const questionBase: CSSProperties = {
   color: "var(--pl-color-fg)",
+  fontSize: "var(--pl-font-size-base)",
   whiteSpace: "pre-wrap",
   margin: 0,
 };
+/** Lines of the question shown before "Show full question" (§2). */
+const QUESTION_CLAMP_LINES = 4;
 const questionClamp: CSSProperties = {
   ...questionBase,
   display: "-webkit-box",
   WebkitBoxOrient: "vertical",
-  WebkitLineClamp: 6,
+  WebkitLineClamp: QUESTION_CLAMP_LINES,
   overflow: "hidden",
 };
-const optionGroup: CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--pl-space-2)" };
-const optionWrap: CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--pl-space-1)" };
+const optionGroup: CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--pl-space-1_5)" };
+const optionWrap: CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--pl-space-0_5)" };
 const optionBtn: CSSProperties = { width: "100%", justifyContent: "flex-start", gap: "var(--pl-space-2)" };
 const muted: CSSProperties = { color: "var(--pl-color-fg-muted)", margin: 0 };
-const footerRow: CSSProperties = { display: "flex", flexDirection: "column", gap: "var(--pl-space-2)" };
+// The explanation sits right under its button, indented to line up with the label text.
+const optionDesc: CSSProperties = {
+  ...muted,
+  fontSize: "var(--pl-font-size-xs)",
+  paddingInlineStart: "var(--pl-space-2_5)",
+};
+const footer: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--pl-space-2)",
+  paddingTop: "var(--pl-space-2)",
+  borderTop: "var(--pl-border-width) solid var(--pl-color-border)",
+};
+const footerActions: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: "var(--pl-space-2)",
+};
+// "Dismiss" is pushed to the far end of the action row.
+const footerEnd: CSSProperties = { marginInlineStart: "auto" };
 
 export type DecisionCardProps = {
   decision: DecisionRow;
@@ -77,6 +104,11 @@ export type DecisionCardProps = {
    *  record freezes as a single plain line instead of a callout. A pending decision renders
    *  identically in both. */
   presentation?: "panel" | "transcript";
+  /** Draw the card's own edge (#5668 §1): the root `<article>` takes the DS `Card` surface
+   *  (`.pl-card`), keeping its role and accessible name. True where the card sits loose among
+   *  other content (the chat transcript, the Decisions panel); left off where the host pane or
+   *  row already is the container (the Work decision detail, the Needs you rail). */
+  contained?: boolean;
 };
 
 type Phase =
@@ -114,6 +146,7 @@ export function DecisionCard({
   onStartAgent,
   presentation = "panel",
   actionSize,
+  contained = false,
 }: DecisionCardProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [expanded, setExpanded] = useState(false);
@@ -125,6 +158,10 @@ export function DecisionCard({
 
   const agent = decision.agent || "An agent";
   const isTranscript = presentation === "transcript";
+  // Options and footer actions: `sm` on desktop, `md` at phone width (§2). A host that knows
+  // its own frame (Work sheet, the rail) still decides through `actionSize`.
+  const phone = useIsMobile();
+  const optionSize = actionSize ?? (phone ? "md" : "sm");
   const offlineBlocks = !agentOnline && !agentHoldsOffline;
   const optionsDisabled = phase.kind === "sending" || phase.kind === "checking" || phase.kind === "dismissing" || offlineBlocks;
 
@@ -305,6 +342,8 @@ export function DecisionCard({
     return `${agent} doesn't need this any more.${reason ? ` ${reason}` : ""}`;
   }
 
+  // The options are showing, so the footer carries their secondary actions.
+  let answerable = false;
   let body: ReactNode;
   if (phase.kind === "dismissed") {
     body = (
@@ -366,6 +405,7 @@ export function DecisionCard({
     );
   } else {
     // pending (idle / sending / error): show the options
+    answerable = true;
     body = (
       <>
         {phase.kind === "dismissFailed" && (
@@ -399,7 +439,7 @@ export function DecisionCard({
               <div key={option.id} style={optionWrap}>
                 <Button
                   variant={option.recommended ? "primary" : "default"}
-                  size={actionSize ?? "md"}
+                  size={optionSize}
                   style={optionBtn}
                   disabled={optionsDisabled && !sendingThis}
                   loading={sendingThis}
@@ -410,27 +450,13 @@ export function DecisionCard({
                   {option.recommended && <Badge>suggested</Badge>}
                 </Button>
                 {option.description && (
-                  <p id={descId} style={muted}>
+                  <p id={descId} style={optionDesc}>
                     {option.description}
                   </p>
                 )}
               </div>
             );
           })}
-          <Button variant="ghost" size={actionSize ?? "md"} onClick={() => onReplyInChat?.(decision)}>
-            Reply in chat instead
-          </Button>
-          {onDismiss && (
-            <Button
-              variant="ghost"
-              size={actionSize ?? "md"}
-              disabled={phase.kind === "sending"}
-              loading={phase.kind === "dismissing"}
-              onClick={() => void dismiss()}
-            >
-              Dismiss
-            </Button>
-          )}
         </div>
         {offlineBlocks ? (
           <p style={muted}>
@@ -446,10 +472,12 @@ export function DecisionCard({
     );
   }
 
+  const showExpiry = Boolean(decision.expires_at) && phase.kind === "idle" && !TERMINAL.has(decision.state);
+
   return (
-    <article aria-label={`${agent}: ${firstWords}`} style={card}>
+    <article aria-label={`${agent}: ${firstWords}`} className={contained ? "pl-card" : undefined} style={card}>
       <div style={metaRow}>
-        <Avatar name={agent} size={24} />
+        <Avatar name={agent} size={20} />
         <strong style={agentName}>{agent}</strong>
         {!agentOnline && <StatusDot status="neutral" label="offline" />}
         <span aria-hidden>·</span>
@@ -473,25 +501,49 @@ export function DecisionCard({
 
       {body}
 
-      <div style={footerRow}>
-        {decision.expires_at && phase.kind === "idle" && !TERMINAL.has(decision.state) && (
-          <p style={muted}>
-            {`If nobody answers by ${formatGivenAt(decision.expires_at)}, ${agent} will ${decision.default_action_text}.`}
-          </p>
-        )}
-        {/* In the source chat's transcript the card is already in that chat: no link to it. */}
-        {!isTranscript && (
-          <TextLink
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              onOpenChat?.(decision);
-            }}
-          >
-            Open chat: {chatTitle || agent}
-          </TextLink>
-        )}
-      </div>
+      {(showExpiry || answerable || !isTranscript) && (
+        <footer style={footer}>
+          {/* The one place the default is stated (§3): built from the server's expiry + action. */}
+          {showExpiry && (
+            <p style={muted}>
+              {`If nobody answers by ${formatGivenAt(decision.expires_at)}, ${agent} will ${decision.default_action_text}.`}
+            </p>
+          )}
+          {(answerable || !isTranscript) && (
+            <div style={footerActions}>
+              {answerable && (
+                <Button variant="ghost" size={optionSize} onClick={() => onReplyInChat?.(decision)}>
+                  Reply in chat instead
+                </Button>
+              )}
+              {/* In the source chat's transcript the card is already in that chat: no link to it. */}
+              {!isTranscript && (
+                <TextLink
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onOpenChat?.(decision);
+                  }}
+                >
+                  Open chat: {chatTitle || agent}
+                </TextLink>
+              )}
+              {answerable && onDismiss && (
+                <Button
+                  variant="ghost"
+                  size={optionSize}
+                  style={footerEnd}
+                  disabled={phase.kind === "sending"}
+                  loading={phase.kind === "dismissing"}
+                  onClick={() => void dismiss()}
+                >
+                  Dismiss
+                </Button>
+              )}
+            </div>
+          )}
+        </footer>
+      )}
     </article>
   );
 }

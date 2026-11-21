@@ -501,16 +501,138 @@ describe("useDecisions store", () => {
 
 // ── DecisionCard ──────────────────────────────────────────────────────────────────────────
 describe("DecisionCard", () => {
-  it("renders a pending decision: md options, recommended primary + suggested, never danger", async () => {
+  it("renders a pending decision: sm options, recommended primary + suggested, never danger", async () => {
     await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
     const merge = buttons().find((b) => b.textContent?.includes("Merge with the WARN"));
     expect(merge?.className).toContain("pl-btn--primary");
+    expect(merge?.className).toContain("pl-btn--sm"); // desktop: compact (#5668 §2)
     const hold = buttons().find((b) => b.textContent?.trim() === "Hold the release");
     expect(hold?.className).not.toContain("pl-btn--primary");
     expect(buttons().some((b) => b.className.includes("pl-btn--danger"))).toBe(false);
     expect(document.body.textContent).toContain("suggested");
     expect(document.body.textContent).toContain("I'll merge and cut the release.");
     expect(document.body.textContent).toContain("Reply in chat instead");
+  });
+
+  // ── compact layout in a card container (#5668 spec v5 §1–§3, §6) ──────────────────────────
+  const footerOf = () => document.querySelector<HTMLElement>("article footer");
+  const answerGroup = () => document.querySelector('[role="group"][aria-label="Answer"]')!;
+
+  it("keeps the options md at phone width, and an explicit actionSize still wins", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)", addEventListener() {}, removeEventListener() {},
+    }));
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
+    const option = () => buttons().find((b) => b.textContent?.trim() === "Hold the release")!;
+    expect(option().className).not.toContain("pl-btn--sm");
+    expect(buttons().find((b) => b.textContent?.trim() === "Dismiss")!.className).not.toContain("pl-btn--sm");
+    await renderNode(<DecisionCard key="sized" decision={decision("a")} actionSize="sm" onAnswer={vi.fn()} />);
+    expect(option().className).toContain("pl-btn--sm");
+  });
+
+  it("draws the DS Card edge on the article only when contained, keeping its role and name", async () => {
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
+    const bare = document.querySelector("article")!;
+    expect(bare.classList.contains("pl-card")).toBe(false); // Work detail / Needs you rail: host is the box
+    expect(document.querySelector(".pl-card")).toBeNull();
+    const name = bare.getAttribute("aria-label");
+    expect(name).toMatch(/^protoEngineer: /);
+
+    await renderNode(<DecisionCard key="contained" decision={decision("a")} contained onAnswer={vi.fn()} />);
+    const boxed = document.querySelector("article")!;
+    expect(boxed.classList.contains("pl-card")).toBe(true);
+    expect(boxed.getAttribute("aria-label")).toBe(name);
+    expect(document.querySelectorAll(".pl-card")).toHaveLength(1); // no box in a box
+  });
+
+  it("puts the secondary actions in the footer row, below and outside the Answer group", async () => {
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} chatTitle="Cut v0.227.0" />);
+    const footer = footerOf()!;
+    const group = answerGroup();
+    // The footer follows the options in the card.
+    expect(group.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The Answer group holds the options only; each explanation stays attached to its option.
+    const options = [...group.querySelectorAll("button")];
+    expect(options.map((b) => b.querySelector("span")?.textContent)).toEqual(decision("a").options.map((o) => o.label));
+    const described = options.find((b) => b.getAttribute("aria-describedby"))!;
+    const desc = document.getElementById(described.getAttribute("aria-describedby")!)!;
+    expect(desc.parentElement).toBe(described.parentElement);
+    expect(desc.textContent).toBe(decision("a").options.find((o) => o.description)!.description);
+    // One action row: Reply in chat instead · Open chat · Dismiss.
+    const row = footer.querySelector("div")!;
+    expect([...row.children].map((el) => el.textContent?.trim())).toEqual([
+      "Reply in chat instead", "Open chat: Cut v0.227.0", "Dismiss",
+    ]);
+    expect([...row.querySelectorAll("button")].every((b) => b.className.includes("pl-btn--ghost"))).toBe(true);
+    expect(footer.style.borderTop).toContain("var(--pl-color-border)");
+  });
+
+  it("states the expiry and default once, in the footer line", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { expires_at: "2026-11-08T15:45:00+00:00", default_option: "hold", default_action_text: "keep holding the release" })}
+        onAnswer={vi.fn()}
+      />,
+    );
+    const line = footerOf()!.querySelector("p")!;
+    expect(line.textContent).toMatch(/^If nobody answers by .+, protoEngineer will keep holding the release\.$/);
+    const text = document.querySelector("article")!.textContent!;
+    expect(text.split("If nobody answers by")).toHaveLength(2);
+    expect(text.split("keep holding the release")).toHaveLength(2);
+    expect(answerGroup().textContent).not.toContain("keep holding the release");
+  });
+
+  it("drops the footer actions with the options, and the whole footer from a settled transcript card", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({ answered_elsewhere: false, decision: decision("a"), resumed: true });
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={onAnswer} />);
+    await click("Hold the release");
+    expect(footerOf()!.textContent).toBe("Open chat: protoEngineer"); // the panel keeps its way back to the chat
+    await renderNode(
+      <DecisionCard
+        key="frozen"
+        decision={decision("a", { state: "answered", answer_label: "Hold the release", answered_at: "2026-11-08T14:52:00+00:00" })}
+        presentation="transcript"
+        contained
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(footerOf()).toBeNull(); // no empty bordered strip
+  });
+
+  it("clamps a long question at 4 lines behind Show full question", async () => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(240);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(80);
+    const long = Array.from({ length: 12 }, (_, i) => `Line ${i + 1} of a long question.`).join("\n");
+    await renderNode(<DecisionCard decision={decision("a", { question: long })} onAnswer={vi.fn()} />);
+    const question = () => [...document.querySelectorAll<HTMLElement>("article > p")].find((p) => p.textContent === long)!;
+    expect(question().style.webkitLineClamp).toBe("4");
+    expect(question().style.overflow).toBe("hidden");
+    const toggle = buttons().find((b) => b.textContent?.trim() === "Show full question")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    expect(question().style.webkitLineClamp).toBeFalsy();
+    const less = buttons().find((b) => b.textContent?.trim() === "Show less")!;
+    expect(less.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => less.click());
+    expect(question().style.webkitLineClamp).toBe("4");
+  });
+
+  it("offers no Show full question when the question fits", async () => {
+    await renderNode(<DecisionCard decision={decision("a")} onAnswer={vi.fn()} />);
+    expect(buttons().some((b) => b.textContent?.trim() === "Show full question")).toBe(false);
+  });
+
+  it("uses the muted text token for secondary text, never the subtle one", async () => {
+    await renderNode(
+      <DecisionCard
+        decision={decision("a", { expires_at: "2026-11-08T15:45:00+00:00" })}
+        contained
+        onAnswer={vi.fn()}
+      />,
+    );
+    const html = document.querySelector("article")!.outerHTML;
+    expect(html).toContain("var(--pl-color-fg-muted)");
+    expect(html).not.toContain("--pl-color-fg-subtle");
   });
 
   it("answering calls onAnswer and shows the Sent line; the panel holds the card", async () => {
@@ -1004,6 +1126,8 @@ describe("DecisionsPanel", () => {
     );
     expect(document.querySelectorAll("article").length).toBe(2);
     expect(document.querySelectorAll(".pl-divider").length).toBe(1);
+    // Each panel card has its own edge (#5668 §1).
+    expect([...document.querySelectorAll("article")].every((el) => el.classList.contains("pl-card"))).toBe(true);
     expect(document.querySelector(".pl-popover")).toBeFalsy();
     expect(document.body.textContent).toContain("Cindi");
   });
