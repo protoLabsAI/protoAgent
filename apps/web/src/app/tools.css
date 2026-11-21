@@ -24,22 +24,28 @@
 .tools-row:last-child {
   border-bottom: 0;
 }
+/* Description first, in body text; the code name under it, small and muted. */
 .tools-row-main {
   display: flex;
-  align-items: baseline;
-  gap: var(--pl-space-2);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--pl-space-0_5);
   min-width: 0;
-  flex-wrap: wrap;
-}
-.tools-name {
-  font-family: var(--pl-font-mono);
-  font-size: var(--pl-font-size-sm);
-  color: var(--pl-color-fg);
 }
 .tools-desc {
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg);
+  min-width: 0;
+}
+.tools-name,
+.tools-note {
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   min-width: 0;
+}
+.tools-name {
+  font-family: var(--pl-font-mono);
+  overflow-wrap: anywhere;
 }
 /* The per-row on/off switch must not shrink against a long description. */
 .tools-row .pl-switch {
@@ -47,6 +53,7 @@
 }
 /* Toggled-off rows stay listed (so they can be re-enabled) but read as inert. */
 .tools-row--off .tools-name,
+.tools-row--off .tools-note,
 .tools-row--off .tools-desc {
   color: var(--pl-color-fg-subtle);
   opacity: 0.65;
@@ -141,10 +148,4 @@
   align-items: center;
   gap: var(--pl-space-2);
   margin: var(--pl-space-0_5) 0 var(--pl-space-2);
-}
-/* The group carries settings — a muted glyph on its header, next to the count. */
-.tools-group-cog {
-  color: var(--pl-color-fg-subtle);
-  opacity: 0.75;
-  flex-shrink: 0;
 }

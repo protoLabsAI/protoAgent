@@ -55,7 +55,7 @@ denied section, so the list itself can't be edited from inside.
 
 **D6. Visible, not wired.** The compiled graph stamps `subagent_only_tools`. `/api/tools`
 lists them with `subagent_only: true`, outside `count` (still "what the lead model can call"),
-and the console's Tools list marks them "Subagents only". Checks that ask whether an action
+and the console's Tools list marks them "Only subagents can use this". Checks that ask whether an action
 is backed by a tool count held tools as backed: the persona untooled-action audit and the
 archetype capability contract. So does `load_skill`'s availability note.
 
