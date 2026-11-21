@@ -34,6 +34,11 @@ class Field:
     restart: bool = False  # True = needs a full process restart (not hot-reload)
     options: list[str] = field(default_factory=list)
     options_source: str = ""  # "models" → filled dynamically by the endpoint
+    # Plain-language text for a `select`'s options: {stored value: what the console
+    # shows}. The STORED value stays the option itself (so configs, validation and older
+    # consoles are untouched); only the picker's visible text changes. Emitted as
+    # `option_labels` only when set; an option with no entry shows its raw value.
+    option_labels: dict[str, str] = field(default_factory=dict)
     minimum: float | None = None
     maximum: float | None = None
     # Conditional visibility (#963): {"key": "<sibling field key>", "equals": <value>}
@@ -1284,11 +1289,15 @@ FIELDS: list[Field] = [
         "MCP server sharing",
         "select",
         "MCP",
-        "How this agent uses MCP servers: scoped (only this agent's servers) · layered "
-        "(also run the box commons — every agent on this machine shares those — ∪ your "
-        "own). Blank = scoped. A shared server runs as a subprocess with its configured "
-        "secrets on every agent, so share only servers you trust box-wide.",
+        "Which MCP servers this agent uses: only the ones added to this agent, or those "
+        "plus the servers shared with every agent on this computer. Unset = only this "
+        "agent's servers. A shared server runs on every agent with its saved secrets, so "
+        "share only servers you trust.",
         options=["scoped", "layered"],
+        option_labels={
+            "scoped": "Only this agent's servers",
+            "layered": "This agent's servers and shared ones",
+        },
     ),
     # ── Filesystem (ADR 0007 operator primitives) — the fenced project fs toolset,
     # incl. the dual-use ``run_command``. Per-agent (leaf scope): an operator can
@@ -2844,6 +2853,8 @@ def build_schema(
             entry["minimum"] = f.minimum
         if f.maximum is not None:
             entry["maximum"] = f.maximum
+        if f.option_labels:
+            entry["option_labels"] = dict(f.option_labels)  # select: value → visible text
         if f.depends_on:
             entry["depends_on"] = f.depends_on  # #963 — full dotted sibling key
         if is_credential_plane_key(f.key):

@@ -575,3 +575,20 @@ def test_skills_enable_action_is_writable_and_requires_restart():
     assert nest_updates(updates) == {"skills": {"enabled": True}}
     assert restart_keys(updates) == ["skills.enabled"]
     assert validate_flat({"skills.enabled": "true"})[0] is False
+
+
+def test_mcp_sharing_field_reads_in_plain_words():
+    """Settings ▸ MCP's "Sharing" chip renders this field verbatim (label, description and
+    option text), so the storage vocabulary must not reach it. The stored values stay
+    ``scoped`` / ``layered`` — only what the picker shows is relabelled."""
+    import re
+
+    field = next(f for g in build_schema(LangGraphConfig()) for f in g["fields"] if f["key"] == "mcp.scope")
+    assert field["options"] == ["scoped", "layered"]
+    assert set(field["option_labels"]) == set(field["options"])
+    shown = " ".join([field["label"], field["description"], *field["option_labels"].values()])
+    assert not re.search(r"\b(commons|box|layered|scoped|stdio)\b", shown, re.I), shown
+    assert validate_flat({"mcp.scope": "layered"}) == (True, None)
+    # A select without labels keeps the wire shape it always had.
+    skills = next(f for g in build_schema(LangGraphConfig()) for f in g["fields"] if f["key"] == "skills.scope")
+    assert "option_labels" not in skills
