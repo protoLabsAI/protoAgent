@@ -397,8 +397,13 @@ def spend_cap_status() -> dict:
     cost_limit = getattr(config, "spend_cap_daily_cost_hard_limit", 10.0)
     token_limit = getattr(config, "spend_cap_daily_token_hard_limit", 1_000_000)
     reached = store is not None and (spend["cost_usd"] >= cost_limit or spend["total_tokens"] >= token_limit)
+    # Notice (soft) limits ride along for the console; 0 means "no notice limit". They never
+    # affect ``paused`` — ``_notify_spend_soft_limit`` owns the once-a-day notice.
+    cost_soft = float(getattr(config, "spend_cap_daily_cost_soft_limit", 0) or 0)
+    token_soft = int(getattr(config, "spend_cap_daily_token_soft_limit", 0) or 0)
     return {**spend, "enabled": enabled, "meter_available": store is not None,
             "daily_cost_hard_limit": cost_limit, "daily_token_hard_limit": token_limit,
+            "daily_cost_soft_limit": cost_soft, "daily_token_soft_limit": token_soft,
             "approved_today": approved, "decision_id": rec.id if rec else None,
             "paused": enabled and (bool(rec and rec.pending) or (not approved and (reached or store is None)))}
 
