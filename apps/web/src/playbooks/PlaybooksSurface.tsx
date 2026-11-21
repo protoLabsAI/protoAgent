@@ -1,17 +1,19 @@
 import { Checkbox, Input, Textarea } from "@protolabsai/ui/forms";
+import { Alert } from "@protolabsai/ui/data";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ArrowDownFromLine, ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } from "lucide-react";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { RefreshButton } from "../app/ui-kit";
 import { StagePanel } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import { invalidateChatCommands, playbooksQuery, queryKeys } from "../lib/queries";
+import { RestartNow } from "../settings/RestartNow";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { Playbook } from "../lib/types";
 
@@ -71,7 +73,7 @@ export function SkillForm({
       />
       <Textarea
         rows={8}
-        placeholder="The procedure — markdown instructions the agent retrieves into context."
+        placeholder="The steps, in Markdown."
         value={draft.body}
         onChange={(e) => setDraft({ ...draft, body: e.target.value })}
         aria-label="skill body"
@@ -148,13 +150,13 @@ function isEditable(p: Playbook): boolean {
 function SourceBadge({ p }: { p: Playbook }) {
   if (p.source === "disk") {
     return p.origin === "user" ? (
-      <span title="You authored this skill (SKILL.md under your data home)">
+      <span title="You wrote this skill.">
         <Badge status="success">
           <Pencil size={12} /> yours
         </Badge>
       </span>
     ) : (
-      <span title="Bundled example (re-seeded from SKILL.md on boot) — read-only">
+      <span title="Built-in example. Read-only.">
         <Badge status="info">
           <Pin size={12} /> pinned
         </Badge>
@@ -162,7 +164,7 @@ function SourceBadge({ p }: { p: Playbook }) {
     );
   }
   return (
-    <span title="Agent-emitted (curated/decaying)">
+    <span title="Saved by the agent. Fades if unused.">
       <Badge status="neutral">
         <Sparkles size={12} /> learned
       </Badge>
@@ -184,6 +186,28 @@ function PlaybooksBody() {
   const onError = (message: string) => {
     if (message) toast({ tone: "error", title: "Skills", message });
   };
+
+  const [restartNeeded, setRestartNeeded] = useState(false);
+  useEffect(() => {
+    const clear = () => setRestartNeeded(false);
+    window.addEventListener("protoagent:settings-restarted", clear);
+    return () => window.removeEventListener("protoagent:settings-restarted", clear);
+  }, []);
+
+  const turnOn = useMutation({
+    mutationFn: () => api.saveSettings({ "skills.enabled": true }, "agent"),
+    onSuccess: (r) => {
+      if (!r.ok) {
+        onError("Could not turn on skills. Try again.");
+        return;
+      }
+      setRestartNeeded(r.restart_required.length > 0);
+      void qc.invalidateQueries({ queryKey: queryKeys.settings });
+      void qc.invalidateQueries({ queryKey: queryKeys.runtime });
+      invalidate();
+    },
+    onError: () => onError("Could not turn on skills. Try again."),
+  });
 
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<Playbook | null>(null);
@@ -338,12 +362,12 @@ function PlaybooksBody() {
     <>
       <PanelHeader
         title="Skills"
-        kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned${layered ? ` · ${fromCommons} from commons` : ""}`}
+        kicker={`Step-by-step guides the agent can follow · ${pinned} pinned · ${learned} learned${layered ? ` · ${fromCommons} shared` : ""}`}
         actions={
           <>
             {/* Skill sharing tier + the box commons location — set right where you manage
                 skills (ADR 0048: the canonical editor for the Capabilities sharing knobs). */}
-            <QuickSetting keys={["skills.scope", "commons.path"]} title="Skill sharing" label="Skill sharing & commons" icon={<Share2 size={16} />} />
+            <QuickSetting keys={["skills.scope", "commons.path"]} title="Skill sharing" label="Sharing" icon={<Share2 size={16} />} />
             {enabled ? (
               <Button
                 icon
@@ -362,6 +386,12 @@ function PlaybooksBody() {
       />
 
       <div className="stage-body">
+        {restartNeeded ? (
+          <Alert status="warning">
+            Skills will turn on after a restart.
+            <RestartNow labels={["Skills"]} onRestarted={() => setRestartNeeded(false)} />
+          </Alert>
+        ) : null}
         <Input
           className="playbook-search"
           type="search"
@@ -371,12 +401,17 @@ function PlaybooksBody() {
         />
 
         {!enabled ? (
-          <Empty>The skills index is disabled (set <code>skills.enabled: true</code>).</Empty>
+          <Empty title="Skills are off." action={
+            <Button onClick={() => turnOn.mutate()} loading={turnOn.isPending} disabled={turnOn.isPending || restartNeeded}>
+              Turn on
+            </Button>
+          } />
         ) : filtered.length === 0 ? (
           playbooks.length === 0 ? (
             <Empty
               title="No skills yet"
-              description="author one with +, drop a SKILL.md, or let the agent emit one from a run."
+              description="Write one, or the agent can save one after a run."
+              action={<Button onClick={openCreate}>New skill</Button>}
             />
           ) : (
             <Empty>No skills match your search.</Empty>
@@ -390,9 +425,9 @@ function PlaybooksBody() {
                       <div className="playbook-title">
                         <SourceBadge p={p} />
                         {p.tier === "commons" ? (
-                          <span title="Shared commons — readable by every agent on this box">
+                          <span title="Shared — readable by every agent on this box">
                             <Badge status="neutral">
-                              <Library size={12} /> commons
+                              <Library size={12} /> Shared
                             </Badge>
                           </span>
                         ) : p.tier === "private" ? (
@@ -429,7 +464,7 @@ function PlaybooksBody() {
                           type="button"
                           icon
                           variant="ghost"
-                          title="Promote to the shared commons (every agent on this box can then reuse it)"
+                          title="Share with every agent on this box"
                           onClick={() => promote.mutate(p)}
                           loading={promotingId === p.id}
                           data-testid={`playbook-promote-${p.id}`}
@@ -465,7 +500,7 @@ function PlaybooksBody() {
                           type="button"
                           icon
                           variant="ghost"
-                          title="Unshare — remove from the shared commons (no agent on this box will read it anymore)"
+                          title="Unshare — other agents on this box will no longer read it"
                           onClick={() => setForgetPending(p)}
                           data-testid={`playbook-forget-${p.id}`}
                         >
@@ -496,13 +531,13 @@ function PlaybooksBody() {
         onClose={() => setPending(null)}
       >
         {pending
-          ? `Remove "${pending.name}"${pending.origin === "user" ? " — its SKILL.md is deleted too." : "."}`
+          ? `Remove "${pending.name}"${pending.origin === "user" ? " — its saved file is deleted too." : "."}`
           : undefined}
       </ConfirmDialog>
 
       <ConfirmDialog
         open={forgetPending !== null}
-        title="Unshare from the commons?"
+        title="Unshare this skill?"
         confirmLabel="Unshare"
         destructive
         onConfirm={() => {
@@ -512,7 +547,7 @@ function PlaybooksBody() {
         onClose={() => setForgetPending(null)}
       >
         {forgetPending
-          ? `"${forgetPending.name}" will be removed from the shared commons — no other agent on this box will read it. A private copy (if any) is untouched.`
+          ? `"${forgetPending.name}" will no longer be shared — no other agent on this box will read it. A private copy (if any) is untouched.`
           : undefined}
       </ConfirmDialog>
 

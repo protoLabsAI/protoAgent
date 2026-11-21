@@ -1116,6 +1116,17 @@ FIELDS: list[Field] = [
         "length inlined — so a big document never gets dumped into the turn.",
         minimum=1,
     ),
+    # The Skills surface owns the enable action; the index is initialized at boot.
+    Field(
+        "skills.enabled",
+        "skills_enabled",
+        "Skills",
+        "bool",
+        "Skills",
+        "Let the agent follow saved step-by-step guides.",
+        restart=True,
+        ui_hidden=True,
+    ),
     # minimum=0 (not 1): 0 = "index off, but /slash + load_skill still work" — a
     # coherent middle ground vs skills.enabled:false (which kills everything). The
     # runtime (KnowledgeMiddleware + runtime/context.py) honors 0, so the schema must
@@ -1256,9 +1267,8 @@ FIELDS: list[Field] = [
         "Skill sharing",
         "select",
         "Skills",
-        "How this agent uses the skill library: scoped (private only) · shared "
-        "(the one box commons) · layered (read the commons ∪ private, write "
-        "private, promote proven skills up). Blank = derived (scoped).",
+        "How this agent uses skills: scoped (private only), shared (shared skills only), "
+        "or layered (read both, save privately, and share when ready). Leave blank to use the agent’s default.",
         options=["scoped", "shared", "layered"],
     ),
     Field(
@@ -1267,7 +1277,7 @@ FIELDS: list[Field] = [
         "Shared skills location",
         "path",
         "Skills",
-        "Box-shared skill library read by every agent on this machine. Blank = ~/.protoagent/commons.",
+        "Shared skill library read by every agent on this machine. Leave blank to use the default location.",
         scope="host",
     ),
     # MCP server sharing tier (ADR 0041) — mirrors skills.scope. The commons of shared
