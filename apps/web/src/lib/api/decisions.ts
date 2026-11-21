@@ -48,6 +48,10 @@ export type DecisionRow = {
   withdraw_reason: string | null;
   answered_by: string | null;
   answered_surface: string | null;
+  /** How the answer was given: "option" (one of the offered options was picked) or "text" (a
+   *  typed reply in chat). Null while unanswered and on records answered before the server
+   *  recorded it; absent from older servers. The card treats null/absent as an option. */
+  answer_kind?: "option" | "text" | null;
   /** Server-computed: the agent's default action verb phrase, or "carry on without this step". */
   default_action_text: string;
   /** Server-computed: the chosen option's label (or the raw answer for free text). */

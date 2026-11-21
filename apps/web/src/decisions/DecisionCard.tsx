@@ -131,6 +131,11 @@ const CHECK_DELAYS_MS = [1000, 2000, 3000, 5000];
 
 const TERMINAL: ReadonlySet<DecisionRow["state"]> = new Set(["answered", "expired", "cancelled", "withdrawn"]);
 
+/** Longest typed answer quoted in the "Already answered in chat" callout (#5668 spec v5 §4). */
+const TYPED_ANSWER_MAX = 80;
+const clipTyped = (text: string) =>
+  text.length > TYPED_ANSWER_MAX ? `${text.slice(0, TYPED_ANSWER_MAX)}…` : text;
+
 export function DecisionCard({
   decision,
   onAnswer,
@@ -294,6 +299,43 @@ export function DecisionCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the record only
   }, [decision.state, decision.answer]);
 
+  // A typed reply is being delivered (#5668 spec v5 §4): the record says an answer is on its
+  // way and no option was picked on this card. The options give way to "Sending your reply…".
+  // A record read once can go stale (the delivery failed and nothing changed on the bus), so the
+  // card re-reads it on the same backoff until the server says the delivery is over.
+  const [deliveryOver, setDeliveryOver] = useState(false);
+  const [replyAttempt, setReplyAttempt] = useState(0);
+  useEffect(() => {
+    if (!decision.delivering) {
+      setDeliveryOver(false);
+      setReplyAttempt(0);
+    }
+  }, [decision.delivering]);
+  const replySending = phase.kind === "idle" && decision.state === "pending"
+    && decision.delivering === true && !deliveryOver;
+  useEffect(() => {
+    if (!replySending) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      onCheck(decision.id).then(
+        (record) => {
+          if (!live) return;
+          if (record === null || TERMINAL.has(record.state)) setPhase({ kind: "answeredElsewhere", record });
+          else if (record.delivering) setReplyAttempt((n) => n + 1);
+          else setDeliveryOver(true);
+        },
+        () => {
+          if (live) setReplyAttempt((n) => n + 1);
+        },
+      );
+    }, CHECK_DELAYS_MS[Math.min(replyAttempt, CHECK_DELAYS_MS.length - 1)]);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-armed per attempt only
+  }, [replySending, replyAttempt, decision.id]);
+
   const firstWords = decision.question.replace(/\s+/g, " ").trim().slice(0, 80);
 
   // ── result / closed states (replace the options) ──────────────────────────────────────────
@@ -302,7 +344,9 @@ export function DecisionCard({
     const when = record.answered_at ? ` at ${formatGivenAt(record.answered_at)}` : "";
     return (
       <Callout tone="info">
-        {`Already answered: you chose "${chosen}"${when}. Nothing else changed.`}
+        {record.answer_kind === "text"
+          ? `Already answered in chat: "${clipTyped(record.answer ?? record.answer_label ?? "")}"${when}. Nothing else changed.`
+          : `Already answered: you chose "${chosen}"${when}. Nothing else changed.`}
       </Callout>
     );
   }
@@ -327,9 +371,12 @@ export function DecisionCard({
   }
 
   // The frozen transcript sentence for a settled record (§5.5–5.6): one plain muted line, never
-  // a callout. Answered reads "You chose …"; expired and withdrawn keep the panel's closed text.
+  // a callout. Answered reads "You chose …" (or "You replied in chat" for a typed answer: the
+  // reply is the user bubble right below, so the line does not repeat it); expired and withdrawn
+  // keep the panel's closed text.
   function transcriptLine(record: DecisionRow) {
     if (record.state === "answered") {
+      if (record.answer_kind === "text") return `You replied in chat · ${formatGivenAt(record.answered_at)}`;
       const chosen = record.answer_label ?? record.answer ?? "an option";
       return `You chose "${chosen}" · ${formatGivenAt(record.answered_at)}`;
     }
@@ -395,6 +442,13 @@ export function DecisionCard({
     body = (
       <div ref={result} tabIndex={-1} aria-live="polite">
         <StatusDot status="success" label={sent} />
+      </div>
+    );
+  } else if (replySending) {
+    // A typed reply is on its way: no options to pick while it lands.
+    body = (
+      <div aria-live="polite">
+        <StatusDot status="neutral" pulse label="Sending your reply…" />
       </div>
     );
   } else if ((phase.kind === "idle" || phase.kind === "error") && TERMINAL.has(decision.state)) {
@@ -472,7 +526,7 @@ export function DecisionCard({
     );
   }
 
-  const showExpiry = Boolean(decision.expires_at) && phase.kind === "idle" && !TERMINAL.has(decision.state);
+  const showExpiry = Boolean(decision.expires_at) && phase.kind === "idle" && !replySending && !TERMINAL.has(decision.state);
 
   return (
     <article aria-label={`${agent}: ${firstWords}`} className={contained ? "pl-card" : undefined} style={card}>
