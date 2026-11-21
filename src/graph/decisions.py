@@ -661,18 +661,53 @@ def decision_store() -> DecisionStore:
     return store if store is not None else DecisionStore()
 
 
+# The host's "is a console showing this chat right now?" read (``server.turn_control.
+# is_session_attended``), set by the server when it starts push delivery. ``graph`` must
+# not import ``server`` (the import-layering contract), so the read is handed in. Unset
+# (a test, a process with no server) reads as unattended.
+_attendance_reader: list[Callable[[str], bool] | None] = [None]
+
+
+def set_attendance_reader(reader: Callable[[str], bool] | None) -> None:
+    """Hand ``push_eligible`` the host's session-attendance read; ``None`` clears it."""
+    _attendance_reader[0] = reader
+
+
+def _session_attended(session_id: str) -> bool:
+    """Whether a console holds ``session_id`` open now. No reader, or a reader that
+    raises, reads as unattended: when in doubt the push goes out."""
+    reader = _attendance_reader[0]
+    if reader is None:
+        return False
+    try:
+        return reader(session_id) is True
+    except Exception:  # noqa: BLE001 — an unknown attendance must never swallow a push
+        log.warning("[decision] could not read attendance for session %s; pushing", session_id, exc_info=True)
+        return False
+
+
 def push_eligible(notice_id: str) -> bool:
     """Whether a queued phone push for ``notice_id`` should still go out (#5648).
 
     The push transport asks before each attempt, so a decision answered, withdrawn,
     cancelled or expired while its push waited (a retry, a quiet-hours hold, a restart)
-    is dropped instead of sent. Only a ``decision-<id>`` notice this store knows can be
-    ineligible: any other notice passes, and so does a decision id with no record here —
-    a member's relayed decision carries the member's id, which the hub's store never
-    holds. A store read error propagates; the transport defers the row on an exception.
+    is dropped instead of sent. A pending decision is also dropped while a console holds
+    its chat open (a live ``GET /api/chat/attend`` stream on its session): the operator is
+    already looking at it. The transport marks a dropped push obsolete, so an attended
+    decision does not push later if the operator leaves without answering. That is an
+    accepted trade-off; the decision stays in the console's Needs-you list. A failed
+    attendance read counts as unattended, so the push goes out.
+
+    Only a ``decision-<id>`` notice this store knows can be ineligible: any other notice
+    passes, and so does a decision id with no record here — a member's relayed decision
+    carries the member's id, which the hub's store never holds, so attendance is never
+    consulted for it. A store read error propagates; the transport defers the row on an
+    exception.
     """
     prefix = "decision-"
     if not notice_id.startswith(prefix):
         return True
     rec = decision_store().get(notice_id[len(prefix):])
-    return rec is None or rec.pending
+    if rec is None:
+        return True
+    return rec.pending and not _session_attended(rec.session_id)
