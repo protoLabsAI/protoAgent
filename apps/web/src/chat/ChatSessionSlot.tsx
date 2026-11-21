@@ -1,7 +1,7 @@
 import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { PromptInput } from "@protolabsai/ui/ai";
 import { EyeOff } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { MobileWorkHandle } from "../app/MobileShell";
@@ -239,7 +239,7 @@ export function ChatSessionSlot({
     noteToThread,
     lastAssistantId: () => lastAssistantId,
   });
-  const decisionTranscript = useLiveDecisionTranscript(hitlRef, updateHitl, resumeHitl);
+  const decisionTranscript = useLiveDecisionTranscript(hitlRef, updateHitl, resumeHitl, session?.messages || []);
   const abortRef = useRef<AbortController | null>(null);
   const [reattachRequest, setReattachRequest] = useState(0);
   // The live turn's reveal-queue flush (#2993): stop() settles bubbles outside
@@ -363,6 +363,18 @@ export function ChatSessionSlot({
   // (Enter queues an interjection through its durable control task). Named for the
   // capability rather than the source: it is not server-specific.
   const turnInterruptible = status === "streaming" || Boolean(serverTurnControl);
+  // The composer answers the open decision card in this chat (#5668 §4). Not while a turn is
+  // interruptible: Enter queues a steer then, so the placeholder must not promise an answer.
+  const answersDecision = decisionTranscript.awaitingAnswer && !turnInterruptible;
+  // Screen readers get the same fact the placeholder shows. The DS PromptInput owns the
+  // textarea and takes no aria-describedby, so it is set on the node, and removed with it.
+  const answerHintId = useId();
+  useLayoutEffect(() => {
+    const field = textareaRef.current;
+    if (!field || !answersDecision) return;
+    field.setAttribute("aria-describedby", answerHintId);
+    return () => field.removeAttribute("aria-describedby");
+  });
 
   // Native vision: when the active model accepts images, attached images go
   // straight to the model as multimodal parts; otherwise they take the pipeline.
@@ -795,7 +807,20 @@ export function ChatSessionSlot({
     if (draft.trim() && (hitl || serverTurnControl || canSend)) {
       repinTranscript(); // a send always brings the transcript back to the latest (B6)
     }
-    if (decisionTranscript.submitReply(draft)) {
+    // The open decision card in this chat is answered straight from the composer (#5668 §4).
+    // A leading "/" stays a slash command, never an answer: a client command runs now; any
+    // other falls through to the ordinary hold below.
+    if (answersDecision && draft.trim().startsWith("/")) {
+      const text = draft.trim();
+      setDraft(""); // cleared first, as on an idle send: the command may write its own draft
+      if (runClientSlash(text.slice(1).trim())) {
+        recordSubmitted(text);
+        setSlashCtx(null);
+        setSlashIndex(0);
+        return;
+      }
+      setDraft(draft);
+    } else if (answersDecision && decisionTranscript.submitReply(draft)) {
       if (draft.trim()) {
         recordSubmitted(draft.trim());
         setDraft("");
@@ -2137,6 +2162,11 @@ export function ChatSessionSlot({
             </Button>
           </Callout>
         )}
+        {answersDecision && !signedOut ? (
+          <span id={answerHintId} className="conversations-announce">
+            {`Your message answers ${chatAgentName || "the agent"}'s question.`}
+          </span>
+        ) : null}
         {signedOut ? (
           /* Deliberate OAuth signed-out state (#2513): the composer is out of
              service — an enabled Send would only fail locally. Reconnect opens
@@ -2179,7 +2209,9 @@ export function ChatSessionSlot({
           // the agent" is also an e2e anchor — chat-steer-cancel.spec.ts.) With a steer
           // queued mid-turn, the hint flips to ↑-recall discoverability (#2837).
           placeholder={
-            serverTurnControl
+            answersDecision
+              ? composerPlaceholder(status, steerQueue.length, chatAgentName, true)
+              : serverTurnControl
               ? "Interject into the running server task…"
               : home && status === "idle" ? "Reply to your agent…" : composerPlaceholder(status, steerQueue.length, chatAgentName)
           }

@@ -245,9 +245,12 @@ describe("durable decision transcript", () => {
   const runTurn = vi.fn(async () => {});
   let liveHitl: ReturnType<typeof useHitl>;
   let bridge: ReturnType<typeof useLiveDecisionTranscript>;
+  // The chat's transcript: by default it holds the current decision's card.
+  let transcript: ChatMessage[];
+  const cardMessage = (id: string): ChatMessage => ({ id: `m-${id}`, role: "assistant", content: "", decisionId: id });
   function LiveSlot() {
     liveHitl = useHitl({ sessionId: "chat-test", runTurn, noteToThread: vi.fn(), lastAssistantId: () => undefined });
-    bridge = useLiveDecisionTranscript(liveHitl.hitlRef, liveHitl.updateHitl, liveHitl.resumeHitl);
+    bridge = useLiveDecisionTranscript(liveHitl.hitlRef, liveHitl.updateHitl, liveHitl.resumeHitl, transcript);
     return h(DecisionTranscriptContext.Provider, { value: bridge },
       h("div", { className: "chat-session-slot" },
         h(DecisionTranscript, { id: current.id }),
@@ -256,30 +259,91 @@ describe("durable decision transcript", () => {
   }
   async function mountLive() {
     runTurn.mockClear();
+    transcript = [cardMessage(current.id)];
     await act(async () => { root.render(h(LiveSlot)); await flush(); });
     act(() => liveHitl.updateHitl({ kind: "decision", decision_id: current.id }));
   }
 
-  it("arms a free-text interrupt answer from Reply in chat instead, once", async () => {
+  it("answers the open decision from the composer with no button press, once (#5668 §4)", async () => {
     await mountLive();
-    expect(bridge.submitReply("ordinary steer")).toBe(false);
-    click(button("Reply in chat instead"));
-    expect(document.activeElement).toBe(container.querySelector("textarea"));
+    // The transcript card no longer offers the arming button; the composer just answers.
+    expect(button("Reply in chat instead")).toBeUndefined();
+    expect(button("Dismiss")).toBeTruthy();
+    expect(bridge.awaitingAnswer).toBe(true);
+    // An empty draft is swallowed, never queued as a held steer, and leaves the pause open.
+    act(() => { expect(bridge.submitReply("   ")).toBe(true); });
+    expect(runTurn).not.toHaveBeenCalled();
     act(() => { expect(bridge.submitReply("  Hold for review  ")).toBe(true); });
     expect(runTurn).toHaveBeenCalledExactlyOnceWith("Hold for review", { hitlResume: true });
     expect(liveHitl.hitlRef.current).toBeNull();
+    expect(bridge.awaitingAnswer).toBe(false);
     expect(bridge.submitReply("next turn")).toBe(false);
-    expect(slotSource).toContain("decisionTranscript.submitReply(draft)");
+    // The slot checks a leading "/" (slash command) before it hands the draft to the bridge.
+    expect(slotSource.indexOf('draft.trim().startsWith("/")')).toBeGreaterThan(-1);
+    expect(slotSource.indexOf('draft.trim().startsWith("/")')).toBeLessThan(slotSource.indexOf("decisionTranscript.submitReply(draft)"));
+  });
+
+  it("never lets typed text answer an approval gate, a legacy/table form, or an id-less decision", async () => {
+    await mountLive();
+    const held: HitlPayload[] = [
+      approval,
+      { kind: "approval", description: "Run rm -rf?", decision_id: current.id } as HitlPayload,
+      { kind: "form", title: "Legacy", steps: [] },
+      { question: "Legacy question?" },
+      { kind: "decision" },
+      { kind: "decision", decision_id: "   " },
+    ];
+    for (const payload of held) {
+      act(() => liveHitl.updateHitl(payload));
+      expect(bridge.awaitingAnswer).toBe(false);
+      expect(bridge.submitReply("approved")).toBe(false);
+      expect(liveHitl.hitlRef.current).toBe(payload);
+    }
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  it("holds typed text when this chat's transcript has no card for the pending decision", async () => {
+    await mountLive();
+    transcript = [{ id: "u", role: "user", content: "hi", decisionId: current.id } as ChatMessage, cardMessage("older")];
+    await act(async () => { root.render(h(LiveSlot)); await flush(); });
+    expect(bridge.awaitingAnswer).toBe(false);
+    expect(bridge.submitReply("Hold for review")).toBe(false);
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(liveHitl.hitlRef.current?.decision_id).toBe(current.id);
+  });
+
+  it("stops answering while the card is sending or checking, and resumes when it is idle again", async () => {
+    let release!: (value: Awaited<ReturnType<typeof decisionsApi.answerDecision>>) => void;
+    vi.spyOn(decisionsApi, "answerDecision").mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    await mountLive();
+    expect(bridge.awaitingAnswer).toBe(true);
+    await act(async () => { button("Ship it").click(); await flush(); });
+    // sending: an option answer is in flight, so typed text is held, not raced against it.
+    expect(bridge.awaitingAnswer).toBe(false);
+    expect(bridge.submitReply("Hold for review")).toBe(false);
+    // 202: accepted, on its way (checking) — still not answerable from the composer.
+    await act(async () => { release({ answered_elsewhere: false, decision: current, resumed: false, delivering: true }); await flush(); });
+    expect(container.textContent).toContain("Waiting for Engineer to pick it up");
+    expect(bridge.awaitingAnswer).toBe(false);
+    expect(bridge.submitReply("Hold for review")).toBe(false);
+    expect(runTurn).not.toHaveBeenCalled();
+    // The card unmounting (or going idle) releases the hold.
+    act(() => bridge.busy(current.id, false));
+    expect(bridge.awaitingAnswer).toBe(true);
+    // A different (historical) card being busy never blocks the current decision.
+    act(() => bridge.busy("older", true));
+    expect(bridge.awaitingAnswer).toBe(true);
   });
 
   it.each(["answered", "expired", "withdrawn", "cancelled"] as const)(
     "clears the matching live interrupt on %s without a second resume",
     async (state) => {
       await mountLive();
-      click(button("Reply in chat instead"));
+      expect(bridge.awaitingAnswer).toBe(true);
       current = { ...current, state };
       await act(async () => { decisionBus.forEach((fn) => fn({ id: current.id })); await flush(); });
       expect(liveHitl.hitlRef.current).toBeNull();
+      expect(bridge.awaitingAnswer).toBe(false);
       expect(bridge.submitReply("next turn")).toBe(false);
       expect(runTurn).not.toHaveBeenCalled();
     },
@@ -301,11 +365,12 @@ describe("durable decision transcript", () => {
     expect(runTurn).not.toHaveBeenCalled();
   });
 
-  it("never arms or clears a different or generic live interrupt from a historical card", async () => {
+  it("never answers or clears a different or generic live interrupt from a historical card", async () => {
     await mountLive();
     const other: HitlPayload = { kind: "decision", decision_id: "newer" };
     act(() => liveHitl.updateHitl(other));
-    click(button("Reply in chat instead"));
+    // The transcript holds only the historical card: text for the newer pause stays held.
+    expect(bridge.awaitingAnswer).toBe(false);
     expect(bridge.submitReply("steer")).toBe(false);
     current = { ...current, state: "withdrawn" };
     await act(async () => { decisionBus.forEach((fn) => fn({ id: current.id })); await flush(); });

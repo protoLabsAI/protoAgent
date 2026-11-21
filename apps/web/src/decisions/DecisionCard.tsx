@@ -89,6 +89,9 @@ export type DecisionCardProps = {
   onOpenChat?: (decision: DecisionRow) => void;
   /** Open the chat with the composer focused, for a free-text reply (§4.3). */
   onReplyInChat?: (decision: DecisionRow) => void;
+  /** An option answer or dismissal is in flight or being confirmed (sending / checking /
+   *  dismissing). The source chat's composer stops answering this decision meanwhile (#5668 §4). */
+  onBusyChange?: (busy: boolean) => void;
   /** Title of the source chat for "Open chat: {title}"; falls back to the agent name. */
   chatTitle?: string;
   /** Agent presence. Default online; offline adds a neutral StatusDot + line (§5.7). */
@@ -140,6 +143,7 @@ export function DecisionCard({
   onResolved,
   onOpenChat,
   onReplyInChat,
+  onBusyChange,
   chatTitle,
   agentOnline = true,
   agentHoldsOffline = true,
@@ -197,6 +201,16 @@ export function DecisionCard({
     const timer = setTimeout(() => onResolvedRef.current?.(decision.id), 4000);
     return () => clearTimeout(timer);
   }, [isTranscript, phase.kind, decision.id]);
+
+  // Read through a ref (hosts pass a fresh closure every render); released on unmount.
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  const interacting = phase.kind === "sending" || phase.kind === "checking" || phase.kind === "dismissing";
+  useEffect(() => {
+    if (!interacting) return;
+    onBusyChangeRef.current?.(true);
+    return () => onBusyChangeRef.current?.(false);
+  }, [interacting]);
 
   async function dismiss() {
     if (!onDismiss) return;
@@ -511,7 +525,9 @@ export function DecisionCard({
           )}
           {(answerable || !isTranscript) && (
             <div style={footerActions}>
-              {answerable && (
+              {/* The source chat's transcript passes no handler: its composer already answers
+                  the decision (#5668 §4). Every other host keeps the action. */}
+              {answerable && (!isTranscript || onReplyInChat) && (
                 <Button variant="ghost" size={optionSize} onClick={() => onReplyInChat?.(decision)}>
                   Reply in chat instead
                 </Button>
