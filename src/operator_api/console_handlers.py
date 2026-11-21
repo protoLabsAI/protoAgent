@@ -613,9 +613,14 @@ async def _operator_scheduler_set_enabled(job_id: str, enabled: bool) -> dict:
     return {"job": job.as_dict()}
 
 
-async def _operator_scheduler_runs(job_id: str, limit: int) -> dict:
+async def _operator_scheduler_runs(job_id: str, limit: int, before: str | None = None) -> dict:
     """A job's run history, newest first — read from the scheduler's own ledger through
     the backend's OPTIONAL ``list_runs`` (ADR 0135 D8; no second history store).
+
+    ``before`` is the ``next_cursor`` of an earlier page: only runs older than it are
+    returned. ``next_cursor`` is the cursor for the next older page when this one came
+    back full, else ``None``. A cursor the backend cannot read is a ``ValueError`` (a 400),
+    as is any cursor sent to a backend that has ``list_runs`` but no ``list_runs_page``.
 
     A backend without ``list_runs`` raises ``NotImplementedError`` (a 501 at the route).
     The ledger outlives its job (a finished one-shot is deleted, its runs are not), so an
@@ -628,12 +633,22 @@ async def _operator_scheduler_runs(job_id: str, limit: int) -> dict:
     list_runs = getattr(STATE.scheduler, "list_runs", None)
     if not callable(list_runs):
         raise NotImplementedError("This scheduler backend does not keep run history.")
-    runs = await asyncio.to_thread(list_runs, job_id, limit)
+    list_runs_page = getattr(STATE.scheduler, "list_runs_page", None)
+    if callable(list_runs_page):
+        page = await asyncio.to_thread(list_runs_page, job_id, limit, before)
+        runs, next_cursor = page["runs"], page["next_cursor"]
+    elif before is not None:
+        raise ValueError("This scheduler backend does not page run history.")
+    else:
+        runs, next_cursor = await asyncio.to_thread(list_runs, job_id, limit), None
     if not runs and await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
-        from operator_api.routes import NotFoundError
+        # A page past the oldest run is empty for a job that is gone but has history:
+        # the id is unknown only when it has no run at all.
+        if before is None or not await asyncio.to_thread(list_runs, job_id, 1):
+            from operator_api.routes import NotFoundError
 
-        raise NotFoundError(f"No scheduled job {job_id!r}.")
-    return {"job_id": job_id, "runs": runs}
+            raise NotFoundError(f"No scheduled job {job_id!r}.")
+    return {"job_id": job_id, "runs": runs, "next_cursor": next_cursor}
 
 
 def _scheduler_job(scheduler, job_id: str):

@@ -169,14 +169,25 @@ class SchedulerBackend(Protocol):
         Raises ``ValueError`` if no such job exists (matching ``update_job``)."""
         ...
 
-    def list_runs(self, job_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    def list_runs(self, job_id: str, limit: int = 50, before: str | None = None) -> list[dict[str, Any]]:
         """A job's past runs, newest first, bounded by ``limit`` (ADR 0135 D8).
 
         OPTIONAL — like ``set_enabled``, callers check for it with ``getattr``. The
         local backend reads its ``occurrences`` ledger, the one run-history source;
         each run carries ``scheduled_for``, ``state``, ``task_state``, ``ok`` and
         ``error``, plus ``started_at`` / ``ended_at`` / ``duration_s`` and ``reported``
-        (each ``None`` when unknown). An id with no recorded runs returns ``[]``."""
+        (each ``None`` when unknown). An id with no recorded runs returns ``[]``.
+        ``before`` is an opaque cursor from ``list_runs_page``: only runs older than
+        it are returned, and one that does not decode is a ``ValueError``."""
+        ...
+
+    def list_runs_page(self, job_id: str, limit: int = 50, before: str | None = None) -> dict[str, Any]:
+        """One page of ``list_runs`` with the cursor for the next older page:
+        ``{"runs": [...], "next_cursor": str | None}``.
+
+        OPTIONAL — like ``list_runs``, callers check for it with ``getattr``; a
+        backend without it serves the first page only. ``next_cursor`` is set when
+        the page came back full, else ``None``."""
         ...
 
     def record_run_report(self, job_id: str, task_id: str, reported: bool) -> bool:

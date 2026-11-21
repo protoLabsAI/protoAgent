@@ -8,6 +8,8 @@ ones the dispatch path itself wrote.
 
 from __future__ import annotations
 
+import base64
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -118,7 +120,8 @@ async def test_unknown_job_is_404_but_a_known_one_is_never(history):
     assert "nope" in missing.json()["detail"]
 
     sched.add_job("nightly sweep", "0 9 * * *", job_id="j1")
-    assert client.get("/api/scheduler/jobs/j1/runs").json() == {"job_id": "j1", "runs": []}  # not fired yet
+    assert client.get("/api/scheduler/jobs/j1/runs").json() == {
+        "job_id": "j1", "runs": [], "next_cursor": None}  # not fired yet
 
     # The ledger outlives the job row: a canceled job's past runs stay readable.
     slot = await fire("j1", _OK)
@@ -318,3 +321,122 @@ async def test_a_ledger_from_before_the_timing_columns_upgrades_in_place(history
     slot = await fire("j1", _OK)
     newest = client.get("/api/scheduler/jobs/j1/runs").json()["runs"][0]
     assert newest["scheduled_for"] == slot and newest["duration_s"] >= 0
+
+
+# ── cursor paging (#5543 S3) ─────────────────────────────────────────────────
+
+
+def _seed_ledger(sched, job_id: str, keys: list[tuple[str, str]]) -> None:
+    """Settled ledger rows for ``(next_fire, created_at)`` keys, inserted in the given order."""
+    with sqlite3.connect(str(sched.path)) as db:
+        db.executemany(
+            "INSERT INTO occurrences (job_id, next_fire, message_id, state, created_at, expected_next) "
+            "VALUES (?, ?, ?, 'settled', ?, 'x')",
+            [(job_id, slot, f"m-{slot}-{gen}", gen) for slot, gen in keys],
+        )
+
+
+def _key(run: dict) -> tuple[str, str]:
+    return run["scheduled_for"], run["job_created_at"]
+
+
+def _token(value) -> str:
+    return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+
+
+def test_cursor_pages_through_runs_that_share_a_slot_without_overlap_or_gap(history):
+    client, sched, _ = history
+    slots = [f"2026-01-0{d}T09:00:00+00:00" for d in (1, 2, 3)]
+    # Three generations of the job ran the middle slot, and two the oldest; inserted
+    # out of order so the page boundary is decided by the sort key, not insert order.
+    keys = [(slots[1], "gen-b"), (slots[0], "gen-a"), (slots[2], "gen-a"), (slots[1], "gen-c"),
+            (slots[1], "gen-a"), (slots[0], "gen-b"), (slots[2], "gen-b")]
+    _seed_ledger(sched, "j1", keys)
+    newest_first = sorted(keys, reverse=True)
+
+    whole = client.get("/api/scheduler/jobs/j1/runs").json()
+    assert [_key(r) for r in whole["runs"]] == newest_first
+    assert whole["next_cursor"] is None  # 7 runs do not fill a page of 50
+
+    pages, cursor = [], None
+    for _ in range(len(keys)):
+        query = "?limit=2" + (f"&before={cursor}" if cursor else "")
+        body = client.get(f"/api/scheduler/jobs/j1/runs{query}").json()
+        pages.append([_key(r) for r in body["runs"]])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+        assert isinstance(cursor, str) and len(body["runs"]) == 2  # a full page hands on a cursor
+    assert [len(p) for p in pages] == [2, 2, 2, 1]  # the short page ends the walk
+    assert [k for page in pages for k in page] == newest_first  # no overlap, no gap
+    assert pages[1] == [(slots[1], "gen-c"), (slots[1], "gen-b")]  # a boundary inside one slot
+
+    # The backend method pages the same way, and its entries match the unpaged ones.
+    first = sched.list_runs_page("j1", 3)
+    rest = sched.list_runs("j1", 200, before=first["next_cursor"])
+    assert first["runs"] + rest == sched.list_runs("j1") == whole["runs"]
+
+
+def test_a_full_last_page_hands_on_a_cursor_whose_page_is_empty(history):
+    client, sched, _ = history
+    _seed_ledger(sched, "gone", [(f"2026-01-0{d}T09:00:00+00:00", "gen") for d in (1, 2)])
+    full = client.get("/api/scheduler/jobs/gone/runs?limit=2").json()
+    assert len(full["runs"]) == 2 and full["next_cursor"]
+    # No job row is left, but the id has runs: the page past the oldest is empty, not a 404.
+    after = client.get(f"/api/scheduler/jobs/gone/runs?before={full['next_cursor']}")
+    assert after.status_code == 200
+    assert after.json() == {"job_id": "gone", "runs": [], "next_cursor": None}
+    # An id with neither a job nor a run stays a 404, cursor or not.
+    assert client.get(f"/api/scheduler/jobs/nope/runs?before={full['next_cursor']}").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_without_a_cursor_the_runs_are_unchanged(history):
+    client, sched, fire = history
+    sched.add_job("nightly sweep", "0 9 * * *", job_id="j1")
+    slots = [await fire("j1", body) for body in (_OK, _FAILED, _OK)]
+
+    body = client.get("/api/scheduler/jobs/j1/runs").json()
+    assert set(body) == {"job_id", "runs", "next_cursor"}
+    assert [r["scheduled_for"] for r in body["runs"]] == slots[::-1]
+    assert body["runs"] == sched.list_runs("j1") and body["next_cursor"] is None
+    assert "ledger_rowid" not in body["runs"][0]  # the cursor's row id stays inside the token
+    # A cursor never changes an entry's shape, only which entries come back.
+    cursor = client.get("/api/scheduler/jobs/j1/runs?limit=1").json()["next_cursor"]
+    assert client.get(f"/api/scheduler/jobs/j1/runs?before={cursor}").json()["runs"] == body["runs"][1:]
+
+
+@pytest.mark.parametrize(
+    "before",
+    ["", "not a cursor!", "abc", _token({"next_fire": "x"}), _token(["only", "two"]),
+     _token(["2026-01-01T09:00:00+00:00", "gen", "7"]), _token(["2026-01-01T09:00:00+00:00", "gen", True]),
+     _token([1, "gen", 7]), _token(["2026-01-01T09:00:00+00:00", "gen", 2**70]),
+     base64.urlsafe_b64encode(b"\xff\xfe").decode()],
+)
+def test_an_invalid_cursor_is_a_400(history, before):
+    client, sched, _ = history
+    sched.add_job("nightly sweep", "0 9 * * *", job_id="j1")
+    resp = client.get("/api/scheduler/jobs/j1/runs", params={"before": before})
+    assert resp.status_code == 400
+    assert "cursor" in resp.json()["detail"]
+    with pytest.raises(ValueError):
+        sched.list_runs("j1", 50, before=before)
+
+
+def test_backend_without_paging_serves_the_first_page_and_refuses_a_cursor(monkeypatch):
+    import runtime.state as rs
+
+    class _ListOnlyScheduler:
+        name = "local"
+
+        def list_jobs(self):
+            return []
+
+        def list_runs(self, job_id, limit=50):
+            return [{"job_id": job_id, "scheduled_for": "2026-01-01T09:00:00+00:00"}]
+
+    monkeypatch.setattr(rs.STATE, "scheduler", _ListOnlyScheduler(), raising=False)
+    client = TestClient(_app(scheduler_runs=ch._operator_scheduler_runs))
+    first = client.get("/api/scheduler/jobs/j1/runs").json()
+    assert len(first["runs"]) == 1 and first["next_cursor"] is None
+    assert client.get("/api/scheduler/jobs/j1/runs?before=abc").status_code == 400
