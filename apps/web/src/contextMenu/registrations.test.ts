@@ -100,6 +100,21 @@ describe("chat-tab bulk-close menu", () => {
     expect(items.find((i) => i.id === "export")?.danger).toBeFalsy();
   });
 
+  // A tab's menu stays short: no "Standing instructions" (the directive strip and /directives
+  // open them) and no "New incognito chat" (the toggle covers this tab; the empty-space menu
+  // and Shift+click on the + open a new one).
+  it("offers neither Standing instructions nor New incognito chat on a tab", () => {
+    const tab = { sessionId: "s1", onNew: noop, onNewIncognito: noop, onToggleIncognito: noop, onRename: noop, onClose: noop };
+    const got = ids(resolveMenu("chat-tab", tab));
+    expect(got).not.toContain("directives");
+    expect(got).not.toContain("new-incognito");
+    expect(got).toEqual(["new", "rename", "incognito", "tab-div", "close"]);
+    // Same for a tab that is already incognito — only the toggle's label flips.
+    const on = resolveMenu("chat-tab", { ...tab, incognito: true }) as Item[];
+    expect(ids(on)).not.toContain("new-incognito");
+    expect(on.find((i) => i.id === "incognito")?.label).toBe("Turn incognito off");
+  });
+
   it("shows no per-tab actions (single or bulk) for the empty-space menu", () => {
     const got = ids(resolveMenu("chat-tab", { onNew: noop, onNewIncognito: noop }));
     expect(got).toEqual(["new", "new-incognito"]);

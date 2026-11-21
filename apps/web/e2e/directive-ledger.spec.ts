@@ -171,9 +171,11 @@ for (const width of [1440, 390]) {
       if (width === 1440) {
         await page.locator(".pl-tabbar__tab").filter({ hasText: "Other chat" }).click();
         await page.locator(".pl-tabbar__tab").filter({ hasText: "Release instructions" }).click({ button: "right" });
-        await page.getByRole("menuitem", { name: "Standing instructions", exact: true }).click();
-        await expect(rail.locator(".work-section--directives")).toBeVisible();
-        await expect(rail.locator(".work-row").filter({ hasText: APPROVAL_QUOTE })).toBeVisible();
+        // The tab menu no longer repeats "Standing instructions" — /directives (above) and the
+        // composer strip are the ways in.
+        await expect(page.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
+        await expect(page.getByRole("menuitem", { name: "Standing instructions", exact: true })).toHaveCount(0);
+        await page.keyboard.press("Escape");
       }
     });
   }
