@@ -26,6 +26,11 @@ async function openDevices(page) {
   await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
 }
 
+/** Open the closed-by-default Advanced section at the end of the Devices page. */
+async function openAdvanced(page) {
+  await page.getByTestId("devices-advanced").getByRole("button", { name: "Advanced", exact: true }).click();
+}
+
 for (const colorScheme of ["light", "dark"] as const) {
   test(`Settings Devices has no axe accessibility violations in ${colorScheme} mode`, async ({ page }) => {
     await page.emulateMedia({ colorScheme });
@@ -741,6 +746,9 @@ test("a full-access console sees the notification key and rotates it behind a co
   });
   await openDevices(page);
   const card = page.getByTestId("notification-key-card");
+  // The key card is a rare admin tool: it waits inside the closed Advanced section.
+  await expect(card).toHaveCount(0);
+  await openAdvanced(page);
   await expect(card).toContainText("Key version 2 · active");
   await expect(card).toContainText(/Version 1 retires on \d{1,2} \w+\. 2 devices still use it\./);
   await expect(card).not.toContainText("PUBLICKEY");
@@ -771,6 +779,48 @@ test("a limited console gets no notification key card", async ({ page }) => {
   await openDevices(page);
   await expect(page.locator(".subagent-row", { hasText: "New Pixel" })).toBeVisible();
   await expect(page.getByTestId("notification-key-card")).toHaveCount(0);
+  // No token row, no key and no tap log: nothing for Advanced to hold, so it isn't there.
+  await expect(page.getByTestId("devices-advanced")).toHaveCount(0);
+});
+
+// ── Device list first, rare tools under Advanced ──────────────────────────────────────────
+
+test("the device list comes first, then notifications, then a closed Advanced with the access token", async ({ page }) => {
+  await mockScopedDevices(page, { caller: { scope: "full", device_id: null } });
+  await openDevices(page);
+  const overlay = page.locator(".settings-overlay");
+  const header = overlay.locator(".pl-panel-header");
+  await expect(header).toContainText("Phones, tablets and other agents that can reach this agent.");
+  await expect(header.getByRole("button", { name: "Pair an agent" })).toBeVisible();
+  await expect(header.getByRole("button", { name: "Add a device" })).toBeVisible();
+  await expect(overlay.getByRole("button", { name: "New access token" })).toHaveCount(0);
+  await expect(overlay).not.toContainText("Each holds its own");
+
+  // Order on the page: devices, then this device's notifications, then Advanced.
+  const advanced = page.getByTestId("devices-advanced");
+  const row = await page.locator(".subagent-row", { hasText: "New Pixel" }).boundingBox();
+  const push = await page.getByTestId("push-card").boundingBox();
+  const adv = await advanced.boundingBox();
+  expect(push!.y).toBeGreaterThan(row!.y);
+  expect(adv!.y).toBeGreaterThanOrEqual(push!.y + push!.height);
+  await expect(page.getByTestId("push-card").getByTestId("tap-log")).toHaveCount(0);
+
+  const trigger = advanced.getByRole("button", { name: "Advanced", exact: true });
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  const token = advanced.getByTestId("devices-advanced-token");
+  await expect(token.getByRole("heading", { name: "Access token for a script" })).toBeVisible();
+  await expect(token).toContainText("It can use this agent but can't pair devices or change sign-in settings.");
+  await expectNoAxeViolations(page, { include: '[data-testid="devices-advanced"]' });
+
+  // The button opens the existing mint form, in place.
+  await token.getByRole("button", { name: "New access token" }).click();
+  await expect(token.getByRole("textbox", { name: "Name for the new access token" })).toBeFocused();
+  await expect(token.getByRole("button", { name: "Create token" })).toBeDisabled();
+  await expect(token).not.toContainText("storage_state");
+  await expect(token).not.toContainText("Authorization");
+  await expectNoAxeViolations(page, { include: '[data-testid="devices-advanced"]' });
 });
 
 // ── Notifications on this device, and each row's push line (ADR 0135 W2e, #5539) ─────────

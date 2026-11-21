@@ -1,5 +1,5 @@
-// Settings ▸ Devices mounts the "Notifications on this device" card (PushCard) at the top of
-// the page, feeds it the push service from THIS device's row in the list the panel already
+// Settings ▸ Devices mounts the "Notifications on this device" card (PushCard) after the
+// device list, feeds it the push service from THIS device's row in the list the panel already
 // loads, and hands it the existing pairing flow. The panel is mounted for real; only the
 // toast, fetch and lib/push are stubbed.
 
@@ -65,7 +65,7 @@ async function mount() {
 }
 const card = () => host.querySelector<HTMLElement>('[data-testid="push-card"]')!;
 
-it("renders the card above the device list, with this device's own push service", async () => {
+it("renders the card after the device list, with this device's own push service", async () => {
   localStorage.setItem("protoagent.deviceToken", "own-token");
   localStorage.setItem("protoagent.deviceId", "mine");
   vi.spyOn(push, "pushState").mockResolvedValue("enrolled");
@@ -75,7 +75,7 @@ it("renders the card above the device list, with this device's own push service"
   expect(card().textContent).toContain("Push service: Mozilla");
   expect(card().textContent).toContain("Renewed 3 hours ago");
   const list = host.querySelector(".devices-list")!;
-  expect(card().compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(list.compareDocumentPosition(card()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 it("a shared sign-in's Pair this device starts the existing device pairing", async () => {
