@@ -44,6 +44,8 @@ STATE_ANSWERED = "answered"
 STATE_EXPIRED = "expired"
 STATE_CANCELLED = "cancelled"
 STATE_WITHDRAWN = "withdrawn"
+#: How an answer was given: a listed option was picked, or the answer was typed.
+ANSWER_KINDS = ("option", "text")
 STATES = (STATE_PENDING, STATE_ANSWERED, STATE_EXPIRED, STATE_CANCELLED, STATE_WITHDRAWN)
 
 #: A question is a sentence or two, not a pasted essay; bounded so one record can't bloat
@@ -145,6 +147,9 @@ class Decision:
     withdraw_reason: str | None = None
     answered_by: str | None = None
     answered_surface: str | None = None
+    # How the answer was given: "option" (a listed option was picked) or "text" (typed).
+    # None while pending, and on an expired, withdrawn or cancelled record.
+    answer_kind: str | None = None
 
     def option_label(self, option: str | None) -> str | None:
         return next(
@@ -188,7 +193,7 @@ class Decision:
             thread_id=row["thread_id"],
             interrupt_id=row["interrupt_id"],
             context=row["context"],
-            **{k: row[k] for k in ("default_action", "withdraw_reason", "answered_by", "answered_surface")},
+            **{k: row[k] for k in ("default_action", "withdraw_reason", "answered_by", "answered_surface", "answer_kind")},
         )
 
 
@@ -328,7 +333,7 @@ class DecisionStore:
             for column in ("thread_id", "interrupt_id", "context"):
                 if column not in columns:
                     db.execute(f"ALTER TABLE decisions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
-            for column in ("default_action", "withdraw_reason", "answered_by", "answered_surface"):
+            for column in ("default_action", "withdraw_reason", "answered_by", "answered_surface", "answer_kind"):
                 if column not in columns:
                     db.execute(f"ALTER TABLE decisions ADD COLUMN {column} TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_state ON decisions(state, created_at)")
@@ -515,11 +520,17 @@ class DecisionStore:
                 self._close(db)
         return {str(r["session_id"]) for r in rows if r["session_id"]}
 
-    def answer(self, decision_id: str, answer: str, *, answered_by: str = "operator", answered_surface: str = "chat") -> Decision:
+    def answer(self, decision_id: str, answer: str, *, answered_by: str = "operator", answered_surface: str = "chat",
+               answer_kind: str = "text") -> Decision:
         """Mark a pending decision answered with the operator's choice. Raises
         :class:`DecisionNotFound` for an unknown id and :class:`DecisionClosed` when it is
-        no longer pending (answering twice is refused). Publishes ``decision.changed``."""
-        return self._close_record(decision_id, STATE_ANSWERED, answer=answer, answered_by=answered_by, answered_surface=answered_surface)
+        no longer pending (answering twice is refused). ``answer_kind`` records whether a
+        listed option was picked (``"option"``) or the answer was typed (``"text"``); any
+        other value raises :class:`DecisionError`. Publishes ``decision.changed``."""
+        if answer_kind not in ANSWER_KINDS:
+            raise DecisionError(f"answer_kind must be one of {', '.join(ANSWER_KINDS)}")
+        return self._close_record(decision_id, STATE_ANSWERED, answer=answer, answered_by=answered_by,
+                                  answered_surface=answered_surface, answer_kind=answer_kind)
 
     def cancel(self, decision_id: str) -> Decision:
         """Cancel a pending decision (the operator dismissed it, or its turn was abandoned).
@@ -562,9 +573,10 @@ class DecisionStore:
                 rec.answered_at = None
                 rec.answered_by = None
                 rec.answered_surface = None
+                rec.answer_kind = None
                 db.execute(
                     "UPDATE decisions SET state = ?, answer = NULL, answered_at = NULL, "
-                    "answered_by = NULL, answered_surface = NULL WHERE id = ? AND state = ?",
+                    "answered_by = NULL, answered_surface = NULL, answer_kind = NULL WHERE id = ? AND state = ?",
                     (STATE_PENDING, rec.id, STATE_ANSWERED),
                 )
                 db.commit()
@@ -578,7 +590,7 @@ class DecisionStore:
 
     def _close_record(self, decision_id: str, state: str, *, answer: str | None = None,
                       answered_by: str | None = None, answered_surface: str | None = None,
-                      withdraw_reason: str = "") -> Decision:
+                      answer_kind: str | None = None, withdraw_reason: str = "") -> Decision:
         decision_id = (decision_id or "").strip()
         with self._lock:
             db = self._connect()
@@ -604,10 +616,11 @@ class DecisionStore:
                     rec.answered_at = self._now()
                 rec.answered_by = answered_by
                 rec.answered_surface = answered_surface
+                rec.answer_kind = answer_kind
                 rec.withdraw_reason = withdraw_reason[:MAX_ANSWER_CHARS]
                 updated = db.execute(
-                    "UPDATE decisions SET state = ?, answer = ?, answered_at = ?, answered_by = ?, answered_surface = ?, withdraw_reason = ? WHERE id = ? AND state = ?",
-                    (rec.state, rec.answer, rec.answered_at, rec.answered_by, rec.answered_surface, rec.withdraw_reason, rec.id, STATE_PENDING),
+                    "UPDATE decisions SET state = ?, answer = ?, answered_at = ?, answered_by = ?, answered_surface = ?, answer_kind = ?, withdraw_reason = ? WHERE id = ? AND state = ?",
+                    (rec.state, rec.answer, rec.answered_at, rec.answered_by, rec.answered_surface, rec.answer_kind, rec.withdraw_reason, rec.id, STATE_PENDING),
                 )
                 if updated.rowcount != 1:
                     raise DecisionClosed(f"decision {decision_id} is no longer pending")
