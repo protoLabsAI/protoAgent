@@ -416,6 +416,46 @@ async def test_steer_into_a_peer_conversation_is_refused_rather_than_sent_public
     assert await rig.rows() == before and rig.seen == [("hello", False)] and steering.pending_items(session) == []
 
 
+@pytest.mark.parametrize("session", ["chat-from-fed", "thread-from-fleet"])
+@pytest.mark.parametrize("flag", [False, True])
+async def test_a_failed_owner_read_never_sends_the_steer_publicly(rig, monkeypatch, session, flag):
+    """Who started the thread cannot be read: even a console-shaped id goes private or is refused."""
+    peer = "federation" if session == "chat-from-fed" else "fleet-service"
+    peer_task = (await _peer_send(rig, peer, session, "hello")).json()["result"]["task"]["id"]
+    await poll_terminal(rig.clients[peer], peer_task)
+    rig.config.private_steering_enabled = flag
+    before = await rig.rows()
+
+    real = STATE.a2a_task_engine
+
+    class _FailsFirstRead:
+        """The owner read (the route's first use of the engine) fails; later uses are real."""
+
+        failed = False
+
+        def begin(self):
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("database is locked")
+            return real.begin()
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    monkeypatch.setattr(STATE, "a2a_task_engine", broken := _FailsFirstRead())
+    response = await rig.steer("shared-bearer", session, SECRET, "m1")
+
+    assert broken.failed and steering.pending_items(session) == []
+    if not flag:
+        assert response.status_code == 403 and response.json() == {"detail": REFUSED}
+        assert await rig.rows() == before and rig.seen == [("hello", False)]
+        return
+    body = response.json()
+    assert response.status_code == 200 and body["private"] is True
+    await poll_terminal(rig.op, body["started_turn"])
+    await _assert_peer_never_reads_it(rig, peer, session, peer_task, body["started_turn"])
+
+
 @pytest.mark.parametrize("session", ["chat-op", "api-op", "openai-compat-op"])
 @pytest.mark.parametrize("private_enabled", [False, True])
 async def test_a_steer_in_an_operator_started_chat_is_delivered_as_before(rig, session, private_enabled):

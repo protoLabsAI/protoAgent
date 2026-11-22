@@ -6,6 +6,8 @@
   turn, and is absent from the peer's stream, its subscription, GetTask and the stored
   history. A steer that cannot be private is refused instead of being sent publicly: 403
   when private steering is off or the caller is not a signed-in operator, 409 when the
-  thread is waiting on the peer's own question. Steering your own chats, including API and
+  thread is waiting on the peer's own question, 400 when it carries images or incognito
+  (a private steer is text only). If the server cannot read who started a thread, it
+  treats the steer the same way: private or refused, never public. Steering your own chats, including API and
   OpenAI-compatible sessions, is unchanged. Known limit: the agent's own context still holds
   the text. Refs #5400, Refs #5401.

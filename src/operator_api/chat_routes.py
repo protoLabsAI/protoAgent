@@ -1200,8 +1200,8 @@ async def _private_steer(session_id: str, request: Request, body: dict, text: st
 async def _peer_started(session_id: str) -> bool:
     """Whether ``session_id`` is a conversation a PEER started, not an operator chat (#5400).
 
-    A conversation belongs to whoever STARTED it: its first-created stored task, the rule
-    ``stores.context_foreign`` uses. It is peer-started when that task is federation-owned, or
+    A conversation belongs to whoever STARTED it: its first-created stored task (the idea
+    behind ``stores.context_foreign``, read here over every stored row). It is peer-started when that task is federation-owned, or
     when the context is outside the console and API chat namespaces. API-minted sessions
     may appear in From others, but ordinary operator-owned API chats remain public.
     A fleet peer saves under the operator's owner, so the
@@ -1209,8 +1209,9 @@ async def _peer_started(session_id: str) -> bool:
     with no stored task yet, or one the operator opened with a private steer, is not a peer's.
     (A thread's first turn is stored with its first frame; until then it is not listed either.)
 
-    A failed read answers by context id alone, so it never opens a peer's thread to an
-    ordinary, peer-readable steer."""
+    A failed read answers True for EVERY context id: a federation thread can sit under a
+    console-shaped id (``chat-…``), so the id alone cannot clear it. The steer then goes
+    private or is refused, and is never delivered as an ordinary, peer-readable one."""
     outside = not session_id.startswith(conversation_policy.CONVERSATION_EXCLUDE_PREFIXES + _API_SESSION_PREFIXES)
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
@@ -1232,8 +1233,8 @@ async def _peer_started(session_id: str) -> bool:
                 await conn.execute(select(TaskModel.owner).where(TaskModel.context_id == session_id).order_by(*order).limit(1))
             ).first()
     except Exception as exc:  # noqa: BLE001 — a failed read must not downgrade a peer's thread
-        log.warning("[steer] could not read who started %s: %s", session_id, exc)
-        return outside
+        log.warning("[steer] could not read who started %s, steering it privately: %s", session_id, exc)
+        return True
     if first is None:
         return False
     return first.owner == FEDERATION_OWNER or (outside and first.owner != HUMAN_OPERATOR_OWNER)
