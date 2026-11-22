@@ -132,8 +132,8 @@ class PromptCaptureMiddleware(AgentMiddleware):
             # retained source (one shared boundary with tracing), so a later ordinary turn
             # cannot clear it and restore a private snapshot via a shared capture cache.
             # DROP the private buffers — the projected-context frame AND the wire stash — not
-            # just the final write, so nothing survives for a later call to pop. Dormant in
-            # production (the source reader is unbound → every conversation reads public), so
+            # just the final write, so nothing survives for a later call to pop. A
+            # conversation with no private steer reads public (``production_source``), so
             # capture is unchanged without a private partition.
             from observability import tracing
 
