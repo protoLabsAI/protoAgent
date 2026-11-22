@@ -27,6 +27,9 @@ const apiMock = vi.hoisted(() => ({
   // conversations to name a thread's caller for the §4.6 provenance link.
   chatSessionTurns: vi.fn(async () => ({ turns: [] as unknown[] })),
   listConversations: vi.fn(async () => ({ conversations: [] as ConversationRow[] })),
+  // The waiting-task reply (#5400): a steer into the source, or a fresh chat registered for it.
+  steerChat: vi.fn(async (..._args: unknown[]) => ({ ok: true, id: "reply", pending: 0, started_turn: "turn-2" as string | null })),
+  registerSession: vi.fn(async () => ({ ok: true, session_id: "new" })),
 }));
 vi.mock("../../lib/api", () => ({ api: apiMock, currentSlug: () => "test" }));
 
@@ -53,6 +56,8 @@ import { parseAskRefs } from "../askRefs";
 import { ARTIFACT_VIEW_KEY } from "../../artifacts/artifactRef";
 import { resetPluginViewInbox, takePluginViewMessages } from "../../lib/pluginViewInbox";
 import { useUI } from "../../state/uiStore";
+import { ApiError } from "../../lib/api/http";
+import { PRIVATE_STEER_WAITING_ON_PEER } from "../../chat/privateSteer";
 
 vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../schedule/schedule-builder")>(),
@@ -987,5 +992,90 @@ describe("A waiting job shows the question and links what it waits on (#5676)", 
       { kind: "url", ref: "https://example.com/a-1795238555984-27d9a2/x" }, ", ok?",
     ]);
     expect(parseAskRefs("data-a-12 and abd-x1 stay text")).toEqual(["data-a-12 and abd-x1 stay text"]);
+  });
+});
+
+describe("Replying to a waiting job from a From others conversation is private (#5400)", () => {
+  const TURN = { task_id: "turn-1", state: "completed", last_updated: null, text: "Ready" };
+  function waiting(sessionId: string): WorkItem {
+    return taskItem({ status: "waiting", session_id: sessionId, ask: "Can we ship?" });
+  }
+  async function open(sessionId: string, { peer, turns }: { peer: boolean; turns: boolean }) {
+    apiMock.listConversations.mockResolvedValueOnce({ conversations: peer ? [startedConvRow({ session_id: sessionId })] : [] });
+    apiMock.chatSessionTurns.mockImplementation(async () => ({ turns: turns ? [TURN] : [] }));
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([waiting(sessionId)]) }), state: { itemId: "task:task-3" } })));
+    await settleUntil(() => conversationsSnapshot().status === "ready" && !allText().includes("Checking source chat"));
+  }
+  const replyInput = () => labeledField("Reply")!.querySelector<HTMLInputElement>("input")!;
+  async function reply(text: string) {
+    await changeValue(replyInput(), text);
+    await act(async () => button("Send reply").click());
+    await settleUntil(() => apiMock.steerChat.mock.calls.length > 0);
+    await flush();
+  }
+  const controls = () => ({
+    buttons: Array.from(document.querySelectorAll(".work-detail button")).map((b) => b.textContent?.trim()),
+    fields: Array.from(document.querySelectorAll(".work-detail__fields:not(.work-detail__fields--technical) dt")).map((d) => d.textContent),
+  });
+
+  afterEach(() => {
+    apiMock.chatSessionTurns.mockImplementation(async () => ({ turns: [] }));
+    apiMock.steerChat.mockImplementation(async () => ({ ok: true, id: "reply", pending: 0, started_turn: "turn-2" }));
+  });
+
+  it("steers a From others source that has turns with the private flag (r1)", async () => {
+    await open("ctx-55", { peer: true, turns: true });
+    await reply("Yes, ship it.");
+    expect(apiMock.registerSession).not.toHaveBeenCalled();
+    const call = apiMock.steerChat.mock.calls[0];
+    expect(call[0]).toBe("ctx-55");
+    expect(call[2]).toBe("Yes, ship it.");
+    expect(call[6]).toBe(true); // isPrivate → `private: true` in the steer body
+    expect(call[3]).toBeUndefined(); // text only: no images
+    expect(call[4]).toBeUndefined(); // and no incognito
+    expect(apiMock.updateTask).toHaveBeenCalledWith("task-3", { session_id: "ctx-55", status: "open" });
+  });
+
+  it("a fresh chat- session made for the reply sends no private flag (r2)", async () => {
+    await open("ctx-55", { peer: true, turns: false });
+    await reply("Yes, ship it.");
+    const call = apiMock.steerChat.mock.calls[0];
+    expect(call[0]).toMatch(/^chat-/);
+    expect(call[0]).not.toBe("ctx-55");
+    expect(apiMock.registerSession).toHaveBeenCalledWith(call[0], { title: "Re: Fix the flaky login test" });
+    expect(call).toHaveLength(3); // exactly (session, id, text) — no `private` key
+  });
+
+  it("an ordinary own chat with turns is steered as before, without the private flag", async () => {
+    await open("chat-own", { peer: false, turns: true });
+    await reply("Go ahead");
+    expect(apiMock.steerChat.mock.calls[0]).toEqual(["chat-own", expect.any(String), "Go ahead"]);
+  });
+
+  it("a 409 refusal reads as the plain sentence and keeps the reply in the field (r3)", async () => {
+    apiMock.steerChat.mockRejectedValueOnce(new ApiError(409, "a private steer can't answer the peer's own question"));
+    await open("ctx-55", { peer: true, turns: true });
+    await reply("Yes, ship it.");
+    await settleUntil(() => allText().includes(PRIVATE_STEER_WAITING_ON_PEER));
+    const shown = labeledField("Reply")!.textContent ?? "";
+    expect(shown).not.toContain("409");
+    expect(shown).not.toContain("can't answer the peer");
+    expect(shown).not.toContain("Reply has not started yet");
+    expect(shown).not.toContain("Couldn't finish sending your reply");
+    expect(replyInput().value).toBe("Yes, ship it.");
+    expect(replyInput().disabled).toBe(false); // never delivered: editable, and a resend starts over
+    expect(apiMock.updateTask).not.toHaveBeenCalled();
+  });
+
+  it("draws the same controls for a From others source as for an ordinary chat (r4)", async () => {
+    await open("ctx-55", { peer: true, turns: true });
+    const peer = controls();
+    await act(async () => root?.unmount());
+    host?.remove();
+    resetConversationsStore();
+    await open("chat-own", { peer: false, turns: true });
+    expect(controls()).toEqual(peer);
+    expect(peer.buttons).toContain("Send reply");
+    expect(peer.buttons.some((label) => /private/i.test(label ?? ""))).toBe(false); // no toggle
   });
 });
