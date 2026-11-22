@@ -29,6 +29,7 @@ deliberately NOT re-exported: a re-exported bool is a stale copy).
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -189,6 +190,72 @@ def _build_inbox_store(config):
     except Exception:
         log.exception("[inbox] failed to build store at %s; inbox disabled", path)
         return None
+
+
+def _inbox_group_key(item: dict) -> tuple:
+    """The batch grouping key (ADR 0129 amendment): exact ``source`` and ``priority`` (so
+    ``now`` and ``next`` never mix), plus ``origin_session`` (null and empty both mean
+    no origin) and requester provenance, so one turn never lets a member inherit
+    another member's chat or requester."""
+    from inbox.store import origin_meta_fields
+
+    meta = origin_meta_fields(item.get("origin_meta"))
+    return (
+        str(item.get("source") or ""),
+        str(item.get("priority") or ""),
+        str(item.get("origin_session") or ""),
+        json.dumps(meta, sort_keys=True, separators=(",", ":")),
+    )
+
+
+async def _plan_inbox_units(store, items: list[dict], *, batch_capable: bool) -> list[dict]:
+    """Partition one pass's claimed ``items`` into delivery units, in first-member claim
+    order. ``{"item": row}`` is a single (today's per-item path); ``{"members": [...],
+    "binding": record|None}`` is a batched turn — ``binding`` set when the members are
+    already bound to a live frozen batch (reconcile it: completion-only or a same-identity
+    re-send), ``None`` for a new group of two or more unbound items. Without a
+    batch-capable hook, or when the binding lookup fails, every item stays a single."""
+    # Even ONE claimed item may be a member of a frozen batch: it must reconcile against
+    # that batch (never be re-sent alone under the batch identity), so look bindings up
+    # whenever the hook can batch.
+    if not batch_capable or not items:
+        return [{"item": it} for it in items]
+    ids = [int(it["id"]) for it in items]
+    try:
+        batches = await asyncio.to_thread(store.batch_bindings, ids)
+        bound = await asyncio.to_thread(store.bound_item_ids, ids)
+    except Exception:  # noqa: BLE001 — unknown bindings: never invent a batch
+        log.exception("[inbox] now-recovery could not read execution bindings; delivering per item")
+        return [{"item": it} for it in items]
+    units: list[dict] = []
+    by_batch: dict[str, dict] = {}
+    groups: dict[tuple, dict] = {}
+    for it in items:
+        item_id = int(it["id"])
+        record = batches.get(item_id)
+        if record is not None:
+            unit = by_batch.get(record["context_id"])
+            if unit is None:
+                unit = by_batch[record["context_id"]] = {"members": [], "binding": record}
+                units.append(unit)
+            unit["members"].append(it)
+            continue
+        if item_id in bound or it.get("recovery_accepted_at"):
+            # An existing singleton binding stays a singleton delivery; an accepted-but-
+            # unmarked row completes on its own, as before.
+            units.append({"item": it})
+            continue
+        key = _inbox_group_key(it)
+        unit = groups.get(key)
+        if unit is None:
+            unit = groups[key] = {"members": [], "binding": None}
+            units.append(unit)
+        unit["members"].append(it)
+    # A new group of one keeps today's per-item identity and wire shape.
+    return [
+        {"item": u["members"][0]} if "members" in u and u["binding"] is None and len(u["members"]) == 1 else u
+        for u in units
+    ]
 
 
 async def recover_pending_now_inbox_items(
@@ -432,10 +499,125 @@ async def recover_pending_now_inbox_items(
             log.debug("[inbox] exhausted-delivery publish failed", exc_info=True)
         log.warning("[inbox] %s", text)
 
+    async def _complete(item_id: int, claimed_at: str | None) -> bool:
+        """Mark one accepted item delivered, then settle any restore its turn already owed
+        (#5106). A failed mark leaves the durable ``recovery_accepted_at`` completion
+        marker instead. Returns whether the delivered mark landed."""
+        try:
+            await asyncio.to_thread(store.mark_delivered, [item_id])
+        except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
+            log.exception("[inbox] now-recovery accepted item %s but could not mark delivered", item_id)
+            await _record_accepted_mark_failure(
+                item_id,
+                f"accepted delivery could not be marked delivered: {exc}",
+                claimed_at,
+            )
+            return False
+        # The fired turn may already have failed, before this mark landed (#5106): its
+        # restore was owed to this write — settle it now, after it, so the failure wins.
+        try:
+            from server.a2a import settle_owed_inbox_restore
+
+            await asyncio.to_thread(settle_owed_inbox_restore, item_id)
+        except Exception:  # noqa: BLE001 — best-effort; never break the batch
+            log.exception("[inbox] now-recovery could not settle item %s's failed turn", item_id)
+        return True
+
+    # Batched turns (ADR 0129 amendment, #5519): when the delivery hook advertises batch
+    # support, the claimed items are partitioned into work units in first-member claim
+    # order — members of an already-bound batch reconcile against that frozen batch,
+    # unbound items group by exact source/priority/origin, and everything else (an
+    # existing singleton binding, an accepted-but-unmarked completion, a group of one)
+    # stays a single unit delivered exactly as before.
+    hook = getattr(STATE, "inbox_now_delivery", None)
+    batch_fire = getattr(hook, "deliver_batch", None)
+    units = await _plan_inbox_units(store, items, batch_capable=callable(batch_fire))
+
+    async def _deliver_batch(members: list[dict], binding: dict | None) -> bool:
+        import time
+
+        guard = getattr(STATE, "storm_guard", None)
+        if guard is not None and not guard.allow(time.monotonic()):
+            # One batched fire counts as ONE fire; a denial restores every member.
+            log.warning(
+                "[inbox] storm guard suppressed now-recovery for batch %s",
+                sorted(int(m["id"]) for m in members),
+            )
+            return False
+        return bool(await batch_fire(members, binding))
+
+    def _unit_items(us: list[dict]) -> list[dict]:
+        return [it for u in us for it in (u.get("members") or [u["item"]])]
+
     # Every item in ``items`` was claimed by the atomic claim above, so no concurrent
     # consumer can double-deliver it while we await its fire. Mark accepted delivery
     # explicitly; restore the claim to pending (with evidence) otherwise.
-    for idx, item in enumerate(items):
+    for idx, unit in enumerate(units):
+        if unit.get("members"):
+            members = unit["members"]
+            binding = unit.get("binding")
+            # Completion-only: the frozen batch is already accepted (or a member already
+            # delivered), or every claimed member carries a durable accepted marker — mark
+            # them delivered without a fire, even while busy, and consume no storm budget.
+            completion_only = bool(binding and (binding.get("task_id") or binding.get("delivered_ids"))) or all(
+                m.get("recovery_accepted_at") for m in members
+            )
+            if not completion_only and is_busy is not None and is_busy():
+                await _restore_remaining(
+                    _unit_items(units[idx:]), "the agent is busy — retrying when it is free", refund_attempt=True
+                )
+                break
+            if not completion_only:
+                try:
+                    delivered = await _deliver_batch(members, binding)
+                except asyncio.CancelledError:
+                    await _restore_remaining(_unit_items(units[idx:]), "delivery was cancelled")
+                    raise
+                except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
+                    log.exception("[inbox] now-recovery batch delivery raised for items %s", [m["id"] for m in members])
+                    for m in members:
+                        failed += 1
+                        await _restore(int(m["id"]), f"delivery raised: {exc}", m.get("recovery_claimed_at"))
+                        _record_exhausted(m, f"delivery raised: {exc}")
+                    continue
+                if not delivered:
+                    log.warning(
+                        "[inbox] now-recovery batch not accepted for items %s; restoring pending fallback",
+                        [m["id"] for m in members],
+                    )
+                    for m in members:
+                        failed += 1
+                        await _restore(int(m["id"]), "delivery was not accepted", m.get("recovery_claimed_at"))
+                        _record_exhausted(m, "delivery was not accepted")
+                    continue
+            # Accepted (or completion-only): the whole message carried every member, so
+            # mark every claimed member delivered under its own claim...
+            for m in members:
+                if await _complete(int(m["id"]), m.get("recovery_claimed_at")):
+                    accepted += 1
+                else:
+                    failed += 1
+            # ...and finish any frozen member this pass did not claim (it rode the same
+            # accepted turn). Best-effort: a later pass completes it from the batch record.
+            if binding is None:
+                try:
+                    bound = await asyncio.to_thread(store.batch_bindings, [int(members[0]["id"])])
+                    binding = bound.get(int(members[0]["id"]))
+                except Exception:  # noqa: BLE001 — the claimed members are already settled
+                    binding = None
+            claimed_ids = {int(m["id"]) for m in members}
+            for other in (binding or {}).get("member_ids") or []:
+                if int(other) not in claimed_ids:
+                    try:
+                        await asyncio.to_thread(store.mark_delivered, [int(other)])
+                        from server.a2a import settle_owed_inbox_restore
+
+                        await asyncio.to_thread(settle_owed_inbox_restore, int(other))
+                    except Exception:  # noqa: BLE001 — a later pass completes it from the batch record
+                        log.exception("[inbox] now-recovery could not complete batch member %s", other)
+            continue
+
+        item = unit["item"]
         item_id = int(item["id"])
         claimed_at = item.get("recovery_claimed_at")
         # A page carrying a durable recovery_accepted_at was already accepted-delivered on a
@@ -448,14 +630,16 @@ async def recover_pending_now_inbox_items(
             # remaining batch back untouched (attempts refunded — nothing was tried); the
             # next settle kick or sweep retries it. Completions above are exempt: they
             # fire nothing, so they can always proceed.
-            await _restore_remaining(items[idx:], "the agent is busy — retrying when it is free", refund_attempt=True)
+            await _restore_remaining(
+                _unit_items(units[idx:]), "the agent is busy — retrying when it is free", refund_attempt=True
+            )
             break
         try:
             delivered = True if already_accepted else await _deliver(item)
         except asyncio.CancelledError:
             # Restore the current item and every later item the batch already claimed,
             # otherwise the un-processed tail stays reserved until the recovery lease expires.
-            await _restore_remaining(items[idx:], "delivery was cancelled")
+            await _restore_remaining(_unit_items(units[idx:]), "delivery was cancelled")
             raise
         except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
             failed += 1
@@ -465,26 +649,10 @@ async def recover_pending_now_inbox_items(
             continue
 
         if delivered:
-            try:
-                await asyncio.to_thread(store.mark_delivered, [item_id])
-            except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
+            if await _complete(item_id, claimed_at):
+                accepted += 1
+            else:
                 failed += 1
-                log.exception("[inbox] now-recovery accepted item %s but could not mark delivered", item_id)
-                await _record_accepted_mark_failure(
-                    item_id,
-                    f"accepted delivery could not be marked delivered: {exc}",
-                    claimed_at,
-                )
-                continue
-            # The fired turn may already have failed, before this mark landed (#5106): its
-            # restore was owed to this write — settle it now, after it, so the failure wins.
-            try:
-                from server.a2a import settle_owed_inbox_restore
-
-                await asyncio.to_thread(settle_owed_inbox_restore, item_id)
-            except Exception:  # noqa: BLE001 — best-effort; never break the batch
-                log.exception("[inbox] now-recovery could not settle item %s's failed turn", item_id)
-            accepted += 1
             continue
 
         failed += 1

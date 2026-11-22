@@ -122,6 +122,38 @@ def origin_meta_fields(raw: object) -> dict:
     return _origin_meta(parsed)
 
 
+#: Canonical-name tag for a batched turn's deterministic identity (ADR 0129 amendment).
+BATCH_IDENTITY_TAG = "protoagent/inbox-batch/v1"
+
+
+def _member_key(ids: list[int]) -> str:
+    return json.dumps(sorted({int(i) for i in ids}), separators=(",", ":"))
+
+
+def _member_ids_from_key(key: str) -> list[int]:
+    try:
+        raw = json.loads(key)
+    except (TypeError, ValueError):
+        return []
+    return sorted({int(i) for i in raw}) if isinstance(raw, list) else []
+
+
+def batch_identity(store_namespace: str, member_ids: list[int], generation: int) -> tuple[str, str]:
+    """The deterministic ``(context_id, message_id)`` of a batched inbox turn.
+
+    UUIDv5 under ``NAMESPACE_URL`` of the compact-JSON canonical name
+    ``[BATCH_IDENTITY_TAG, store_namespace, sorted_member_ids, generation]``, prefixed
+    ``"context:"`` for the context (itself prefixed ``job:``) and ``"message:"`` for the
+    message id. Claim time, claim order and source names are never inputs."""
+    from uuid import NAMESPACE_URL, uuid5
+
+    name = json.dumps(
+        [BATCH_IDENTITY_TAG, str(store_namespace), sorted({int(i) for i in member_ids}), int(generation)],
+        separators=(",", ":"),
+    )
+    return f"job:{uuid5(NAMESPACE_URL, 'context:' + name)}", str(uuid5(NAMESPACE_URL, "message:" + name))
+
+
 class InboxStore:
     def __init__(self, db_path: str, *, dedup_window_s: int = 300) -> None:
         self.path = str(db_path)
@@ -257,6 +289,39 @@ class InboxStore:
                 )
                 """
             )
+            # Batched recovery turns (ADR 0129 amendment, #5519): several same-source items
+            # claimed in one pass run as ONE turn. Each member keeps its own
+            # ``inbox_executions`` row, all naming the batch's shared context/message id;
+            # this table freezes the batch itself — full sorted membership, the dispatch
+            # snapshot a retry re-sends, its generation, the accepted task handle and a
+            # retirement tombstone. ``inbox_batch_generations`` advances a member set's
+            # generation when its batch provably dies, so the same members never
+            # regenerate a dead task's identity. ``inbox_meta`` holds the per-database
+            # ``store_namespace`` UUID the batch identity is derived under.
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS inbox_batches (
+                    context_id  TEXT PRIMARY KEY,
+                    message_id  TEXT NOT NULL,
+                    member_key  TEXT NOT NULL,
+                    generation  INTEGER NOT NULL,
+                    snapshot    TEXT NOT NULL,
+                    task_id     TEXT,
+                    accepted_at TEXT,
+                    retired_at  TEXT,
+                    created_at  TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS inbox_batch_generations (
+                    member_key TEXT PRIMARY KEY,
+                    generation INTEGER NOT NULL
+                )
+                """
+            )
+            db.execute("CREATE TABLE IF NOT EXISTS inbox_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             db.commit()
         finally:
             db.close()
@@ -745,9 +810,11 @@ class InboxStore:
         try:
             row = db.execute(
                 "SELECT i.origin_session AS origin_session FROM inbox_executions e "
-                "JOIN inbox i ON i.id = e.item_id WHERE e.context_id = ? LIMIT 1",
+                "JOIN inbox i ON i.id = e.item_id WHERE e.context_id = ? ORDER BY e.item_id LIMIT 1",
                 (context_id,),
             ).fetchone()
+            # A batched turn's members share one context and were grouped on an identical
+            # origin_session, so the lowest member speaks for the whole batch.
             return (row["origin_session"] or "") if row is not None else ""
         finally:
             db.close()
@@ -767,7 +834,7 @@ class InboxStore:
             row = db.execute(
                 "SELECT e.item_id, e.context_id, e.message_id, e.task_id, i.origin_meta "
                 "FROM inbox_executions e JOIN inbox i ON i.id = e.item_id "
-                "WHERE e.context_id = ? LIMIT 1",
+                "WHERE e.context_id = ? ORDER BY e.item_id LIMIT 1",
                 (context_id,),
             ).fetchone()
             if row is None:
@@ -780,6 +847,14 @@ class InboxStore:
             }
             if row["task_id"]:
                 request["task_id"] = row["task_id"]
+            # A batched turn (ADR 0129 amendment) exposes its full frozen membership; the
+            # lowest member stays ``item_id`` so singleton attribution is unchanged.
+            batch = db.execute(
+                "SELECT member_key FROM inbox_batches WHERE context_id = ?",
+                (context_id,),
+            ).fetchone()
+            if batch is not None:
+                request["item_ids"] = _member_ids_from_key(batch["member_key"])
             return {"request": request, "requester": origin_meta_fields(row["origin_meta"])}
         finally:
             db.close()
@@ -802,7 +877,7 @@ class InboxStore:
         finally:
             db.close()
 
-    def retire_execution(self, item_id: int) -> None:
+    def retire_execution(self, item_id: int, *, context_id: str | None = None) -> None:
         """Retire an item's execution identity once its invocation PROVABLY settled
         terminally (its turn failed/was canceled) and the item went back to pending.
 
@@ -811,13 +886,263 @@ class InboxStore:
         could never actually run. The next delivery allocates a fresh session + message id
         — a retired execution UUID is never reused (ADR 0129). Identity for an UNCERTAIN
         send is deliberately NOT retired; the reuse there is what folds a lost response
-        back into its accepted turn."""
+        back into its accepted turn.
+
+        An item bound to a batched turn retires the WHOLE batch (one settlement, see
+        :meth:`retire_batch`): the members shared one invocation, so it died for all of
+        them. ``context_id`` scopes the retire to the binding the caller observed, so a
+        late settlement can never clear a newer binding the item has since acquired."""
         db = self._connect()
         try:
-            db.execute("DELETE FROM inbox_executions WHERE item_id = ?", (int(item_id),))
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT context_id FROM inbox_executions WHERE item_id = ?",
+                (int(item_id),),
+            ).fetchone()
+            if row is None or (context_id and row["context_id"] != context_id):
+                db.rollback()
+                return
+            if not self._retire_batch_db(db, row["context_id"]):
+                db.execute("DELETE FROM inbox_executions WHERE item_id = ?", (int(item_id),))
             db.commit()
         finally:
             db.close()
+
+    # ── batched recovery turns (ADR 0129 amendment, #5519) ─────────────────────────
+
+    def store_namespace(self) -> str:
+        """The UUID this inbox database derives batch identities under — allocated once
+        and persisted, so two databases never mint the same batch identity for the same
+        member ids."""
+        from uuid import uuid4
+
+        db = self._connect()
+        try:
+            return self._store_namespace_db(db, uuid4)
+        finally:
+            db.close()
+
+    @staticmethod
+    def _store_namespace_db(db: sqlite3.Connection, uuid4) -> str:
+        row = db.execute("SELECT value FROM inbox_meta WHERE key = 'store_namespace'").fetchone()
+        if row is not None:
+            return str(row["value"])
+        db.execute("INSERT OR IGNORE INTO inbox_meta (key, value) VALUES ('store_namespace', ?)", (str(uuid4()),))
+        db.commit()
+        return str(db.execute("SELECT value FROM inbox_meta WHERE key = 'store_namespace'").fetchone()["value"])
+
+    def bind_batch_identity(
+        self,
+        members: list[dict],
+        snapshot: dict,
+        *,
+        now: datetime | None = None,
+    ) -> dict | None:
+        """Freeze a batched turn's membership and bind every member to ONE identity.
+
+        In one write transaction: revalidate that each member is still undelivered,
+        still bears the claim stamp it was handed (``recovery_claimed_at``) and has no
+        execution binding yet; then record the batch (sorted member list, ``snapshot`` —
+        the exact text/metadata a retry re-sends — and generation) and give every member
+        an ``inbox_executions`` row naming the batch's context and message id. Any changed
+        claim or pre-existing binding aborts the WHOLE binding and returns ``None``: a
+        batch is never half-bound. Fewer than two distinct members is not a batch.
+
+        The identity is deterministic (:func:`batch_identity`) from this database's
+        :meth:`store_namespace`, the sorted member ids and the member set's current
+        generation, so a retry of the same frozen set presents the same
+        ``(contextId, messageId)`` and the A2A layer joins the accepted turn."""
+        from uuid import uuid4
+
+        ids = sorted({int(m["id"]) for m in members})
+        if len(ids) < 2:
+            return None
+        claims = {int(m["id"]): m.get("recovery_claimed_at") for m in members}
+        member_key = _member_key(ids)
+        stamp = (now or datetime.now(UTC)).isoformat()
+        db = self._connect()
+        try:
+            namespace = self._store_namespace_db(db, uuid4)
+            db.execute("BEGIN IMMEDIATE")
+            for item_id in ids:
+                row = db.execute(
+                    "SELECT delivered_at, recovery_claimed_at FROM inbox WHERE id = ?",
+                    (item_id,),
+                ).fetchone()
+                if row is None or row["delivered_at"] is not None or row["recovery_claimed_at"] != claims[item_id]:
+                    db.rollback()
+                    return None
+                if db.execute("SELECT 1 FROM inbox_executions WHERE item_id = ?", (item_id,)).fetchone():
+                    db.rollback()
+                    return None
+            gen_row = db.execute(
+                "SELECT generation FROM inbox_batch_generations WHERE member_key = ?",
+                (member_key,),
+            ).fetchone()
+            generation = int(gen_row["generation"]) if gen_row is not None else 0
+            context_id, message_id = batch_identity(namespace, ids, generation)
+            if db.execute("SELECT 1 FROM inbox_batches WHERE context_id = ?", (context_id,)).fetchone():
+                # A batch row for this exact identity already exists, yet no member is bound
+                # to it — inconsistent evidence. Never re-mint over it.
+                db.rollback()
+                return None
+            snapshot_json = json.dumps(snapshot, separators=(",", ":"), sort_keys=True)
+            db.execute(
+                "INSERT INTO inbox_batches (context_id, message_id, member_key, generation, snapshot, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (context_id, message_id, member_key, generation, snapshot_json, stamp),
+            )
+            db.executemany(
+                "INSERT INTO inbox_executions (item_id, context_id, message_id, created_at) VALUES (?, ?, ?, ?)",
+                [(item_id, context_id, message_id, stamp) for item_id in ids],
+            )
+            db.commit()
+            return {
+                "context_id": context_id,
+                "message_id": message_id,
+                "member_ids": ids,
+                "generation": generation,
+                "snapshot": snapshot,
+                "task_id": "",
+                "accepted_at": "",
+                "delivered_ids": [],
+            }
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def batch_bindings(self, item_ids: list[int]) -> dict[int, dict]:
+        """Map each of ``item_ids`` bound to a LIVE (unretired) batch to that batch's
+        record: ``context_id``, ``message_id``, the full sorted ``member_ids``,
+        ``generation``, the frozen ``snapshot``, the accepted ``task_id``/``accepted_at``
+        (``""`` until accepted) and ``delivered_ids`` (members already delivered). Items
+        with no binding or a singleton binding are absent — see
+        :meth:`bound_item_ids` for "has any binding"."""
+        ids = [int(i) for i in item_ids]
+        if not ids:
+            return {}
+        db = self._connect()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            rows = db.execute(
+                "SELECT e.item_id AS item_id, b.* FROM inbox_executions e "
+                "JOIN inbox_batches b ON b.context_id = e.context_id "
+                f"WHERE e.item_id IN ({placeholders}) AND b.retired_at IS NULL",
+                tuple(ids),
+            ).fetchall()
+            records: dict[str, dict] = {}
+            out: dict[int, dict] = {}
+            for r in rows:
+                ctx = r["context_id"]
+                if ctx not in records:
+                    members = _member_ids_from_key(r["member_key"])
+                    mph = ",".join("?" for _ in members)
+                    delivered = [
+                        int(d["id"])
+                        for d in db.execute(
+                            f"SELECT id FROM inbox WHERE id IN ({mph}) AND delivered_at IS NOT NULL",
+                            tuple(members),
+                        ).fetchall()
+                    ]
+                    try:
+                        snapshot = json.loads(r["snapshot"])
+                    except (TypeError, ValueError):
+                        snapshot = {}
+                    records[ctx] = {
+                        "context_id": ctx,
+                        "message_id": r["message_id"],
+                        "member_ids": members,
+                        "generation": int(r["generation"]),
+                        "snapshot": snapshot if isinstance(snapshot, dict) else {},
+                        "task_id": r["task_id"] or "",
+                        "accepted_at": r["accepted_at"] or "",
+                        "delivered_ids": delivered,
+                    }
+                out[int(r["item_id"])] = records[ctx]
+            return out
+        finally:
+            db.close()
+
+    def bound_item_ids(self, item_ids: list[int]) -> set[int]:
+        """Which of ``item_ids`` already hold an execution binding (singleton or batch)."""
+        ids = [int(i) for i in item_ids]
+        if not ids:
+            return set()
+        db = self._connect()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            rows = db.execute(
+                f"SELECT item_id FROM inbox_executions WHERE item_id IN ({placeholders})",
+                tuple(ids),
+            ).fetchall()
+            return {int(r["item_id"]) for r in rows}
+        finally:
+            db.close()
+
+    def record_batch_acceptance(self, context_id: str, task_id: str, *, now: datetime | None = None) -> None:
+        """Persist a batched turn's accepted task handle: on the batch record FIRST, then
+        on every member's execution row (first acceptance wins, as for a singleton). One
+        transaction, and restartable — a member row left without the handle is repaired
+        from the batch record by a later call."""
+        stamp = (now or datetime.now(UTC)).isoformat()
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "UPDATE inbox_batches SET task_id = ?, accepted_at = ? "
+                "WHERE context_id = ? AND task_id IS NULL AND retired_at IS NULL",
+                (str(task_id or ""), stamp, context_id),
+            )
+            row = db.execute(
+                "SELECT task_id, accepted_at FROM inbox_batches WHERE context_id = ? AND retired_at IS NULL",
+                (context_id,),
+            ).fetchone()
+            if row is not None:
+                db.execute(
+                    "UPDATE inbox_executions SET task_id = ?, accepted_at = ? WHERE context_id = ? AND task_id IS NULL",
+                    (row["task_id"], row["accepted_at"], context_id),
+                )
+            db.commit()
+        finally:
+            db.close()
+
+    def retire_batch(self, context_id: str) -> bool:
+        """Retire a batched turn's identity as ONE settlement once its invocation
+        provably settled terminally: keep the batch row as a retirement tombstone,
+        atomically advance the member set's generation, and unbind every member still
+        bound to this batch. Idempotent — an already-retired (or unknown) batch is a
+        no-op and returns False, so a duplicate settlement never advances the
+        generation twice nor clears a newer binding."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            retired = self._retire_batch_db(db, context_id)
+            db.commit()
+            return retired
+        finally:
+            db.close()
+
+    @staticmethod
+    def _retire_batch_db(db: sqlite3.Connection, context_id: str) -> bool:
+        row = db.execute(
+            "SELECT member_key, generation FROM inbox_batches WHERE context_id = ? AND retired_at IS NULL",
+            (context_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        db.execute(
+            "UPDATE inbox_batches SET retired_at = ? WHERE context_id = ?",
+            (datetime.now(UTC).isoformat(), context_id),
+        )
+        db.execute(
+            "INSERT INTO inbox_batch_generations (member_key, generation) VALUES (?, ?) "
+            "ON CONFLICT(member_key) DO UPDATE SET generation = MAX(generation, excluded.generation)",
+            (row["member_key"], int(row["generation"]) + 1),
+        )
+        db.execute("DELETE FROM inbox_executions WHERE context_id = ?", (context_id,))
+        return True
 
     def reset_stale_recovery_claims(
         self,
@@ -1146,6 +1471,14 @@ class InboxStore:
             # as long as its item can still be referenced, drop it only once the item
             # row itself is gone.
             db.execute("DELETE FROM inbox_executions WHERE item_id NOT IN (SELECT id FROM inbox)")
+            # Batch records (and their generation tombstones) are pinned while ANY member
+            # row survives — an unresolved batch's membership and snapshot must outlive
+            # partial pruning; only a batch whose every member is gone is dropped.
+            live = {int(r["id"]) for r in db.execute("SELECT id FROM inbox").fetchall()}
+            for b in db.execute("SELECT context_id, member_key FROM inbox_batches").fetchall():
+                if not live.intersection(_member_ids_from_key(b["member_key"])):
+                    db.execute("DELETE FROM inbox_batches WHERE context_id = ?", (b["context_id"],))
+                    db.execute("DELETE FROM inbox_batch_generations WHERE member_key = ?", (b["member_key"],))
             db.commit()
             return cur.rowcount
         finally:

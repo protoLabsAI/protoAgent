@@ -287,6 +287,142 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
         return False
 
 
+def _inbox_batch_snapshot(members: list[dict], *, now: datetime | None = None) -> dict:
+    """The frozen dispatch snapshot of a batched inbox turn (ADR 0129 amendment, #5519):
+    one message text holding every member's full text — labelled by inbox id in
+    ascending id order, each with its queued time and its own late-delivery notice —
+    plus the batch's wire metadata. Persisted with the binding, so a retry re-sends
+    exactly this (the A2A layer dedups on the identity, not the text)."""
+    ordered = sorted(members, key=lambda m: int(m["id"]))
+    first = ordered[0]
+    source = str(first.get("source") or "")
+    priority = str(first.get("priority") or "now")
+    ids = [int(m["id"]) for m in ordered]
+    header = (
+        f"{len(ordered)} inbox items arrived together"
+        + (f" from {source}" if source else "")
+        + f" (priority {priority}). Read them all, then respond ONCE to the group — "
+        "not once per item."
+    )
+    sections = [header]
+    for m in ordered:
+        created_at = m.get("created_at")
+        label = f"--- Inbox item {m['id']}" + (f" (queued {created_at})" if created_at else "") + " ---"
+        notice = _inbox_late_delivery_notice(created_at, now=now)
+        body = f"{notice}\n\n{m['text']}" if notice else str(m["text"])
+        sections.append(f"{label}\n{body}")
+    return {
+        "text": "\n\n".join(sections),
+        "metadata": {
+            "origin": "inbox",
+            "inbox_source": source,
+            "priority": priority,
+            "inbox_ids": ids,
+        },
+    }
+
+
+async def _fire_activity_from_inbox_batch(members: list[dict], binding: dict | None = None) -> bool:
+    """Self-A2A fire for a GROUP of claimed inbox items as ONE turn (ADR 0129 amendment).
+
+    ``members`` are the claimed rows of one same-source/priority/origin group. With no
+    ``binding`` the batch is new: its snapshot is composed and the membership frozen
+    under one deterministic identity on every member's ``inbox_executions`` row
+    (:meth:`InboxStore.bind_batch_identity`); an aborted binding (a claim changed, a
+    member got bound meanwhile) sends nothing and returns False. With a ``binding``
+    (a prior send of this frozen set was uncertain) the persisted snapshot is re-sent
+    under the SAME ``(contextId, messageId)`` so the A2A layer joins the accepted turn.
+
+    Returns True only on accepted ownership, recording the task handle on the batch and
+    every member and watching the turn for a later failure. A terminal failed dedup echo
+    retires the whole batch identity (one settlement); an uncertain send keeps it."""
+    import httpx
+
+    from a2a_impl.auth import self_invocation_headers
+
+    store = getattr(STATE, "inbox_store", None)
+    if store is None or not members:
+        return False
+    if binding is None:
+        binding = store.bind_batch_identity(members, _inbox_batch_snapshot(members))
+        if binding is None:
+            log.warning(
+                "[inbox] batch binding aborted for items %s (a claim changed or a member was bound)",
+                sorted(int(m["id"]) for m in members),
+            )
+            return False
+    ctx = binding["context_id"]
+    mid = binding["message_id"]
+    ids = list(binding.get("member_ids") or [])
+    snapshot = binding.get("snapshot") or {}
+    metadata = dict(snapshot.get("metadata") or {})
+    metadata.setdefault("origin", "inbox")
+    metadata.setdefault("inbox_ids", ids)
+    body = {
+        "jsonrpc": "2.0",
+        "id": mid,
+        "method": "SendMessage",
+        "params": {
+            "configuration": {"returnImmediately": True},
+            "message": {
+                "role": "ROLE_USER",
+                "parts": [{"text": str(snapshot.get("text") or "")}],
+                "messageId": mid,
+                "contextId": ctx,
+                "metadata": metadata,
+            },
+        },
+    }
+    headers = {"Content-Type": "application/json", "A2A-Version": A2A_PROTOCOL_VERSION}
+    headers.update(self_invocation_headers())
+    app = getattr(STATE, "fastapi_app", None)
+    base_url = f"http://127.0.0.1:{STATE.active_port}"
+    client_kwargs = {"timeout": 30}
+    if app is not None:
+        client_kwargs.update({"transport": httpx.ASGITransport(app=app), "base_url": base_url})
+        url = "/a2a"
+    else:
+        url = f"{base_url}/a2a"
+    try:
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            r = await client.post(url, headers=headers, json=body)
+        if r.status_code >= 400:
+            log.warning("[inbox] batch now-fire rejected for items %s: HTTP %d %s", ids, r.status_code, r.text[:200])
+            return False
+        if not r.headers.get("content-type", "").startswith("application/json"):
+            log.warning("[inbox] batch now-fire rejected for items %s: non-JSON A2A response", ids)
+            return False
+        payload = r.json()
+        if _a2a_send_accepted(payload):
+            task_id = task_id_from_response(payload)
+            if task_id:
+                try:
+                    store.record_batch_acceptance(ctx, task_id)
+                except Exception:  # noqa: BLE001 — the identity is stable; a retry joins it anyway
+                    log.exception("[inbox] could not record acceptance for batch %s", ids)
+            _watch_inbox_batch_turn(task_id, ctx, ids, members)
+            return True
+        err = payload.get("error")
+        state = _a2a_result_state(payload)
+        if err:
+            log.warning("[inbox] batch now-fire rejected for items %s: %s", ids, err)
+        elif state:
+            log.warning("[inbox] batch now-fire not accepted for items %s: task state %s", ids, state)
+            # A terminal dedup echo proves this batch's invocation already died: retire the
+            # whole batch identity once, so the restored members run fresh (ADR 0129).
+            if state.lower().removeprefix("task_state_") in ("failed", "rejected", "canceled", "cancelled"):
+                try:
+                    store.retire_batch(ctx)
+                except Exception:  # noqa: BLE001 — members still restore; pull fallback remains
+                    log.exception("[inbox] could not retire batch identity for items %s", ids)
+        else:
+            log.warning("[inbox] batch now-fire rejected for items %s: A2A response had no task status", ids)
+        return False
+    except Exception:
+        log.exception("[inbox] batch now-fire failed for items %s", ids)
+        return False
+
+
 # ── an accepted now-item whose turn then fails is restored (#5106) ─────────────
 #
 # The now-fire answers on acceptance, so its turn's outcome arrives later, at the
@@ -332,6 +468,26 @@ def _watch_inbox_turn(task_id: str, item: dict) -> None:
             _INBOX_EVICTED_WATCH.pop(next(iter(_INBOX_EVICTED_WATCH)))
 
 
+def _watch_inbox_batch_turn(task_id: str, context_id: str, member_ids: list[int], members: list[dict]) -> None:
+    """Watch a batched turn: ONE entry tracking every frozen member, so a turn that later
+    fails restores each of them (and retires the batch identity once). Members not
+    claimed by this pass are read back from the store for their restore badge."""
+    if not task_id:
+        return
+    by_id = {int(m["id"]): m for m in members if m.get("id") is not None}
+    store = getattr(STATE, "inbox_store", None)
+    tracked: list[dict] = []
+    for item_id in member_ids or sorted(by_id):
+        row = by_id.get(int(item_id))
+        if row is None and store is not None:
+            try:
+                row = store.get(int(item_id))
+            except Exception:  # noqa: BLE001 — a bare id still restores the member
+                row = None
+        tracked.append({**(row or {"id": int(item_id)}), "_inbox_context_id": context_id})
+    _watch_inbox_turn(task_id, {"id": f"batch:{context_id}", "_inbox_batch_members": tracked})
+
+
 def _inbox_turn_ended(outcome) -> None:
     """Terminal-hook half of the watch: settle the watched now-item for this task."""
     if str(getattr(outcome, "origin", "") or "") != "inbox":
@@ -358,28 +514,41 @@ def _inbox_turn_ended(outcome) -> None:
 def _settle_inbox_turn(item: dict, state: str) -> None:
     if state not in _INBOX_RESTORE_STATES:
         return
+    # A batched turn's watch tracks every member: each is restored on its own (its own
+    # owed-restore ordering), and the shared identity is retired once.
+    targets = item.get("_inbox_batch_members") or [item]
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        _restore_inbox_item(item, state)
+        _restore_inbox_items(targets, state)
         return
-    t = loop.create_task(asyncio.to_thread(_restore_inbox_item, item, state))
+    t = loop.create_task(asyncio.to_thread(_restore_inbox_items, targets, state))
     _BG_WAKE_TASKS.add(t)
     t.add_done_callback(_BG_WAKE_TASKS.discard)
 
 
-def _retire_inbox_execution(item_id) -> None:
+def _retire_inbox_execution(item_id, context_id: str | None = None) -> None:
     """Retire a restored item's execution identity (ADR 0129): its invocation settled
     terminally, so the next delivery is a NEW invocation under a fresh identity — the
-    retired one would only dedup into the dead task. Best-effort; never raises."""
+    retired one would only dedup into the dead task. A batch member retires its whole
+    batch; ``context_id`` (a batch watch knows it) scopes the retire to that binding so
+    a late settlement never clears a newer one. Best-effort; never raises."""
     store = getattr(STATE, "inbox_store", None)
     retire = getattr(store, "retire_execution", None)
     if not callable(retire) or item_id is None:
         return
     try:
-        retire(int(item_id))
+        if context_id:
+            retire(int(item_id), context_id=context_id)
+        else:
+            retire(int(item_id))
     except Exception:  # noqa: BLE001 — the item is already pending; retry still falls back to pull
         log.exception("[inbox] could not retire the execution identity for item %s", item_id)
+
+
+def _restore_inbox_items(items: list[dict], state: str) -> None:
+    for item in items:
+        _restore_inbox_item(item, state)
 
 
 def _restore_inbox_item(item: dict, state: str) -> None:
@@ -403,7 +572,7 @@ def _restore_inbox_item(item: dict, state: str) -> None:
         _INBOX_RESTORE_OWED.pop(int(item["id"]), None)
         # The watched turn ended terminally (that is what put us here): the identity is
         # settled, so retire it — the restored item retries as a fresh invocation.
-        _retire_inbox_execution(item.get("id"))
+        _retire_inbox_execution(item.get("id"), item.get("_inbox_context_id"))
     _badge_restored(item, state)
 
 
@@ -426,7 +595,7 @@ def settle_owed_inbox_restore(item_id: int) -> bool:
         if restored:
             # Same retire as _restore_inbox_item: the owed restore proves the turn ended
             # terminally, so the next delivery must be a fresh invocation (ADR 0129).
-            _retire_inbox_execution(item.get("id"))
+            _retire_inbox_execution(item.get("id"), item.get("_inbox_context_id"))
     if restored:
         _badge_restored(item, state)
     return bool(restored)
@@ -452,6 +621,12 @@ def _badge_restored(item: dict, state: str) -> None:
         )
     except Exception:  # noqa: BLE001
         log.debug("[inbox] restore badge publish failed", exc_info=True)
+
+
+# The real hook advertises batch support (ADR 0129 amendment, #5519): the recovery pass
+# groups same-source claims into one turn only through a hook that carries
+# ``deliver_batch``; a substituted per-item hook keeps strictly per-item delivery.
+_fire_activity_from_inbox.deliver_batch = _fire_activity_from_inbox_batch
 
 
 def install_inbox_now_delivery() -> None:
