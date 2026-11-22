@@ -56,6 +56,7 @@ import {
   unpauseBubble,
 } from "./turnReducers";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
+import { ownedByAnotherLiveTab, whenTurnFree } from "./turnOwner";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
 import { formResponseText } from "./useHitl";
 
@@ -691,7 +692,15 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
  *  MAX_ACTIVE_SESSIONS slots mount, so a sixth one's turn can end (its preview settled by
  *  `chat.resumed`) with no slot and no reattach to hand the status back. Opening it then
  *  finds no streaming bubble and nothing to reattach. Before, it sat "streaming" for good;
- *  now the reconciler reads that nothing is live and returns it to idle. */
+ *  now the reconciler reads that nothing is live and returns it to idle.
+ *
+ *  A bubble another LIVE tab is streaming (turnOwner.ts, #5514) is not reattached: that tab
+ *  holds the stream, and a second copy of the turn here could replace the reply it finishes.
+ *  This slot waits instead, and runs the same decision again once the owner's marker is
+ *  released or goes stale: by then the bubble is either still streaming (the owner went away
+ *  mid-turn, or its finished reply has not reached this tab), and is reattached, or it was
+ *  settled from the owner's saved transcript, and there is nothing left to do but reconcile.
+ *  The session's status is left as it is while waiting: the turn is running. */
 export function reattachOrReconcile(sessionId: string, hooks: ReattachHooks = {}): (() => void) | undefined {
   const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   // The same bubble `reattachKey` names: a participant's row after the preview is not it.
@@ -701,6 +710,16 @@ export function reattachOrReconcile(sessionId: string, hooks: ReattachHooks = {}
   if (!last) {
     reconcileSessionStatus(sessionId);
     return undefined;
+  }
+  if (ownedByAnotherLiveTab(sessionId, last.taskId)) {
+    let cancelNext: (() => void) | undefined;
+    const stopWaiting = whenTurnFree(sessionId, last.taskId, () => {
+      cancelNext = reattachOrReconcile(sessionId, hooks);
+    });
+    return () => {
+      stopWaiting();
+      cancelNext?.();
+    };
   }
   return reattachTurn(sessionId, last.id, last.taskId, hooks);
 }

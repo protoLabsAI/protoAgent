@@ -141,6 +141,10 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   // console last cleared old chats on its own, how many and from where. Written only by the
   // automatic paths (lib/storageEviction.ts), never by a clear the operator asks for.
   { id: "storage.lastAutoClear", area: "local", pattern: /^protoagent\.storage\.lastAutoClear$/, category: "ephemeral", slug: noSlug, evictable: false },
+  // Which tab is streaming a turn (chat/turnOwner.ts, #5514): one short-lived marker per
+  // (session, task), renewed on a heartbeat and removed when the stream ends. In localStorage
+  // because other tabs must read it. Both ids are URI-encoded, so neither holds a ":".
+  { id: "chat.turnOwner", area: "local", pattern: /^protoagent\.chat\.turnOwner:([^:]+):([^:]+)$/, category: "ephemeral", slug: noSlug, evictable: false },
   // ── sessionStorage (per tab) ──
   { id: "schedwatch.notified", area: "session", pattern: /^protoagent\.schedwatch\.notified$/, category: "ephemeral", slug: noSlug, evictable: false },
   { id: "bgwatch.notified", area: "session", pattern: /^protoagent\.bgwatch\.notified$/, category: "ephemeral", slug: noSlug, evictable: false },
