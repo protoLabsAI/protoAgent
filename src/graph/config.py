@@ -1734,6 +1734,9 @@ class LangGraphConfig:
     # Push policy (ADR 0135 W2, #5648): off = only questions and high-importance
     # notices reach enrolled devices; on = every notice does.
     push_all_notices: bool = False
+    # Decisions (#5678 slice 9a): on = ``request_decision`` records a no-pause decision and
+    # ends the turn instead of pausing it at ``interrupt()``. Off (default) = today's pause.
+    decisions_never_block: bool = False
 
     # Instance-wide unattended admission budget (ADR 0135 D12), per UTC day.
     spend_cap_enabled: bool = False
@@ -2761,6 +2764,7 @@ class LangGraphConfig:
             quiet_hours_end=data.get("quiet_hours", {}).get("end", cls.quiet_hours_end),
             quiet_hours_timezone=data.get("quiet_hours", {}).get("timezone", cls.quiet_hours_timezone),
             push_all_notices=data.get("push", {}).get("all_notices", cls.push_all_notices),
+            decisions_never_block=bool((data.get("decisions") or {}).get("never_block", cls.decisions_never_block)),
             spend_cap_enabled=data.get("spend_cap", {}).get("enabled", cls.spend_cap_enabled),
             spend_cap_daily_cost_hard_limit=float(data.get("spend_cap", {}).get(
                 "daily_cost_hard_limit", cls.spend_cap_daily_cost_hard_limit)),

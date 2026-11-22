@@ -647,6 +647,10 @@ async def _decision_interrupt_pending(config: dict) -> bool:
 
         found = await _chat()._pending_interrupt(config)
         interrupt_id = str((found[0] if found else "") or "")
+        if not interrupt_id:
+            # An empty id would match a no-pause record (#5678 9a, ``decisions.never_block``):
+            # it has no pause to hold for, so it never parks an autonomous turn.
+            return False
         thread_id = str((config.get("configurable") or {}).get("thread_id") or "")
         rec = decision_store().for_interrupt(thread_id, interrupt_id)
         return rec is not None and rec.pending

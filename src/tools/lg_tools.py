@@ -165,13 +165,18 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 @tool
 def request_decision(question: str, options: list[str | dict], context: str = "",
                      expires_in_minutes: int | None = None, default_option: str | None = None,
-                     default_action: str | None = None, requires_pick: bool = False) -> str:
+                     default_action: str | None = None, requires_pick: bool = False,
+                     state: Annotated[Any, InjectedState] = None) -> str:
     # Maintainer notes (kept out of the model-facing docstring): unlike ask_human /
     # request_user_input, a ``kind: "decision"`` interrupt PARKS even on an autonomous turn
     # (server/turn_control.py) — the agent deliberately chose to stop rather than guess — and
     # the server records it in the durable decisions ledger (graph/decisions.py) so the park
     # outlives the input-required TTL sweep and shows in the operator inbox either way. The
     # resume value is the chosen option, returned here.
+    # With ``decisions.never_block`` on (#5678 9a) there is no pause: the tool writes a
+    # no-pause ledger record (empty interrupt id) itself and returns "asked, waiting", and
+    # ``get_all_tools`` binds a ``return_direct`` copy so the turn ends there. The answer
+    # reaches the agent later as a delivery turn (server/turn_control.py claim_decision_delivery).
     """Stop and ask the operator to decide; returns the chosen option.
 
     Use it when a skill rule forbids proceeding on your own judgment, for a destructive or
@@ -202,10 +207,52 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
             raise DecisionError("default_option must name an option id")
     except DecisionError as exc:
         return f"Error: {exc}"
+    if _decisions_never_block():
+        return _record_unpaused_decision(
+            state, question, options, context=context, expires_in_minutes=expires_in_minutes,
+            default_option=default_option, default_action=default_action, requires_pick=requires_pick,
+        )
     answer = interrupt({"kind": "decision", "question": question, "options": options, "context": context,
                         "expires_in_minutes": expires_in_minutes, "default_option": default_option,
                         "default_action": default_action, "requires_pick": requires_pick})
     return answer if isinstance(answer, str) else str(answer)
+
+
+def _decisions_never_block() -> bool:
+    """Live ``decisions.never_block`` (#5678 9a): off unless the running config turns it on."""
+    from runtime.state import STATE
+
+    return getattr(getattr(STATE, "graph_config", None), "decisions_never_block", False) is True
+
+
+def _record_unpaused_decision(state: Any, question: str, options, **fields) -> str:
+    """Write a no-pause decision for this turn's thread and say it was asked (#5678 9a).
+
+    The record is the whole ask: no ``interrupt()`` runs, so the chat stays free and the
+    turn ends completed. Its thread is the running graph config's, the same key the
+    delivery, reminder and typed-answer paths look it up by."""
+    from langgraph.config import get_config
+
+    from graph.decisions import DecisionError, decision_store
+    from runtime.state import STATE
+
+    try:
+        thread_id = str((get_config().get("configurable") or {}).get("thread_id") or "")
+    except RuntimeError:  # called outside a graph run: no thread to deliver the answer on
+        thread_id = ""
+    session_id = _session_id_from(state)
+    if not thread_id or not session_id:
+        return "Error: request_decision needs a chat thread to ask on; none was found."
+    try:
+        rec = decision_store().create(
+            session_id, question, options,
+            agent=str(getattr(STATE.graph_config, "identity_name", "") or ""),
+            thread_id=thread_id, interrupt_id="", **fields,
+        )
+    except DecisionError as exc:
+        return f"Error: {exc}"
+    return (f"Asked, waiting for the operator's answer (decision {rec.id}): {rec.question} "
+            "Their answer arrives as a later message; do not ask again.")
 
 
 @tool
@@ -1142,7 +1189,11 @@ def get_all_tools(
         fetch_url,
         ask_human,
         request_user_input,
-        request_decision,
+        # decisions.never_block (#5678 9a): the no-pause ask ends the turn, so bind a
+        # return_direct copy. The graph rebuilds on a settings change, so this follows it.
+        request_decision.model_copy(update={"return_direct": True})
+        if getattr(graph_config, "decisions_never_block", False) is True
+        else request_decision,
         withdraw_decision,
         load_skill,
         show_component,

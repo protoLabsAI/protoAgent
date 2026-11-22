@@ -348,6 +348,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "quiet_hours_end": "07:00",
     "quiet_hours_timezone": "",
     "push_all_notices": False,
+    "decisions_never_block": False,
     "spend_cap_enabled": False,
     "spend_cap_daily_cost_hard_limit": 10.0,
     "spend_cap_daily_token_hard_limit": 1_000_000,
