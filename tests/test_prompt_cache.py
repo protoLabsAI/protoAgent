@@ -297,7 +297,8 @@ def test_small_prefix_never_warns(caplog):
     assert "ZERO cache activity" not in caplog.text
 
 
-def test_config_wires_middleware():
+@pytest.mark.parametrize("hook", ["wrap_model_call", "awrap_model_call"])
+def test_config_wires_middleware(hook):
     from langchain.agents.middleware import AgentMiddleware
 
     from graph.config import LangGraphConfig
@@ -306,19 +307,23 @@ def test_config_wires_middleware():
     mw = _build_middleware(LangGraphConfig(), knowledge_store=None)
     names = [m.__class__.__name__ for m in mw]
     # ToolCallRepairMiddleware runs first — heal a dangling-tool_call history before
-    # anything else touches it. WaitYieldMiddleware sits alongside it (both are
-    # before_model-only gates that never wrap the model call).
+    # anything else touches it. WaitYieldMiddleware also gates async model calls.
     assert names[0] == "ToolCallRepairMiddleware"
     assert "WaitYieldMiddleware" in names
-    # ModelOverrideMiddleware is the outermost *model* wrapper — it swaps the
-    # per-tab model FIRST, so PromptCacheMiddleware (the next wrapper) sees the
+    # DecisionContextMiddleware adds the model-only open-decision note before
+    # the model-selection, recording, and caching wrappers see the request.
+    # ModelOverrideMiddleware swaps the per-tab model before caching sees the
     # ACTUAL model when deciding whether to cache. ModelOverride doesn't touch the
     # system message, so the cache breakpoint still lands on the stable prefix.
-    wrappers = [m.__class__.__name__ for m in mw if type(m).wrap_model_call is not AgentMiddleware.wrap_model_call]
+    wrappers = [m.__class__.__name__ for m in mw if getattr(type(m), hook) is not getattr(AgentMiddleware, hook)]
     # Trajectory sits BETWEEN them by design (ADR 0102 S1): inside ModelOverride
     # (logs the real per-tab model) but outside PromptCache (its refs must hash
     # the STORED message bytes, not the view-only cache-marked copies).
-    assert wrappers[:3] == ["ModelOverrideMiddleware", "TrajectoryMiddleware", "PromptCacheMiddleware"]
+    prefix = ["WaitYieldMiddleware"] if hook == "awrap_model_call" else []
+    expected = prefix + [
+        "DecisionContextMiddleware", "ModelOverrideMiddleware", "TrajectoryMiddleware", "PromptCacheMiddleware",
+    ]
+    assert wrappers[:len(expected)] == expected
     # RoomCast (#3049) mutates the prompt (system-suffix cast line): INSIDE
     # PromptCache (a suffix never disturbs the prefix anchors), OUTSIDE
     # PromptCapture (which must record the prompt cast line included).
