@@ -22,7 +22,7 @@ import logging
 from fastapi import Request
 from pydantic import BaseModel
 
-from a2a_impl.auth import is_human_operator
+from a2a_impl.auth import is_human_operator, open_mode
 from graph.decision_resume import CANCELLED_RESUME as CANCELLED_RESUME
 from graph.decision_resume import resume_parked_turn as _resume_parked_turn
 
@@ -103,6 +103,22 @@ def _resolve_answer(rec, body: AnswerRequest) -> str:
     if text:
         return text
     raise HTTPException(status_code=400, detail="provide an option_id or free-text answer")
+
+
+def _require_human_operator(request: Request) -> None:
+    """403 unless the auth middleware verified a human-operator credential for this request.
+
+    The shared operator bearer, a paired phone and a hub delegation (slice 4) pass; the fleet
+    service token, agent devices and federation callers do not. An instance that enforces NO
+    credential (``open_mode`` — the desktop loopback default) rates every caller the operator,
+    so its unclassified principal still passes, as before. A request the middleware never
+    stamped fails closed."""
+    from fastapi import HTTPException
+
+    kind = getattr(request.state, "principal_kind", None)
+    if is_human_operator(kind) or (kind == "open/unknown" and open_mode()):
+        return
+    raise HTTPException(status_code=403, detail="Forbidden: human operator credential required")
 
 
 def register_decision_routes(app) -> None:
@@ -193,8 +209,7 @@ def register_decision_routes(app) -> None:
         consumption leaves the decision pending: 200 ``resumed: false``, retryable. A delivery
         still queued after :data:`ACCEPT_WAIT_S` (the session is busy) is 202
         ``delivering: true``; answering again meanwhile joins it rather than sending twice."""
-        if not is_human_operator(getattr(request.state, "principal_kind", None)):
-            raise HTTPException(status_code=403, detail="Forbidden: human operator credential required")
+        _require_human_operator(request)
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:
@@ -320,8 +335,7 @@ def register_decision_routes(app) -> None:
         from graph.decision_reconcile import interrupt_parked
         from runtime.state import STATE
 
-        if not is_human_operator(getattr(request.state, "principal_kind", None)):
-            raise HTTPException(status_code=403, detail="Forbidden: human operator credential required")
+        _require_human_operator(request)
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:

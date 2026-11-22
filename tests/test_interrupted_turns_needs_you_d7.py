@@ -30,6 +30,7 @@ from server.interrupted_turns import (
     InterruptedTurnRecovery,
     _dangling_tool_calls,
 )
+from tests._operator_identity import as_operator
 from tests.test_interrupted_turns_d7 import (
     _let_zombies_unwind,
     _harness_hygiene,  # noqa: F401 — autouse fixture: resets module globals around each test
@@ -59,12 +60,7 @@ def _api_app():
     from operator_api.decision_routes import register_decision_routes
 
     app = FastAPI()
-    # This isolated route harness represents an authenticated operator.
-    @app.middleware("http")
-    async def operator_identity(request, call_next):
-        request.state.principal_kind = "shared-operator-bearer"
-        return await call_next(request)
-
+    as_operator(app)
     register_decision_routes(app)
     return app
 
