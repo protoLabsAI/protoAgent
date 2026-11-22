@@ -1,0 +1,1 @@
+- **Tolerate A2A SQLite contention.** Set an explicit five-second busy timeout on every connection and enable WAL so task saves and private scheduling can overlap readers without blocking commits. Complete the private-steer graph fixture's interrupt cleanup support. Refs #5612.

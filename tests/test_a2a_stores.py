@@ -47,6 +47,86 @@ async def _fresh_push_store(db_path: str) -> tuple[ValidatingPushNotificationCon
 
 
 @pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_sqlite_connections_wait_for_a_writer(tmp_path):
+    """A brief competing write must not fail task persistence (#5612)."""
+    import asyncio
+    import sqlite3
+
+    from sqlalchemy import event, text
+
+    path = str(tmp_path / "contended.db")
+    engine = make_sqlite_engine(path)
+    attempted = asyncio.Event()
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _writing(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.startswith("INSERT"):
+            attempted.set()
+
+    async def write(conn):
+        await conn.execute(text("INSERT INTO entries VALUES (1)"))
+        await conn.commit()
+
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE TABLE entries (value INTEGER)"))
+        # Simultaneous checkouts force two physical connections, not pool reuse.
+        async with engine.connect() as first, engine.connect() as second:
+            for conn in (first, second):
+                assert (await conn.execute(text("PRAGMA busy_timeout"))).scalar_one() >= 5000
+                await conn.rollback()
+            blocker = sqlite3.connect(path)
+            try:
+                blocker.execute("BEGIN IMMEDIATE")
+                pending = asyncio.create_task(write(second))
+                try:
+                    await asyncio.wait_for(attempted.wait(), timeout=1)
+                    # Prove the write is waiting while the other connection owns the lock.
+                    with pytest.raises(asyncio.TimeoutError):
+                        await asyncio.wait_for(asyncio.shield(pending), timeout=0.05)
+                finally:
+                    blocker.rollback()
+                    await asyncio.wait_for(pending, timeout=2)
+                assert (await first.execute(text("SELECT value FROM entries"))).scalar_one() == 1
+            finally:
+                blocker.close()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_sqlite_reader_does_not_block_a_writer_commit(tmp_path):
+    """A busy timeout alone cannot let a writer commit past a held reader (#5612)."""
+    import asyncio
+    import sqlite3
+
+    from sqlalchemy import text
+
+    path = str(tmp_path / "readers.db")
+    engine = make_sqlite_engine(path)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE TABLE entries (value INTEGER)"))
+        reader = sqlite3.connect(path)
+        try:
+            reader.execute("BEGIN")
+            assert reader.execute("SELECT * FROM entries").fetchall() == []
+            async with engine.connect() as writer:
+                await writer.execute(text("INSERT INTO entries VALUES (1)"))
+                await asyncio.wait_for(writer.commit(), timeout=1)
+            # The reader keeps its snapshot while a fresh read sees the committed write.
+            assert reader.execute("SELECT * FROM entries").fetchall() == []
+            reader.rollback()
+            assert reader.execute("SELECT * FROM entries").fetchall() == [(1,)]
+        finally:
+            reader.close()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_push_config_survives_restart(tmp_path):
     """Write via one store instance; read via a fresh instance on the same db file."""
     db = str(tmp_path / "a2a-push.db")

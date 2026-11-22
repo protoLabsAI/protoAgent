@@ -43,6 +43,11 @@ class _Graph:
     async def aget_state(self, _config):
         return self.snapshot
 
+    async def aupdate_state(self, config, values):
+        assert values is None  # interrupt cleanup, without running another model turn
+        self.snapshot = _idle_snapshot()
+        return config
+
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
