@@ -944,6 +944,37 @@ async def validate_decision_resume(config: dict, decision_id: str, session_id: s
     return config
 
 
+async def answer_typed_decision(config: dict, message: str, session_id: str,
+                                request_metadata: dict | None = None) -> tuple[dict, str] | None:
+    """Save an exact operator answer before delivering it in this already-locked turn."""
+    from a2a_impl.auth import is_human_operator, open_mode
+    from graph.decisions import decision_store
+    from graph.middleware.request_context import current_verified_principal
+
+    md = request_metadata or {}
+    # An attended background result is still server-started. Unknown origins also
+    # fail closed; only established incoming message surfaces can supply typed answers.
+    origin = str(md.get("origin") or "").strip().lower()
+    server_started = origin not in {"", "local", "console", "api-chat", "v1", "plugin", "a2a"}
+    principal = current_verified_principal()
+    operator = is_human_operator(principal) or (principal == "open/unknown" and open_mode())
+    if (server_started or _truthy(md.get("unattended")) or md.get("decision_id")
+            or not operator):
+        return None
+    # A parked form/question still owns the next input; never consume its answer here.
+    if await _chat()._pending_interrupt_value(config) is not None:
+        return None
+    try:
+        rec = decision_store().answer_typed(session_id, config["configurable"]["thread_id"], message,
+                                            principal=principal)
+    except Exception:
+        log.warning("Could not save typed decision answer on %s", session_id, exc_info=True)
+        return None
+    if rec is None:
+        return None
+    return await claim_decision_delivery(config, rec.id, session_id)
+
+
 async def claim_decision_delivery(config: dict, decision_id: str, session_id: str) -> tuple[dict, str] | None:
     """Accept a turn that delivers a no-pause decision's saved answer (#5678 2c), under the lock.
 

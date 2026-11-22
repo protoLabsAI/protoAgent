@@ -580,6 +580,26 @@ class DecisionStore:
                 self._close(db)
         return {str(r["session_id"]) for r in rows if r["session_id"]}
 
+    def answer_typed(self, session_id: str, thread_id: str, text: str, *, principal: str | None) -> Decision | None:
+        """Atomically match the chat's sole open decision and save a typed operator answer.
+
+        Share the writers' lock so another ask, answer, or cancellation cannot change
+        eligibility between matching and closing the record.
+        """
+        from graph.decision_match import match_decision
+
+        if not session_id:
+            return None
+        with self._lock:
+            match = match_decision(text, self.list(state=STATE_PENDING, session_id=session_id, limit=2),
+                                   principal=principal)
+            if match is None:
+                return None
+            rec, answer = match
+            if rec.thread_id != thread_id:
+                return None
+            return self.answer(rec.id, answer, answered_by="operator", answered_surface="chat", answer_kind="text")
+
     def answer(self, decision_id: str, answer: str, *, answered_by: str = "operator", answered_surface: str = "chat",
                answer_kind: str = "text") -> Decision:
         """Mark a pending decision answered with the operator's choice. Raises
