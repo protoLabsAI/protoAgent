@@ -15,6 +15,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.260.0] - 2026-11-22
+
+### Added
+- **Running peer turn privacy coverage (#5721).** Exercise fleet and paired-agent credentials against the Phase 0 A2A projection rig, checking private steering stays out of retained streams, subscriptions, task polling, push callbacks, reply text and reopened SQLite history. Refs #5400.
+
+- **Add a per-tab owner marker for a streaming chat turn (#5730).** A console tab no longer reattaches to a turn while another live tab holds that turn's marker, and picks it up once the marker is released or its heartbeat goes stale. Nothing claims a marker yet, so behaviour is unchanged until the follow-up that saves the task id at once. Refs #5514.
+
+- **The decisions ledger can hold a decision that has no paused turn behind it (#5718).**
+  A decision record can now be written with a chat thread and no pause id. Such a record
+  stays pending until it is answered: the stranded-decision check, which closes a record
+  whose paused turn has disappeared, never touches it. Each record also gains three
+  fields: `requires_pick` (only a listed option may answer), `reminded_at` and
+  `delivered_at`, with `mark_reminded` and `mark_delivered` to stamp them once. An
+  existing database gains the columns when it is opened. This is groundwork only:
+  nothing reads the new fields yet, and decisions that pause a turn, spend-cap decisions
+  and restart-recovery decisions behave as before. Refs #5678.
+
+- **Fleet proxies preserve human operator identity (#5726).** Authenticated human calls to local members carry a signed, single-use delegation; fleet service callers remain peers. Members verify the hub signature and request binding without a new credential type. Refs #5678.
+
+- **Evals count how often unattended work interrupts the operator (#5732).** `evals/interruptions.py` reports, for the 24 hours ending at a given time, the Activity cards posted and the Needs-you items raised by each source: scheduler, inbox, watch and background. It reads the instance's own Activity log, scheduler run history, background job ledger, inbox and decisions ledger, read-only. A scheduled run that stayed quiet (`NO_UPDATE`, or a repeated result) is not counted as a card. Operator-chat decisions are excluded from unattended-source counts, and inbox alerts count only operator-class priority-now items, not exhausted delivery retries alone. `python -m evals.interruptions` prints the counts. Refs #5518.
+
+- **The nightly eval gate reports how often unattended work interrupted the operator (#5735).** `scripts/evals_nightly.py` now counts each source's Activity cards and Needs-you items (scheduler, inbox, watch, background) over the 24 hours before the run, prints them as a per-source table and writes them into the nightly report JSON under `interruptions`. A count above its daily threshold (defaults: 20 cards, 5 Needs-you items per source; change them with `--interruption-threshold [SOURCE:]KIND=LIMIT`) records one `evals-nightly` harness friction entry, `nightly gate regression: interruptions:<source>:<cards|needs_you>`, and fails the night. The first night the count is back under resolves it. `--dry-run` prints the counts and records nothing. Fixes #5518.
+
+### Changed
+- **A job waiting on you now shows the question, with links to what it asks you to look at (#5719).**
+  Work ▸ Needs you used to open a waiting job on its whole record: the ask, then the agent's
+  working notes, type, priority and dates, with the ask repeated inside the description and the
+  artifact it named printed as an id you could not open. The detail now shows who is asking,
+  the ask once, links to what it refers to, and the reply box. An artifact id in the ask opens
+  the Artifact panel on that artifact, a board card id opens the board on that card, and a
+  GitHub reference such as `owner/repo#12` opens on GitHub. Description, type and priority,
+  updated, created and "waiting since" moved under Technical details. Jobs in any other state
+  look the same as before. Refs #5676.
+
+- **A burst of inbox items from one source now runs as one turn, so the agent replies once (#5733).**
+  When the retry-when-free / now-recovery pass claims several pending items with the same
+  source, priority and origin (a webhook retry storm, a run of sister-agent messages, a
+  boot backlog), it sends them as one self-A2A turn. Each item's text is labelled with its
+  inbox id and keeps its own late-delivery note. Retry dedup still holds: the batch gets a
+  deterministic identity (ADR 0129 amendment), recorded on every member's execution row,
+  so a retry after an uncertain send joins the accepted turn. Acceptance, restore and
+  retirement apply to every member, and StormGuard counts the batch as one fire. A single
+  item is delivered exactly as before. Fixes #5519.
+
+### Fixed
+- **Console steers into From others conversations stay private (#5727).** Mid-turn messages and requeued steers explicitly request private delivery without adding a toggle. Private steers omit incognito, keep image-bearing drafts unsent, and explain server refusals in plain language while returning the text to the composer. Refs #5400 and #5401.
+
+- **Replying from Work to a conversation another agent started now stays private (#5736).** When you answer a waiting job in Work whose source is a conversation listed under From others, or steer that conversation from the chat, your words now always go privately to your agent, and the peer that started the thread never reads them. There is no new switch: it is always private. If the server refuses the message, you see one plain sentence saying why it was not sent (the conversation is waiting on the other agent's own question, a private message can only be text, or private messages are off or need you to sign in again), and what you typed stays in the field. Known limit: your agent's own context still holds the text. Fixes #5400, Fixes #5401.
+
+- **Steering a conversation another agent started now stays between you and your agent (#5723).**
+  When you steered a thread a peer had started (the ones under From others), your words were
+  queued into the peer's running turn or saved into task history the peer could read back.
+  The server now takes the private path for every steer into such a thread, whether or not
+  the request asks for it: the text is kept in the operator-only partition, runs as its own
+  turn, and is absent from the peer's stream, its subscription, GetTask and the stored
+  history. A steer that cannot be private is refused instead of being sent publicly: 403
+  when private steering is off or the caller is not a signed-in operator, 409 when the
+  thread is waiting on the peer's own question, 400 when it carries images or incognito
+  (a private steer is text only). If the server cannot read who started a thread, it
+  treats the steer the same way: private or refused, never public. Steering your own chats, including API and
+  OpenAI-compatible sessions, is unchanged. Known limit: the agent's own context still holds
+  the text. Refs #5400, Refs #5401.
+
+- **A private steer stays out of traces, prompt snapshots and the fleet trace export (#5724).** Tracing, prompt capture and the fleet trace export already checked whether a conversation's content is public, but in production that check had no reader behind it, so every conversation read as public. It now reads the record the private-steer path writes: a conversation holding a private steer records structure, timing, usage and cost but no content, and is skipped by the fleet trace export, on the steered turn and on every later turn (it does not depend on the turn's incognito flag). A conversation with no private steer is traced, captured and exported exactly as before. If the record cannot be read, nothing is recorded rather than assuming the conversation is ordinary. Fixes #5403.
+
+- **Tapping a decision's notification opens its answer form, with Home on or off (#5731).**
+  With Home on, a tapped decision went to Home's entry for it when Home had one: a pointer
+  card with a button, one more tap from the form. Whether Home had recorded the decision
+  varied, so the same tap landed in two different places. A decision now always opens its
+  answer form, in the console of the agent that asked. Other notices still open their Home
+  entry. Refs #5664.
+
+- **Make Needs you actionable (#5720).** Notices with only Dismiss appear as information in What happened. Shared causes appear once with links to affected work; details show the full cause and keep identifiers under Technical details. Waiting work can ask its producer to check again. Fixes #5681.
+
+- **Act on missing work folders from the warning (#5722).** Remove a folder, choose its new location, or dismiss it for this session directly from the banner. Removal preserves board project references and reports them; removing the last explicit folder does not grant access to other board projects. Missing-folder logs appear only once per folder per process. Fixes #5692.
+
+- **A reload in a turn's first seconds brings its question back (#5734).** The console now saves a turn's task id the moment it arrives instead of on the 2 s streaming timer, so reloading before that timer fires still reattaches to a turn parked on an `ask_human` question, form or approval and shows the form again. The tab that sent the message claims the turn while it streams and releases the claim once its finished state is saved. A second open tab leaves the turn alone until then, and adopts the sender's saved reply instead of reattaching and replacing it. Fixes #5514.
+
+- **Turning a flag on in Settings ▸ Developer now turns it on for the server too, and it stays on after a restart (#5717).**
+  The toggle used to be saved in the browser only, so it changed what the console drew and
+  nothing else. A flag that gates server behaviour, like Home, could be switched on in the
+  panel while the server went on answering "not found"; the only way to really enable it
+  was an environment variable, which on the desktop app is lost at the next reboot. The
+  toggle is now stored on the agent (`PUT /api/flags/<id>`, one small file in the instance
+  folder), the server reads it on every check, and Reset clears it. A flag pinned by its
+  `PROTOAGENT_FLAG_<ID>` environment variable shows as "set by environment" with the toggle
+  disabled, because the environment still wins. Each agent keeps its own toggles.
+
+- **The peer-started private-steer test no longer fails at random on CI (#5725).**
+  It read the task's state once, straight after the scripted model signalled that it had
+  started, and asserted "working". The executor stores that state a moment later, so on a
+  loaded runner the read came back unset and the test failed (`assert 0 == 2`), on Linux and
+  Windows, in every run on main since it was added. It now waits for the stored state. Test
+  only; no product code changed.
+
+- **Tolerate A2A SQLite contention (#5728).** Set an explicit five-second busy timeout on every connection and enable WAL so task saves and private scheduling can overlap readers without blocking commits. Complete the private-steer graph fixture's interrupt cleanup support. Refs #5612.
+
+### Docs
+- **Inbox batch delivery design (#5729).** Amend ADR 0129 with source-grouped recovery turns, durable batch identities, retry deduplication, per-member settlement, provenance and StormGuard accounting. Implementation follows in a separate slice. Refs #5519.
+
 ## [0.259.1] - 2026-11-21
 
 ### Changed

@@ -1,5 +1,31 @@
 [
   {
+    "version": "v0.260.0",
+    "date": "2026-11-22",
+    "changes": [
+      "Running peer turn privacy coverage (#5721).",
+      "Add a per-tab owner marker for a streaming chat turn (#5730).",
+      "The decisions ledger can hold a decision that has no paused turn behind it (#5718).",
+      "Fleet proxies preserve human operator identity (#5726).",
+      "Evals count how often unattended work interrupts the operator (#5732).",
+      "The nightly eval gate reports how often unattended work interrupted the operator (#5735).",
+      "A job waiting on you now shows the question, with links to what it asks you to look at (#5719).",
+      "A burst of inbox items from one source now runs as one turn, so the agent replies once (#5733).",
+      "Console steers into From others conversations stay private (#5727).",
+      "Replying from Work to a conversation another agent started now stays private (#5736).",
+      "Steering a conversation another agent started now stays between you and your agent (#5723).",
+      "A private steer stays out of traces, prompt snapshots and the fleet trace export (#5724).",
+      "Tapping a decision's notification opens its answer form, with Home on or off (#5731).",
+      "Make Needs you actionable (#5720).",
+      "Act on missing work folders from the warning (#5722).",
+      "A reload in a turn's first seconds brings its question back (#5734).",
+      "Turning a flag on in Settings ▸ Developer now turns it on for the server too, and it stays on after a restart (#5717).",
+      "The peer-started private-steer test no longer fails at random on CI (#5725).",
+      "Tolerate A2A SQLite contention (#5728).",
+      "Inbox batch delivery design (#5729)."
+    ]
+  },
+  {
     "version": "v0.259.1",
     "date": "2026-11-21",
     "changes": [
