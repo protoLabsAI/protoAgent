@@ -57,9 +57,9 @@ def _fixture(age: float = 1.0) -> dict:
             {"id": "bg3", "status": "running", "completed_at": None},
         ],
         "inbox_items": [
-            {"id": 1, "created_at": when, "needs_human": True},
-            {"id": 2, "created_at": when, "needs_human": False, "retries_exhausted": True},
-            {"id": 3, "created_at": when, "needs_human": False},
+            {"id": 1, "created_at": when, "priority": "now", "needs_human": True},
+            {"id": 2, "created_at": when, "priority": "now", "needs_human": False, "retries_exhausted": True},
+            {"id": 3, "created_at": when, "priority": "now", "needs_human": False},
         ],
         "job_sessions": [
             {"job_id": "digest", "context_id": "job:s1"},
@@ -88,7 +88,7 @@ def _fixture(age: float = 1.0) -> dict:
 EXPECTED = {
     # t-feed + t-posted (once) + t-chat-only; t-quiet is suppressed.
     "scheduler": {"activity_cards": 3, "needs_you": 2},  # d1, d6
-    "inbox": {"activity_cards": 2, "needs_you": 3},  # items 1, 2 + d3
+    "inbox": {"activity_cards": 2, "needs_you": 2},  # item 1 + d3
     "watch": {"activity_cards": 2, "needs_you": 2},  # t-w1 feed row + t-w2 posted; d2, d5
     "background": {"activity_cards": 2, "needs_you": 1},  # bg1, bg2; d4
 }
@@ -135,11 +135,31 @@ def test_window_end_must_be_a_time():
         count_interruptions(window_end=None)
 
 
-def test_module_docstring_names_each_record():
-    doc = interruptions.__doc__
-    for record in ("activity", "occurrences", "reported", "background_jobs", "inbox", "decisions",
-                   "job_sessions", "inbox_executions"):
-        assert f"``{record}``" in doc, record
+@pytest.mark.parametrize("origin", ["scheduler", "watch", "inbox", "background-resume"])
+@pytest.mark.parametrize("mapping", ["activity", "job_sessions", "inbox_executions"])
+def test_operator_chat_decisions_are_not_attributed_to_previous_unattended_work(origin, mapping):
+    records = {mapping: [{"context_id": "chat-123", "origin": origin, "job_id": "watch-abc"}]}
+    counts = count_interruptions(
+        window_end=END,
+        decisions=[{"session_id": "chat-123", "created_at": _at(1)}],
+        **records,
+    )
+    assert all(count["needs_you"] == 0 for count in counts.values())
+
+
+@pytest.mark.parametrize(("fields", "expected"), [
+    ({"needs_human": False, "retries_exhausted": True}, 0),
+    ({"needs_human": True, "retries_exhausted": True}, 1),
+    ({"source": "project_board"}, 1),
+    ({"needs_human": True, "priority": "later"}, 0),
+    ({"needs_human": True, "delivered_at": _at(0.5)}, 1),
+])
+def test_inbox_counts_operator_alerts_raised_not_delivery_failures(fields, expected):
+    counts = count_interruptions(
+        window_end=END,
+        inbox_items=[{"created_at": _at(1), "priority": "now", **fields}],
+    )
+    assert counts["inbox"]["needs_you"] == expected
 
 
 # ── the reader ────────────────────────────────────────────────────────────────────

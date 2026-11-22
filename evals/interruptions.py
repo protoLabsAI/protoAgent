@@ -39,15 +39,18 @@ Needs-you items
 
 * ``inbox`` — the **inbox**: the ``inbox`` table in ``inbox/agent.db``
   (``inbox/store.py``). A row raises Needs-you when it is operator-class
-  (``needs_human``, or a known operator-class producer) or its automatic delivery
-  retries are spent; it is timed by ``created_at``.
+  (``needs_human``, or a known operator-class producer) and priority ``now``; it is
+  timed by ``created_at`` even if subsequently delivered. Exhausted automatic
+  delivery retries alone do not raise an alert.
 * every source — the **decisions ledger**: the ``decisions`` table in
   ``decisions/decisions.db`` (``graph/decisions.py``), one row per parked
   ``request_decision``, timed by ``created_at``. The row names a session, not a source,
   so the source comes from whichever durable record owns that session: a
   restart-recovery marker naming a job, a ``background:`` session, the scheduler's
   ``job_sessions`` table, the inbox's ``inbox_executions`` table, then the Activity
-  log's ``context_id``. A decision raised in an operator's own chat belongs to no
+  log's ``context_id``. These mappings attribute only isolated ``job:`` execution
+  sessions, never the operator chats that can also host scheduled runs or watch
+  reactions. A decision raised in an operator's own chat belongs to no
   unattended source and is not counted.
 
 Not counted: a task parked ``waiting`` and a stopped goal. Their rows record neither
@@ -79,6 +82,9 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from events import JOB_CONTEXT_PREFIX
+from inbox.store import needs_operator_attention
+
 SOURCES = ("scheduler", "inbox", "watch", "background")
 WINDOW = timedelta(hours=24)
 
@@ -94,7 +100,6 @@ _ORIGIN_SOURCE = {
 _WATCH_JOB_PREFIX = "watch-"
 _BACKGROUND_SESSION_PREFIX = "background:"
 _RESTART_RECOVERY_PREFIX = "restart-recovery:"
-_ACTIVITY_CONTEXT = "system:activity"
 
 
 def _parse_time(value: object) -> datetime | None:
@@ -198,7 +203,8 @@ def count_interruptions(
 
     # ── Needs-you items ───────────────────────────────────────────────────────────
     for item in inbox_items:
-        if (item.get("needs_human") or item.get("retries_exhausted")) and in_window(item.get("created_at")):
+        if (item.get("priority") == "now" and needs_operator_attention(item)
+                and in_window(item.get("created_at"))):
             counts["inbox"]["needs_you"] += 1
 
     session_source: dict[str, str] = {}
@@ -206,13 +212,13 @@ def count_interruptions(
     for row in activity:
         context = _text(row, "context_id")
         source = _ORIGIN_SOURCE.get(_text(row, "origin"))
-        if context and context != _ACTIVITY_CONTEXT and source:
+        if context.startswith(JOB_CONTEXT_PREFIX) and source:
             session_source[context] = source
     for row in inbox_executions:
-        if _text(row, "context_id"):
+        if _text(row, "context_id").startswith(JOB_CONTEXT_PREFIX):
             session_source[_text(row, "context_id")] = "inbox"
     for row in job_sessions:
-        if _text(row, "context_id"):
+        if _text(row, "context_id").startswith(JOB_CONTEXT_PREFIX):
             session_source[_text(row, "context_id")] = _job_source(row.get("job_id"))
 
     for decision in decisions:
@@ -282,7 +288,6 @@ def _rows(path: Path | None, table: str, columns: tuple[str, ...]) -> list[dict]
 def load_records() -> dict[str, list[dict]]:
     """The records :func:`count_interruptions` takes, read from the stores of the
     instance this process runs under (``instance_paths()``). Read-only."""
-    from inbox.store import RECOVERY_MAX_ATTEMPTS, needs_operator_attention
     from infra.paths import instance_paths
 
     paths = instance_paths()
@@ -290,18 +295,8 @@ def load_records() -> dict[str, list[dict]]:
     scheduler_db = _scheduler_db(paths.store("scheduler"))
     inbox_items = _rows(
         inbox_db, "inbox",
-        ("id", "created_at", "priority", "source", "delivered_at", "needs_human",
-         "recovery_attempts", "recovery_accepted_at"),
+        ("created_at", "priority", "source", "needs_human"),
     )
-    for item in inbox_items:
-        # The same derivation /api/inbox applies (operator_api.console_handlers).
-        item["needs_human"] = needs_operator_attention(item)
-        item["retries_exhausted"] = bool(
-            not item.get("delivered_at")
-            and item.get("priority") == "now"
-            and not item.get("recovery_accepted_at")
-            and int(item.get("recovery_attempts") or 0) >= RECOVERY_MAX_ATTEMPTS
-        )
     return {
         "activity": _rows(
             _agent_db(paths.store("activity")), "activity", ("created_at", "context_id", "origin", "task_id")
