@@ -422,7 +422,8 @@ export function useConversationRow(contextId: string): ConversationRow | null {
  *  a hook) for the code that must decide at the moment it acts: a steer into such a thread is
  *  always sent private (#5400), and the closure sending it may be older than the newest rows.
  *  Only as good as what is loaded: a thread the list has not hydrated, or one paged out of it,
- *  reads false — the server still takes the private path for it on its own. */
+ *  reads false — the server still takes the private path for it on its own, and the steer
+ *  callers recognise its refusal by the server's fixed detail (`privateSteerRefusal`). */
 export function isFromOthers(sessionId: string | null | undefined): boolean {
   return Boolean(sessionId) && indexOf(sessionId as string) !== -1;
 }

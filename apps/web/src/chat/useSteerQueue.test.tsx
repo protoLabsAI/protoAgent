@@ -918,6 +918,13 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     expect(r.current.steerQueue).toEqual([]);
   });
 
+  // The server's own fixed refusal details (chat_routes._private_steer, chat.py's parked 409).
+  const SERVER_DETAIL = {
+    409: "This conversation is waiting on a decision a private steer can't answer. Answer the decision first.",
+    400: "A private steer carries text only: no attachments, no incognito.",
+    403: "Private steering is not available for this request.",
+  } as const;
+
   it.each([
     [409, PRIVATE_STEER_WAITING_ON_PEER, "This conversation is waiting on the caller's own question"],
     [400, PRIVATE_STEER_TEXT_ONLY, "A private steer is text only: no attachments or incognito"],
@@ -953,6 +960,48 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     );
     expect(privateSteerRefusal(new ApiError(503, "raw"))).toBeNull();
     expect(privateSteerRefusal(new Error("offline"))).toBeNull();
+  });
+
+  it.each([
+    [409, PRIVATE_STEER_WAITING_ON_PEER],
+    [400, PRIVATE_STEER_TEXT_ONLY],
+    [403, PRIVATE_STEER_UNAVAILABLE],
+  ] as const)(
+    "a peer thread the list has not loaded: the server's own %i private refusal still reads as its sentence and hands the text back",
+    async (status, sentence) => {
+      // Not in the Conversations store (e.g. outside its window), so the console sends an
+      // ordinary steer — the server takes the private path on its own and refuses.
+      await listFromOthers("ctx-someone-else");
+      stubSteerFetch(refused(status, SERVER_DETAIL[status]));
+      draftBox.value = "change course";
+      const onError = vi.fn();
+      const r = renderHook(baseOpts({ onError }));
+      await act(() => r.current.queueSteer());
+      await flush();
+      expect(bodies[0]).not.toHaveProperty("private");
+      expect(onError).toHaveBeenCalledTimes(1);
+      const shown = onError.mock.calls[0][0] as string;
+      expect(shown).toBe(sentence);
+      expect(shown).not.toContain(String(status));
+      expect(shown).not.toContain(SERVER_DETAIL[status]);
+      expect(draftBox.value).toBe("change course");
+      expect(r.current.steerQueue).toEqual([]);
+    },
+  );
+
+  it("a private steer that meets the fleet proxy's member-down 409 is not told the thread waits on the peer", async () => {
+    await listFromOthers(sessionId);
+    stubSteerFetch(refused(409, "agent 'scout' is not running"));
+    const onError = vi.fn();
+    const r = renderHook(baseOpts({ draft: "go", onError }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    expect(bodies[0]).toMatchObject({ private: true });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).not.toBe(PRIVATE_STEER_WAITING_ON_PEER);
+    expect(privateSteerRefusal(new ApiError(409, "agent 'scout' is not running"))).toBeNull();
+    expect(privateSteerRefusal(new ApiError(409, SERVER_DETAIL[409]), false)).toBe(PRIVATE_STEER_WAITING_ON_PEER);
+    expect(privateSteerRefusal(new ApiError(403, "nope"), false)).toBeNull();
   });
 
   it("an ordinary chat keeps its own failure line for the same status", async () => {

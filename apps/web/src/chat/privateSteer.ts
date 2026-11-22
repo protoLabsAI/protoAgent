@@ -23,11 +23,37 @@ const REFUSALS: Record<number, string> = {
   403: PRIVATE_STEER_UNAVAILABLE,
 };
 
-/** The plain sentence for a refused PRIVATE steer, or null when `error` is not one of the
- *  server's refusals (a network failure, a 5xx) — the caller keeps its own wording for those.
- *  Only meaningful for a steer that was sent private: an ordinary chat's 400/403 means
- *  something else. */
-export function privateSteerRefusal(error: unknown): string | null {
+// The server's own fixed refusal details on its private branch (src/operator_api/chat_routes.py
+// `_private_steer`, src/server/chat.py's parked-decision 409). They are what tells a private
+// refusal apart when the console did NOT ask for private: the server takes the private path
+// for any peer-started conversation on its own (#5401), including one the Conversations list
+// has not loaded (outside its window), and its refusal must still read as a sentence and hand
+// the words back. Matched as fragments so a reworded tail does not break the match.
+const SERVER_REFUSAL_DETAILS: ReadonlyArray<readonly [number, string]> = [
+  [409, "a private steer can't answer"],
+  [400, "A private steer carries text only"],
+  [403, "Private steering is not available"],
+];
+
+// The fleet proxy's own 409 for a slug-routed call whose member is down (`isAgentNotRunning`,
+// graph/fleet/proxy.py: "agent 'x' is not running"). It is not the thread waiting on a peer.
+const AGENT_NOT_RUNNING = /\bis not running\b/;
+
+/** The plain sentence for a refused private steer, or null when `error` is not one of the
+ *  server's refusals (a network failure, a 5xx, the fleet proxy's member-down 409) — the
+ *  caller keeps its own wording for those.
+ *
+ *  A refusal is recognised by the server's fixed detail whether or not the console sent the
+ *  steer private. `sentPrivate` (default true) additionally trusts the status alone for a
+ *  steer the console DID send private, so a reworded detail still maps; an ordinary chat's
+ *  400/403 with any other detail means something else and stays null. */
+export function privateSteerRefusal(error: unknown, sentPrivate = true): string | null {
   if (!(error instanceof ApiError)) return null;
+  const detail = error.message ?? "";
+  for (const [status, fragment] of SERVER_REFUSAL_DETAILS) {
+    if (error.status === status && detail.includes(fragment)) return REFUSALS[status];
+  }
+  if (!sentPrivate) return null;
+  if (error.status === 409 && AGENT_NOT_RUNNING.test(detail)) return null;
   return REFUSALS[error.status] ?? null;
 }

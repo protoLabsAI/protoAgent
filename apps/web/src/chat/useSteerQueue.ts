@@ -213,9 +213,12 @@ export function useSteerQueue({
       if (res.started_turn) attachStartedTurn([{ id, text }], res.started_turn);
     } catch (e) {
       // The server refused a private steer (409 / 400 / 403): one plain sentence, and the
-      // words go back to the composer — never the raw detail, never lost. Text only is handed
-      // back; a private steer carried no images, so the tray was never touched.
-      const refusal = isPrivate ? privateSteerRefusal(e) : null;
+      // words go back to the composer — never the raw detail, never lost. That includes a
+      // steer the console sent ordinary into a peer thread it has not loaded (outside the
+      // Conversations window): the server took the private path on its own, and its fixed
+      // refusal detail names it. Text only is handed back; the tray is only cleared on
+      // success, so any images stay there.
+      const refusal = privateSteerRefusal(e, isPrivate);
       if (refusal) {
         handBackQueued([{ id, text }], refusal);
         return;
@@ -671,7 +674,7 @@ export function useSteerQueue({
       } catch (e) {
         // A refused private steer names its reason in a plain sentence; anything else keeps
         // the generic hand-back line. Either way the text returns to the composer.
-        const refusal = isPrivate ? privateSteerRefusal(e) : null;
+        const refusal = privateSteerRefusal(e, isPrivate);
         handBackQueued([item], refusal ?? lost);
       }
     }
