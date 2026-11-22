@@ -1,7 +1,5 @@
-"""With ``decisions.never_block`` on, an unanswered decision never holds a chat: the four
-real-hub tests of the #5678 design comment (bd-yr13z). A real hub, real operator/federation/
-fleet-service tokens over HTTP; only the model is fake. ``PA_RUN_INTEGRATION=1`` opts in.
-"""
+"""Slow real-hub tests: unanswered decisions never hold chats with ``decisions.never_block``.
+Only the model is fake; ``PA_RUN_INTEGRATION=1`` opts in. Refs #5678 (bd-yr13z)."""
 
 from __future__ import annotations
 
@@ -24,14 +22,12 @@ _DECISION = {"question": _QUESTION, "options": ["Ship it", "Hold it"]}
 _REMINDER = f'Still waiting on your decision: "{_QUESTION}"'
 _ANSWERED = "The operator answered your decision."
 _TAG = re.compile(r"\[\[([\w-]+)\]\]")
-#: Untagged answer attempts the model echoes like a tag; the hub context it never reads as a cue.
 _TYPED = ("Ship it", "Hold it", "Operator chose: Ship it (Ship it)")
 _HUB_CONTEXT = "<injected_context>"
 
 OP, FED = "operator-token-5678-9b", "federation-token-5678-9b"
 NEVER_BLOCK = "decisions:\n  never_block: true\n"
 
-#: Every chat-completion request the fake model was sent: its user-message texts, in order.
 _SEEN: list[list[str]] = []
 _SEEN_LOCK = threading.Lock()
 
@@ -113,7 +109,6 @@ def _post_message(base: str, token: str, session: str, text: str, *, mid: str, m
 
 
 def _send(base: str, token: str, session: str, text: str, *, mid: str, **fields) -> dict:
-    """One ``SendMessage`` turn; returns the task's id, state and the reply's whole text."""
     payload = _post_message(base, token, session, text, mid=mid, **fields)
     assert "error" not in payload, f"{mid}: the turn was refused: {json.dumps(payload)[:400]}"
     task = (payload.get("result") or {}).get("task") or {}
@@ -130,7 +125,6 @@ def _get(base: str, path: str):
 
 
 def _ask(base: str, token: str, session: str) -> tuple[dict, str]:
-    """The asking turn: it completes (no pause) and leaves exactly one pending decision."""
     asked = _send(base, token, session, f"{_MARK} [[ask-{session}]]", mid=f"ask-{session}")
     assert asked["state"] == "TASK_STATE_COMPLETED", f"the asking turn must complete, not park: {asked}"
     pending = poll(lambda: [d for d in _get(base, f"?session_id={session}").get("decisions") or []
@@ -161,7 +155,6 @@ def _answer(base: str, dec: str, token: str = OP) -> tuple[int, str]:
 
 
 def _assert_delivered(base: str, decision_id: str, *history: str) -> None:
-    """Answered "Ship it" by the operator, delivered, and shown to the agent after ``history``."""
     rec = poll(lambda: (d := _get(base, "/" + decision_id)) and d["state"] == "answered" and d.get("delivered_at") and d,
                timeout=60, interval=0.5)
     assert rec, f"the answer was never saved and delivered: {_get(base, '/' + decision_id)}"
@@ -180,7 +173,6 @@ def test_operator_unrelated_message_keeps_the_decision_pending_and_is_reminded_o
     assert _REMINDER not in asked["text"], f"the asking turn itself is never reminded: {asked}"
     first = _send(hub.base, OP, "op-remind", "[[op-1]] what time is it?", mid="op-1")
     second = _send(hub.base, OP, "op-remind", "[[op-2]] and the date?", mid="op-2")
-    # Both run as ordinary turns; the first reply carries the one reminder, the second never repeats it.
     _assert_normal_turn(first, "[[op-1]] what time is it?")
     _assert_normal_turn(second, "[[op-2]] and the date?")
     assert first["text"].count(_REMINDER) == 1, f"the first unrelated reply must remind once: {first}"
@@ -243,7 +235,6 @@ def test_answer_after_other_turns_resumes_the_work(fleet):
     assert _get(hub.base, "/" + dec)["state"] == "pending"
     st, raw = _answer(hub.base, dec)
     assert st == 200, f"the operator's pick was refused: {st} {raw[:300]}"
-    # The delivery turn sees the whole chat in order: both unrelated exchanges, then the answer.
     _assert_delivered(hub.base, dec, "[[ask-op-answer]]", "[[mid-1]]", "[[mid-2]]")
 
 
