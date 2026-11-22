@@ -1,4 +1,8 @@
-import { act, type ReactNode } from "react";
+import { PromptInput } from "@protolabsai/ui/ai";
+import { api } from "../lib/api";
+import { chatStore } from "../chat/chat-store";
+import { ChatSessionSlot } from "../chat/ChatSessionSlot";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +42,27 @@ vi.mock("../lib/events", () => ({
 }));
 vi.mock("../lib/notify", () => ({ notifyIfHidden: mocks.notify }));
 vi.mock("../chat/LazyMarkdown", () => ({ Markdown: ({ children }: { children: string }) => <p>{children}</p> }));
+
+const view = vi.hoisted(() => ({ composer: null as ComponentProps<typeof PromptInput> | null }));
+vi.mock("@protolabsai/ui/ai", async (original) => ({
+  ...await original<typeof import("@protolabsai/ui/ai")>(),
+  // The real field's contract the slot relies on: the textarea node lands on `inputRef`.
+  PromptInput: (props: ComponentProps<typeof PromptInput>) => {
+    view.composer = props;
+    return <textarea ref={props.inputRef} readOnly value={props.value} placeholder={props.placeholder} />;
+  },
+}));
+vi.mock("@tanstack/react-query", async (original) => ({
+  ...await original<typeof import("@tanstack/react-query")>(),
+  useQuery: () => ({ data: { identity: { name: "Gina" } } }),
+}));
+vi.mock("../chat/ComposerModelSelect", () => ({ ComposerModelSelect: () => null }));
+vi.mock("../chat/ChatStatusRail", () => ({ ChatStatusRail: () => null }));
+vi.mock("../chat/LocalTurnControls", () => ({ LocalTurnControls: () => null }));
+vi.mock("../chat/GoalRunStrip", () => ({ GoalRunStrip: () => null }));
+vi.mock("../chat/DirectiveStrip", () => ({ DirectiveWorkRequest: () => null }));
+vi.mock("../chat/sessionListSync", () => ({ registerSessionOnSend: vi.fn() }));
+
 
 /** Fire one bus topic's listeners by hand (the store is driven, not transported). */
 const emit = (topic: string, data: Record<string, unknown> = {}) =>
@@ -184,6 +209,59 @@ describe("ledger-backed decision transcript", () => {
       expect(document.body.textContent).toContain('You chose "Merge with the WARN"');
     },
   );
+});
+
+describe("composer with an open decision", () => {
+  it.each([false, true])("preserves normal sends and parked holds (paused=%s)", async (paused) => {
+    const id = `composer-${paused}`;
+    const row = decision(id, { interrupt_id: paused ? "i1" : "" });
+    vi.spyOn(decisionsApi, "getDecision").mockResolvedValue(row);
+    vi.spyOn(decisionsApi, "listDecisions").mockResolvedValue(listOf([row]));
+    const answer = vi.spyOn(decisionsApi, "answerDecision");
+    const steer = vi.spyOn(api, "steerChat").mockResolvedValue({} as Awaited<ReturnType<typeof api.steerChat>>);
+    const requests: { parts: unknown[]; metadata?: Record<string, unknown> }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || "{}"));
+      if (!body.params?.message) return new Response("{}");
+      requests.push(body.params.message);
+      const parts = [{ data: { kind: "decision", decision_id: id },
+        metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }];
+      const frames = requests.length === 1 ? [
+        { artifactUpdate: { taskId: id, artifact: { parts } } },
+        { statusUpdate: { taskId: id, status: { state: paused ? "input-required" : "completed",
+          ...(paused ? { message: { parts } } : {}) }, final: true } },
+      ] : [
+        { artifactUpdate: { taskId: "reply", artifact: { parts: [{ text: "Unrelated reply" }] } } },
+        { statusUpdate: { taskId: "reply", status: { state: "completed" }, final: true } },
+      ];
+      return new Response(frames.map((result) => `data: ${JSON.stringify({ result })}\n\n`).join(""),
+        { headers: { "Content-Type": "text/event-stream" } });
+    }));
+    const session = chatStore.continueConversation({ contextId: id, title: "Decision", origin: "test" });
+    await renderNode(<ChatSessionSlot sessionId={session.id} visible surfaceActive={false} onError={vi.fn()} />);
+    const send = async (text: string) => {
+      await act(async () => view.composer!.onChange!(text));
+      await act(async () => view.composer!.onSubmit!());
+    };
+    await send("Ask me a decision");
+    expect(document.body.textContent).toContain("Merge the release?");
+    expect(view.composer!.placeholder).toBe("Message Gina…");
+    await send("An unrelated question");
+    expect(answer).not.toHaveBeenCalled();
+    if (paused) {
+      expect(requests).toHaveLength(1);
+      expect(steer).toHaveBeenCalledTimes(1);
+      expect(steer.mock.calls[0][2]).toBe("An unrelated question");
+    } else {
+      expect(steer).not.toHaveBeenCalled();
+      expect(requests).toHaveLength(2);
+      expect(requests[1].parts).toEqual([{ text: "An unrelated question" }]);
+      expect(requests[1].metadata ?? {}).not.toHaveProperty("hitl_resume");
+      expect(document.body.textContent).toContain("Unrelated reply");
+      expect(document.body.textContent).not.toContain("Input needed first");
+    }
+    expect(buttons().some((b) => b.textContent?.includes("Merge with the WARN"))).toBe(true);
+  });
 });
 
 // ── useDecisions store ────────────────────────────────────────────────────────────────────
