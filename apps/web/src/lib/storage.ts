@@ -57,6 +57,7 @@ const noSlug = () => null;
 const SLUG = "([^:/.]+)";
 
 export const KEY_REGISTRY: readonly KeySpec[] = [
+  { id: "missingFolders.dismissed", area: "session", pattern: new RegExp(`^protoagent\\.missingFolders\\.dismissed:${SLUG}$`), category: "dismissals", slug: (m) => m[1], evictable: true },
   // ── credentials / connection ──
   { id: "authToken", area: "local", pattern: /^protoagent\.authToken$/, category: "auth", slug: noSlug, evictable: false },
   // A paired device's own token (#4336 S3) — kept apart from the operator's `authToken`.

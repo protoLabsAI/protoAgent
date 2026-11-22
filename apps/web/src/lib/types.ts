@@ -1,4 +1,8 @@
+export type MissingFolder = { name: string; path: string };
+
 export type RuntimeStatus = {
+  missing_folders?: MissingFolder[];
+  missing_folders_warning?: string | null;
   setup_complete: boolean;
   /** The agent's public URL (`A2A_PUBLIC_URL`), or "" — where its absolute media links point. */
   public_url?: string;

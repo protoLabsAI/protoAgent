@@ -804,6 +804,12 @@ def register_operator_routes(
         if not task_svc.enabled:
             raise HTTPException(status_code=503, detail="tasks not enabled")
 
+    @app.post("/api/settings/missing-folder")
+    async def _missing_folder_action(body: dict):
+        from operator_api.console_handlers import _operator_missing_folder_action
+
+        return await _operator_missing_folder_action(body)
+
     @app.get("/api/runtime/status")
     async def _runtime_status():
         # The console handler is async (it offloads the per-poll `ps` co-location
