@@ -65,3 +65,22 @@ describe("steerChat: optional image attachments", () => {
     });
   });
 });
+
+// #5400: a steer into a conversation a peer started is sent private. The flag is the only
+// thing that changes the body — without it, nothing about the request moves.
+describe("steerChat: optional private flag", () => {
+  it("posts private: true when the private flag is set", async () => {
+    const bodies = captureBody();
+    await api.steerChat("ctx-peer", "m1", "go left", undefined, undefined, undefined, true);
+    expect(bodies[0]).toEqual({ id: "m1", text: "go left", private: true });
+  });
+
+  it("has no private key without the flag (or with it false)", async () => {
+    const bodies = captureBody();
+    await api.steerChat("chat-1", "m1", "go left");
+    await api.steerChat("chat-1", "m2", "go right", undefined, undefined, { model: "m" }, false);
+    expect(bodies[0]).not.toHaveProperty("private");
+    expect(bodies[1]).not.toHaveProperty("private");
+    expect(bodies[0]).toEqual({ id: "m1", text: "go left" });
+  });
+});
