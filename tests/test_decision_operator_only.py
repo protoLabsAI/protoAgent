@@ -11,6 +11,8 @@ from operator_api import decision_routes
 from runtime.state import STATE
 from security import devices
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _decision_app(monkeypatch):
     """A decision-routes app over an in-memory store with the parked-turn resume faked."""
