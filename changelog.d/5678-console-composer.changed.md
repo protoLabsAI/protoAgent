@@ -1,1 +1,0 @@
-- **Keep chatting while a decision awaits an answer.** Decisions without a parked interrupt leave the composer sending ordinary messages; paused decisions retain their existing hold and answer behavior. Refs #5678.

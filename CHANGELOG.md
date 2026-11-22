@@ -15,6 +15,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.261.0] - 2026-11-22
+
+### Added
+- **Deliver saved decision answers as new turns (#5740).** No-pause answers are saved before delivery, with ledger-backed question and answer text and delivery tracking; paused decisions retain their resume path. Refs #5678.
+
+- **Decision cards after finished turns (#5748).** The console reads decision IDs from finished-turn artifacts and shows the existing ledger-backed card, with option answers accepted even when no parked turn resumes. Paused decisions keep their existing behavior. Refs #5678.
+
+- **Recover missed decision answers (#5749).** The next model call on a thread receives saved no-pause answers whose delivery turn never ran, with shared delivery claims preventing duplicate notes. Refs #5678.
+
+- **The agent receives a saved decision answer as an ordinary turn (#5742).** When the answer route starts a turn to deliver an answer to a decision that never paused the chat, the chat driver now runs it as a normal new turn on the decision's thread instead of rejecting it as a stale resume. The agent reads the answer from the decisions ledger, never from the message text. The turn is refused, and no turn starts, when the decision is still pending, was already delivered, or belongs to another chat. The driver records the delivery when it takes the answer, so a turn queued behind a busy chat is not mistaken for a duplicate. Decisions that paused the chat resume exactly as before. Nothing creates these decisions until `decisions.never_block` is turned on in a later slice. Refs #5678.
+
+- **Ask decisions without pausing the chat, behind a setting (#5754).** With `decisions.never_block` on (off by default), `request_decision` saves the question as a pending decision and ends the turn completed instead of pausing it, so the chat stays free for any message and the decision can still be answered later. With the setting off, the turn pauses until the decision is answered, as before. Refs #5678.
+
+- **Decisions without a paused turn expire and dismiss the way paused ones do (#5741).** When a decision that has no checkpoint pause reaches its deadline, its stated default is recorded and delivered to the agent as a new turn; one with no default simply expires and starts no turn. Dismissing such a decision closes the record without starting a turn. Paused decisions behave exactly as before. Dormant until no-pause decisions are switched on. Refs #5678.
+
+- **The agent is reminded of an open no-pause decision on every model call (#5750).** While a chat has a pending decision that does not pause the turn, each model call's input carries a short note naming the question, so the agent neither forgets it nor asks it again; when the turn's caller is not the verified human operator (a federation peer, the fleet service token, an agent device), the note adds that this caller cannot answer it and must not be asked to. The note is model-only and never appears in the operator's transcript; pause-id decisions are unchanged. New ledger helpers find a thread's open no-pause decision and the oldest one not yet reminded. Dormant until no-pause decisions are created. Refs #5678.
+
+- **Real-hub tests prove an open decision never holds a chat (#5756).** With `decisions.never_block` on, four opt-in tests (`PA_RUN_INTEGRATION=1`) boot a real hub and check over HTTP: the operator's unrelated messages run as normal turns and are reminded once; a federation caller and the fleet service token are served as normal turns, never see the question or the reminder, and cannot answer by typed option, cited task, answer flag, forged "answered by" data or the answer route (403); an answer given after other turns reaches the agent with the whole chat in view; and an open decision survives a hub restart and is still answered and delivered. Refs #5678.
+
+- **Remind the operator once that a decision is still waiting (#5752).** When the operator sends a message that does not answer an open no-pause decision, the reply ends with one line, `Still waiting on your decision: "<question>"`, and the decision is stamped as reminded so the line never repeats for it. The asking turn, the answering turn, unattended turns and replies to peer agents, federation callers or the fleet service token never carry it; pause-id decisions are untouched. Refs #5678.
+
+- **Approval decisions require an explicit option pick (#5746).** Unattended ask-tier approvals reject typed answers, and agents can opt other decisions into the same protection with `request_decision(requires_pick=True)`. Other decisions retain typed answers. Refs #5678.
+
+- **Completed turns carry decision cards (#5744).** No-pause decisions now include their durable identity and question payload in non-streaming replies and completed A2A answer artifacts without requiring input. Refs #5678.
+
+- **Exact typed decision answers (#5745).** Verified operator messages can answer a single open no-pause decision by matching an option's full id or label, ignoring case and punctuation. Other messages, server-started turns, and decisions requiring a pick remain pending. Refs #5678.
+
+- **The agent can withdraw a decision that has no paused turn without starting one (#5743).** When the agent withdraws its own decision that was never raised on a checkpoint pause, the record closes with the reason and the operator's card goes away, with no clearing resume and so no stray turn. Paused decisions are still cleared by resuming the parked turn, and the ownership check is unchanged. Dormant until no-pause decisions are switched on. Refs #5678.
+
+### Changed
+- **Keep chatting while a decision awaits an answer (#5751).** Decisions without a parked interrupt leave the composer sending ordinary messages; paused decisions retain their existing hold and answer behavior. Refs #5678.
+
+- **Decisions: a message from anyone but the operator never answers a paused decision (#5739).** A peer agent, a sister agent through the hub (the fleet service token) or a paired agent device that sends a message into a chat with an open decision no longer answers it, even when the message names the paused task, carries the resume flag, or claims to be answered by the operator. The message is held like any other message sent while the decision is open, and the decision stays pending until the operator answers. The operator still answers by message from the console, through the hub, from a paired phone and from a notification tap, and "answered by" always comes from the verified credential, never from the message. Refs #5678 (slice 5b).
+
+- **Decision answers require a verified operator (#5738).** Answer and cancel routes reject fleet service tokens, agent devices and federation callers while preserving direct console, hub-delegated console and paired-phone access, including notification taps. An instance with no credential configured still accepts its operator as before. Answer attribution comes from the verified operator credential. Refs #5678.
+
+- **Decision cards hide chat replies when an option pick is required (#5747).** Hide “Reply in chat instead” for decisions with `requires_pick` set, preserving the control for all other decisions. Refs #5678.
+
+### Fixed
+- **Mock-server resilience test waits for handler failure logs (#5755).** Use a bounded poll for stderr so delayed pipe delivery after the HTTP response does not cause spurious E2E failures. Fixes #5753.
+
 ## [0.260.0] - 2026-11-22
 
 ### Added
