@@ -13,6 +13,7 @@ from langgraph.types import Command, interrupt
 from graph.decisions import DecisionStore
 from operator_api import decision_routes
 from runtime.state import STATE
+from tests._operator_identity import as_operator
 
 turn_control = importlib.import_module("server.turn_control")
 
@@ -73,6 +74,7 @@ async def test_answer_returns_on_consumption_and_preserves_next_pause(monkeypatc
 
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", deliver)
     app = FastAPI()
+    as_operator(app)
     decision_routes.register_decision_routes(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         url = f"/api/decisions/{rec.id}/answer"
@@ -121,6 +123,7 @@ async def test_disconnected_answer_keeps_delivery_claim(monkeypatch):
 
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", deliver)
     app = FastAPI()
+    as_operator(app)
     decision_routes.register_decision_routes(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         url = f"/api/decisions/{rec.id}/answer"

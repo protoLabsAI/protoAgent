@@ -37,6 +37,7 @@ def client():
     @app.middleware("http")
     async def identity(request, call_next):
         request.state.device_id = "device-josh"
+        request.state.principal_kind = "device"
         return await call_next(request)
 
     decision_routes.register_decision_routes(app)
@@ -208,7 +209,7 @@ async def test_answer_attribution_label_and_conflict(ledger, parked, monkeypatch
         data = (await c.get(f"/api/decisions/{rec.id}")).json()
         assert data["answer"] == "go"
         assert data["answer_label"] == "Release"
-        assert data["answered_by"] == "device-josh"
+        assert data["answered_by"] == "operator"
         assert data["answered_surface"] == (surface or "console")
         assert data["answered_at"] == clock.now.isoformat(timespec="seconds")
         # A closed record wins even over an invalid answer from a stale surface.

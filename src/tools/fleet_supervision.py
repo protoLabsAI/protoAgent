@@ -20,7 +20,9 @@ Two read-only answers to "what is the fleet doing", built only from seams that a
 Members are reported as a list keyed by their immutable roster ``id``, so two members that share
 a display name stay two rows. The two read tools never mutate members. The independently
 opt-in restart tool uses approval interrupts and the shared fleet lifecycle ops.
-``fleet_dismiss`` uses the member operator routes, only in operator chat turns.
+``fleet_dismiss`` uses the member operator routes, only in operator chat turns; a member's
+decision routes accept only a human-operator credential, so it closes waiting tasks but cannot
+cancel a decision on the operator's behalf.
 """
 
 from __future__ import annotations
@@ -300,7 +302,8 @@ def build_fleet_supervision_tools() -> list:
 
         Read-only: it cannot answer a decision or change a task. A member that cannot be read is
         reported with ``status: "unreachable"`` (or ``"stopped"``) and the others still answer.
-        Use fleet_dismiss with a reason when the operator asks to clear a stale item.
+        Use fleet_dismiss with a reason when the operator asks to clear a stale task; a
+        decision is answered or cancelled by the operator themselves, not by this agent.
         """
         return await fleet_pending()
 
@@ -312,8 +315,13 @@ def build_fleet_supervision_tools() -> list:
         """Dismiss a stale decision or waiting task when the operator asks in chat.
 
         Supply the immutable member id from fleet_pending, kind (decision or task),
-        item_id and a non-empty reason. Cancels decisions without choosing an answer;
-        closes tasks with outcome dismissed. Unattended and subagent turns are refused.
+        item_id and a non-empty reason. Closes waiting tasks with outcome dismissed.
+        Unattended and subagent turns are refused.
+
+        A local member refuses a decision cancel from this tool: only a verified human
+        operator credential (the console, directly or through the hub, or a paired phone) may
+        answer or cancel a decision, so the call returns ``error: "operator_answer_required"``
+        and the decision stays pending. Tell the operator to answer or cancel it themselves.
         """
         from graph.fleet import member_read
         from graph.middleware.knowledge import _restrict_prior_session_memory
@@ -361,7 +369,11 @@ def build_fleet_supervision_tools() -> list:
                         payload["expected_status"] = "waiting"
                     result = await member_read._post_member_json(fd._slug_for(matches[0]), path, payload)
                     if not result["ok"] and "status_code" in result:
-                        result = {**result, "error": "not_found" if result["status_code"] == 404 else "member_error"}
+                        code = result["status_code"]
+                        error = ("not_found" if code == 404
+                                 else "operator_answer_required" if code == 403 and kind == "decision"
+                                 else "member_error")
+                        result = {**result, "error": error}
             return result
         except Exception:  # noqa: BLE001
             result = {"ok": False, "error": "unreachable"}

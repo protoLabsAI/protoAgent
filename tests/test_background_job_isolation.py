@@ -39,6 +39,7 @@ from operator_api import decision_routes
 from runtime.state import STATE
 from scheduler.local import LocalScheduler
 from tests._a2a_app import build_app, drain_handlers
+from tests._operator_identity import as_operator
 
 chat_mod = importlib.import_module("server.chat")
 
@@ -242,6 +243,7 @@ async def test_parked_decision_and_long_turn_do_not_delay_unrelated_dispatch(tmp
     _route_httpx_to(app, monkeypatch)
 
     op_app = FastAPI()
+    as_operator(op_app)
     decision_routes.register_decision_routes(op_app)
 
     try:

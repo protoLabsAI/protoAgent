@@ -16,6 +16,7 @@ from operator_api.telemetry_routes import register_telemetry_routes
 from runtime.state import STATE
 from scheduler.local import LocalScheduler
 from server import turn_control
+from tests._operator_identity import as_operator
 
 chat = importlib.import_module("server.chat")
 
@@ -31,6 +32,7 @@ def cap(tmp_path, monkeypatch):
     monkeypatch.setattr(STATE, "decision_store", decisions)
     monkeypatch.setattr("graph.decisions._notify_created", lambda rec: None)
     app = FastAPI()
+    as_operator(app)
     register_decision_routes(app)
     register_telemetry_routes(app, spend_cap_status=turn_control.spend_cap_status)
     with TestClient(app) as client:
