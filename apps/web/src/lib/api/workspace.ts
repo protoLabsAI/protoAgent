@@ -119,6 +119,9 @@ export const workspaceApi = {
   fsOpenInEditor(body: { project: string; path: string; line?: number }) {
     return request<{ ok: boolean; editor: string }>("/api/fs/open-in-editor", { method: "POST", body });
   },
+  resolveMissingFolder(body: { name: string; path: string; action: "remove" | "relocate"; new_path?: string }) {
+    return request<{ ok: boolean; board_projects: string[] }>("/api/settings/missing-folder", { method: "POST", body });
+  },
   fsProjects() {
     return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
   },

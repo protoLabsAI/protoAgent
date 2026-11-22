@@ -1,0 +1,1 @@
+- **Act on missing work folders from the warning.** Remove a folder, choose its new location, or dismiss it for this session directly from the banner. Removal preserves board project references and reports them; removing the last explicit folder does not grant access to other board projects. Missing-folder logs appear only once per folder per process. Fixes #5692.

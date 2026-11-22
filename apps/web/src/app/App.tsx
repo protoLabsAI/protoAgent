@@ -53,6 +53,7 @@ import { StorageWarning } from "./StorageWarning";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { HomeOriginNotice } from "./HomeOriginNotice";
 import { SignedOutBanner } from "./SignedOutBanner";
+import { MissingFolderBanners } from "./MissingFolderBanner";
 import {
   SetupGapBanner,
   gapIdentity,
@@ -470,7 +471,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // `setup_gaps[]` (graph/plugins/setup_gaps.py, #3395) as actionable, dismissible banners. The
   // server also projects every gap into `warnings[]` as a plain `Label: message` line, so the
   // split drops those — otherwise a gap renders as a dead plain alert (or twice).
-  const { plainWarnings: stringWarnings, setupGaps, gapsKnown } = splitRuntimeWarnings(runtime);
+  const { plainWarnings, setupGaps, gapsKnown } = splitRuntimeWarnings(runtime);
+  const stringWarnings = plainWarnings.filter((w) => !runtime?.missing_folders?.length || w !== runtime.missing_folders_warning);
+  const missingFolderBanners = <MissingFolderBanners key={currentSlug()} scope={currentSlug()} folders={runtime?.missing_folders ?? []} />;
   // Session-scoped, signature-keyed dismissal (client-only; never mutates server config), kept
   // PER AGENT — `runtime` is the focused agent's status, and a fleet switch reloads this same tab.
   // It resets when the server genuinely clears a gap (a known list), never while the list is
@@ -1248,6 +1251,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           onSessionSheetChange={setSessionSheetOpen}
           banners={
             <>
+              {missingFolderBanners}
               {stringWarnings.map((w) => (
                 <Alert status="warning" className="shell-warning-banner" key={w}>
                   {w}
@@ -1293,6 +1297,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       {/* Operational warnings from the runtime status (#706 co-located instances etc.) —
           a slim alert strip under the topbar. Server-driven: appears/clears with the poll.
           DS Alert owns the visuals; the class is placement + the e2e hook. */}
+      {missingFolderBanners}
       {stringWarnings.map((w) => (
         <Alert status="warning" className="shell-warning-banner" key={w}>
           {w}

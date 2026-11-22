@@ -233,3 +233,155 @@ def test_status_poll_does_not_repeat_registry_config_warnings(tmp_path, caplog):
         build_fs_tools(cfg)
     msgs = [r.getMessage() for r in caplog.records]
     assert any("missing name/path" in m for m in msgs) and any("duplicate project name" in m for m in msgs), msgs
+
+
+def test_missing_folders_are_structured_and_logged_once_across_rebuilds(two_projects, caplog):
+    from tools.fs_tools import missing_projects
+
+    cfg, a, b = two_projects
+    shutil.rmtree(a)
+    shutil.rmtree(b)
+    with caplog.at_level(logging.WARNING, logger="protoagent.fs"):
+        build_fs_tools(cfg)
+        build_fs_tools(cfg)
+    assert missing_projects(cfg) == [
+        {"name": "alpha", "path": str(a)}, {"name": "beta", "path": str(b)},
+    ]
+    warnings = [r.getMessage() for r in caplog.records if "folder is missing" in r.getMessage()]
+    assert len(warnings) == 2
+
+
+@pytest.fixture
+def folder_actions(monkeypatch, tmp_path):
+    from graph.config import LangGraphConfig
+    from graph.plugins.host import HOST
+    from runtime.state import STATE
+
+    cfg = LangGraphConfig.app_defaults()
+    cfg.filesystem_enabled = True
+    gone = str(tmp_path / "gone")
+    cfg.filesystem_projects = [{"name": "gone", "path": gone, "write": True, "no_delete": True}]
+    cfg.projects = [{"name": "Board project", "path": gone, "repo": "owner/repo"}]
+    monkeypatch.setattr(STATE, "graph_config", cfg)
+
+    def apply(update):
+        # The host invokes the callback against current state under its write lock.
+        try:
+            patch = update(STATE.graph_config)
+        except Exception as exc:  # same error contract as the real settings writer
+            return False, [str(exc)]
+        if "filesystem" in patch:
+            cfg.filesystem_projects = patch["filesystem"]["projects"]
+        if "projects" in patch:
+            cfg.projects = patch["projects"]
+        return True, []
+
+    monkeypatch.setattr(HOST, "apply_settings", apply)
+    return cfg, {"name": "gone", "path": gone}
+
+
+async def test_remove_folder_clears_banner_and_retains_board_reference(folder_actions):
+    from operator_api.console_handlers import _operator_missing_folder_action, _operator_runtime_status
+
+    cfg, folder = folder_actions
+    before = await _operator_runtime_status()
+    assert before["missing_folders"] == [folder]
+    result = await _operator_missing_folder_action({**folder, "action": "remove"})
+    assert result["board_projects"] == ["Board project"]
+    assert cfg.filesystem_projects == []
+    assert cfg.projects == [{"name": "Board project", "path": folder["path"], "repo": "owner/repo", "fs": False}]
+    after = await _operator_runtime_status()
+    assert after["missing_folders"] == []
+    assert not any(folder["path"] in w for w in after["warnings"])
+
+
+@pytest.mark.parametrize("source", ["last_explicit", "remaining_explicit", "registry"])
+async def test_remove_folder_never_activates_shadowed_registry_grants(folder_actions, tmp_path, source):
+    from operator_api.console_handlers import _operator_missing_folder_action, _operator_runtime_status
+
+    cfg, folder = folder_actions
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "secret.txt").write_text("private")
+    cfg.projects.append({"name": "other", "path": str(other), "repo": "owner/other", "fs": True})
+    if source == "registry":
+        cfg.filesystem_projects = []
+        folder["name"] = "Board project"
+    elif source == "remaining_explicit":
+        cfg.filesystem_projects.append({"name": "other", "path": str(other), "write": False})
+
+    result = await _operator_missing_folder_action({**folder, "action": "remove"})
+
+    assert result["board_projects"] == ["Board project"]
+    assert (await _operator_runtime_status())["missing_folders"] == []
+    assert cfg.projects[1] == {
+        "name": "other", "path": str(other), "repo": "owner/other", "fs": source != "last_explicit",
+    }
+    if source == "last_explicit":
+        assert cfg.filesystem_projects == []
+        assert cfg.effective_filesystem_projects() == []
+        assert build_fs_tools(cfg) == []
+    else:
+        tools = _tools(cfg)
+        assert "private" in _read(tools, "other", "secret.txt")
+        written = tools["write_file"].invoke({"project": "other", "path": "new.txt", "content": "x"})
+        assert written.startswith("Error:") == (source == "remaining_explicit")
+
+
+@pytest.mark.parametrize("destination", ["exists", "missing", "file", "relative"])
+async def test_relocate_folder_validates_destination_and_preserves_permissions(folder_actions, tmp_path, destination):
+    from fastapi import HTTPException
+    from operator_api.console_handlers import _operator_missing_folder_action, _operator_runtime_status
+
+    cfg, folder = folder_actions
+    target = tmp_path / destination
+    if destination == "exists":
+        target.mkdir()
+    elif destination == "file":
+        target.write_text("not a folder")
+    new_path = "relative" if destination == "relative" else str(target)
+    body = {**folder, "action": "relocate", "new_path": new_path}
+    original = [dict(e) for e in cfg.filesystem_projects]
+    if destination != "exists":
+        with pytest.raises(HTTPException) as err:
+            await _operator_missing_folder_action(body)
+        assert err.value.status_code == 400
+        assert cfg.filesystem_projects == original
+    else:
+        await _operator_missing_folder_action(body)
+        assert cfg.filesystem_projects == [{**original[0], "path": str(target)}]
+        assert (await _operator_runtime_status())["missing_folders"] == []
+        # A second click using an old banner must never target a changed entry.
+        with pytest.raises(HTTPException) as err:
+            await _operator_missing_folder_action({**folder, "action": "remove"})
+        assert err.value.status_code == 409
+
+
+@pytest.mark.parametrize("action", ["remove", "relocate"])
+async def test_registry_derived_folder_actions(folder_actions, tmp_path, action):
+    from operator_api.console_handlers import _operator_missing_folder_action, _operator_runtime_status
+
+    cfg, folder = folder_actions
+    cfg.filesystem_projects = []
+    folder["name"] = "Board project"
+    target = tmp_path / "moved"
+    target.mkdir()
+    await _operator_missing_folder_action({**folder, "action": action, "new_path": str(target)})
+    assert cfg.filesystem_projects == []  # do not materialize the projection
+    assert cfg.projects[0]["repo"] == "owner/repo"
+    assert cfg.projects[0]["path"] == (str(target) if action == "relocate" else folder["path"])
+    assert (await _operator_runtime_status())["missing_folders"] == []
+
+
+async def test_folder_action_reports_failed_config_reload(folder_actions, monkeypatch):
+    from fastapi import HTTPException
+    from graph.plugins.host import HOST
+    from operator_api.console_handlers import _operator_missing_folder_action
+
+    cfg, folder = folder_actions
+    monkeypatch.setattr(HOST, "apply_settings", lambda update: (False, ["reload failed"]))
+    with pytest.raises(HTTPException) as err:
+        await _operator_missing_folder_action({**folder, "action": "remove"})
+    assert err.value.status_code == 500
+    assert "reload failed" in err.value.detail
+    assert cfg.filesystem_projects[0]["path"] == folder["path"]
