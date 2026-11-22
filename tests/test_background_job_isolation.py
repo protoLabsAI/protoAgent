@@ -242,6 +242,12 @@ async def test_parked_decision_and_long_turn_do_not_delay_unrelated_dispatch(tmp
     _route_httpx_to(app, monkeypatch)
 
     op_app = FastAPI()
+    # This isolated route harness represents an authenticated operator.
+    @op_app.middleware("http")
+    async def operator_identity(request, call_next):
+        request.state.principal_kind = "shared-operator-bearer"
+        return await call_next(request)
+
     decision_routes.register_decision_routes(op_app)
 
     try:

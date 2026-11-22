@@ -31,6 +31,12 @@ def cap(tmp_path, monkeypatch):
     monkeypatch.setattr(STATE, "decision_store", decisions)
     monkeypatch.setattr("graph.decisions._notify_created", lambda rec: None)
     app = FastAPI()
+    # This isolated route harness represents an authenticated operator.
+    @app.middleware("http")
+    async def operator_identity(request, call_next):
+        request.state.principal_kind = "shared-operator-bearer"
+        return await call_next(request)
+
     register_decision_routes(app)
     register_telemetry_routes(app, spend_cap_status=turn_control.spend_cap_status)
     with TestClient(app) as client:

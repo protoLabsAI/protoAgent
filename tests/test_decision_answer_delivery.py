@@ -145,6 +145,12 @@ async def harness(monkeypatch):
         transport = _ShrunkTimeoutASGI(turn.a2a_app(), scale)
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: RealAsyncClient(transport=transport, **kw))
         app = FastAPI()
+        # This isolated route harness represents an authenticated operator.
+        @app.middleware("http")
+        async def operator_identity(request, call_next):
+            request.state.principal_kind = "shared-operator-bearer"
+            return await call_next(request)
+
         decision_routes.register_decision_routes(app)
         client = RealAsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
         return turn, rec, client

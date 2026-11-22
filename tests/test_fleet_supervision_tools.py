@@ -367,9 +367,10 @@ async def _dismiss(env, **overrides):
     })
 
 
-async def test_dismiss_uses_member_operator_routes_and_removes_pending_items(dismiss_env, monkeypatch, tmp_path):
+async def test_dismiss_service_token_cannot_cancel_decisions_but_can_close_tasks(dismiss_env, monkeypatch, tmp_path):
     import httpx
     from fastapi import FastAPI
+    from a2a_impl import auth
     from graph.decisions import DecisionStore
     from graph.fleet import proxy
     from operator_api.decision_routes import register_decision_routes
@@ -389,6 +390,8 @@ async def test_dismiss_uses_member_operator_routes_and_removes_pending_items(dis
 
     monkeypatch.setattr("graph.decision_reconcile.interrupt_parked", not_parked)
     app = FastAPI()
+    auth.install(app, bearer_token="operator-test-token", fleet_token="fleet-test-token",
+                 api_key="", allowed_origins_raw="")
     register_decision_routes(app)
     notices = []
 
@@ -410,12 +413,13 @@ async def test_dismiss_uses_member_operator_routes_and_removes_pending_items(dis
         monkeypatch.setattr(proxy, "_get_client", lambda: client)
         before = _by_id(await fs.fleet_pending())[_ALPHA["id"]]
         assert before["pending_decisions"] == before["waiting_tasks"] == 1
-        assert (await _dismiss(dismiss_env, item_id=decision.id))["ok"] is True
+        refused = await _dismiss(dismiss_env, item_id=decision.id)
+        assert refused["ok"] is False and refused["status_code"] == 403
         assert (await _dismiss(dismiss_env, kind="task", item_id=task["id"]))["ok"] is True
         after = _by_id(await fs.fleet_pending())[_ALPHA["id"]]
-        assert after["pending_decisions"] == after["waiting_tasks"] == 0
+        assert after["pending_decisions"] == 1 and after["waiting_tasks"] == 0
     assert len(notices) == 1 and "Outcome: dismissed" in notices[0]["text"]
-    assert decisions.get(decision.id).state == "withdrawn"
+    assert decisions.get(decision.id).pending
     closed = tasks.get(task["id"])
     assert closed["status"] == "closed" and closed["close_reason"] == "dismissed: No longer needed"
     assert [r.url.path for r in sent if r.method == "POST"] == [
@@ -423,7 +427,8 @@ async def test_dismiss_uses_member_operator_routes_and_removes_pending_items(dis
     ]
     entries = dismiss_env.audit.get_recent()
     assert len(entries) == 2
-    assert all(e["success"] and e["args"]["reason"] == "No longer needed" for e in entries)
+    assert sorted(e["success"] for e in entries) == [False, True]
+    assert all(e["args"]["reason"] == "No longer needed" for e in entries)
 
 
 @pytest.mark.parametrize("overrides,error", [

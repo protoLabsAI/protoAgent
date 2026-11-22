@@ -59,6 +59,12 @@ def _api_app():
     from operator_api.decision_routes import register_decision_routes
 
     app = FastAPI()
+    # This isolated route harness represents an authenticated operator.
+    @app.middleware("http")
+    async def operator_identity(request, call_next):
+        request.state.principal_kind = "shared-operator-bearer"
+        return await call_next(request)
+
     register_decision_routes(app)
     return app
 

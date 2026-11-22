@@ -7,8 +7,8 @@ here, shows the question + options, and answers one; answering resumes the parke
 through the same HITL-resume entry point an attended session uses.
 
 Registrar-style (``register_decision_routes(app)``), mounted next to the other operator API
-registrars in ``server/__init__.py``. Full-scope operator auth, like the directive routes —
-nothing here is a credential-plane write, so the global auth middleware gates it.
+registrars in ``server/__init__.py``. The global auth middleware verifies credentials;
+answer and cancel additionally require its verified human-operator identity.
 
 This file must NOT import ``server`` (the import-layering invariant): the parked-turn resume
 goes over the loopback A2A endpoint (a network call, carrying the console's own
@@ -22,6 +22,7 @@ import logging
 from fastapi import Request
 from pydantic import BaseModel
 
+from a2a_impl.auth import is_human_operator
 from graph.decision_resume import CANCELLED_RESUME as CANCELLED_RESUME
 from graph.decision_resume import resume_parked_turn as _resume_parked_turn
 
@@ -192,6 +193,8 @@ def register_decision_routes(app) -> None:
         consumption leaves the decision pending: 200 ``resumed: false``, retryable. A delivery
         still queued after :data:`ACCEPT_WAIT_S` (the session is busy) is 202
         ``delivering: true``; answering again meanwhile joins it rather than sending twice."""
+        if not is_human_operator(getattr(request.state, "principal_kind", None)):
+            raise HTTPException(status_code=403, detail="Forbidden: human operator credential required")
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:
@@ -219,7 +222,9 @@ def register_decision_routes(app) -> None:
         inflight[decision_id] = mine
         # _resolve_answer rejects a blank option_id, so a non-None one here names an option.
         text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id is not None else answer
-        actor = getattr(request.state, "device_id", None) or "operator"
+        # Every accepted credential represents the operator, including a paired phone or
+        # a verified hub delegation. Request metadata and device ids are not actors.
+        actor = "operator"
         # Picked from the listed options, or typed (#5668): recorded on the answered record.
         answer_kind = "option" if body.option_id is not None else "text"
 
@@ -298,7 +303,7 @@ def register_decision_routes(app) -> None:
         return {"decision": with_delivery(updated), "resumed": updated.state == "answered"}
 
     @app.post("/api/decisions/{decision_id}/cancel")
-    async def _api_cancel_decision(decision_id: str, body: CancelRequest | None = None):
+    async def _api_cancel_decision(decision_id: str, request: Request, body: CancelRequest | None = None):
         """Cancel a pending decision (the operator dismissed it) and unblock the parked turn.
 
         404 for an unknown id, 409 when it is no longer pending. The record is marked
@@ -315,6 +320,8 @@ def register_decision_routes(app) -> None:
         from graph.decision_reconcile import interrupt_parked
         from runtime.state import STATE
 
+        if not is_human_operator(getattr(request.state, "principal_kind", None)):
+            raise HTTPException(status_code=403, detail="Forbidden: human operator credential required")
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
         if rec is None:

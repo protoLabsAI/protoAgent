@@ -138,6 +138,12 @@ def _run_turn(message, session_id, *, resume=False, origin):
 
 def _client() -> TestClient:
     app = FastAPI()
+    # This isolated route harness represents an authenticated operator.
+    @app.middleware("http")
+    async def operator_identity(request, call_next):
+        request.state.principal_kind = "shared-operator-bearer"
+        return await call_next(request)
+
     decision_routes.register_decision_routes(app)
     return TestClient(app)
 
@@ -442,6 +448,12 @@ async def test_failed_delivery_is_retryable_and_stale_answer_cannot_resume_next_
 
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", deliver)
     app = FastAPI()
+    # This isolated route harness represents an authenticated operator.
+    @app.middleware("http")
+    async def operator_identity(request, call_next):
+        request.state.principal_kind = "shared-operator-bearer"
+        return await call_next(request)
+
     decision_routes.register_decision_routes(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         url = f"/api/decisions/{rec.id}/answer"
@@ -858,6 +870,12 @@ async def test_simultaneous_answers_resume_once_and_the_loser_gets_409(store, mo
 
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", slow_resume)
     app = FastAPI()
+    # This isolated route harness represents an authenticated operator.
+    @app.middleware("http")
+    async def operator_identity(request, call_next):
+        request.state.principal_kind = "shared-operator-bearer"
+        return await call_next(request)
+
     decision_routes.register_decision_routes(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         url = f"/api/decisions/{rec.id}/answer"
@@ -896,6 +914,12 @@ async def test_a_waiting_answer_delivers_when_the_first_fails_delivery(store, mo
 
     monkeypatch.setattr(decision_routes, "_resume_parked_turn", flaky_resume)
     app = FastAPI()
+    # This isolated route harness represents an authenticated operator.
+    @app.middleware("http")
+    async def operator_identity(request, call_next):
+        request.state.principal_kind = "shared-operator-bearer"
+        return await call_next(request)
+
     decision_routes.register_decision_routes(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         url = f"/api/decisions/{rec.id}/answer"
