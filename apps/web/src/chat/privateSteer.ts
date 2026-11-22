@@ -17,10 +17,15 @@ export const PRIVATE_STEER_TEXT_ONLY =
 export const PRIVATE_STEER_UNAVAILABLE =
   "Not sent: private messages to conversations others started are turned off or need you to sign in again.";
 
+/** Delivery may be uncertain after a transport failure; do not claim it was never sent. */
+export const PRIVATE_STEER_DELIVERY_FAILED =
+  "Couldn't confirm delivery of your private message; your text is still in the composer.";
+
 const REFUSALS: Record<number, string> = {
   409: PRIVATE_STEER_WAITING_ON_PEER,
   400: PRIVATE_STEER_TEXT_ONLY,
   403: PRIVATE_STEER_UNAVAILABLE,
+  503: PRIVATE_STEER_DELIVERY_FAILED,
 };
 
 // The server's own fixed refusal details on its private branch (src/operator_api/chat_routes.py
@@ -33,27 +38,24 @@ const SERVER_REFUSAL_DETAILS: ReadonlyArray<readonly [number, string]> = [
   [409, "a private steer can't answer"],
   [400, "A private steer carries text only"],
   [403, "Private steering is not available"],
+  [503, "The private steer could not be delivered"],
 ];
 
 // The fleet proxy's own 409 for a slug-routed call whose member is down (`isAgentNotRunning`,
 // graph/fleet/proxy.py: "agent 'x' is not running"). It is not the thread waiting on a peer.
 const AGENT_NOT_RUNNING = /\bis not running\b/;
 
-/** The plain sentence for a refused private steer, or null when `error` is not one of the
- *  server's refusals (a network failure, a 5xx, the fleet proxy's member-down 409) — the
- *  caller keeps its own wording for those.
- *
- *  A refusal is recognised by the server's fixed detail whether or not the console sent the
- *  steer private. `sentPrivate` (default true) additionally trusts the status alone for a
- *  steer the console DID send private, so a reworded detail still maps; an ordinary chat's
- *  400/403 with any other detail means something else and stays null. */
+/** A plain sentence for every failed private send, so callers always hand the text back.
+ *  Fixed server details also identify private refusals for sessions absent from the loaded
+ *  Conversations list. Other ordinary-chat failures stay with the caller's existing path. */
 export function privateSteerRefusal(error: unknown, sentPrivate = true): string | null {
-  if (!(error instanceof ApiError)) return null;
+  const fallback = sentPrivate ? PRIVATE_STEER_DELIVERY_FAILED : null;
+  if (!(error instanceof ApiError)) return fallback;
   const detail = error.message ?? "";
   for (const [status, fragment] of SERVER_REFUSAL_DETAILS) {
     if (error.status === status && detail.includes(fragment)) return REFUSALS[status];
   }
   if (!sentPrivate) return null;
-  if (error.status === 409 && AGENT_NOT_RUNNING.test(detail)) return null;
-  return REFUSALS[error.status] ?? null;
+  if (error.status === 409 && AGENT_NOT_RUNNING.test(detail)) return fallback;
+  return REFUSALS[error.status] ?? fallback;
 }

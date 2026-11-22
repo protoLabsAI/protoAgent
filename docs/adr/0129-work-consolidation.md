@@ -277,6 +277,127 @@ numbering below.
 
 **Amendment (ADR 0135 D9, #5545).** Each job still runs in its own `job:` session, and Activity stays the provenance feed. What changes is where results are *shown*. Each instance has one Home conversation: an ordinary operator chat with a stable id, pinned in the console. A job with no `origin_session` shows its results in Home. Owner notices (notify, question, review) also post an entry in Home. Home entries are written into Home's own thread as reference messages, so a reply in Home sees them. Showing a result in Home never runs the job there and never gives the job Home's context. A job created from another chat still shows its results in that chat, unless the operator moves it to Home.
 
+#### Amendment — Batched inbox recovery turns (2026-11-22, Refs #5519)
+
+**Job.** When several inbox items arrive at once, help the agent read them in
+one turn so it replies once, without breaking per-item retry deduplication.
+
+**Scope.** This is the design contract for slice 2 (`bd-qcxtl`), not an
+implementation claim. It supersedes D6's distinct-session-per-item rule and
+same-source test expectation only for the retry-when-free / now-recovery pass
+in `src/server/stores.py`. Today `InboxStore.claim_now_recovery_batch` in
+`src/inbox/store.py` claims at most eight items and the pass calls
+`STATE.inbox_now_delivery` (`src/server/a2a.py::_fire_activity_from_inbox`) once
+per item. The console's direct new-`now`-post path in
+`src/operator_api/console_handlers.py` is out of scope. Pull and thread delivery,
+eligibility, age limits, retry budgets and claim leases stay intact.
+
+**Grouping.** Partition unbound eligible items claimed in one pass by exact
+`source` and `priority`: priority **does** split groups, so `now` and `next` are
+not mixed. Also split on `origin_session` (null and empty mean no origin) and
+requester provenance (`origin_meta`), so one execution cannot arbitrarily inherit
+another member's chat or requester. Do not accumulate across passes. Process
+groups in first-member claim order. A group of one keeps today's per-item
+identity allocation and wire shape unchanged, including `inbox_id`, text and
+creation-time metadata. Existing per-item execution bindings remain singleton
+deliveries; never overwrite them to batch.
+
+For two or more members, send one self-A2A `SendMessage` with
+`returnImmediately: true`. Include every member's full text, separated and
+labelled by item id in ascending numeric id order, with each member's queued
+timestamp and late-delivery notice. Ask for one response to the group.
+
+**Batch identity.** Freeze membership before sending. In one store transaction,
+revalidate each member's claim and bind every member's `inbox_executions` row to
+the same context and message id. Abort the entire binding if any claim changed
+or any member acquired a binding. Persist the full member list, dispatch snapshot
+and generation with the binding, so a partial later claim cannot redefine it.
+There remains one execution row per `item_id`; several rows may name one batch.
+
+Use UUIDv5 with `NAMESPACE_URL` and a canonical name: compact JSON of
+`["protoagent/inbox-batch/v1", store_namespace, sorted_member_ids, generation]`.
+`store_namespace` is a UUID allocated once and persisted in this inbox database;
+member ids are integers sorted ascending without duplicates. The context is
+`job:` plus UUIDv5 of that name prefixed with `"context:"`; the message id is
+UUIDv5 of that name prefixed with `"message:"`. Generation starts at zero for
+each member set. Retries reuse the persisted generation. Proven terminal failure
+retires it: retain a durable retirement tombstone and atomically advance the
+set's generation before a fresh invocation, so unchanged members cannot
+regenerate a dead task's identity. Claim time, claim order and source names are
+not identity inputs.
+
+**Retry dedup and differing sets.** A retry of the same frozen member set
+presents the same `(contextId, messageId)` and joins the accepted A2A turn.
+Acceptance is for the whole message; a partly accepted batch means partial local
+bookkeeping, never partial acceptance of its payload. Reconcile bindings before
+forming new groups:
+
+- Already-delivered members are not re-sent. Members with an accepted task handle
+  or `recovery_accepted_at` complete local marking without a fire.
+- A member bound to an accepted batch identity is never re-batched into a new
+  identity. Resolve the original full membership and task even if only some
+  members are claimed this pass. New unbound members form separate groups:
+  accepted `{A, B}` followed by claimed `{B, C}` completes B against the original
+  task and delivers C separately.
+- Uncertain sends retain their frozen binding too. Reconcile the original
+  identity; a transport retry uses the original full snapshot and identity, so
+  A2A dedup joins the same turn. Never send a reduced `{B}` or enlarged
+  `{A, B, C}` under a new identity while `{A, B}` is unresolved. Known acceptance
+  or any delivered member switches to completion-only reconciliation, not payload
+  replay. Missing/unreadable task evidence or a missing member row does not prove
+  failure: keep the binding and defer with evidence, rather than inventing a
+  smaller batch. Pin unresolved membership and snapshots across pruning.
+
+**Per-member settlement.** On acceptance, record the same task id on every
+member's execution row and mark every member delivered. Persist batch acceptance
+before member completion; completion is restartable. A delivered-mark failure
+preserves that member's durable `recovery_accepted_at` completion marker and claim.
+Later passes finish marking without a fire, including while busy or beyond the
+ordinary age/attempt limit. Repair partial member acceptance writes from the
+batch's acceptance record; they never authorize re-batching.
+
+On refusal, exception or cancellation, restore every affected member with its
+own `restore_recovery_failure(item_id, ..., claimed_at=member_claim)` and release
+the unprocessed claimed tail. Never substitute another member's claim or reopen
+an item delivered by a concurrent owner. A busy bail before sending restores
+each skipped member with `refund_attempt=True`; an attempted send keeps each
+member's attempt charge. Completion-only members still finish while busy.
+Uncertain sends retain the execution binding.
+
+A terminal failed/rejected/canceled dedup echo retires every member's identity
+as one batch settlement and restores each still-owned claim. An accepted turn
+that later fails restores every member to pending and retires the entire batch,
+guarded by accepted-task ownership rather than the undelivered-claim guard.
+Track all members in the task watch and durable recovery record. Preserve the
+early-terminal / owed-restore ordering per member: settle its owed restore after
+its delivered mark, including the `recovery_accepted_at` completion path, so a
+late success write cannot bury a failure. Settlement is idempotent and cannot
+clear a newer binding or claim. HTTP failure, lost response or missing task
+evidence alone never retires an identity. This preserves retry dedup, not
+exactly-once external side effects; D7's interrupted-task policy still applies.
+
+**Wire provenance and StormGuard.** Batch message metadata contains
+`origin: "inbox"`, `inbox_source`, the group's `priority`, and `inbox_ids` (the
+sorted full member list). Do not disguise a batch as one arbitrary `inbox_id`.
+The durable member-to-context mappings let `origin_for_context` resolve the
+common origin; request attribution must expose the full membership while keeping
+singleton attribution unchanged. Activity uses inbox origin/source and the
+shared task/context, with member ids for traceability: one turn yields one
+result, not a report per member. No-origin routing stays unchanged. StormGuard
+counts one batched fire as **one fire**, under the existing eight-fires-per-60-
+seconds limit. Denial restores all group claims; completion-only reconciliation
+consumes no fire.
+
+**Required slice-2 verification.** Use real temporary stores to cover grouping,
+singleton compatibility, sorted deterministic identity, retirement and a fresh
+generation, same-set retry and differing-set reconciliation. Cover lost
+acceptance responses, crashes between member writes, missing task/member evidence,
+busy-bail refunds, cancellation, StormGuard denial, accepted-mark completion,
+terminal dedup echoes and early/late failures for every member. Verify common
+origin/requester attribution and one Activity result, with unchanged console
+direct-post, pull and thread-delivery paths. These are future implementation
+tests, not coverage claimed by this documentation slice.
+
 ### D7 — A turn interrupted by a restart: resume what's safe, ask about the rest (Josh, 2026-11-12)
 
 **Problem.** When the server stops mid-turn (SIGTERM, crash, desktop relaunch),
