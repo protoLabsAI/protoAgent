@@ -321,7 +321,7 @@ def mint_member_delegation(
     slug: str, request, *, method: str, context: str, operation: str, task_id: str = ""
 ) -> str | None:
     """Mint a one-member, one-operation human-operator delegation for a proxied private op, or
-    None when the caller is not a human operator (ADR 0131 P1a.2; dormant until P1b consumes it).
+    None when the caller is not a human operator (ADR 0131 P1a.2).
 
     The hub authenticates every caller (``A2AAuthMiddleware`` stamps ``request.state.principal_kind``);
     this re-reads that VERIFIED kind — never a client header, which ``_proxy_headers`` strips —
@@ -872,6 +872,17 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
         extra = {**extra, SCOPE_HEADER: SCOPE_DEVICE}
     elif any(k.lower() == SCOPE_HEADER for k in getattr(request, "headers", {}) or {}):
         extra = {**extra, SCOPE_HEADER: None}
+    # Only local members share this hub's verification trust. Bind to the actual
+    # decoded destination httpx will send, not the hub's /agents/<slug> route.
+    if not is_remote and not member_public:
+        from graph.fleet.delegation import DELEGATION_HEADER
+
+        delegation = mint_member_delegation(
+            slug, request, method=request.method,
+            context=httpx.URL(f"{base}/{raw_path}").path, operation="http-request",
+        )
+        if delegation is not None:
+            extra = {**extra, DELEGATION_HEADER: delegation}
     if path == "a2a" and request.method == "POST":
         # A turn is starting (or being resumed/queried) on this member — refresh its
         # LRU recency so the warm-cap's grace window (Swap & Resume S4) actually
