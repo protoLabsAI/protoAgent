@@ -30,6 +30,16 @@ RESULT = "The requested public result."
 SESSION = "peer-running-private-steer"
 
 
+async def _working(handler, task_id, peer, timeout=5.0):
+    """Wait for the persisted working state, bounding database reads as well as polling."""
+    async with asyncio.timeout(timeout):
+        while True:
+            task = await handler.on_get_task(GetTaskRequest(id=task_id), peer)
+            if task.status.state == TaskState.TASK_STATE_WORKING:
+                return task
+            await asyncio.sleep(0.02)
+
+
 @pytest.mark.parametrize("kind", ["fleet-service", "paired-agent"])
 async def test_running_peer_private_steer_retained_handles(tmp_path, principals, kind):  # noqa: F811
     # Phase 0 supplies the enrolled recipient separately from credential classification.
@@ -106,7 +116,10 @@ async def test_running_peer_private_steer_retained_handles(tmp_path, principals,
         snapshot.CopyFrom(initial)
         subscriptions.append(snapshot)
         workers.append(asyncio.create_task(collect(subscribed, subscriptions)))
-        before = await handler.on_get_task(GetTaskRequest(id=task_id), peer)
+        # The model signals `started` before the executor has stored the task as working, so a
+        # GetTask taken at once can still read the unset state (seen on loaded CI runners, on
+        # Linux and Windows). Wait for the stored state instead of sampling it once.
+        before = await _working(handler, task_id, peer)
         assert before.status.state == TaskState.TASK_STATE_WORKING
         assert not workers[0].done() and not workers[1].done()
 
