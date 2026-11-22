@@ -3,7 +3,8 @@ import type { DecisionRow } from "../src/lib/api/decisions";
 
 // The fleet Needs-you marker + decision answer states (work consolidation v2 §5, S7) against
 // the real shell: the marker FIRST on the rail (primary, xs; numbers only at 390), counting
-// another chat's decision + an undelivered page + a stopped goal; the grouped details' first
+// another chat's decision + a stopped goal — an undelivered page whose only action is Dismiss
+// is information, not a Needs-you item (#5681); the grouped details' first
 // section with the shared DecisionCard; sent / answered-elsewhere / failed-delivery /
 // expired / withdrawn / stale, with screenshots per state at both widths, light and dark.
 // Count equality with the shared selector is pinned in ChatStatusRail.decisions.test.tsx —
@@ -98,24 +99,26 @@ for (const width of [1440, 390] as const) {
       await page.goto("/app/", { waitUntil: "load" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
 
-      // The marker: FIRST on the row, fleet-wide 3 (another chat's decision + an undelivered
-      // page + a stopped goal), numbers only on the phone — and nothing scrolls sideways.
-      await expect(marker).toHaveText(width === 390 ? "3" : "Needs you 3", { useInnerText: true });
-      await expect(marker).toHaveAttribute("aria-label", "3 things need you. Show them");
+      // The marker: FIRST on the row, fleet-wide 2 (another chat's decision + a stopped goal;
+      // the undelivered page can only be dismissed, so it does not count — #5681), numbers only
+      // on the phone — and nothing scrolls sideways.
+      await expect(marker).toHaveText(width === 390 ? "2" : "Needs you 2", { useInnerText: true });
+      await expect(marker).toHaveAttribute("aria-label", "2 things need you. Show them");
       await expect(page.locator('[data-testid="chat-status-rail"] > :first-child'))
         .toHaveAttribute("data-testid", "chat-status-chip-needs-you");
       const overflow = await page.evaluate(() => ({
         doc: document.documentElement.scrollWidth, vw: window.innerWidth }));
       expect(overflow.doc).toBeLessThanOrEqual(overflow.vw);
-      await shot("marker-3");
+      await shot("marker-2");
 
       // The details' FIRST section: the expanded card (recommended primary + suggested, the
-      // stale hint, Reply in chat), the neutral delivery and stopped-goal rows, Open in Work.
+      // stale hint, Reply in chat), the neutral stopped-goal row, Open in Work. The
+      // Dismiss-only page is not listed here.
       await openPanel();
-      await expect(details.locator("h2").first()).toHaveText("Needs you · 3");
+      await expect(details.locator("h2").first()).toHaveText("Needs you · 2");
       await expect(details.getByRole("button", { name: /Ship it/ })).toBeVisible();
       await expect(details.locator(".chat-needs-you__stale")).toContainText("30 minutes");
-      await expect(details).toContainText("build failed on main");
+      await expect(details).not.toContainText("build failed on main");
       await expect(details).toContainText("Goal stopped");
       await expect(details.getByRole("button", { name: "Keep going" })).toBeVisible();
       await expect(details.getByRole("button", { name: "Drop the goal" })).toBeVisible();
@@ -123,10 +126,10 @@ for (const width of [1440, 390] as const) {
       await shot("section-stale");
 
       // Consumed success: Sent + Continuing… immediately; the held card stays in the OPEN
-      // panel while the marker drops to pending-only (the page + the goal).
+      // panel while the marker drops to pending-only (the goal).
       await details.getByRole("button", { name: /Ship it/ }).click();
       await expect(details).toContainText('Sent: "Ship it". Continuing…');
-      await expect(marker).toHaveText(width === 390 ? "2" : "Needs you 2", { useInnerText: true });
+      await expect(marker).toHaveText(width === 390 ? "1" : "Needs you 1", { useInnerText: true });
       await shot("sent");
       await page.keyboard.press("Escape");
       await expect(details).toHaveCount(0);
