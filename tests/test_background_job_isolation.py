@@ -165,13 +165,14 @@ def _marker(state) -> str:
 
 def _build_graph(coord: _Coordinator):
     """A REAL compiled LangGraph (real checkpointer, real interrupt) with a deterministic
-    model node: ``PARK-DECISION`` parks on the real ``request_decision`` interrupt;
+    model node: ``PARK-DECISION`` parks on a real decision interrupt (a pre-#5678-slice-10
+    ``request_decision`` pause);
     ``LONG-TURN`` is a controlled multi-step turn (second step gated on ``coord.release``)."""
     from langchain_core.messages import AIMessage
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.graph import END, START, StateGraph
 
-    from tools.lg_tools import request_decision
+    from tests._pre_upgrade_decision import PRE_UPGRADE_REQUEST_DECISION as request_decision
 
     class S(TypedDict):
         messages: list

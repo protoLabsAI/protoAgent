@@ -1,9 +1,12 @@
-"""Decision needed (#4725, items 1 + 3).
+"""Decision needed (#4725, items 1 + 3; #5678 slice 10).
 
-The agent's ``request_decision`` tool parks a turn at a choice it may not make on its own —
-even on an UNATTENDED autonomous turn, the one exception to the auto-answer policy — and the
-server records a durable pending decision. The operator lists + answers it over
-``/api/decisions``, which resumes the parked turn with the chosen option.
+``request_decision`` never pauses (#5678 slice 10): it writes a pending NO-PAUSE ledger record
+(a thread, no interrupt id) and the turn ends completed, attended or not. A ``kind:
+"decision"`` PAUSE still exists for the unattended policy's ask tier and for a
+``request_decision`` paused before the upgrade: such a pause parks even an UNATTENDED
+autonomous turn — the one exception to the auto-answer policy — and the server records it
+durably. The operator lists + answers it over ``/api/decisions``, which resumes the parked
+turn with the chosen option.
 
 Driven with deterministic model nodes, real in-memory graph checkpoints, a fake clock,
 and an in-memory ``DecisionStore``; stream fakes also cover the driver event seam.
@@ -19,7 +22,14 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from langchain.agents import create_agent
+from langchain_core.callbacks import UsageMetadataCallbackHandler
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import InMemorySaver
 
+from graph.config import LangGraphConfig
 from graph.decisions import (
     RESTART_RECOVERY_PREFIX,
     STATE_ANSWERED,
@@ -32,10 +42,13 @@ from graph.decisions import (
     is_unpaused_decision,
     normalize_options,
 )
+from graph.middleware.request_context import verified_principal_scope
 from graph.plugins import host
+from graph.state import ProtoAgentState
 from operator_api import decision_routes
 from runtime.state import STATE
 from tests._operator_identity import as_operator
+from tests._pre_upgrade_decision import pre_upgrade_request_decision
 
 # ``server.chat`` the attribute is shadowed by the re-exported ``chat`` function in
 # server/__init__.py; resolve the actual submodules from sys.modules (as test_hitl_forms does).
@@ -378,21 +391,20 @@ def test_list_route_returns_pending_decisions(store):
 
 @pytest.fixture
 def decision_graph(store, monkeypatch, request):
-    """A real checkpoint and tool with deterministic model output, no gateway."""
+    """A real checkpoint holding a pre-upgrade decision pause, with deterministic model
+    output and no gateway."""
     from typing import TypedDict
     from langgraph.graph import StateGraph, START, END
     from langgraph.checkpoint.memory import InMemorySaver
     from langchain_core.messages import AIMessage
-    from tools.lg_tools import request_decision
 
     class State(TypedDict):
         messages: list
         session_id: str
 
     def model(state):
-        chosen = request_decision.invoke({
-            "question": "Deploy?", "options": ["yes", "no"], **getattr(request, "param", {}),
-        })
+        chosen = pre_upgrade_request_decision(
+            {"question": "Deploy?", "options": ["yes", "no"], **getattr(request, "param", {})})
         return {"messages": [AIMessage(content=f"Chosen: {chosen}")]}
 
     builder = StateGraph(State)
@@ -1169,14 +1181,14 @@ async def test_pending_record_with_no_pause_is_never_closed_as_stranded(store, d
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "decision_graph, expected", [({}, False), ({"requires_pick": False}, False), ({"requires_pick": True}, True)],
-    indirect=["decision_graph"],
-)
-async def test_request_decision_persists_pick_requirement(store, decision_graph, expected):
-    await _sync_turn()
+@pytest.mark.parametrize("args, expected", [({}, False), ({"requires_pick": False}, False),
+                                            ({"requires_pick": True}, True)])
+async def test_request_decision_persists_pick_requirement(store, monkeypatch, args, expected):
+    graph, _model = _agent_graph(monkeypatch, [_ask_call(**args), AIMessage(content="unused")])
+    await _agent_turn(f"a2a:s-pick:{len(args)}:{expected}")
     rec, = store.list(state="pending")
     assert rec.requires_pick is expected
+    assert rec.interrupt_id == ""
 
 
 @pytest.mark.asyncio
@@ -1212,3 +1224,142 @@ def test_answer_route_requires_explicit_pick_only_when_requested(store, monkeypa
     assert response.status_code == 200
     assert store.get(rec.id).state == STATE_ANSWERED
     assert store.get(rec.id).answer == "approve"
+
+
+# ── #5678 slice 10: request_decision never pauses ────────────────────────────────
+
+ASK = {"question": "Deploy to prod?", "options": ["yes", "no"]}
+
+
+class _ScriptedModel(GenericFakeChatModel):
+    """Fake chat model that replies from a script and keeps every call's input."""
+
+    seen: list = []
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, *args, **kwargs):
+        self.seen.append(list(messages))
+        return super()._generate(messages, *args, **kwargs)
+
+
+def _ask_call(**extra) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": "request_decision", "args": {**ASK, **extra}, "id": "call-ask"}])
+
+
+def _agent_graph(monkeypatch, replies, *, tool_obj=None, checkpointer=None):
+    """A real agent graph bound with the request_decision get_all_tools builds, the live
+    config left at its defaults (``decisions.never_block`` unset)."""
+    from tools.lg_tools import get_all_tools
+
+    config = LangGraphConfig(identity_name="deploy-agent")
+    monkeypatch.setattr(STATE, "graph_config", config, raising=False)
+    if tool_obj is None:
+        tool_obj = next(t for t in get_all_tools(graph_config=config) if t.name == "request_decision")
+    model = _ScriptedModel(messages=iter(replies))
+    model.seen = []
+    graph = create_agent(model, tools=[tool_obj], state_schema=ProtoAgentState,
+                         checkpointer=checkpointer or InMemorySaver())
+    monkeypatch.setattr(STATE, "graph", graph)
+    return graph, model
+
+
+async def _agent_turn(thread, message="ship it", *, origin="api-chat", resume=False, sink=None,
+                      session_id="s-nopause"):
+    from server.turn_sync import _native_turn
+
+    with verified_principal_scope("shared-operator-bearer"):
+        return await _native_turn(
+            message, None, session_id=session_id, config={"configurable": {"thread_id": thread}},
+            usage_cb=UsageMetadataCallbackHandler(), state_extra={}, tool_fence=None,
+            hitl_resume=resume, incognito=False, origin=origin, telemetry_sink=sink,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["api-chat", "scheduler"])
+async def test_request_decision_writes_a_no_pause_record_and_the_turn_completes(store, monkeypatch, origin):
+    assert LangGraphConfig().decisions_never_block is False  # the setting is unset
+    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="unused")])
+    thread, sink = f"a2a:s-nopause:{origin}", {}
+    reply = await _agent_turn(thread, origin=origin, sink=sink)
+
+    # One model call, no interrupt on the checkpoint, the turn not parked.
+    assert len(model.seen) == 1
+    assert sink.get("state") != "input_required"
+    assert "Input needed" not in reply[0]["content"]
+    snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
+    assert not snapshot.next and not snapshot.interrupts
+    rec, = store.list(state="pending")
+    assert is_unpaused_decision(rec)
+    assert (rec.thread_id, rec.session_id, rec.interrupt_id, rec.question) == (
+        thread, "s-nopause", "", "Deploy to prod?")
+    last = snapshot.values["messages"][-1]
+    assert isinstance(last, ToolMessage) and last.content.startswith("Asked, waiting")
+
+
+def test_request_decision_is_no_longer_a_pausing_tool_but_stays_lead_only():
+    from runtime.operator_mcp_tools import _MCP_INCOMPATIBLE
+    from tools.lg_tools import HITL_TOOL_NAMES, SUBAGENT_DENIED_TOOLS, get_all_tools
+
+    assert "request_decision" not in HITL_TOOL_NAMES
+    assert "request_decision" not in _MCP_INCOMPATIBLE
+    assert "request_decision" in SUBAGENT_DENIED_TOOLS
+    # Bound return_direct whatever the (now inert) setting says: the ask always ends the turn.
+    for never_block in (False, True):
+        tool_obj = next(t for t in get_all_tools(graph_config=LangGraphConfig(decisions_never_block=never_block))
+                        if t.name == "request_decision")
+        assert tool_obj.return_direct is True
+
+
+@pytest.mark.asyncio
+async def test_an_open_no_pause_decision_never_holds_an_autonomous_turn(store, monkeypatch):
+    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="Scheduled report done.")])
+    thread = "a2a:s-nopause:held"
+    await _agent_turn(thread)
+    rec, = store.list(state="pending")
+
+    config = {"configurable": {"thread_id": thread}}
+    hold = await turn_control._hold_if_hitl_pending(
+        "scheduled fire", "s-nopause", config, request_metadata={"origin": "scheduler"})
+    assert hold is None
+    reply = await _agent_turn(thread, "scheduled fire", origin="scheduler")
+    assert reply[0]["content"].startswith("Scheduled report done.")
+    assert "Input needed" not in reply[0]["content"]
+    assert len(model.seen) == 2
+    assert store.get(rec.id).pending  # the decision stays open and answerable
+
+
+@tool("request_decision")
+def _pre_upgrade_tool(question: str, options: list[str]) -> str:
+    """The pre-#5678-slice-10 request_decision: pause on a decision interrupt."""
+    return pre_upgrade_request_decision({"question": question, "options": options})
+
+
+@pytest.mark.asyncio
+async def test_a_decision_paused_before_the_upgrade_is_answered_and_the_turn_resumes(store, monkeypatch):
+    # Park a turn the old way, then "upgrade": rebuild the graph with today's tool on the
+    # same checkpoint. The operator's answer resumes the turn and the model acts on it.
+    saver = InMemorySaver()
+    thread = "a2a:s-legacy"
+    _agent_graph(monkeypatch, [_ask_call()], tool_obj=_pre_upgrade_tool, checkpointer=saver)
+    parked = await _agent_turn(thread, session_id="s-legacy")
+    assert "Input needed" in parked[0]["content"]
+    rec, = store.list(state="pending")
+    assert rec.interrupt_id and not is_unpaused_decision(rec)
+
+    graph, model = _agent_graph(monkeypatch, [AIMessage(content="Deploying to prod now.")], checkpointer=saver)
+    # Still a pause: an autonomous turn is held behind it rather than abandoning it.
+    held = await _agent_turn(thread, "scheduled fire", origin="scheduler", session_id="s-legacy")
+    assert "Input needed first" in held[0]["content"]
+
+    reply = await _agent_turn(thread, "yes", resume=True, session_id="s-legacy")
+    assert reply[0]["content"].startswith("Deploying to prod now.")
+    assert len(model.seen) == 1  # the resumed turn went back to the model with the answer
+    tool_msg = next(m for m in model.seen[0] if isinstance(m, ToolMessage))
+    assert tool_msg.content == "yes"
+    assert (store.get(rec.id).state, store.get(rec.id).answer) == (STATE_ANSWERED, "yes")
+    assert len(store.list()) == 1  # the resume asked nothing new
+    snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
+    assert not snapshot.interrupts

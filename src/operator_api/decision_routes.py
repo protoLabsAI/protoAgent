@@ -1,10 +1,13 @@
 """Operator "decision needed" routes (#4725, item 3).
 
 The read + answer surface over the durable decisions ledger (``graph/decisions.py``). When
-the agent calls ``request_decision`` it parks the turn — even on an unattended autonomous
-turn — and the server records a pending decision. The console (card 3) lists pending ones
-here, shows the question + options, and answers one; answering resumes the parked turn
-through the same HITL-resume entry point an attended session uses.
+the agent calls ``request_decision`` the server records a pending decision; since #5678
+slice 10 that record never pauses the turn, and its answer is delivered to the agent as a
+later turn. A decision PAUSE (the unattended policy's ask tier, or a ``request_decision``
+paused before the upgrade) parks the turn — even an unattended autonomous one. The console
+(card 3) lists pending ones here, shows the question + options, and answers one; answering a
+pause resumes the parked turn through the same HITL-resume entry point an attended session
+uses.
 
 Registrar-style (``register_decision_routes(app)``), mounted next to the other operator API
 registrars in ``server/__init__.py``. The global auth middleware verifies credentials;

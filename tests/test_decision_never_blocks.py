@@ -3,8 +3,8 @@
 With the setting on, the tool writes a no-pause ledger record (empty interrupt id), returns
 "asked, waiting" and the turn ends there (``return_direct``), completed rather than
 input-required. A later unrelated turn runs normally, the decision stays pending, and the
-operator can still answer it. With the setting off (the default) the tool still pauses
-through ``interrupt()`` exactly as before.
+operator can still answer it. Since #5678 slice 10 the tool never pauses, so the setting is
+declared but has no effect: with it off (the default) the ask is the same no-pause record.
 
 Driven through the real non-streaming turn driver on a real ``create_agent`` graph with an
 in-memory checkpoint, a scripted fake model and an in-memory ``DecisionStore``.
@@ -148,23 +148,24 @@ async def test_a_later_turn_leaves_the_decision_pending_and_answerable(store, mo
 
 
 @pytest.mark.asyncio
-async def test_with_the_setting_off_request_decision_still_pauses(store, monkeypatch):
+async def test_with_the_setting_off_request_decision_no_longer_pauses(store, monkeypatch):
+    # #5678 slice 10 removed the pausing path: the setting off is the same no-pause ask.
     assert LangGraphConfig().decisions_never_block is False
-    graph, model = _graph(monkeypatch, never_block=False, replies=[_ask_call(), AIMessage(content="Chosen.")])
+    graph, model = _graph(monkeypatch, never_block=False, replies=[_ask_call(), AIMessage(content="unused")])
     tool = next(t for t in get_all_tools(graph_config=LangGraphConfig()) if t.name == "request_decision")
-    assert tool is request_decision and tool.return_direct is False
+    assert tool.return_direct is True
     thread, sink = _thread(), {}
     reply = await _turn(thread, "ship it", sink=sink)
 
-    assert "Input needed" in reply[0]["content"]
-    assert sink["state"] == "input_required"
+    assert "Input needed" not in reply[0]["content"]
+    assert sink.get("state") != "input_required"
     snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
-    assert snapshot.interrupts and snapshot.interrupts[0].value["kind"] == "decision"
+    assert not snapshot.next and not snapshot.interrupts
     rec, = store.list(state="pending")
-    assert rec.interrupt_id  # a paused record, keyed to the checkpoint interrupt
-    # A fresh message is held behind the pause, as today.
-    held = await _turn(thread, "what is 2 + 2?")
-    assert "Input needed first" in held[0]["content"]
+    assert rec.interrupt_id == ""
+    # A fresh message is not held behind the decision.
+    later = await _turn(thread, "what is 2 + 2?")
+    assert "Input needed first" not in later[0]["content"]
 
 
 def test_the_setting_round_trips_and_renders_in_settings():

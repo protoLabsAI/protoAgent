@@ -167,34 +167,36 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
                      expires_in_minutes: int | None = None, default_option: str | None = None,
                      default_action: str | None = None, requires_pick: bool = False,
                      state: Annotated[Any, InjectedState] = None) -> str:
-    # Maintainer notes (kept out of the model-facing docstring): unlike ask_human /
-    # request_user_input, a ``kind: "decision"`` interrupt PARKS even on an autonomous turn
-    # (server/turn_control.py) — the agent deliberately chose to stop rather than guess — and
-    # the server records it in the durable decisions ledger (graph/decisions.py) so the park
-    # outlives the input-required TTL sweep and shows in the operator inbox either way. The
-    # resume value is the chosen option, returned here.
-    # With ``decisions.never_block`` on (#5678 9a) there is no pause: the tool writes a
-    # no-pause ledger record (empty interrupt id) itself and returns "asked, waiting", and
-    # ``get_all_tools`` binds a ``return_direct`` copy so the turn ends there. The answer
-    # reaches the agent later as a delivery turn (server/turn_control.py claim_decision_delivery).
-    """Stop and ask the operator to decide; returns the chosen option.
+    # Maintainer notes (kept out of the model-facing docstring): the ask never pauses the
+    # turn (#5678 slice 10 removed the old ``interrupt()`` path). The tool writes a no-pause
+    # record to the durable decisions ledger (graph/decisions.py: a thread, an empty
+    # interrupt id) and returns "asked, waiting"; ``get_all_tools`` binds a ``return_direct``
+    # copy so the turn ends there, completed. The chat stays free, and the operator's answer
+    # reaches the agent later as a delivery turn (server/turn_control.py
+    # claim_decision_delivery). ``decisions.never_block`` is still declared but no longer
+    # read. One legacy seam remains: a decision PAUSED before the upgrade still has a
+    # checkpoint interrupt, and answering it re-runs this tool call with a resume value —
+    # ``_legacy_resume_value`` hands that answer back instead of asking again.
+    """Ask the operator to decide, then end your turn; their answer arrives later.
 
     Use it when a skill rule forbids proceeding on your own judgment, for a destructive or
     outward-facing step, or for a choice only the operator can make. ``options`` is the list
     of allowed answers — each a short string, or ``{"id", "label", "description"?}``;
-    ``context`` is optional background for the operator. On an UNATTENDED turn (scheduled /
-    inbox / background) the turn STOPS here until a person answers, so don't guess — only use
-    it for a decision that genuinely cannot be made autonomously.
+    ``context`` is optional background for the operator. The question is recorded and your
+    turn ends here without blocking the chat; the operator's answer reaches you as a later
+    message, so don't ask again or guess meanwhile — only use it for a decision that genuinely
+    cannot be made autonomously.
     Pass both ``expires_in_minutes`` (positive) and ``default_option`` (an option id)
     to apply that default on expiry, or neither to wait indefinitely. ``default_action``
     is an optional verb phrase describing that action, valid only with expiry.
     Set ``requires_pick=True`` for approvals that must use an option instead of typed text.
     At most one option may carry ``recommended: true``.
     """
-    from langgraph.types import interrupt
-
     from graph.decisions import DecisionError, normalize_options
 
+    legacy = _legacy_resume_value()
+    if legacy is not _NO_RESUME:
+        return _legacy_answer(legacy, state)
     try:
         opts = normalize_options(options)
         if (expires_in_minutes is None) != (default_option is None):
@@ -207,26 +209,89 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
             raise DecisionError("default_option must name an option id")
     except DecisionError as exc:
         return f"Error: {exc}"
-    if _decisions_never_block():
-        return _record_unpaused_decision(
-            state, question, options, context=context, expires_in_minutes=expires_in_minutes,
-            default_option=default_option, default_action=default_action, requires_pick=requires_pick,
-        )
-    answer = interrupt({"kind": "decision", "question": question, "options": options, "context": context,
-                        "expires_in_minutes": expires_in_minutes, "default_option": default_option,
-                        "default_action": default_action, "requires_pick": requires_pick})
-    return answer if isinstance(answer, str) else str(answer)
+    return _record_unpaused_decision(
+        state, question, options, context=context, expires_in_minutes=expires_in_minutes,
+        default_option=default_option, default_action=default_action, requires_pick=requires_pick,
+    )
 
 
-def _decisions_never_block() -> bool:
-    """Live ``decisions.never_block`` (#5678 9a): off unless the running config turns it on."""
+_NO_RESUME = object()
+
+
+def _legacy_resume_value() -> Any:
+    """The operator's answer when this call resumes a decision paused before #5678 slice 10.
+
+    Such a decision parked the turn on an ``interrupt()`` in this tool; answering it resumes
+    the checkpoint, which re-runs the call with a resume value queued. Only then is
+    ``interrupt()`` called, and it returns that value at once (it never raises here, since a
+    value is waiting). Any other call — no graph run, or no resume value — returns
+    ``_NO_RESUME`` and the tool writes a no-pause record instead."""
+    from langgraph.config import get_config
+    from langgraph.types import interrupt
+
+    try:  # the per-task scratchpad LangGraph threads through a node's config
+        from langgraph._internal._constants import CONFIG_KEY_SCRATCHPAD
+    except Exception:  # noqa: BLE001 — private module; the key's value is stable
+        CONFIG_KEY_SCRATCHPAD = "__pregel_scratchpad"
+    try:
+        scratchpad = (get_config().get("configurable") or {}).get(CONFIG_KEY_SCRATCHPAD)
+    except RuntimeError:  # called outside a graph run: nothing to resume
+        return _NO_RESUME
+    if scratchpad is None:
+        return _NO_RESUME
+    if not scratchpad.resume and scratchpad.get_null_resume(False) is None:
+        return _NO_RESUME
+    return interrupt({"kind": "decision"})
+
+
+def _legacy_answer(answer: Any, state: Any) -> Any:
+    """Hand a pre-upgrade decision's answer back AND keep the resumed turn going.
+
+    The bound tool is ``return_direct`` (a new ask ends the turn), but a resumed legacy
+    pause must reach the model, as it did when the tool paused: so the answer comes back as
+    a ``Command`` that writes this call's ToolMessage and routes to the agent's model-loop
+    entry. When the call id or that entry can't be resolved, the plain answer is returned:
+    it is still recorded in the thread, only the turn ends there."""
+    text = answer if isinstance(answer, str) else str(answer)
+    call_id = _decision_call_id(state)
+    entry = _model_loop_entry()
+    if not call_id or not entry:
+        return text
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    return Command(
+        update={"messages": [ToolMessage(content=text, tool_call_id=call_id, name="request_decision")]},
+        goto=entry,
+    )
+
+
+def _decision_call_id(state: Any) -> str:
+    """The id of the one ``request_decision`` call on the thread's last AI message, else ""."""
+    try:
+        messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
+        last_ai = next((m for m in reversed(messages or []) if getattr(m, "type", "") == "ai"), None)
+        ids = [c.get("id") for c in (getattr(last_ai, "tool_calls", None) or [])
+               if c.get("name") == "request_decision" and c.get("id")]
+    except Exception:  # noqa: BLE001 — an unreadable state just ends the turn at the answer
+        return ""
+    return str(ids[0]) if len(ids) == 1 else ""
+
+
+def _model_loop_entry() -> str:
+    """The live agent graph's node the tool loop returns to (first before_model, or model)."""
     from runtime.state import STATE
 
-    return getattr(getattr(STATE, "graph_config", None), "decisions_never_block", False) is True
+    try:
+        branches = getattr(getattr(STATE.graph, "builder", None), "branches", None) or {}
+        spec = next(iter((branches.get("tools") or {}).values()))
+        return next((n for n in spec.ends if n.endswith(".before_model") or n == "model"), "")
+    except Exception:  # noqa: BLE001 — no resolvable entry just ends the turn at the answer
+        return ""
 
 
 def _record_unpaused_decision(state: Any, question: str, options, **fields) -> str:
-    """Write a no-pause decision for this turn's thread and say it was asked (#5678 9a).
+    """Write a no-pause decision for this turn's thread and say it was asked (#5678).
 
     The record is the whole ask: no ``interrupt()`` runs, so the chat stays free and the
     turn ends completed. Its thread is the running graph config's, the same key the
@@ -1110,7 +1175,8 @@ def load_skill(name: str) -> str:
 # the operator's answer isn't dropped. An APPROVAL-type interrupt tool (``self_restart``) must
 # NOT be here: a resumer whose fence excludes it must DECLINE it, not run it. Add only
 # question/answer interrupts here; add every lead-only interrupt tool to SUBAGENT_DENIED_TOOLS.
-HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input", "request_decision"})
+# ``request_decision`` is not here: it no longer pauses the turn (#5678 slice 10).
+HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input"})
 
 # Lead-only interrupt tools hard-denied to every subagent: a subagent runs on a
 # checkpointer-less graph, so binding any ``interrupt()``-based tool (answer-type or
@@ -1118,8 +1184,10 @@ HITL_TOOL_NAMES = frozenset({"ask_human", "request_user_input", "request_decisio
 # subagent's tool set (``_subagent_tools`` / ``_subagent_tool_names``) and tool_access excludes
 # them from read inheritance, regardless of a SubagentConfig.tools allowlist. This is the
 # superset of HITL_TOOL_NAMES plus approval-type restart tools. Keep it in sync when a
-# new interrupt-based lead tool is added.
-SUBAGENT_DENIED_TOOLS = HITL_TOOL_NAMES | frozenset({"self_restart", "fleet_member_restart"})
+# new interrupt-based lead tool is added. ``request_decision`` stays denied although it no
+# longer pauses: its ledger record needs the lead's chat thread, and an ask to the operator
+# is the lead's to make, not a delegated subagent's.
+SUBAGENT_DENIED_TOOLS = HITL_TOOL_NAMES | frozenset({"self_restart", "fleet_member_restart", "request_decision"})
 
 
 def get_all_tools(
@@ -1189,11 +1257,9 @@ def get_all_tools(
         fetch_url,
         ask_human,
         request_user_input,
-        # decisions.never_block (#5678 9a): the no-pause ask ends the turn, so bind a
-        # return_direct copy. The graph rebuilds on a settings change, so this follows it.
-        request_decision.model_copy(update={"return_direct": True})
-        if getattr(graph_config, "decisions_never_block", False) is True
-        else request_decision,
+        # request_decision never pauses (#5678): the ask ends the turn, so bind a
+        # return_direct copy.
+        request_decision.model_copy(update={"return_direct": True}),
         withdraw_decision,
         load_skill,
         show_component,

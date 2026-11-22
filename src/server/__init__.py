@@ -1428,9 +1428,10 @@ def _main():
 
     register_injection_routes(fastapi_app)
 
-    # "Decision needed" ledger (#4725) — the agent's request_decision parks a turn and
-    # records it; the operator lists/answers pending decisions here, which resumes the
-    # parked turn over the HITL-resume path. Full-scope operator auth via the middleware.
+    # "Decision needed" ledger (#4725) — the agent's request_decision records a decision
+    # (no pause since #5678 slice 10; a policy ask or pre-upgrade pause still parks a turn);
+    # the operator lists/answers pending decisions here, which delivers the answer or resumes
+    # the parked turn over the HITL-resume path. Full-scope operator auth via the middleware.
     from operator_api.decision_routes import register_decision_routes
 
     register_decision_routes(fastapi_app)
