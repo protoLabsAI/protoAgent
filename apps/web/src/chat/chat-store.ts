@@ -1079,15 +1079,43 @@ async function onTranscriptMessage(message: TranscriptMessage) {
     }
   }
   if (!Array.isArray(message.ids) || !message.ids.length) return;
-  const loaded = await transcripts.loadSessions(AGENT, message.ids);
+  await adoptSavedSessions(transcripts, message.ids);
+}
+
+async function adoptSavedSessions(store: TranscriptStore, ids: string[], adopt?: Set<string>) {
+  const loaded = await store.loadSessions(AGENT, ids);
   const incoming = sanitizePersisted({ version: 1, sessions: loaded, currentSessionId: null });
   if (!incoming) return;
-  mergeFromStorage(incoming);
+  mergeFromStorage(incoming, adopt);
   // What we adopted is exactly what the store holds: never echo it back as a change.
   for (const session of state.sessions) {
     if (incoming.sessions.some((s) => s.id === session.id) && session === incoming.sessions.find((s) => s.id === session.id)) {
       persistedRefs.set(session.id, session);
     }
+  }
+}
+
+/** Fold in the saved copy of `sessionId` now, a newer one winning even though this tab reads
+ *  the session as streaming (#5514). A tab that waited on another tab's turn (turnOwner.ts)
+ *  runs this before it decides the turn is its own to reattach. It holds no stream of that
+ *  turn, so its copy is not the authoritative one a cross-tab merge protects: the owner's
+ *  saved copy is. Without this the waiting tab, still marked streaming, refused the owner's
+ *  finished reply (and on IndexedDB that save can arrive after the marker's release), read
+ *  its stale "streaming" copy, reattached and replaced the reply. Never rejects: on a failed
+ *  read the tab decides from what it has, as before. */
+export async function catchUpSavedSession(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  const adopt = new Set([sessionId]);
+  try {
+    if (transcripts) {
+      await adoptSavedSessions(transcripts, [sessionId], adopt);
+      return;
+    }
+    const onDisk = parsePersisted(readKey("local", STORAGE_KEY));
+    const saved = onDisk?.sessions.filter((s) => s.id === sessionId) ?? [];
+    if (onDisk && saved.length) mergeFromStorage({ ...onDisk, sessions: saved }, adopt);
+  } catch {
+    /* best-effort */
   }
 }
 
@@ -1524,9 +1552,13 @@ function removeLocalSession(sessionId: string) {
  *  own view — our currentSessionId, active tabs, and live stream statuses stay put. We
  *  don't persist here: the next real write carries the union via persist()'s
  *  read-merge-write, so two tabs can't ping-pong writes. */
-function mergeFromStorage(incoming: PersistedChatState) {
+/** `adopt`: sessions whose newer saved copy wins even while this tab reads them as streaming
+ *  (catchUpSavedSession — a turn another tab held, not a stream of this tab's). */
+function mergeFromStorage(incoming: PersistedChatState, adopt?: Set<string>) {
+  const streaming = streamingIds(state);
+  for (const id of adopt ?? []) streaming.delete(id);
   const sessions = mergeSessions(state.sessions, incoming.sessions, {
-    streamingIds: streamingIds(state),
+    streamingIds: streaming,
     deletedIds: locallyDeletedIds,
   });
   const currentSessionId =
@@ -1920,6 +1952,28 @@ export const chatStore = {
       );
       return { ...current, sessions: nextSessions, currentSessionId, activeSessions, sessionStatusMap, serverTurnControls };
     });
+  },
+
+  /** Stamp a turn's task id on its assistant message and save it NOW, past the streaming
+   *  debounce (#5514). The task id is what a reload reattaches through (reattach.ts): saved
+   *  on the 2 s trailing timer, a reload in the first seconds of a turn — the window an
+   *  ask_human/form/approval often parks in — found a streaming reply with no task id and
+   *  never brought its question back. One write per turn, as it arrives, so the WebKit
+   *  rewrite cost the debounce guards against (above PERSIST_DEBOUNCE_MS) stays the same.
+   *  Streamed text keeps the debounce. No-op when the message is gone or already holds it. */
+  setMessageTaskId(sessionId: string, messageId: string, taskId: string) {
+    if (!taskId) return;
+    const session = state.sessions.find((item) => item.id === sessionId);
+    const target = session?.messages.find((m) => m.id === messageId);
+    if (!session || !target || target.taskId === taskId) return;
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((item) =>
+        item.id === sessionId
+          ? { ...item, messages: item.messages.map((m) => (m.id === messageId ? { ...m, taskId } : m)), updatedAt: Date.now() }
+          : item,
+      ),
+    }));
   },
 
   updateMessages(sessionId: string, messages: ChatMessage[]) {

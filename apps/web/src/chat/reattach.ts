@@ -37,7 +37,7 @@
 
 import { api, supersededByFromStatus, textFromParts, type DurableChatTurn, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
-import { chatStore } from "./chat-store";
+import { catchUpSavedSession, chatStore } from "./chat-store";
 import { applyDelegateProgress } from "./delegateProgress";
 import { isEmptyPlaceholder } from "./roomBubble";
 import { isLiveServerTurn, serverTurnEnded, serverTurnLabel } from "./server-turn-store";
@@ -713,10 +713,17 @@ export function reattachOrReconcile(sessionId: string, hooks: ReattachHooks = {}
   }
   if (ownedByAnotherLiveTab(sessionId, last.taskId)) {
     let cancelNext: (() => void) | undefined;
+    let cancelled = false;
     const stopWaiting = whenTurnFree(sessionId, last.taskId, () => {
-      cancelNext = reattachOrReconcile(sessionId, hooks);
+      // The owner's settled save can reach this tab after its marker's release (IndexedDB
+      // saves and their notices are asynchronous): read it first, so a finished reply is
+      // seen as finished rather than reattached and replaced.
+      void catchUpSavedSession(sessionId).then(() => {
+        if (!cancelled) cancelNext = reattachOrReconcile(sessionId, hooks);
+      });
     });
     return () => {
+      cancelled = true;
       stopWaiting();
       cancelNext?.();
     };

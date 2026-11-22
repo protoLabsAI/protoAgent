@@ -331,6 +331,43 @@ describe("persist debouncing", () => {
     expect(session.messages[0].content).toBe("token ".repeat(50));
   });
 
+  // #5514: a reload in a turn's first seconds (a question parks there) reattaches through the
+  // saved task id, so that one write skips the debounce; streamed text still waits for it.
+  it("saves a streaming reply's task id at once, while streamed text still waits for the timer", async () => {
+    const { chatStore, PERSIST_DEBOUNCE_MS } = await freshStore();
+    const sessionId = chatStore.getSnapshot().currentSessionId!;
+    const saved = () =>
+      JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{\"sessions\":[]}")
+        .sessions.find((s: ChatSession) => s.id === sessionId)?.messages ?? [];
+    const streaming = (content: string, extra: Partial<ChatMessage> = {}) =>
+      [{ id: "a1", role: "assistant" as const, content, status: "streaming" as const, ...extra }];
+
+    chatStore.updateMessages(sessionId, streaming(""));
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS);
+    setItem.mockClear();
+
+    // Text-only streaming update: nothing written until the trailing timer.
+    chatStore.updateMessages(sessionId, streaming("partial"));
+    expect(setItem).not.toHaveBeenCalled();
+
+    // The task id lands: written now, with the text streamed so far, long before 2 s.
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS / 4);
+    chatStore.setMessageTaskId(sessionId, "a1", "task-1");
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(saved()[0]).toMatchObject({ status: "streaming", taskId: "task-1", content: "partial" });
+    expect(chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.messages[0].taskId).toBe("task-1");
+
+    // The same id again writes nothing; more streamed text is debounced as before.
+    chatStore.setMessageTaskId(sessionId, "a1", "task-1");
+    chatStore.updateMessages(sessionId, streaming("partial and more", { taskId: "task-1" }));
+    expect(setItem).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS - 1);
+    expect(setItem).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(setItem).toHaveBeenCalledTimes(2);
+    expect(saved()[0]).toMatchObject({ content: "partial and more", taskId: "task-1" });
+  });
+
   it("keeps the in-memory snapshot synchronous while the write is pending", async () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
