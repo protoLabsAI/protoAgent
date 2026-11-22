@@ -1565,6 +1565,29 @@ describe("reattachOrReconcile and a turn another tab owns", () => {
     expect(sessionStatus(sessionId)).toBe("idle"); // reconciled: nothing is streaming here
   });
 
+  it("adopts the owner's saved finished reply on release, though this tab still reads the turn streaming", async () => {
+    otherTabOwns(sessionId);
+    start(sessionId);
+    await settle();
+    // The owner saved its finished reply. This tab, marked streaming while it waits, refuses
+    // it in an ordinary cross-tab merge; the catch-up on release must take it (#5514).
+    const saved = JSON.parse(window.localStorage.getItem("protoagent.chat.sessions")!);
+    const mine = saved.sessions.find((s: { id: string }) => s.id === sessionId);
+    mine.updatedAt = Date.now() + 1_000;
+    mine.messages = [
+      { id: "u1", role: "user", content: "deploy the release", status: "done" },
+      { id: ASSISTANT_ID, role: "assistant", content: "the owner's saved reply", status: "done", taskId: TASK_ID },
+    ];
+    window.localStorage.setItem("protoagent.chat.sessions", JSON.stringify(saved));
+    expect(sessionStatus(sessionId)).toBe("streaming");
+    otherTabReleases(sessionId);
+    await settle();
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(getTask).not.toHaveBeenCalled();
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", content: "the owner's saved reply" });
+    expect(sessionStatus(sessionId)).toBe("idle");
+  });
+
   it("cancelling while it waits means a later release reattaches nothing", async () => {
     otherTabOwns(sessionId);
     const cancel = start(sessionId)!;

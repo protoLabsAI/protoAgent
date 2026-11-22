@@ -1724,6 +1724,15 @@ async function handleLivePark(res, body, prompt, sessionId) {
       metadata: { [TOOL_CALL_EXT_URI]: { toolCallId: "ask-1", name: "ask_human", phase: "started", args: JSON.stringify({ question }) } },
     },
   }));
+  // "HOLDPARK" (#5514): the task is parked server-side, but the stream HOLDS before its
+  // input-required frame until the browser drops it (a reload), bounded like DROPNET. The
+  // console has the task id and nothing else, the shape a reload in a turn's first seconds
+  // finds; only the saved task id can bring the question back.
+  if (park[1] === "HOLDPARK") {
+    await Promise.race([new Promise((r) => res.once("close", r)), new Promise((r) => setTimeout(r, 15_000))]);
+    res.end();
+    return true;
+  }
   await send(status(taskId, "input-required", {
     message: { role: "agent", parts: [{ kind: "data", data: { question }, metadata: { mimeType: HITL_MIME } }] },
   }));

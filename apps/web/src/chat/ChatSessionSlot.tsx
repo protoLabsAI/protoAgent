@@ -26,6 +26,7 @@ import {
   useChatState,
   effectiveReasoningEffort,
   sessionCast,
+  transcriptWritesSettled,
   type SessionStatus,
 } from "./chat-store";
 import { openChat as leaveConversationsForChat } from "./conversations-store";
@@ -92,6 +93,7 @@ import {
   unpauseBubble,
 } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
+import { claimTurn, TURN_OWNER_HEARTBEAT_MS, type TurnClaim } from "./turnOwner";
 import { watchGoalKickoff, type GoalKickoffWatch } from "./goalKickoffWatch";
 import { composerDraftContext, useHomeReplyAdoption } from "./homeReply";
 import { loadDraft, loadScroll, saveDraft, saveDraftContext, saveScroll } from "./scratchState";
@@ -1219,6 +1221,37 @@ export function ChatSessionSlot({
     // slot. It is claimed inside the `try` and released first in `finally`: a claim that
     // outlived a throw would block the reconciler for this session for good.
     let endLocalTurn: () => void = () => {};
+    // This tab's claim on the turn's stream (turnOwner.ts, #5514), taken when the task id
+    // arrives and released in `finally` — the stream ending, failing or being stopped. While
+    // it's held, another open tab that reads the saved "streaming with a task id" bubble
+    // leaves the turn to this one instead of reattaching and replacing its reply.
+    let turnClaim: TurnClaim | null = null;
+    let claimedTaskId = "";
+    let lastClaimRenew = 0;
+    const renewTurnClaim = () => {
+      // Stream activity keeps the marker fresh when the browser throttles a background tab's
+      // heartbeat timer; at most once a heartbeat, so a fast stream doesn't write per frame.
+      if (!turnClaim || Date.now() - lastClaimRenew < TURN_OWNER_HEARTBEAT_MS) return;
+      lastClaimRenew = Date.now();
+      turnClaim.renew();
+    };
+    const releaseTurnClaim = () => {
+      const claim = turnClaim;
+      turnClaim = null;
+      if (!claim) return;
+      // Released once the turn's settled save has committed (on IndexedDB it is asynchronous),
+      // so a tab that waited on this turn finds the finished reply saved, not the streaming
+      // copy it holds. Bounded, so a wedged store can't hold the turn from the other tabs.
+      let done = false;
+      const release = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(bound);
+        claim();
+      };
+      const bound = setTimeout(release, TURN_OWNER_HEARTBEAT_MS);
+      void transcriptWritesSettled().then(release, release);
+    };
 
     // Whether the stream delivered an AUTHORITATIVE full-turn text (a replace —
     // the terminal artifact's append:false canonical re-send, or a terminal task
@@ -1327,6 +1360,7 @@ export function ChatSessionSlot({
     const bumpWatchdog = () => {
       if (controller.signal.aborted) return;
       watchdog.bump();
+      renewTurnClaim();
     };
     const clearWatchdog = () => watchdog.stop();
 
@@ -1339,15 +1373,21 @@ export function ChatSessionSlot({
         onTaskId: (id) => {
           turnTaskId = id;
           setTaskId(id);
+          // Claim the turn BEFORE its task id is saved: another tab reacts to that save, and
+          // must already find this tab's marker when it does (#5514). A second task id on the
+          // same stream (a resumed task re-announcing) re-claims under the new one.
+          if (!controller.signal.aborted && id !== claimedTaskId) {
+            const previous = turnClaim;
+            turnClaim = claimTurn(session.id, id);
+            claimedTaskId = id;
+            lastClaimRenew = Date.now();
+            previous?.();
+          }
           // Persist the task id on the assistant message so a stuck `streaming`
           // turn can be reconciled against the server task after a reload (below).
-          const cur = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
-          if (cur) {
-            chatStore.updateMessages(
-              session.id,
-              cur.messages.map((m) => (m.id === assistantId ? { ...m, taskId: id } : m)),
-            );
-          }
+          // Saved at once, not on the streaming debounce: a reload in the turn's first
+          // seconds (a question parks there) must find it to bring the form back (#5514).
+          chatStore.setMessageTaskId(session.id, assistantId, id);
         },
         onStatus: (m) => {
           bumpWatchdog();
@@ -1808,6 +1848,9 @@ export function ChatSessionSlot({
     } finally {
       // First, so nothing below can throw past it and leak the claim.
       endLocalTurn();
+      // Every exit above has saved the turn's settled state (setSessionStatus flushes), so
+      // another tab that picks the turn up from here reads it finished or parked (#5514).
+      releaseTurnClaim();
       // Drop the live tool-arg previews: they never outlive their turn (ADR 0118 D3), so a reload
       // shows the finished tool card, not a stale partial. The durable store already omits them.
       if (toolArgsTracker.size > 0) {

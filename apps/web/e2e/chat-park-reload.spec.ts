@@ -54,6 +54,12 @@ async function park(page: Page, bodies: { method: string; params: any }[], label
 
 const taskFor = (sessionId: string) => `task-paused-ask_human-live-${sessionId}`;
 
+/** The turn-owner markers (chat/turnOwner.ts, #5514) this page's localStorage holds. */
+const turnOwnerKeys = (page: Page) =>
+  page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("protoagent.chat.turnOwner:")));
+const turnOwnerKey = (sessionId: string, taskId: string) =>
+  `protoagent.chat.turnOwner:${encodeURIComponent(sessionId)}:${encodeURIComponent(taskId)}`;
+
 /** The visible slot reads as parked: the form is up and live, the ask_human card waits. */
 async function expectWaiting(page: Page, label: string) {
   const card = page.locator(`${SLOT} .hitl-float .hitl-card`);
@@ -85,6 +91,8 @@ test("a live park shows the ask_human card waiting, not done ✓ (#3956)", async
   await expectWaiting(page, "cheese");
   // The form's buttons are live: the session is not held "streaming".
   await expect(page.locator(`${SLOT} .hitl-float .hitl-card`).getByRole("button", { name: "Send" })).toBeVisible();
+  // The stream closed at the park, so the sending tab no longer holds the turn (#5514).
+  await expect.poll(() => turnOwnerKeys(page)).toEqual([]);
 });
 
 test("after a reload with warm local storage the form is back, and answering it resumes the right task (#3956)", async ({
@@ -126,6 +134,53 @@ test("after a reload with warm local storage the form is back, and answering it 
   await expect(page.locator(`${SLOT} .tool-waiting`)).toHaveCount(0);
 });
 
+// #5514: a reload in a turn's first seconds, before the streaming save's 2 s timer, must still
+// bring the question back. The mock parks "HOLDPARK" server-side but holds the stream before
+// its input-required frame, so the console has the task id and nothing else when it reloads.
+test("a reload before the turn's first save still brings its question back (#5514)", async ({ page }) => {
+  const bodies = a2aLog(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await send(page, "PARK_ASK_HUMAN HOLDPARK");
+  // The ask_human start frame follows the task frame, so the task id has arrived.
+  await expect(page.locator(`${SLOT} .pl-toolcard`).filter({ hasText: "ask_human" })).toHaveCount(1);
+  const sessionId = String(
+    bodies.filter((b) => b.method === "SendStreamingMessage").at(-1)?.params?.message?.contextId ?? "",
+  );
+  expect(sessionId).toMatch(/^chat-/);
+
+  // The sending tab holds the turn while it streams, so another tab leaves it alone.
+  expect(await turnOwnerKeys(page)).toEqual([turnOwnerKey(sessionId, taskFor(sessionId))]);
+  // The task id is saved at once, well inside the streaming debounce.
+  await expect
+    .poll(
+      async () =>
+        (await persistedChat(page))?.sessions.find((s) => s.id === sessionId)
+          ?.messages.filter((m) => m.role === "assistant")
+          .map((m) => [m.status, m.taskId]),
+      { timeout: 1_500 },
+    )
+    .toEqual([["streaming", taskFor(sessionId)]]);
+
+  const subscribed = page.waitForRequest(
+    (req) =>
+      req.url().endsWith("/a2a") &&
+      (req.postData() ?? "").includes("SubscribeToTask") &&
+      (req.postData() ?? "").includes(taskFor(sessionId)),
+  );
+  await page.reload({ waitUntil: "load" });
+  await subscribed;
+  await expectWaiting(page, "HOLDPARK");
+
+  const sent = await answer(page, bodies, "plum");
+  expect(sent.params.message.taskId).toBe(taskFor(sessionId));
+  expect(sent.params.message.metadata?.hitl_resume).toBe(true);
+  await expect(page.locator(`${SLOT} .pl-message--assistant`).last()).toContainText(
+    `You like plum. (resumed ${taskFor(sessionId)} in ${sessionId})`,
+  );
+  // The answer's stream ended, and released its claim with it.
+  await expect.poll(() => turnOwnerKeys(page)).toEqual([]);
+});
+
 test("two sessions parked at once each reattach to their own task after a reload (#3956)", async ({ page }) => {
   const bodies = a2aLog(page);
   await page.goto("/app/", { waitUntil: "load" });
@@ -137,11 +192,8 @@ test("two sessions parked at once each reattach to their own task after a reload
   expect(first).not.toBe(second);
 
   // The reload reattaches through the SAVED transcript: wait until both parked bubbles are
-  // saved with their task ids. While a reply streams the console saves on a trailing ~2 s
-  // timer (and asynchronously on IndexedDB), so a reload before that save commits has
-  // nothing to reattach through. That gap is a known product limit; saving the task id
-  // at once closed it but made a second open tab reattach to a turn that was still live
-  // in the first (the double-render specs), so it was reverted.
+  // saved with their task ids. The task id is saved the moment it arrives (#5514), but on
+  // IndexedDB that save is asynchronous, so the precondition is still polled.
   await expect
     .poll(async () => {
       const saved = (await persistedChat(page))?.sessions ?? [];
