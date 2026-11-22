@@ -1300,6 +1300,10 @@ class ProtoAgentExecutor(AgentExecutor):
                 {"phase": "text", "text": chunk, "origin": _origin},
             )
 
+        # No-pause asks are durable answer data, never an input-required status.
+        # Keep every pass's cards in the authoritative replacement for task replay.
+        turn_decisions: dict[str, dict] = {}
+
         async def _finalize(final_text: str) -> None:
             """Close the answer artifact + emit the cost/context DataParts.
 
@@ -1345,6 +1349,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 success=True,
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
+            parts.extend(_data_part_proto(payload, HITL_MIME) for payload in turn_decisions.values())
             parts = await self._append_structured(parts, context, final_text)
             parts.extend(_file_parts(_close_turn_files()))
             if projection is not None and projection.private_ref:
@@ -1685,6 +1690,10 @@ class ProtoAgentExecutor(AgentExecutor):
                         model = payload.get("model", "")
                         if model and model not in models:
                             models.append(model)
+
+                elif event_type == "decision":
+                    if isinstance(payload, dict) and payload.get("decision_id"):
+                        turn_decisions[payload["decision_id"]] = payload
 
                 elif event_type == "input_required":
                     await _flush_text()  # persist any answer text streamed before the pause

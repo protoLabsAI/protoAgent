@@ -1168,6 +1168,10 @@ async def _run_turn_stream(
     frame instead of ``__raw__`` so the A2A layer can park the task (ADR 0003).
     """
     from langgraph.types import Command
+    from datetime import UTC, datetime
+    from graph.decisions import turn_decision_payloads
+
+    started_at = datetime.now(UTC).isoformat()
 
     from server.chat_rehydrate import recovered_messages
 
@@ -1262,4 +1266,6 @@ async def _run_turn_stream(
         yield ("input_required", _chat()._interrupt_payload(interrupt_val))
         return
 
+    for payload in turn_decision_payloads(config["configurable"]["thread_id"], started_at):
+        yield ("decision", payload)
     yield ("__raw__", st.accumulated_raw)
