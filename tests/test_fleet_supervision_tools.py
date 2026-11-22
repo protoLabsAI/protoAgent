@@ -415,6 +415,7 @@ async def test_dismiss_service_token_cannot_cancel_decisions_but_can_close_tasks
         assert before["pending_decisions"] == before["waiting_tasks"] == 1
         refused = await _dismiss(dismiss_env, item_id=decision.id)
         assert refused["ok"] is False and refused["status_code"] == 403
+        assert refused["error"] == "operator_answer_required"
         assert (await _dismiss(dismiss_env, kind="task", item_id=task["id"]))["ok"] is True
         after = _by_id(await fs.fleet_pending())[_ALPHA["id"]]
         assert after["pending_decisions"] == 1 and after["waiting_tasks"] == 0
@@ -457,7 +458,7 @@ async def test_dismiss_refusals_are_audited_without_requests(dismiss_env, monkey
     assert error in entries[0]["result_summary"] and not entries[0]["success"]
 
 
-@pytest.mark.parametrize("failure,error", [(404, "not_found"), (409, "member_error"),
+@pytest.mark.parametrize("failure,error", [(404, "not_found"), (409, "member_error"), (403, "operator_answer_required"),
                                             ("timeout", "unreachable"), ("resolution", "unreachable")])
 async def test_dismiss_member_failures_are_contained(dismiss_env, monkeypatch, failure, error):
     import httpx
