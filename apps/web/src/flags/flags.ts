@@ -12,8 +12,11 @@ import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { createUISlice } from "../ext/uiStateRegistry";
-import { flagsQuery } from "../lib/queries";
-import type { FlagChannel } from "../lib/types";
+import { api } from "../lib/api";
+import { ApiError } from "../lib/api/http";
+import { flagsQuery, queryKeys } from "../lib/queries";
+import { queryClient } from "../lib/queryClient";
+import type { FlagChannel, FlagsPayload } from "../lib/types";
 
 // Device-local panel overrides — persisted per-agent (like the other UI slices), so a
 // developer's toggles never leak into shared config. `undefined` = follow the server state.
@@ -32,6 +35,69 @@ export function clearFlagOverride(id: string): void {
 }
 export function resetFlagOverrides(): void {
   useFlagOverrides.setState({ overrides: {} });
+}
+
+// ── The panel's toggle: stored on the AGENT, so server-gated flags really turn on ────────
+// A device-local override only changes what this console draws. A flag that gates server
+// behaviour (a route that answers 404 while off, say) needs the server to know, so the
+// panel writes the override to the agent (`PUT /api/flags/<id>`). The device-local layer
+// stays as the fallback for an agent too old to store one.
+
+/** Does this agent store overrides itself? (It reports each flag's channel `default`.)
+ *  When it does, a toggle left in this browser from before that is stale: it would mask
+ *  what the agent says, so it is ignored, and cleared the next time the panel saves. */
+export function agentStoresFlags(data: FlagsPayload | undefined): boolean {
+  return Boolean(data?.flags.some((f) => f.default !== undefined));
+}
+
+/** The server answered: take its list, drop the device-local stand-in, and refetch
+ *  everything else, because data gated by the flag may exist now (or be gone). */
+function applied(data: FlagsPayload, id?: string): void {
+  queryClient.setQueryData(queryKeys.flags, data);
+  if (id) clearFlagOverride(id);
+  else resetFlagOverrides();
+  // Deliberately unfiltered: a flag can gate any route, so there is no narrower key that
+  // is known to be enough, and this runs only when a developer flips a switch.
+  void queryClient.invalidateQueries();
+}
+
+/** True when the agent has no stored-override route (older than this feature). */
+function unsupported(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 404 || err.status === 405) && !/no developer flag/i.test(err.message);
+}
+
+/** Turn a flag on or off. Stored on the agent when it supports that; on an older agent the
+ *  change is kept on this device only. Rejects with the agent's reason when it refuses
+ *  (a flag pinned by its environment variable). */
+export async function saveFlag(id: string, on: boolean): Promise<"agent" | "device"> {
+  try {
+    applied(await api.setFlag(id, on), id);
+    return "agent";
+  } catch (err) {
+    if (!unsupported(err)) throw err;
+    setFlagOverride(id, on);
+    return "device";
+  }
+}
+
+/** Back to the channel default for one flag: the agent's stored override and this device's. */
+export async function resetFlag(id: string): Promise<void> {
+  clearFlagOverride(id);
+  try {
+    applied(await api.clearFlag(id), id);
+  } catch (err) {
+    if (!unsupported(err)) throw err;
+  }
+}
+
+/** Back to the channel defaults for every flag. */
+export async function resetAllFlags(): Promise<void> {
+  resetFlagOverrides();
+  try {
+    applied(await api.clearFlag());
+  } catch (err) {
+    if (!unsupported(err)) throw err;
+  }
 }
 
 // Transient, shareable overrides parsed ONCE from ?flag:<id>=on|off (a "try this build"
@@ -62,7 +128,7 @@ export function useFlagPredicate(): (id: string) => boolean {
   return useCallback(
     (id: string) => {
       if (id in _queryOverrides) return _queryOverrides[id];
-      const override = overrides[id];
+      const override = agentStoresFlags(data) ? undefined : overrides[id];
       if (override !== undefined) return override;
       return data?.flags.find((f) => f.id === id)?.enabled ?? false;
     },
@@ -70,7 +136,9 @@ export function useFlagPredicate(): (id: string) => boolean {
   );
 }
 
-/** Is a developer flag ON for this session? Fail-closed: an unknown/loading flag is off. */
+/** Is a developer flag ON for this session? Fail-closed: an unknown/loading flag is off.
+ *  A hook: call it at the top level of a component, never in a loop or a condition. To
+ *  gate a list, use `useFlagPredicate()` once and call the predicate per item. */
 export function useFlag(id: string): boolean {
   return useFlagPredicate()(id);
 }

@@ -358,6 +358,15 @@ export const setupApi = {
   flags() {
     return request<FlagsPayload>("/api/flags");
   },
+  /** Store this agent's override for a developer flag (ADR 0068): the server applies it,
+   *  so a flag gating server behaviour turns on, and it survives a restart. */
+  setFlag(id: string, enabled: boolean) {
+    return request<FlagsPayload>(`/api/flags/${encodeURIComponent(id)}`, { method: "PUT", body: { enabled } });
+  },
+  /** Clear this agent's stored override for one flag, or for all of them with no id. */
+  clearFlag(id?: string) {
+    return request<FlagsPayload>(id ? `/api/flags/${encodeURIComponent(id)}` : "/api/flags", { method: "DELETE" });
+  },
 
   // Per-agent theme (ADR 0042). The blob is opaque — the DS ThemePanel owns its schema; the
   // server just round-trips JSON. These auto-route to the focused agent via the active prefix

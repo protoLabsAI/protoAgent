@@ -319,6 +319,19 @@ function sendJson(res, body, status = 200) {
   res.end(data);
 }
 
+// Developer-flag overrides the "agent" has stored (PUT /api/flags/<id>).
+const FLAG_OVERRIDES = new Map();
+function withFlagOverrides(payload) {
+  return {
+    ...payload,
+    flags: payload.flags.map((f) =>
+      FLAG_OVERRIDES.has(f.id)
+        ? { ...f, default: f.enabled, enabled: FLAG_OVERRIDES.get(f.id), source: "override" }
+        : { ...f, default: f.enabled },
+    ),
+  };
+}
+
 async function readBody(req) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
@@ -1388,7 +1401,8 @@ function handleApiGet(
     }
     case "/api/flags":
       // Developer flags (ADR 0068). channel "dev" so the Developer panel is visible in e2e.
-      return {
+      // A stored override (PUT /api/flags/<id>, below) is applied the way the server does.
+      return withFlagOverrides({
         channel: "dev",
         flags: [
           { id: "chat.new_dashboard", description: "Preview of the redesigned dashboard.", tier: "beta", owner: "kj", remove_by: "v1.0", enabled: true, source: "channel" },
@@ -1401,7 +1415,7 @@ function handleApiGet(
           // its flag-off (prod) path is covered by the source-level secretsGate.test unit test.
           { id: "secrets-panel", description: "Settings ▸ Secrets — external secrets manager panel.", tier: "dev", owner: "kj", remove_by: "2026-10-01", enabled: true, source: "channel" },
         ],
-      };
+      });
     default:
       return null;
   }
@@ -2036,6 +2050,14 @@ async function handleRequest(req, res) {
   // detail loads its Recent runs clean; the job-runs spec serves its own rows via `page.route`.
   if (/^\/api\/scheduler\/jobs\/[^/]+\/runs$/.test(pathname) && req.method === "GET") {
     return sendJson(res, { job_id: decodeURIComponent(pathname.split("/")[4]), runs: [] });
+  }
+  // Developer flag overrides stored on the agent (ADR 0068): the panel's toggle and Reset.
+  if (/^\/api\/flags(\/[^/]+)?$/.test(pathname) && (req.method === "PUT" || req.method === "DELETE")) {
+    const id = pathname === "/api/flags" ? null : decodeURIComponent(pathname.slice("/api/flags/".length));
+    if (req.method === "PUT") FLAG_OVERRIDES.set(id, Boolean((await readBody(req))?.enabled));
+    else if (id) FLAG_OVERRIDES.delete(id);
+    else FLAG_OVERRIDES.clear();
+    return sendJson(res, handleApiGet("/api/flags"));
   }
   if (pathname === "/api/scheduler/jobs" && req.method === "POST") {
     const body = await readBody(req);
