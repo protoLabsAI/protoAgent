@@ -751,6 +751,10 @@ def start(ident: str, *, stop: threading.Event | None = None, restart_exit: dict
         # to a member, or inherit the hub's workspace root where the persisted key lives.
         # With its own PROTOAGENT_HOME, the member resolves its own workspace/key store.
         full_env.pop("PROTOAGENT_FLEET_DELEGATION_SEED", None)
+        from graph.fleet.delegation import public_key_b64
+
+        full_env["PROTOAGENT_FLEET_DELEGATION_PUBKEY"] = public_key_b64()
+        full_env["PROTOAGENT_FLEET_MEMBER_SLUG"] = wid
         if "PROTOAGENT_WORKSPACES_DIR" not in env:
             full_env.pop("PROTOAGENT_WORKSPACES_DIR", None)
         # Fleet service token (ADR 0089): the instance's internal, loopback-only credential.

@@ -1150,3 +1150,68 @@ def test_member_verifies_hub_delegation_only_with_injected_pubkey(delegation_env
     delegation_env.reset_signing_keys()
     grant = _owner_resolve(delegation_env, token)
     assert grant is not None and grant.audience == "alice"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["human", "peer", "forged", "expired", "wrong-path", "wrong-member", "replay"])
+async def test_http_proxy_preserves_only_verified_operator_identity(monkeypatch, delegation_env, case):
+    """Authenticate at both ends of the real proxy hop, including the member's bearer alias."""
+    import base64
+
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    from graph.fleet import service_token
+    from graph.middleware.request_context import current_verified_principal
+
+    path = "api/decisions/decision-1/answer"
+    captured = FakeClient(upstream=FakeUpstream(chunks=(b"{}",)))
+    monkeypatch.setattr(proxy, "_get_client", lambda: captured)
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    monkeypatch.setattr(service_token, "resolve_service_token", lambda: "fleet-secret")
+
+    async def forward(request):
+        return await proxy.forward_to("alice", request, path)
+
+    hub = Starlette(routes=[Route("/agents/alice/" + path, forward, methods=["POST"])])
+    auth.install(hub, bearer_token="human-secret", fleet_token="fleet-secret", api_key="", allowed_origins_raw="")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=hub), base_url="http://localhost") as client:
+        response = await client.post(
+            "/agents/alice/" + path,
+            headers={"authorization": "Bearer " + ("fleet-secret" if case == "peer" else "human-secret"),
+                     "x-human-operator": "true", "x-fleet-delegation": "smuggled"},
+            json={"answer": "yes"},
+        )
+    assert response.status_code == 200
+    headers = captured.built["headers"]
+    token = headers.get(delegation_env.DELEGATION_HEADER)
+    assert bool(token) == (case != "peer")
+    assert headers["authorization"] == "Bearer fleet-secret"
+    if case == "forged":
+        headers[delegation_env.DELEGATION_HEADER] = token.split(".")[0] + ".AAAA"
+    elif case == "expired":
+        headers[delegation_env.DELEGATION_HEADER] = delegation_env.mint_delegation(
+            audience="alice", method="POST", context="/" + path, operation="http-request", ttl=-1,
+        )
+
+    # Model a distinct member process: it holds its own private key and ONLY the hub public key.
+    monkeypatch.setenv("PROTOAGENT_FLEET_DELEGATION_PUBKEY", delegation_env.public_key_b64())
+    monkeypatch.setenv("PROTOAGENT_FLEET_MEMBER_SLUG", "bob" if case == "wrong-member" else "alice")
+    monkeypatch.setenv("PROTOAGENT_FLEET_DELEGATION_SEED", base64.urlsafe_b64encode(b"m" * 32).decode())
+    delegation_env.reset_signing_keys()
+
+    async def identity(request):
+        assert current_verified_principal() == request.state.principal_kind
+        return JSONResponse({"human": is_human_operator(request.state.principal_kind),
+                             "tier": request.state.trust_tier})
+
+    member = Starlette(routes=[Route("/api/{path:path}", identity, methods=["POST"])])
+    auth.install(member, bearer_token="fleet-secret", fleet_token="fleet-secret", api_key="", allowed_origins_raw="")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=member), base_url="http://localhost") as client:
+        destination = "/api/decisions/other/answer" if case == "wrong-path" else "/" + path
+        response = await client.post(destination, headers=headers, content=captured.built["content"])
+        assert response.json() == {"human": case in {"human", "replay"}, "tier": "operator"}
+        if case == "replay":
+            response = await client.post(destination, headers=headers)
+            assert response.json() == {"human": False, "tier": "operator"}

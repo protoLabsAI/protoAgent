@@ -1012,18 +1012,20 @@ def test_spawned_member_is_closed_with_fleet_token(tmp_path, monkeypatch):
     assert "PROTOAGENT_ALLOW_OPEN" not in env  # dropped — a credential now gates the surface
 
 
-def test_spawned_member_does_not_inherit_hub_delegation_key(tmp_path, monkeypatch):
+def test_spawned_member_does_not_inherit_hub_delegation_key(tmp_path, monkeypatch, delegation_env):
     """Member startup cannot reuse the hub's environment or persisted signing seed."""
     from infra.paths import reset_instance_paths
 
     captured = _env_capturing_fleet(tmp_path, monkeypatch)
-    monkeypatch.setenv("PROTOAGENT_FLEET_DELEGATION_SEED", "hub-private-seed")
+    hub_public_key = delegation_env.public_key_b64()
     hub_root = manager.workspaces_root()
-    manager.create("beta", port=7891)
+    workspace = manager.create("beta", port=7891)
 
     supervisor.start("beta")
 
     env = captured["env"]
+    assert env["PROTOAGENT_FLEET_DELEGATION_PUBKEY"] == hub_public_key
+    assert env["PROTOAGENT_FLEET_MEMBER_SLUG"] == workspace["id"]
     assert "PROTOAGENT_FLEET_DELEGATION_SEED" not in env
     assert "PROTOAGENT_WORKSPACES_DIR" not in env
     # Resolve paths as the child does, with the actual environment passed to Popen.

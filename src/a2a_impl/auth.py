@@ -515,7 +515,10 @@ def _classify_token(token: str) -> Credential | None:
     if not token:
         return None
     if active is not None and _same_secret(token, active):
-        return Credential("operator", SCOPE_FULL, principal_kind="shared-operator-bearer")
+        # Spawned members use the fleet token as their active bearer too. That
+        # alias must retain peer identity, without changing its operator tier.
+        kind = "fleet-service" if fleet is not None and _same_secret(token, fleet) else "shared-operator-bearer"
+        return Credential("operator", SCOPE_FULL, principal_kind=kind)
     if fed is not None and _same_secret(token, fed):
         # Scope is moot here — the ADR 0066 ceiling already denies federation all of /api.
         return Credential("federation", SCOPE_FULL, principal_kind="federation")
@@ -1062,6 +1065,19 @@ class A2AAuthMiddleware:
             if origin is not None and origin.lower() not in allowed:
                 return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
 
+        # A fleet bearer alone stays a peer. Only a hub-signed, single-use HTTP
+        # delegation can restore the operator identity lost in the proxy swap.
+        if cred.principal_kind == "fleet-service":
+            from graph.fleet.delegation import ISSUER_PROXY
+
+            grant = resolve_human_operator(
+                request, audience=os.environ.get("PROTOAGENT_FLEET_MEMBER_SLUG", "host"),
+                method=request.method, context=route_path, operation="http-request",
+                task_id="", allowed_issuers=frozenset({ISSUER_PROXY}),
+            )
+            if grant is not None:
+                request.state.principal_kind = grant.principal_kind
+
         # Surface the ALREADY-decided trust tier to structured request telemetry for the
         # span of the downstream handler only — recorded here, immediately before call_next,
         # and always cleared after. The auth decision (including the Origin denial above) is
@@ -1260,8 +1276,8 @@ def resolve_human_operator(
     ``allowed_issuers`` to the loopback issuer so a loopback owner never honors a proxy token.
     ``allowed_issuers`` defaults to both this-instance issuers (the proxy owner's case).
 
-    Dormant: no live route grants private access off this yet; P1b wires it into the private
-    intake. Returns the ``graph.fleet.delegation.Delegation`` so a caller can read its binding.
+    HTTP auth resolves proxy grants; loopback intake resolves its own operation grants.
+    Returns the ``graph.fleet.delegation.Delegation`` so a caller can read its binding.
     """
     from graph.fleet import delegation as _delegation
 

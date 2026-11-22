@@ -31,13 +31,13 @@ SESSION = "peer-running-private-steer"
 
 
 async def _working(handler, task_id, peer, timeout=5.0):
-    """The peer's GetTask once the task is stored as working, or the last read at the deadline."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while True:
-        task = await handler.on_get_task(GetTaskRequest(id=task_id), peer)
-        if task.status.state == TaskState.TASK_STATE_WORKING or asyncio.get_running_loop().time() >= deadline:
-            return task
-        await asyncio.sleep(0.02)
+    """Wait for the persisted working state, bounding database reads as well as polling."""
+    async with asyncio.timeout(timeout):
+        while True:
+            task = await handler.on_get_task(GetTaskRequest(id=task_id), peer)
+            if task.status.state == TaskState.TASK_STATE_WORKING:
+                return task
+            await asyncio.sleep(0.02)
 
 
 @pytest.mark.parametrize("kind", ["fleet-service", "paired-agent"])
