@@ -1,6 +1,4 @@
-// The cross-tab turn-owner marker (#5514): who is streaming a (session, task), as another
-// tab reads it. "Another tab" is a marker written under a different tab id — exactly what a
-// second tab's claimTurn leaves in the shared localStorage.
+// The cross-tab turn-owner marker (#5514). "Another tab" is a marker under a different tab id.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,10 +40,6 @@ afterEach(() => {
 });
 
 describe("ownedByAnotherLiveTab", () => {
-  it("is false with no marker", () => {
-    expect(ownedByAnotherLiveTab(SESSION, TASK)).toBe(false);
-  });
-
   it("is true while another tab's marker is renewed, and false once it is released", () => {
     otherTabStamps();
     expect(ownedByAnotherLiveTab(SESSION, TASK)).toBe(true);
@@ -67,16 +61,18 @@ describe("ownedByAnotherLiveTab", () => {
     expect(ownedByAnotherLiveTab(SESSION, TASK)).toBe(false);
   });
 
-  it("never counts this tab's own marker as another tab", () => {
+  it("never counts this tab's own marker as another tab, and release removes it", () => {
     const release = claimTurn(SESSION, TASK);
     expect(marker()?.tab).toBe(turnOwnerTabId());
     expect(ownedByAnotherLiveTab(SESSION, TASK)).toBe(false);
     vi.advanceTimersByTime(TURN_OWNER_HEARTBEAT_MS);
     expect(ownedByAnotherLiveTab(SESSION, TASK)).toBe(false);
     release();
+    expect(marker()).toBeNull();
   });
 
-  it("is scoped to the session and the task", () => {
+  it("is false with no marker, and scoped to the session and the task", () => {
+    expect(ownedByAnotherLiveTab(SESSION, TASK)).toBe(false);
     otherTabStamps();
     expect(ownedByAnotherLiveTab(SESSION, "task-2")).toBe(false);
     expect(ownedByAnotherLiveTab("session-2", TASK)).toBe(false);
@@ -93,20 +89,6 @@ describe("ownedByAnotherLiveTab", () => {
 });
 
 describe("claimTurn", () => {
-  it("as seen from another tab: owned while claimed, free after release", () => {
-    const release = claimTurn(SESSION, TASK);
-    // A page loaded after the claim has its own tab id — the reload, or a second tab.
-    const asOtherTab = () => {
-      const raw = readKey("local", KEY);
-      const m = raw ? (JSON.parse(raw) as { tab: string; at: number }) : null;
-      return !!m && m.tab !== "some-other-tab" && Date.now() - m.at < TURN_OWNER_STALE_MS;
-    };
-    expect(asOtherTab()).toBe(true);
-    release();
-    expect(marker()).toBeNull();
-    expect(asOtherTab()).toBe(false);
-  });
-
   it("renews the marker on an interval until released", () => {
     const release = claimTurn(SESSION, TASK);
     const first = marker()!.at;

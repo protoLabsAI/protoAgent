@@ -1469,13 +1469,9 @@ describe("decision replay after a local visible answer", () => {
 // a turn another live tab is streaming (#5514)
 // ---------------------------------------------------------------------------
 //
-// Two tabs on one chat share its saved transcript, so the second sees the first's turn as
-// "streaming with a task id, no local stream" — the shape a reload recovers from. While the
-// first tab holds the turn's owner marker the second must not resubscribe: its copy of the
-// turn could replace the reply the first one finished.
-
+// A second tab sees the first's turn as "streaming with a task id, no local stream". While
+// the first holds the owner marker it must not resubscribe and replace the finished reply.
 describe("reattachOrReconcile and a turn another tab owns", () => {
-  /** What the owning tab's claim and heartbeats leave in the shared localStorage. */
   function otherTabOwns(sessionId: string, at = Date.now()) {
     writeKey("local", turnOwnerKey(sessionId, TASK_ID), JSON.stringify({ tab: "the-other-tab", at }));
   }
@@ -1502,21 +1498,18 @@ describe("reattachOrReconcile and a turn another tab owns", () => {
     removeKey("local", turnOwnerKey(sessionId, TASK_ID));
   });
 
-  it("with no marker, reattaches at once (unchanged)", async () => {
+  it.each<[string, (id: string) => void]>([
+    ["no marker (unchanged)", () => {}],
+    ["this tab's own marker", (id) => void cancels.push(claimTurn(id, TASK_ID))],
+    ["a marker already stale at mount", (id) => otherTabOwns(id, Date.now() - TURN_OWNER_STALE_MS)],
+  ])("reattaches at once with %s", async (_name, arrange) => {
+    arrange(sessionId);
     start(sessionId);
     await settle();
     expect(resumeTask).toHaveBeenCalledTimes(1);
     expect(resumeTask.mock.calls[0].slice(0, 2)).toEqual([TASK_ID, sessionId]);
     expect(assistantMessage(sessionId)).toMatchObject({ status: "done", content: "the whole answer" });
     expect(sessionStatus(sessionId)).toBe("idle");
-  });
-
-  it("this tab's own marker does not hold its reattach back", async () => {
-    const release = claimTurn(sessionId, TASK_ID);
-    start(sessionId);
-    await settle();
-    expect(resumeTask).toHaveBeenCalledTimes(1);
-    release();
   });
 
   it("does not reattach while another live tab owns the task, and leaves the turn as it is", async () => {
@@ -1537,7 +1530,6 @@ describe("reattachOrReconcile and a turn another tab owns", () => {
     start(sessionId);
     await settle();
     expect(resumeTask).not.toHaveBeenCalled();
-
     otherTabReleases(sessionId);
     await settle();
     expect(resumeTask).toHaveBeenCalledTimes(1);
@@ -1552,18 +1544,10 @@ describe("reattachOrReconcile and a turn another tab owns", () => {
     start(sessionId);
     await settle();
     expect(resumeTask).not.toHaveBeenCalled();
-
     vi.advanceTimersByTime(TURN_OWNER_STALE_MS); // the owner died: no renewal, no release
     await settle();
     expect(resumeTask).toHaveBeenCalledTimes(1);
     expect(assistantMessage(sessionId)).toMatchObject({ status: "done", content: "the whole answer" });
-  });
-
-  it("a marker already stale when the slot mounts does not hold the reattach back", async () => {
-    otherTabOwns(sessionId, Date.now() - TURN_OWNER_STALE_MS);
-    start(sessionId);
-    await settle();
-    expect(resumeTask).toHaveBeenCalledTimes(1);
   });
 
   it("does not reattach after release when the owner's finished reply already landed here", async () => {
