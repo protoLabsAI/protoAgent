@@ -37,9 +37,9 @@ def register_flags_routes(app) -> None:
     def _refusal(exc: Exception):  # noqa: ANN202
         """An unknown flag is 404; a flag pinned by its environment variable is 409."""
         from fastapi import HTTPException
+        from runtime.flags import UnknownFlagError
 
-        message = str(exc)
-        return HTTPException(status_code=404 if message.startswith("no developer flag") else 409, detail=message)
+        return HTTPException(status_code=404 if isinstance(exc, UnknownFlagError) else 409, detail=str(exc))
 
     @router.put("/api/flags/{flag_id}")
     async def _set_flag(flag_id: str, body: FlagOverride) -> dict:

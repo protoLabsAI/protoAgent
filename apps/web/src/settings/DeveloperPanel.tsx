@@ -4,6 +4,7 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 
 import {
+  agentStoresFlags,
   resetAllFlags,
   resetFlag,
   saveFlag,
@@ -30,7 +31,9 @@ function FlagRow({ flag }: { flag: FlagInfo }) {
   const toast = useToast();
   const effective = useFlag(flag.id);
   const override = useFlagOverrides((s) => s.overrides[flag.id]);
-  const overridden = override !== undefined || flag.source === "override";
+  const { data } = useFlags();
+  // A toggle left in this browser only counts against an agent that can't store one.
+  const overridden = flag.source === "override" || (override !== undefined && !agentStoresFlags(data));
   // Pinned by PROTOAGENT_FLAG_<ID>: the agent would refuse a change, so don't offer one.
   const pinned = flag.source === "env";
   const failed = (err: unknown) =>
@@ -75,10 +78,16 @@ function FlagRow({ flag }: { flag: FlagInfo }) {
 }
 
 export function DeveloperPanel() {
+  const toast = useToast();
   const { data } = useFlags();
   const localCount = useFlagOverrides((s) => Object.keys(s.overrides).length);
   const flags = data?.flags ?? [];
-  const overrideCount = localCount + flags.filter((f) => f.source === "override").length;
+  const overrideCount = (agentStoresFlags(data) ? 0 : localCount) + flags.filter((f) => f.source === "override").length;
+  const resetAll = () => {
+    resetAllFlags().catch((err: unknown) =>
+      toast({ tone: "error", title: "Couldn't reset the flags", message: err instanceof Error ? err.message : String(err) }),
+    );
+  };
   const channel = data?.channel ?? "prod";
   return (
     <section className="panel stage-panel" data-testid="developer-panel">
@@ -86,7 +95,7 @@ export function DeveloperPanel() {
         title="Developer"
         kicker={`pre-release feature flags · channel ${channel} · toggles saved on this agent`}
         actions={
-          <Button variant="ghost" size="sm" onClick={() => void resetAllFlags()} disabled={overrideCount === 0}>
+          <Button variant="ghost" size="sm" onClick={resetAll} disabled={overrideCount === 0}>
             Reset all
           </Button>
         }

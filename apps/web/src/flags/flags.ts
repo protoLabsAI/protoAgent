@@ -43,12 +43,21 @@ export function resetFlagOverrides(): void {
 // panel writes the override to the agent (`PUT /api/flags/<id>`). The device-local layer
 // stays as the fallback for an agent too old to store one.
 
+/** Does this agent store overrides itself? (It reports each flag's channel `default`.)
+ *  When it does, a toggle left in this browser from before that is stale: it would mask
+ *  what the agent says, so it is ignored, and cleared the next time the panel saves. */
+export function agentStoresFlags(data: FlagsPayload | undefined): boolean {
+  return Boolean(data?.flags.some((f) => f.default !== undefined));
+}
+
 /** The server answered: take its list, drop the device-local stand-in, and refetch
  *  everything else, because data gated by the flag may exist now (or be gone). */
 function applied(data: FlagsPayload, id?: string): void {
   queryClient.setQueryData(queryKeys.flags, data);
   if (id) clearFlagOverride(id);
   else resetFlagOverrides();
+  // Deliberately unfiltered: a flag can gate any route, so there is no narrower key that
+  // is known to be enough, and this runs only when a developer flips a switch.
   void queryClient.invalidateQueries();
 }
 
@@ -119,7 +128,7 @@ export function useFlagPredicate(): (id: string) => boolean {
   return useCallback(
     (id: string) => {
       if (id in _queryOverrides) return _queryOverrides[id];
-      const override = overrides[id];
+      const override = agentStoresFlags(data) ? undefined : overrides[id];
       if (override !== undefined) return override;
       return data?.flags.find((f) => f.id === id)?.enabled ?? false;
     },
@@ -127,7 +136,9 @@ export function useFlagPredicate(): (id: string) => boolean {
   );
 }
 
-/** Is a developer flag ON for this session? Fail-closed: an unknown/loading flag is off. */
+/** Is a developer flag ON for this session? Fail-closed: an unknown/loading flag is off.
+ *  A hook: call it at the top level of a component, never in a loop or a condition. To
+ *  gate a list, use `useFlagPredicate()` once and call the predicate per item. */
 export function useFlag(id: string): boolean {
   return useFlagPredicate()(id);
 }

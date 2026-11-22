@@ -104,12 +104,19 @@ def _env_override(flag_id: str) -> bool | None:
 # ── stored overrides (the Developer panel's toggle) ──────────────────────────────────────
 _OVERRIDES_FILE = "developer-flags.json"
 _overrides_lock = threading.Lock()
+# Serializes each read-modify-write of the file: the routes run writers on worker threads,
+# and two interleaved toggles must not lose one or trip over each other's temp file.
+_overrides_write_lock = threading.Lock()
 # (path, mtime_ns) the cached map was read at; flag_enabled is called on request paths.
 _overrides_cache: list = [None, None, {}]
 
 
 class FlagOverrideError(ValueError):
     """The override cannot be changed; the message is safe to show the operator."""
+
+
+class UnknownFlagError(FlagOverrideError):
+    """No developer flag is registered under that id."""
 
 
 def _overrides_path() -> Path:
@@ -143,7 +150,7 @@ def stored_overrides() -> dict[str, bool]:
 def _write_overrides(overrides: dict[str, bool]) -> None:
     path = _overrides_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(overrides, sort_keys=True, indent=2) + "\n", "utf-8")
     os.replace(tmp, path)
     with _overrides_lock:
@@ -155,25 +162,27 @@ def set_override(flag_id: str, enabled: bool | None) -> None:
     registered flag. Refuses an unknown flag, and one pinned by its environment variable,
     where a stored value would be ignored and the panel would appear to do nothing."""
     if flag_id not in _registry():
-        raise FlagOverrideError(f"no developer flag named {flag_id!r}")
+        raise UnknownFlagError(f"no developer flag named {flag_id!r}")
     if enabled is not None and _env_override(flag_id) is not None:
         raise FlagOverrideError(
             f"{flag_id} is set by the {_env_key(flag_id)} environment variable; unset it to change the flag here"
         )
-    overrides = stored_overrides()
-    if enabled is None:
-        if flag_id not in overrides:
-            return
-        overrides.pop(flag_id)
-    else:
-        overrides[flag_id] = bool(enabled)
-    _write_overrides(overrides)
+    with _overrides_write_lock:
+        overrides = stored_overrides()
+        if enabled is None:
+            if flag_id not in overrides:
+                return
+            overrides.pop(flag_id)
+        else:
+            overrides[flag_id] = bool(enabled)
+        _write_overrides(overrides)
 
 
 def clear_overrides() -> None:
     """Remove every stored override (the panel's "Reset all")."""
-    if stored_overrides():
-        _write_overrides({})
+    with _overrides_write_lock:
+        if stored_overrides():
+            _write_overrides({})
 
 
 def current_channel() -> Channel:

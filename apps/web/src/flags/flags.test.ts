@@ -101,3 +101,13 @@ describe("saving a flag on the agent", () => {
     expect(useFlagOverrides.getState().overrides).toEqual({});
   });
 });
+
+describe("a toggle left in this browser from before the agent stored them", () => {
+  it("is ignored once the agent stores overrides, and still used against an older agent", async () => {
+    const { agentStoresFlags } = await import("./flags");
+    expect(agentStoresFlags(payload(false, "channel"))).toBe(true);
+    const old: FlagsPayload = { channel: "dev", flags: [{ id: "x", description: "", tier: "off", owner: "", remove_by: "", enabled: false, source: "channel" }] };
+    expect(agentStoresFlags(old)).toBe(false);
+    expect(agentStoresFlags(undefined)).toBe(false);
+  });
+});

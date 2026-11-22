@@ -162,3 +162,18 @@ def test_the_real_home_flag_follows_the_panel_toggle(tmp_path, monkeypatch):
         assert home_entries._enabled() is False
     finally:
         reset_instance_paths()
+
+
+def test_concurrent_toggles_lose_nothing(instance, monkeypatch):
+    """The routes run writers on worker threads: interleaved toggles of different flags must
+    all land, and none may fail on another's temp file."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ids = [f"f{i}" for i in range(24)]
+    monkeypatch.setattr(flags, "FLAGS", [Flag(i, "d", tier="off") for i in ids])
+    flags._overrides_cache[:] = [None, None, {}]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(lambda i: flags.set_override(i, True), ids))
+    flags._overrides_cache[:] = [None, None, {}]
+    assert flags.stored_overrides() == dict.fromkeys(ids, True)
+    assert [p.name for p in instance.iterdir() if p.name.endswith(".tmp")] == []
