@@ -31,6 +31,8 @@ import {
 import { liveMessageId, noteTurnFinished, noteTurnStarted, resetServerTurns } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
+import { removeKey, writeKey } from "../lib/storage";
+import { claimTurn, TURN_OWNER_STALE_MS, turnOwnerKey } from "./turnOwner";
 import { finalizeStoppedMessages } from "./stopTurn";
 import { formResponseText } from "./useHitl";
 
@@ -1460,5 +1462,130 @@ describe("decision replay after a local visible answer", () => {
     expect(messages[0]).toMatchObject({ id: "older", content: "Earlier task", decisionId: "older-id" });
     expect(messages.filter((m) => m.decisionId === "decision-B")).toHaveLength(1);
     cancel();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// a turn another live tab is streaming (#5514)
+// ---------------------------------------------------------------------------
+//
+// A second tab sees the first's turn as "streaming with a task id, no local stream". While
+// the first holds the owner marker it must not resubscribe and replace the finished reply.
+describe("reattachOrReconcile and a turn another tab owns", () => {
+  function otherTabOwns(sessionId: string, at = Date.now()) {
+    writeKey("local", turnOwnerKey(sessionId, TASK_ID), JSON.stringify({ tab: "the-other-tab", at }));
+  }
+  /** The owning tab's stream ended: its marker is removed, and this tab hears of it. */
+  function otherTabReleases(sessionId: string) {
+    const key = turnOwnerKey(sessionId, TASK_ID);
+    removeKey("local", key);
+    window.dispatchEvent(new StorageEvent("storage", { key, newValue: null }));
+  }
+  function start(sessionId: string) {
+    const cancel = reattachOrReconcile(sessionId);
+    if (cancel) cancels.push(cancel);
+    return cancel;
+  }
+
+  let sessionId = "";
+  beforeEach(() => {
+    sessionId = seedStuckSession();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "completed", text: "the whole answer" });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    removeKey("local", turnOwnerKey(sessionId, TASK_ID));
+  });
+
+  it.each<[string, (id: string) => void]>([
+    ["no marker (unchanged)", () => {}],
+    ["this tab's own marker", (id) => void cancels.push(claimTurn(id, TASK_ID))],
+    ["a marker already stale at mount", (id) => otherTabOwns(id, Date.now() - TURN_OWNER_STALE_MS)],
+  ])("reattaches at once with %s", async (_name, arrange) => {
+    arrange(sessionId);
+    start(sessionId);
+    await settle();
+    expect(resumeTask).toHaveBeenCalledTimes(1);
+    expect(resumeTask.mock.calls[0].slice(0, 2)).toEqual([TASK_ID, sessionId]);
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", content: "the whole answer" });
+    expect(sessionStatus(sessionId)).toBe("idle");
+  });
+
+  it("does not reattach while another live tab owns the task, and leaves the turn as it is", async () => {
+    otherTabOwns(sessionId);
+    const cancel = start(sessionId);
+    await settle();
+    expect(cancel).toBeTypeOf("function");
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(replayTask).not.toHaveBeenCalled();
+    expect(getTask).not.toHaveBeenCalled();
+    // The other tab's turn is still running: nothing here settles or unlocks it.
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "streaming", content: "partial answer" });
+    expect(sessionStatus(sessionId)).toBe("streaming");
+  });
+
+  it("reattaches once the owner releases its marker", async () => {
+    otherTabOwns(sessionId);
+    start(sessionId);
+    await settle();
+    expect(resumeTask).not.toHaveBeenCalled();
+    otherTabReleases(sessionId);
+    await settle();
+    expect(resumeTask).toHaveBeenCalledTimes(1);
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", content: "the whole answer" });
+    expect(sessionStatus(sessionId)).toBe("idle");
+  });
+
+  it("reattaches once the owner's heartbeat goes stale", async () => {
+    // Only the interval and the clock are faked: settle() still drains on real timeouts.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    otherTabOwns(sessionId);
+    start(sessionId);
+    await settle();
+    expect(resumeTask).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(TURN_OWNER_STALE_MS); // the owner died: no renewal, no release
+    await settle();
+    expect(resumeTask).toHaveBeenCalledTimes(1);
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", content: "the whole answer" });
+  });
+
+  it("does not reattach after release when the owner's finished reply already landed here", async () => {
+    otherTabOwns(sessionId);
+    start(sessionId);
+    // The owner's saved transcript reached this tab (chat-store's cross-tab merge) first.
+    chatStore.updateMessages(sessionId, [
+      { id: "u1", role: "user", content: "deploy the release", status: "done" },
+      { id: ASSISTANT_ID, role: "assistant", content: "the owner's reply", status: "done", taskId: TASK_ID },
+    ]);
+    otherTabReleases(sessionId);
+    await settle();
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", content: "the owner's reply" });
+    expect(sessionStatus(sessionId)).toBe("idle"); // reconciled: nothing is streaming here
+  });
+
+  it("cancelling while it waits means a later release reattaches nothing", async () => {
+    otherTabOwns(sessionId);
+    const cancel = start(sessionId)!;
+    cancel();
+    otherTabReleases(sessionId);
+    await settle();
+    expect(resumeTask).not.toHaveBeenCalled();
+  });
+
+  it("cancelling after the wait ended cancels the reattach it started", async () => {
+    otherTabOwns(sessionId);
+    let finish: () => void = () => {};
+    resumeTask.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const cancel = start(sessionId)!;
+    otherTabReleases(sessionId);
+    await settle();
+    expect(resumeTask).toHaveBeenCalledTimes(1);
+    cancel();
+    finish();
+    await settle();
+    // The cancelled reattach must not settle the bubble.
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "streaming", content: "partial answer" });
   });
 });
