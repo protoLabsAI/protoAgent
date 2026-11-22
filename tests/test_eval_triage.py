@@ -47,6 +47,20 @@ async def test_reads_only_open_nightly_entries_without_latest_twelve_cap(regress
     assert result[0]["id"] == friction.entry_id("harness", row["summary"])
 
 
+@pytest.mark.asyncio
+async def test_interruption_rows_are_not_eval_cases(regression):
+    """#5518: over-threshold interruption counts share the nightly prefix but are
+    not eval case ids, so the case-id triage tools never see or rerun them."""
+    row, path = regression
+    noisy = {**row, "summary": "nightly gate regression: interruptions:scheduler:cards",
+             "trace_id": "", "detail": "report: run.json\nover: 21 scheduler Activity cards"}
+    path.write_text("\n".join(map(json.dumps, [row, noisy])), encoding="utf-8")
+    entries = json.loads(await friction.eval_regression_entries.ainvoke({}))
+    assert [e["case_id"] for e in entries] == ["instance:lookup"]
+    with pytest.raises(ValueError, match="No open nightly regression"):
+        friction._regression_model("interruptions:scheduler:cards")
+
+
 class Model(GenericFakeChatModel):
     def bind_tools(self, tools, **kwargs):
         assert {t.name for t in tools} == friction.eval_triage_tool_names()

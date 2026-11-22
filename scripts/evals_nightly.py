@@ -9,6 +9,14 @@ recorded regressions queue proposal-mode triage on this instance's scheduler.
 Flaky gate cases are printed for a
 human to deal with — nothing auto-demotes.
 
+It also counts how often unattended work interrupted the operator in the 24 hours
+before the run (``evals.interruptions``: Activity cards and Needs-you items per
+source), prints the table, writes it under the report's ``interruptions`` key, and
+records each count above its threshold (``--interruption-threshold``) as a gate
+regression — ``nightly gate regression: interruptions:<source>:<cards|needs_you>`` —
+resolved the first night it is back under. The counts read THIS process's instance
+stores, like the friction ledger below.
+
 What runs where (ADR 0004 instance scoping — read this, it is the whole
 isolation story):
 
@@ -300,6 +308,151 @@ def resolve_recoveries(recoveries: list[dict], report_path: str | Path, *, resol
             print(f"  ! friction resolution failed for {cid}: {exc}", file=sys.stderr)
 
 
+# ── interruptions: Activity cards + Needs-you items per source (#5518) ─────────
+
+#: Threshold kind (the friction summary's last segment) → the count key
+#: ``evals.interruptions.count_interruptions`` reports.
+INTERRUPTION_KINDS = {"cards": "activity_cards", "needs_you": "needs_you"}
+#: The documented default limit per source per day; a count ABOVE it is a regression.
+DEFAULT_INTERRUPTION_THRESHOLDS = {"cards": 20, "needs_you": 5}
+INTERRUPTION_PREFIX = "interruptions"
+
+
+def _interruption_sources() -> tuple[str, ...]:
+    from evals.interruptions import SOURCES
+
+    return SOURCES
+
+
+def interruption_thresholds(overrides: list[str] | None = None) -> dict[str, dict[str, int | None]]:
+    """``source -> kind -> limit`` (``None`` = not gated): the defaults, then each override.
+
+    An override is ``[<source>:]<kind>=<limit>`` — ``scheduler:cards=40`` sets one
+    source, ``needs_you=3`` sets that kind for every source, and a limit of ``off``
+    stops gating it. Raises ``ValueError`` on an unknown source/kind or a bad limit."""
+    sources = _interruption_sources()
+    out: dict[str, dict[str, int | None]] = {
+        source: dict(DEFAULT_INTERRUPTION_THRESHOLDS) for source in sources
+    }
+    for raw in overrides or []:
+        key, sep, value = str(raw).partition("=")
+        if not sep:
+            raise ValueError(f"interruption threshold {raw!r} is not [<source>:]<kind>=<limit>")
+        source, _, kind = key.strip().rpartition(":")
+        kind = kind.strip()
+        source = source.strip()
+        if kind not in INTERRUPTION_KINDS:
+            raise ValueError(f"interruption threshold {raw!r}: kind must be one of {', '.join(INTERRUPTION_KINDS)}")
+        if source and source not in out:
+            raise ValueError(f"interruption threshold {raw!r}: source must be one of {', '.join(sources)}")
+        value = value.strip().lower()
+        if value == "off":
+            limit = None
+        else:
+            try:
+                limit = int(value)
+            except ValueError:
+                raise ValueError(f"interruption threshold {raw!r}: limit must be a whole number or 'off'") from None
+            if limit < 0:
+                raise ValueError(f"interruption threshold {raw!r}: limit must not be negative")
+        for target in [source] if source else list(out):
+            out[target][kind] = limit
+    return out
+
+
+def _read_interruptions(window_end: datetime) -> dict[str, dict[str, int]]:
+    """This instance's counts for the 24 hours ending at ``window_end`` (a seam for tests)."""
+    from evals.interruptions import read_interruptions
+
+    return read_interruptions(window_end)
+
+
+def measure_interruptions(window_end: datetime, thresholds: dict[str, dict[str, int | None]]) -> dict | None:
+    """The report's ``interruptions`` section, or ``None`` when the stores can't be read.
+
+    ``over`` lists the ``interruptions:<source>:<kind>`` ids whose count exceeds its
+    threshold — the next night reads it to resolve the ones that came back under."""
+    try:
+        counts = _read_interruptions(window_end)
+    except Exception as exc:  # noqa: BLE001 — a store blip must not stop the eval gate
+        print(f"  ! interruption counts unavailable: {exc}", file=sys.stderr)
+        return None
+    over: list[str] = []
+    for source, limits in thresholds.items():
+        for kind, limit in limits.items():
+            n = int((counts.get(source) or {}).get(INTERRUPTION_KINDS[kind], 0) or 0)
+            if limit is not None and n > limit:
+                over.append(f"{INTERRUPTION_PREFIX}:{source}:{kind}")
+    return {
+        "window_end": window_end.isoformat(),
+        "window_hours": 24,
+        "sources": counts,
+        "thresholds": thresholds,
+        "over": over,
+    }
+
+
+def _limit_text(limit: int | None) -> str:
+    return "off" if limit is None else str(limit)
+
+
+def format_interruptions(section: dict) -> str:
+    """The per-source table: each count with its threshold, over-threshold rows flagged."""
+    over = set(section.get("over") or [])
+    lines = [
+        f"interruptions — 24h to {section.get('window_end')} (count / threshold)",
+        f"  {'source':<12}{'cards':>14}{'needs-you':>14}",
+    ]
+    for source, limits in (section.get("thresholds") or {}).items():
+        counts = (section.get("sources") or {}).get(source) or {}
+        cells = []
+        for kind in INTERRUPTION_KINDS:
+            n = int(counts.get(INTERRUPTION_KINDS[kind], 0) or 0)
+            flag = "!" if f"{INTERRUPTION_PREFIX}:{source}:{kind}" in over else " "
+            cells.append(f"{n} / {_limit_text(limits.get(kind))}{flag}".rjust(14))
+        lines.append(f"  {source:<12}{''.join(cells)}")
+    return "\n".join(lines)
+
+
+def interruption_regressions(section: dict | None) -> list[dict]:
+    """One row per over-threshold count, shaped for :func:`record_regressions`: the id
+    is the stable ``interruptions:<source>:<kind>``; the count lives in the detail."""
+    if not section:
+        return []
+    rows = []
+    for rid in section.get("over") or []:
+        _, source, kind = rid.split(":", 2)
+        n = int(((section.get("sources") or {}).get(source) or {}).get(INTERRUPTION_KINDS[kind], 0) or 0)
+        limit = (section.get("thresholds") or {}).get(source, {}).get(kind)
+        label = "Activity cards" if kind == "cards" else "Needs-you items"
+        rows.append({
+            "id": rid,
+            "detail": (
+                f"{n} {source} {label} in the 24 hours to {section.get('window_end')}, "
+                f"above the threshold of {_limit_text(limit)}"
+            ),
+        })
+    return rows
+
+
+def interruption_recoveries(previous_reports: list[dict], section: dict | None) -> list[dict]:
+    """Counts over in the last measured nightly and measured back under now.
+
+    A failed store read contributes no observation, so skip those reports instead
+    of losing the outstanding regression when measurements resume.
+    """
+    if not section:
+        return []
+    previous = next(
+        (report["interruptions"] for report in reversed(previous_reports)
+         if report.get("interruptions") is not None),
+        {},
+    )
+    before = previous.get("over") or []
+    now = set(section.get("over") or [])
+    return [{"id": rid} for rid in before if rid not in now]
+
+
 def _triage_scheduler():
     """Open this instance's scheduler store without starting a second polling loop.
 
@@ -381,16 +534,20 @@ def load_nightly_reports(results_dir: Path) -> list[dict]:
     return out
 
 
-def mark_nightly(sweep_report: Path, ts: int, results_dir: Path) -> Path:
+def mark_nightly(sweep_report: Path, ts: int, results_dir: Path, *, interruptions: dict | None = None) -> Path:
     """Stamp a sweep's per-model report as the night's nightly and rename it to
     ``run-nightly-<ts>.json``.
 
     Renamed rather than copied so there is exactly one report in ``results/`` for
     the run (no double-count in ``evals.report``); the ``run-nightly-`` prefix and
-    the ``nightly: true`` flag are what mark it."""
+    the ``nightly: true`` flag are what mark it. ``interruptions`` (the section
+    :func:`measure_interruptions` built) is written under the ``interruptions`` key so
+    later nights can trend it and resolve recovered thresholds."""
     rep = _read_report(sweep_report) or {}
     rep["nightly"] = True
     rep["nightly_ts"] = ts
+    if interruptions is not None:
+        rep["interruptions"] = interruptions
     dest = results_dir / f"run-nightly-{ts}.json"
     dest.write_text(json.dumps(rep, indent=2), encoding="utf-8")
     try:
@@ -506,7 +663,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--no-triage", action="store_true", help="do not queue automatic gate-regression triage")
     p.add_argument("--no-rerun", action="store_true", help="do not re-run regressed cases on a fresh agent")
+    p.add_argument(
+        "--interruption-threshold",
+        action="append",
+        default=[],
+        metavar="[SOURCE:]KIND=LIMIT",
+        help=(
+            "daily limit for one interruption count (repeatable): KIND is cards or needs_you, "
+            "SOURCE is scheduler/inbox/watch/background (omit for every source), LIMIT a whole "
+            "number or 'off'. Defaults: cards="
+            f"{DEFAULT_INTERRUPTION_THRESHOLDS['cards']}, needs_you={DEFAULT_INTERRUPTION_THRESHOLDS['needs_you']}"
+        ),
+    )
     args = p.parse_args(argv)
+    try:
+        thresholds = interruption_thresholds(args.interruption_threshold)
+    except ValueError as exc:
+        p.error(str(exc))
 
     # Fixed to where evals.sweep writes its run-sweep-*.json — evals/results. The nightly
     # globs the sweep output, marks it, and loads the comparison window all from this one
@@ -515,6 +688,12 @@ def main(argv: list[str] | None = None) -> int:
     results_dir.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run:
+        # Interruptions first: they need no nightly report, only this instance's stores.
+        section = measure_interruptions(datetime.now(UTC), thresholds)
+        if section is not None:
+            print(format_interruptions(section))
+            for row in interruption_regressions(section):
+                print(f"  OVER THRESHOLD {row['id']} — {row['detail']} (not recorded)")
         nightlies = load_nightly_reports(results_dir)
         if len(nightlies) < 2:
             print("dry-run: need at least two nightly reports to compare", file=sys.stderr)
@@ -544,7 +723,9 @@ def main(argv: list[str] | None = None) -> int:
         # process's regression write can reach the named ledger.
         os.environ["FRICTION_LOG"] = str(Path(args.friction_log).expanduser())
 
-    report_path = mark_nightly(sweep_report, ts, results_dir)
+    # Counted at the night's own timestamp, so the window is the 24 hours before this run.
+    interruptions = measure_interruptions(datetime.fromtimestamp(ts, UTC), thresholds)
+    report_path = mark_nightly(sweep_report, ts, results_dir, interruptions=interruptions)
     print(f"nightly report: {report_path}")
 
     nightlies = load_nightly_reports(results_dir)
@@ -591,6 +772,23 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"no gate regressions vs {prev['_file']}")
 
+    # Interruption thresholds gate every night, baseline included: a count is compared
+    # with its limit, not with the previous night. They share the friction path (and its
+    # stable-summary dedup) but not the eval-case rerun or triage, which read case ids.
+    over_threshold: list[dict] = []
+    if interruptions is not None:
+        print(format_interruptions(interruptions))
+        resolve_recoveries(interruption_recoveries(nightlies[:-1], interruptions), report_path)
+        over_threshold = interruption_regressions(interruptions)
+        if over_threshold:
+            recorded = record_regressions(over_threshold, report_path)
+            for row in over_threshold:
+                rid = row["id"]
+                if rid in recorded:
+                    print(f"  OVER THRESHOLD {rid} → friction 'nightly gate regression: {rid}' ({FRICTION_SOURCE})")
+                else:
+                    print(f"  OVER THRESHOLD {rid} — NOT recorded as friction (plugin unavailable or write failed)")
+
     flakes = flaky_gate_cases(nightlies)
     if flakes:
         print(format_flakes(flakes))
@@ -599,7 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     # Exit non-zero whenever the gate regressed — independent of whether the friction write
     # landed — so a host scheduler surfaces the failed night even if the friction plugin or
     # its ledger was unavailable.
-    return 1 if regressions else 0
+    return 1 if regressions or over_threshold else 0
 
 
 if __name__ == "__main__":
