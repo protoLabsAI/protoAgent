@@ -692,6 +692,7 @@ async def record_decision_pause(session_id: str, payload: object, config: dict) 
             expires_in_minutes=payload.get("expires_in_minutes"),
             default_option=payload.get("default_option"),
             default_action=payload.get("default_action"),
+            requires_pick=bool(payload.get("requires_pick", False)),
         )
     except Exception:  # noqa: BLE001 — the ledger is a durable handle, never a turn gate
         log.warning("[decision] could not record a parked decision for session %s", session_id, exc_info=True)

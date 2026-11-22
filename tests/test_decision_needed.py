@@ -377,7 +377,7 @@ def test_list_route_returns_pending_decisions(store):
 
 
 @pytest.fixture
-def decision_graph(store, monkeypatch):
+def decision_graph(store, monkeypatch, request):
     """A real checkpoint and tool with deterministic model output, no gateway."""
     from typing import TypedDict
     from langgraph.graph import StateGraph, START, END
@@ -390,7 +390,9 @@ def decision_graph(store, monkeypatch):
         session_id: str
 
     def model(state):
-        chosen = request_decision.invoke({"question": "Deploy?", "options": ["yes", "no"]})
+        chosen = request_decision.invoke({
+            "question": "Deploy?", "options": ["yes", "no"], **getattr(request, "param", {}),
+        })
         return {"messages": [AIMessage(content=f"Chosen: {chosen}")]}
 
     builder = StateGraph(State)
@@ -1164,3 +1166,49 @@ async def test_pending_record_with_no_pause_is_never_closed_as_stranded(store, d
     assert store.get(free.id).state == STATE_PENDING
 
     assert store.answer(free.id, "yes", answer_kind="option").state == STATE_ANSWERED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "decision_graph, expected", [({}, False), ({"requires_pick": False}, False), ({"requires_pick": True}, True)],
+    indirect=["decision_graph"],
+)
+async def test_request_decision_persists_pick_requirement(store, decision_graph, expected):
+    await _sync_turn()
+    rec, = store.list(state="pending")
+    assert rec.requires_pick is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind, requires_pick", [("approval", True), ("question", False)])
+async def test_ask_policy_persists_pick_requirement(store, kind, requires_pick):
+    from graph.unattended_policy import ask_payload
+
+    payload = ask_payload({"kind": kind, "question": "Proceed?"}, tool="gated", args={})
+    rec = await turn_control.record_decision_pause(
+        "s-policy", payload, {"configurable": {"thread_id": "a2a:s-policy"}},
+    )
+    assert rec is not None
+    assert store.get(rec.id).requires_pick is requires_pick
+
+
+@pytest.mark.parametrize("requires_pick", [False, True])
+def test_answer_route_requires_explicit_pick_only_when_requested(store, monkeypatch, requires_pick):
+    rec = store.create("s-pick", "Approve?", [{"id": "approve", "label": "Approve"}],
+                       requires_pick=requires_pick, interrupt_id="paused")
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", _noop_resume)
+    client = _client()
+    # Even text matching an option's id or label is not an explicit pick.
+    for text in ("approve", "Approve", "yes"):
+        response = client.post(f"/api/decisions/{rec.id}/answer", json={"text": text})
+        if requires_pick:
+            assert response.status_code == 400
+            assert store.get(rec.id).state == STATE_PENDING
+        else:
+            assert response.status_code == 200
+            assert store.get(rec.id).answer == text
+            return
+    response = client.post(f"/api/decisions/{rec.id}/answer", json={"option_id": "approve"})
+    assert response.status_code == 200
+    assert store.get(rec.id).state == STATE_ANSWERED
+    assert store.get(rec.id).answer == "approve"
