@@ -267,6 +267,8 @@ async def test_resume_transport_carries_attribution(ledger, monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", Transport)
     resolution = {"answer": "go", "answered_by": "device-josh", "answered_surface": "console"}
     assert await decision_routes._resume_parked_turn("s", "Operator chose: Release (go)", rec.id, resolution=resolution)
+    # The loopback grant (#5678 5b) lets the executor tell this delivery from a peer's message.
+    assert posted[0]["metadata"].pop(decision_resume.RESUME_GRANT_KEY)
     assert posted[0]["metadata"] == {"hitl_resume": True, "decision_id": rec.id, "decision_resolution": resolution}
     assert posted[0]["parts"] == [{"text": "Operator chose: Release (go)"}]
     assert store.get(rec.id).pending  # transport success alone never closes a decision
@@ -427,7 +429,8 @@ async def test_stream_entrypoint_preserves_resolution_metadata(ledger, parked, m
     updated = store.get(rec.id)
     assert updated.state == ("expired" if expired else "answered")
     assert updated.answer == ("hold" if expired else "go")
-    assert updated.answered_by == (None if expired else "device-josh")
+    # answered_by is the verified credential's actor, never the message's (#5678 5b).
+    assert updated.answered_by == (None if expired else "operator")
     assert updated.answered_surface == (None if expired else "console")
 
 
@@ -522,6 +525,7 @@ async def test_withdraw_from_another_session_clears_real_checkpoint(
     })
     assert result == f"Decision {rec.id} withdrawn: Release abandoned"
     assert posted[0]["contextId"] == session_id
+    assert posted[0]["metadata"].pop(decision_resume.RESUME_GRANT_KEY)
     assert posted[0]["metadata"] == {"hitl_resume": True}
     assert (await graph.aget_state(config)).values["result"] == decision_resume.CANCELLED_RESUME
     assert await chat._pending_interrupt_value(config) is None

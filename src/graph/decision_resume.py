@@ -26,6 +26,42 @@ _FAILED_TASK_STATES = frozenset({"TASK_STATE_FAILED", "TASK_STATE_CANCELED", "TA
                                  "failed", "canceled", "rejected"})
 
 
+#: Request-metadata key carrying the single-operation loopback grant a decision resume rides.
+#: On a fleet member the self-invocation credential IS the fleet service token (a peer kind,
+#: ``auth._classify_token``), so the bearer alone cannot tell this server's own answer / cancel
+#: / expiry delivery from a sister agent's message. The grant is a loopback delegation (ADR 0131
+#: P1a.2, ``graph.fleet.delegation``) minted with this process's own key and bound to the
+#: session and decision: only code in this process can mint it, and the executor redeems it
+#: (``a2a_impl.executor``) before the turn may answer the paused decision (#5678 slice 5b).
+RESUME_GRANT_KEY = "decision_resume_grant"
+RESUME_GRANT_AUDIENCE = "decision-resume"
+
+
+def resume_grant_operation(decision_id: str | None) -> str:
+    """The operation a resume grant is bound to: the decision it answers, or a dismissal."""
+    return f"decision:{decision_id}" if decision_id else "decision:dismiss"
+
+
+def mint_resume_grant(session_id: str, decision_id: str | None) -> str:
+    """Mint the loopback grant for one decision resume; "" when the key is unavailable.
+
+    Best-effort: without a grant the resume still carries the instance's own credential, which
+    is the human-operator kind on a standalone instance (only a fleet member needs the grant)."""
+    try:
+        from graph.fleet.delegation import ISSUER_LOOPBACK, mint_delegation
+
+        return mint_delegation(
+            audience=RESUME_GRANT_AUDIENCE,
+            method="SendMessage",
+            context=session_id,
+            operation=resume_grant_operation(decision_id),
+            issuer=ISSUER_LOOPBACK,
+        )
+    except Exception:  # noqa: BLE001 — a missing grant degrades to the bearer, never a crash
+        log.warning("[decision] could not mint a resume grant for %s", session_id, exc_info=True)
+        return ""
+
+
 class ResumeOutcome(enum.Enum):
     """What a loopback resume achieved. Truthy when the resume reached the parked turn.
 
@@ -103,6 +139,8 @@ async def resume_parked_turn(
     # is carried only on the answer path (it gates validate_decision_resume); the cancel path
     # omits it so the resume just clears the interrupt on the already-closed record.
     metadata = {"hitl_resume": True}
+    if grant := mint_resume_grant(session_id, decision_id):
+        metadata[RESUME_GRANT_KEY] = grant
     if decision_id:
         metadata["decision_id"] = decision_id
         if resolution:

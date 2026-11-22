@@ -2923,16 +2923,31 @@ async def _chat_langgraph_stream_impl(
                 # `Command(resume=…)` on a thread with nothing pending is a silent no-op
                 # in LangGraph, so the operator's text would vanish and the task complete
                 # empty. Run it as the fresh message it now is instead.
-                if decision_id := (request_metadata or {}).get("decision_id"):
+                # Only a verified human operator answers a paused decision (#5678 5b): from
+                # anyone else a ``decision_id`` / ``decision_resolution`` is ignored, and a
+                # message naming the paused task runs as an ordinary message (held below).
+                if (decision_id := (request_metadata or {}).get("decision_id")) and (
+                    _turn_control.caller_may_answer_decision()
+                ):
                     config = await _turn_control.validate_decision_resume(config, decision_id, session_id)
                     resolution = {**((request_metadata or {}).get("decision_resolution") or {}), "id": decision_id}
                     config = {**config, "configurable": {**config["configurable"], "decision_resolution": resolution}}
-                if resume and await _pending_interrupt_value(config) is None:
-                    log.info(
-                        "[a2a-stream] session=%s: resume on a task with no pending interrupt — running it as a fresh message",
-                        session_id,
-                    )
-                    resume = False
+                if resume:
+                    _pending_resume = await _pending_interrupt_value(config)
+                    if _pending_resume is None:
+                        log.info(
+                            "[a2a-stream] session=%s: resume on a task with no pending interrupt — running it as a fresh message",
+                            session_id,
+                        )
+                        resume = False
+                    elif _turn_control.is_decision_interrupt(_pending_resume) and (
+                        not _turn_control.caller_may_answer_decision()
+                    ):
+                        log.info(
+                            "[decision] session=%s: a non-operator message named the paused task — held, decision stays pending",
+                            session_id,
+                        )
+                        resume = False
                 if not resume:
                     hold = await _turn_control._hold_if_hitl_pending(
                         message, session_id, config, request_metadata=request_metadata, fence=_fence, images=images
