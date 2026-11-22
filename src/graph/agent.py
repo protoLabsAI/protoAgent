@@ -434,6 +434,11 @@ def _build_middleware(
 
         middleware.append(OutsideMessageMiddleware(inbox_store))
 
+    # Recover saved no-pause answers whose delivery turn never reached the agent.
+    from graph.middleware.decision_context import DecisionContextMiddleware
+
+    middleware.append(DecisionContextMiddleware())
+
     # Per-turn model override (per chat tab). Outermost wrap_model_call so the
     # PromptCache below sees the ACTUAL model when deciding caching. No-op unless
     # the turn carries state["model"].

@@ -1,0 +1,1 @@
+- **Recover missed decision answers.** The next model call on a thread receives saved no-pause answers whose delivery turn never ran, with shared delivery claims preventing duplicate notes. Refs #5678.

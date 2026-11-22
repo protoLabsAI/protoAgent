@@ -528,6 +528,21 @@ class DecisionStore:
                 self._close(db)
         return [Decision.from_row(r) for r in rows]
 
+    def undelivered_answers(self, thread_id: str) -> list[Decision]:
+        """Answered no-pause decisions awaiting context delivery on this exact thread."""
+        if not thread_id:
+            return []
+        with self._reading():
+            db = self._connect()
+            try:
+                return [Decision.from_row(row) for row in db.execute(
+                    "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = '' "
+                    "AND state = ? AND delivered_at IS NULL ORDER BY created_at, rowid",
+                    (thread_id, STATE_ANSWERED),
+                )]
+            finally:
+                self._close(db)
+
     def pending_unpaused_since(self, thread_id: str, started_at: str) -> list[Decision]:
         """Pending no-pause asks created on this thread during the locked graph pass.
 
