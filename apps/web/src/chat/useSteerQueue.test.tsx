@@ -964,7 +964,7 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     expect(onError).toHaveBeenCalledWith("Couldn't queue message: nope");
   });
 
-  it("a re-queue into the live turn is private too, and a refusal there hands the text back with its sentence", async () => {
+  it.each([false, true])("a private re-queue hands back its refusal even if the conversation leaves the store: %s", async (removeWhilePending) => {
     await listFromOthers(sessionId);
     // A stranded interjection whose turn ended; a turn starts in this slot WHILE the reconcile
     // dequeues it, so resendInterjections hands it to that running turn as a steer
@@ -978,7 +978,10 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     });
     const onError = vi.fn();
     const runTurn = mkRun();
-    stubSteerFetch(refused(409, "This conversation is waiting on the caller's own question"));
+    stubSteerFetch(() => {
+      if (removeWhilePending) resetConversations();
+      return refused(409, "This conversation is waiting on the caller's own question")();
+    });
     renderHook(baseOpts({ onError, runTurn, status: "idle" }));
     await flush();
     expect(runTurn).not.toHaveBeenCalled();

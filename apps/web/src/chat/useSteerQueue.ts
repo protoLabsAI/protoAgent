@@ -640,6 +640,8 @@ export function useSteerQueue({
     if (!session) return;
     const lost = "Your message couldn't be handed to the running turn — its text is in the composer.";
     for (const item of items) {
+      // Keep the request's privacy choice if the list refreshes while the POST is pending.
+      const isPrivate = !serverTaskId && isFromOthers(session.id);
       try {
         // An attended server turn takes it through its control task (the same guarded path
         // Enter uses); this browser's own stream takes it as an ordinary steer.
@@ -651,7 +653,7 @@ export function useSteerQueue({
           }
         } else {
           // A conversation a peer started is steered private here too (#5400).
-          const res = isFromOthers(session.id)
+          const res = isPrivate
             ? await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings(), true)
             : await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings());
           if (res.started_turn) {
@@ -669,7 +671,7 @@ export function useSteerQueue({
       } catch (e) {
         // A refused private steer names its reason in a plain sentence; anything else keeps
         // the generic hand-back line. Either way the text returns to the composer.
-        const refusal = !serverTaskId && isFromOthers(session.id) ? privateSteerRefusal(e) : null;
+        const refusal = isPrivate ? privateSteerRefusal(e) : null;
         handBackQueued([item], refusal ?? lost);
       }
     }
