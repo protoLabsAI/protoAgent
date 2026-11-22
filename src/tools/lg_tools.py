@@ -211,7 +211,7 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
 async def withdraw_decision(decision_id: str, reason: str = "", state: Annotated[Any, InjectedState] = None) -> str:
     """Withdraw your own pending decision when it is no longer needed, with a reason."""
     from graph.decision_resume import CANCELLED_RESUME, ResumeOutcome, resume_parked_turn
-    from graph.decisions import DecisionError, decision_store, restart_recovery_ref
+    from graph.decisions import DecisionError, decision_store, is_unpaused_decision, restart_recovery_ref
     from runtime.state import STATE
 
     store = decision_store()
@@ -235,6 +235,10 @@ async def withdraw_decision(decision_id: str, reason: str = "", state: Annotated
         # withdrawing it IS the whole dismissal, exactly like the operator's Dismiss. A
         # clearing resume here would start a fresh turn on the job session, which only
         # the operator's Re-run answer may do.
+        return f"Decision {decision_id} withdrawn: {reason}"
+    if is_unpaused_decision(updated):
+        # A no-pause record (#5678: a thread, no pause id) has no parked checkpoint either,
+        # so a clearing resume would start a stray turn. Closing the record closes the card.
         return f"Decision {decision_id} withdrawn: {reason}"
     # Like operator dismissal, clear the checkpoint after closing the ledger record.
     # Omit decision_id: the answer gate rejects this now-withdrawn record.
