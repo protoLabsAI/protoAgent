@@ -188,3 +188,80 @@ async def resume_parked_turn(
     except Exception:  # noqa: BLE001 — a resume transport error must not 500 the answer route
         log.exception("[decision] resume POST failed for %s", session_id)
         return ResumeOutcome.NOT_DELIVERED
+
+
+def decision_answer_message(decision_id: str, session_id: str) -> str:
+    """Read a no-pause answer from the ledger, never from delivery message text.
+
+    Chat drivers can use this reader under their turn lock. Bind the reference to
+    its session so another thread cannot obtain the answer.
+    """
+    from graph.decisions import DecisionError, decision_store
+
+    rec = decision_store().get(decision_id)
+    if rec is None or rec.session_id != session_id or rec.interrupt_id or rec.state != "answered":
+        raise DecisionError("decision is not an answered no-pause decision on this session")
+    answer = (f"Operator chose: {rec.option_label(rec.answer)} ({rec.answer})"
+              if rec.answer_kind == "option" else rec.answer)
+    return f"The operator answered your decision.\nQuestion: {rec.question}\nAnswer: {answer}"
+
+
+async def deliver_decision_answer(decision_id: str) -> ResumeOutcome:
+    """Start a new turn for a saved answer, stamping delivery only on acceptance.
+
+    Decision metadata carries only its id. Receivers use ``decision_answer_message``
+    instead of trusting message text. Failed delivery preserves the saved answer for
+    next-turn recovery. The answer route's claim and ledger CAS arbitrate submissions.
+    """
+    import asyncio
+    import uuid
+
+    import httpx
+
+    from a2a_impl.auth import self_invocation_headers
+    from graph.decisions import decision_store
+    from runtime.state import STATE
+
+    store = decision_store()
+    rec = await asyncio.to_thread(store.get, decision_id)
+    if rec is None or rec.interrupt_id or rec.state != "answered":
+        return ResumeOutcome.NOT_DELIVERED
+    if rec.delivered_at:
+        return ResumeOutcome.DELIVERED
+    port = getattr(STATE, "active_port", None)
+    if not port:
+        return ResumeOutcome.NOT_DELIVERED
+    text = await asyncio.to_thread(decision_answer_message, decision_id, rec.session_id)
+    metadata = {"decision_id": decision_id}
+    if grant := mint_resume_grant(rec.session_id, decision_id):
+        metadata[RESUME_GRANT_KEY] = grant
+    message_id = str(uuid.uuid4())
+    body = {
+        "jsonrpc": "2.0", "id": message_id, "method": "SendMessage",
+        "params": {
+            "configuration": {"returnImmediately": True},
+            "message": {
+                "role": "ROLE_USER", "parts": [{"text": text}],
+                "messageId": message_id, "contextId": rec.session_id, "metadata": metadata,
+            },
+        },
+    }
+    headers = {"Content-Type": "application/json", "A2A-Version": "1.0", **self_invocation_headers()}
+    try:
+        async with httpx.AsyncClient(timeout=RESUME_TIMEOUT_S) as client:
+            response = await client.post(f"http://127.0.0.1:{port}/a2a", headers=headers, json=body)
+        if response.status_code >= 400 or response.json().get("error"):
+            return ResumeOutcome.NOT_DELIVERED
+        state, _ = _task_outcome(response.json())
+        if state in _FAILED_TASK_STATES:
+            return ResumeOutcome.TURN_FAILED
+        if not state:
+            return ResumeOutcome.NOT_DELIVERED
+        await asyncio.to_thread(store.mark_delivered, decision_id)
+        return ResumeOutcome.DELIVERED
+    except httpx.TimeoutException:
+        log.warning("[decision] new-turn delivery timed out for %s", decision_id)
+        return ResumeOutcome.UNKNOWN
+    except Exception:  # noqa: BLE001 — transport failure must preserve the saved answer
+        log.exception("[decision] new-turn delivery failed for %s", decision_id)
+        return ResumeOutcome.NOT_DELIVERED

@@ -109,7 +109,7 @@ async def test_answer_returns_on_consumption_and_preserves_next_pause(monkeypatc
 async def test_disconnected_answer_keeps_delivery_claim(monkeypatch):
     store = DecisionStore(":memory:")
     monkeypatch.setattr(STATE, "decision_store", store)
-    rec = store.create("session", "Continue?", ["yes", "no"])
+    rec = store.create("session", "Continue?", ["yes", "no"], interrupt_id="paused")
     entered = asyncio.Event()
     consume = asyncio.Event()
     calls = []

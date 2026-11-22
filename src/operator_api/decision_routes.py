@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from a2a_impl.auth import is_human_operator, open_mode
 from graph.decision_resume import CANCELLED_RESUME as CANCELLED_RESUME
+from graph.decision_resume import deliver_decision_answer
 from graph.decision_resume import resume_parked_turn as _resume_parked_turn
 
 log = logging.getLogger("protoagent.decisions")
@@ -172,7 +173,7 @@ def register_decision_routes(app) -> None:
 
     def with_delivery(rec) -> dict:
         # Every single-record response carries it, so a 409 detail equals a fresh GET.
-        return {**rec.to_dict(), "delivering": rec.pending and delivering(rec.id)}
+        return {**rec.to_dict(), "delivering": (rec.pending or (not rec.interrupt_id and not rec.delivered_at)) and delivering(rec.id)}
 
     def delivery_done(task):
         deliveries.discard(task)
@@ -183,7 +184,7 @@ def register_decision_routes(app) -> None:
             log.error("[decision] answer delivery crashed", exc_info=exc)
 
     def on_its_way(rec):
-        # Still pending, but an answer is being delivered: say so honestly instead of either
+        # An answer is being delivered: say so honestly instead of either
         # "sent" (not consumed yet) or "failed" (it may well land). 202 Accepted.
         from fastapi.responses import JSONResponse
 
@@ -200,7 +201,7 @@ def register_decision_routes(app) -> None:
 
     @app.post("/api/decisions/{decision_id}/answer")
     async def _api_answer_decision(decision_id: str, body: AnswerRequest, request: Request):
-        """Answer a pending decision and resume its parked turn.
+        """Save a no-pause answer and start a turn, or resume a paused decision.
 
         Validates the answer against the record's options (400 on an unknown option or an
         empty body). Closed decisions return 409 with the record, unknown ids 404. Replies as
@@ -208,7 +209,9 @@ def register_decision_routes(app) -> None:
         turn runs in the background and its outcome is logged. A delivery that fails before
         consumption leaves the decision pending: 200 ``resumed: false``, retryable. A delivery
         still queued after :data:`ACCEPT_WAIT_S` (the session is busy) is 202
-        ``delivering: true``; answering again meanwhile joins it rather than sending twice."""
+        ``delivering: true``; answering again meanwhile joins it rather than sending twice.
+        No-pause decisions close before dispatch: failed delivery retains that answer for
+        next-turn recovery, and ``resumed`` reports transport acceptance via delivered_at."""
         _require_human_operator(request)
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
@@ -259,6 +262,16 @@ def register_decision_routes(app) -> None:
                     except DecisionClosed as exc:
                         raise HTTPException(status_code=409, detail=str(exc)) from exc
                     return
+                if not current.interrupt_id and recovery_ref is None:
+                    try:
+                        await asyncio.to_thread(store.answer, decision_id, answer,
+                                                answered_by=actor, answered_surface=body.surface,
+                                                answer_kind=answer_kind)
+                    except DecisionClosed as exc:
+                        current = await asyncio.to_thread(store.get, decision_id)
+                        raise HTTPException(status_code=409, detail=with_delivery(current) if current else None) from exc
+                    await deliver_decision_answer(decision_id)
+                    return
                 if recovery_ref is not None:
                     # ADR 0129 D7 S7: no parked interrupt — the answer performs
                     # Resume / Re-run / Drop on the held occurrence instead.
@@ -299,7 +312,7 @@ def register_decision_routes(app) -> None:
         await asyncio.wait({accepted_delivery}, timeout=max(0.0, deadline - loop.time()))
         if not accepted_delivery.done():
             current = await asyncio.to_thread(store.get, decision_id)
-            if current is not None and current.pending:
+            if current is not None and (current.pending or (not current.interrupt_id and not current.delivered_at)):
                 return on_its_way(current)
             await accepted_delivery  # consumed at the deadline; settles at once
         elif (exc := accepted_delivery.exception()) is not None:
@@ -315,7 +328,10 @@ def register_decision_routes(app) -> None:
         if not updated.pending and not accepted:
             raise HTTPException(status_code=409, detail=with_delivery(updated))
         # The checkpoint is authoritative even if the HTTP response was lost or timed out.
-        return {"decision": with_delivery(updated), "resumed": updated.state == "answered"}
+        resumed = updated.state == "answered"
+        if not rec.interrupt_id and restart_recovery_ref(rec) is None and not is_spend_cap_decision(rec):
+            resumed = bool(updated.delivered_at)
+        return {"decision": with_delivery(updated), "resumed": resumed}
 
     @app.post("/api/decisions/{decision_id}/cancel")
     async def _api_cancel_decision(decision_id: str, request: Request, body: CancelRequest | None = None):

@@ -304,6 +304,13 @@ def test_unattended_ask_human_still_auto_answers(store, monkeypatch):
 
 
 def test_answer_route_resumes_parked_turn_with_chosen_option(store, monkeypatch):
+    # This stream double has no checkpointer; supply the pause identity a real run records.
+    create = store.create
+
+    def create_paused(*args, **kwargs):
+        return create(*args, **{**kwargs, "interrupt_id": "paused"})
+
+    monkeypatch.setattr(store, "create", create_paused)
     fake = _FakeDecisionStream(["staging", "prod"])
     monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
     # Park an unattended turn first.
@@ -850,7 +857,7 @@ async def test_simultaneous_answers_resume_once_and_the_loser_gets_409(store, mo
 
     import httpx
 
-    rec = store.create("s-race", "Colour?", ["red", "blue"])
+    rec = store.create("s-race", "Colour?", ["red", "blue"], interrupt_id="paused")
     calls: list[str] = []
 
     async def slow_resume(session_id, answer, decision_id=None, *, resolution=None):
@@ -886,7 +893,7 @@ async def test_a_waiting_answer_delivers_when_the_first_fails_delivery(store, mo
 
     import httpx
 
-    rec = store.create("s-retry", "Go?", ["yes", "no"])
+    rec = store.create("s-retry", "Go?", ["yes", "no"], interrupt_id="paused")
     calls: list[str] = []
 
     async def flaky_resume(session_id, answer, decision_id=None, *, resolution=None):
