@@ -34,6 +34,8 @@ export type DecisionRow = {
   agent: string;
   question: string;
   options: DecisionOption[];
+  /** Only an option pick can answer this decision; absent on older servers. */
+  requires_pick?: boolean;
   created_at: string;
   state: DecisionState;
   answer: string | null;

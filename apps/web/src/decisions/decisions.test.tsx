@@ -567,6 +567,16 @@ describe("DecisionCard", () => {
     expect(footer.style.borderTop).toContain("var(--pl-color-border)");
   });
 
+  it.each([true, false, undefined])("shows Reply in chat only when a pick is not required (requires_pick=%s)", async (requires_pick) => {
+    await renderNode(
+      <DecisionCard decision={decision("a", { requires_pick })} onAnswer={vi.fn()} onReplyInChat={vi.fn()} />,
+    );
+    expect(buttons().some((b) => b.textContent === "Reply in chat instead")).toBe(!requires_pick);
+    expect(answerGroup().querySelectorAll("button")).toHaveLength(2);
+    expect(footerOf()!.textContent).toContain("Open chat: protoEngineer");
+    expect(buttons().some((b) => b.textContent === "Dismiss")).toBe(true);
+  });
+
   it("states the expiry and default once, in the footer line", async () => {
     await renderNode(
       <DecisionCard
