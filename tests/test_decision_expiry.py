@@ -276,7 +276,8 @@ async def test_resume_transport_carries_attribution(ledger, monkeypatch):
 
 def test_answer_race_returns_winning_attribution(ledger, monkeypatch):
     store, _ = ledger
-    rec = store.create("s", "Release?", OPTIONS)
+    # Exercise checkpoint consumption; an empty interrupt_id now selects new-turn delivery.
+    rec = store.create("s", "Release?", OPTIONS, thread_id="t", interrupt_id="pause-1")
 
     async def lost_race(*args, **kwargs):
         store.answer(rec.id, "hold", answered_by="Josh", answered_surface="chat")
@@ -288,6 +289,7 @@ def test_answer_race_returns_winning_attribution(ledger, monkeypatch):
     assert response.json()["detail"]["answer_label"] == "Keep holding"
     assert response.json()["detail"]["answered_surface"] == "chat"
     assert response.json()["detail"]["answered_by"] == "Josh"
+    assert store.get(rec.id).delivered_at is None
 
 
 @pytest.mark.asyncio
@@ -436,7 +438,8 @@ async def test_stream_entrypoint_preserves_resolution_metadata(ledger, parked, m
 
 def test_lost_response_after_consumption_still_reports_success(ledger, monkeypatch):
     store, _ = ledger
-    rec = store.create("s", "Release?", OPTIONS)
+    # Exercise checkpoint consumption; an empty interrupt_id now selects new-turn delivery.
+    rec = store.create("s", "Release?", OPTIONS, thread_id="t", interrupt_id="pause-1")
 
     async def response_lost(session_id, answer, decision_id, *, resolution):
         store.answer(
@@ -451,6 +454,8 @@ def test_lost_response_after_consumption_still_reports_success(ledger, monkeypat
     response = client().post(f"/api/decisions/{rec.id}/answer", json={"option_id": "go"})
     assert response.status_code == 200
     assert response.json()["resumed"] is True
+    assert store.get(rec.id).answer == "go"
+    assert store.get(rec.id).delivered_at is None
 
 
 @pytest.mark.asyncio

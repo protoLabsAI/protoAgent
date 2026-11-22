@@ -28,6 +28,13 @@ def _decision_app(monkeypatch):
                          answered_surface=resolution["answered_surface"], answer_kind=resolution["answer_kind"])
         return True
 
+    async def deliver_saved(decision_id):
+        deliveries.append(decision_id)
+        store.mark_delivered(decision_id)
+        return True
+
+    monkeypatch.setattr(decision_routes, "deliver_decision_answer", deliver_saved)
+
     async def not_parked(*args):
         return False
 

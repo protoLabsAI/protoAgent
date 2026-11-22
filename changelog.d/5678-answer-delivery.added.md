@@ -1,0 +1,1 @@
+- **Deliver saved decision answers as new turns.** No-pause answers are saved before delivery, with ledger-backed question and answer text and delivery tracking; paused decisions retain their resume path. Refs #5678.
