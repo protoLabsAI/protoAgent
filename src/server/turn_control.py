@@ -950,7 +950,7 @@ async def claim_decision_delivery(config: dict, decision_id: str, session_id: st
     ``None`` when the record is not a no-pause one (unknown, or it names a pause): the caller
     sends it through :func:`validate_decision_resume` exactly as before. For a no-pause record
     the turn is refused (:class:`DecisionClosed`, before any graph input) unless the record
-    belongs to this session, is answered, and was not delivered yet; the delivery is then
+    belongs to this session, has a saved answer or expired default, and was not delivered yet; the delivery is then
     claimed atomically, so a duplicate turn can never feed the answer twice. Returns the config
     on the record's thread and the message to run, which is built from the LEDGER — the
     incoming message text is never trusted to carry the answer."""
@@ -963,7 +963,7 @@ async def claim_decision_delivery(config: dict, decision_id: str, session_id: st
         return None
     if rec.session_id != session_id:
         raise DecisionClosed("decision belongs to another session")
-    if rec.state != "answered":
+    if rec.state != "answered" and not (rec.state == "expired" and rec.answer is not None):
         raise DecisionClosed("decision has no saved answer to deliver")
     if rec.delivered_at:
         raise DecisionClosed("decision answer was already delivered")
