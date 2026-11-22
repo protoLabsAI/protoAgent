@@ -1197,6 +1197,47 @@ async def _private_steer(session_id: str, request: Request, body: dict, text: st
     return result
 
 
+async def _peer_started(session_id: str) -> bool:
+    """Whether ``session_id`` is a conversation a PEER started, not an operator chat (#5400).
+
+    A conversation belongs to whoever STARTED it: its first-created stored task, the rule
+    ``stores.context_foreign`` uses. It is peer-started when that task is federation-owned, or
+    when the context is outside the console's own namespaces (``conversation_policy``: the
+    threads the From others list shows). A fleet peer saves under the operator's owner, so the
+    context id is the only stored signal telling its thread from an operator chat. A context
+    with no stored task yet, or one the operator opened with a private steer, is not a peer's.
+    (A thread's first turn is stored with its first frame; until then it is not listed either.)
+
+    A failed read answers by context id alone, so it never opens a peer's thread to an
+    ordinary, peer-readable steer."""
+    outside = not session_id.startswith(conversation_policy.CONVERSATION_EXCLUDE_PREFIXES)
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        return False
+    try:
+        from sqlalchemy import literal_column, select
+
+        from a2a.server.tasks.database_task_store import TaskModel
+        from a2a_impl.stores import FEDERATION_OWNER, HUMAN_OPERATOR_OWNER
+
+        async with engine.begin() as conn:
+            # Creation order is the SQLite ``rowid`` (the only store this runtime builds); any
+            # other dialect falls back to last-change order, as ``read_origin`` does.
+            if conn.dialect.name == "sqlite":
+                order: tuple = (literal_column(f"{TaskModel.__tablename__}.rowid").asc(),)
+            else:
+                order = (TaskModel.last_updated.asc().nulls_first(), TaskModel.id.asc())
+            first = (
+                await conn.execute(select(TaskModel.owner).where(TaskModel.context_id == session_id).order_by(*order).limit(1))
+            ).first()
+    except Exception as exc:  # noqa: BLE001 — a failed read must not downgrade a peer's thread
+        log.warning("[steer] could not read who started %s: %s", session_id, exc)
+        return outside
+    if first is None:
+        return False
+    return first.owner == FEDERATION_OWNER or (outside and first.owner != HUMAN_OPERATOR_OWNER)
+
+
 def register_chat_routes(app, ui: str) -> None:
     """Register the chat / goal / health / OpenAI-compat routes on ``app``.
 
@@ -2178,13 +2219,19 @@ def register_chat_routes(app, ui: str) -> None:
         (``_private_steer_or_start``). It is honored only with ``private_steering.enabled``
         on, a verified human-operator credential (the shared bearer or a paired ``device``)
         and no attachments. Anything else is refused: a steer asked to be private is NEVER
-        downgraded to an ordinary, peer-readable one. Without ``private`` nothing changes."""
+        downgraded to an ordinary, peer-readable one.
+
+        A steer into a conversation a PEER started (``_peer_started``) ALWAYS takes that same
+        private branch, flag or no flag (#5400, #5401): the peer reads its own thread's stream
+        and history, so an ordinary steer there would hand it the operator's words. The same
+        refusals apply and nothing is downgraded. In an operator-started chat, without
+        ``private``, nothing changes."""
         from fastapi import HTTPException
 
         text = str((body or {}).get("text", "")).strip()
         msg_id = str((body or {}).get("id", "")).strip() or None
         # Any truthy value asks for privacy — a malformed flag must refuse, not go public.
-        if (body or {}).get("private"):
+        if (body or {}).get("private") or await _peer_started(session_id):
             return await _private_steer(session_id, request, body or {}, text, msg_id)
         # Optional attachments in the same shape a normal send takes; malformed input is
         # dropped here (not 500'd at the bridge, not folded as a bogus image block).

@@ -22,6 +22,7 @@ from a2a_impl.executor import ProtoAgentExecutor
 from a2a_impl.v03_compat import create_a2a_jsonrpc_routes
 from graph import steering
 from graph.middleware.steering import SteeringMiddleware
+from runtime import turn_activity
 from runtime.state import STATE
 from security import devices
 from tests._a2a_app import A2A_HEADERS, poll_terminal, skill
@@ -66,6 +67,8 @@ async def rig(tmp_path, monkeypatch, delegation_env):
             yield ("input_required", {"question": "Which one?"})
             return
         if "hold" in message:
+            if "stream" in message:  # a first frame: the SDK stores the task, a subscriber can attach
+                yield ("tool_start", "working")
             r.running.set()
             await r.release.wait()
             # The next model call of this turn: what the steering middleware folds in.
@@ -309,3 +312,120 @@ async def test_completion_race_and_duplicate_id_give_exactly_one_private_turn(ri
     assert [seen for seen in rig.seen if SECRET in seen[0]] == [(SECRET, False)]
     assert sum(1 for row in await rig.rows() if SECRET in (row.private_payload or "")) == 1
     await _assert_private_only(rig, "chat-race", first["started_turn"])
+
+
+# ── A conversation a peer started: every steer is private, flag or no flag (#5400, #5401) ──
+# The federation thread is told by its first task's owner (even under a console-shaped id); the
+# fleet peer saves under the operator's owner, so its thread is told by its context id.
+PEER_THREADS = [("federation", "chat-from-fed"), ("fleet-service", "thread-from-fleet")]
+
+
+def _peer_send(rig, peer, session, text, method="SendMessage"):
+    message = {"messageId": f"peer-{text}", "contextId": session, "role": "ROLE_USER", "parts": [{"text": text}]}
+    body = {"jsonrpc": "2.0", "id": "p", "method": method, "params": {"message": message}}
+    return rig.clients[peer].post("/a2a", json=body)
+
+
+async def _assert_peer_never_reads_it(rig, peer, session, peer_task, private_task):
+    """The peer's own task is free of the steer, and so is every peer read and stored public column."""
+    mine = await rig.rpc(peer, "GetTask", {"id": peer_task, "historyLength": 50})
+    assert mine["result"]["id"] == peer_task and SECRET not in str(mine) and REPLY not in str(mine)
+    await _assert_private_only(rig, session, private_task)
+
+
+@pytest.mark.parametrize("peer,session", PEER_THREADS)
+async def test_ordinary_steer_into_a_running_peer_conversation_stays_private(rig, peer, session):
+    stream = asyncio.create_task(_peer_send(rig, peer, session, "hold stream", "SendStreamingMessage"))
+    await rig.running.wait()
+    peer_task = turn_activity.holding_task(session)
+    for _ in range(200):  # the first frame's save lands a few loop turns after the frame
+        if "result" in await rig.rpc(peer, "GetTask", {"id": peer_task}):
+            break
+    subscribe = {"jsonrpc": "2.0", "id": "s", "method": "SubscribeToTask", "params": {"id": peer_task}}
+    subscription = asyncio.create_task(rig.clients[peer].post("/a2a", json=subscribe))
+
+    response = await rig.steer("shared-bearer", session, SECRET, "m1")  # no ``private`` flag
+
+    body = response.json()
+    assert response.status_code == 200 and body["private"] is True and body["started_turn"] != peer_task
+    # Never the ordinary queue, never folded into the peer's running turn.
+    assert steering.pending_items(session) == [] and rig.seen == [("hold stream", False)]
+    rig.release.set()
+    streamed, subscribed = (await stream).text, (await subscription).text
+    for live in (streamed, subscribed):
+        assert peer_task in live and "TASK_STATE_COMPLETED" in live
+        assert SECRET not in live and REPLY not in live and body["private_ref"] not in live
+    assert rig.folded == [None]
+    await poll_terminal(rig.op, body["started_turn"])
+    assert rig.seen == [("hold stream", False), (SECRET, False)]  # delivered, as its own private turn
+    await _assert_peer_never_reads_it(rig, peer, session, peer_task, body["started_turn"])
+
+
+@pytest.mark.parametrize("peer,session", PEER_THREADS)
+async def test_ordinary_steer_into_an_idle_peer_conversation_stays_private(rig, peer, session):
+    peer_task = (await _peer_send(rig, peer, session, "hello")).json()["result"]["task"]["id"]
+    assert (await poll_terminal(rig.clients[peer], peer_task))["status"]["state"] == "TASK_STATE_COMPLETED"
+
+    response = await rig.steer("shared-bearer", session, SECRET, "m1", private=False)
+
+    body = response.json()
+    assert response.status_code == 200 and body["private"] is True and body["pending"] == 0
+    task = await poll_terminal(rig.op, body["started_turn"])
+    # The stored message is the opaque reference; the text reached the agent privately.
+    assert [part["text"] for part in task["history"][0]["parts"]] == [body["private_ref"]]
+    assert rig.seen == [("hello", False), (SECRET, False)]
+    await _assert_peer_never_reads_it(rig, peer, session, peer_task, body["started_turn"])
+
+
+@pytest.mark.parametrize("peer,session", PEER_THREADS)
+async def test_ordinary_steer_into_a_parked_peer_conversation_is_never_stored(rig, peer, session):
+    peer_task = (await _peer_send(rig, peer, session, "park")).json()["result"]["task"]["id"]
+    parked = await poll_terminal(rig.clients[peer], peer_task)
+    assert parked["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    before = await rig.rows()
+
+    response = await rig.steer("shared-bearer", session, SECRET, "m1")
+
+    # The private path cannot answer the peer's own pause, and it is never retried publicly:
+    # the steer is refused before anything is stored, so the peer's resume reads none of it.
+    assert response.status_code == 409 and SECRET not in response.text
+    assert await rig.rows() == before and SECRET not in str(before)
+    assert rig.seen == [("park", False)] and steering.pending_items(session) == []
+    assert await poll_terminal(rig.clients[peer], peer_task) == parked
+    for reader in PEERS:
+        listed = str(await rig.rpc(reader, "ListTasks", {"contextId": session, "includeArtifacts": True}))
+        assert SECRET not in listed
+
+
+@pytest.mark.parametrize("kind,flag", [("shared-bearer", False), ("fleet-service", True), ("paired-agent", True)])
+async def test_steer_into_a_peer_conversation_is_refused_rather_than_sent_publicly(rig, kind, flag):
+    session = "chat-from-fed"
+    peer_task = (await _peer_send(rig, "federation", session, "hello")).json()["result"]["task"]["id"]
+    await poll_terminal(rig.clients["federation"], peer_task)
+    rig.config.private_steering_enabled = flag
+    before = await rig.rows()
+
+    response = await rig.steer(kind, session, SECRET, "m1")
+
+    assert response.status_code == 403 and response.json() == {"detail": REFUSED}
+    assert await rig.rows() == before and rig.seen == [("hello", False)] and steering.pending_items(session) == []
+
+
+async def test_a_steer_in_an_operator_started_chat_is_delivered_as_before(rig):
+    session = "chat-op"
+    first = (await _peer_send(rig, "shared-bearer", session, "hello")).json()["result"]["task"]["id"]
+    await poll_terminal(rig.op, first)
+
+    started = (await rig.steer("shared-bearer", session, "hold on", "m1")).json()
+    assert started == {"ok": True, "id": "m1", "started_turn": started["started_turn"], "pending": 0}
+    await rig.running.wait()
+    # The fleet token steers an operator chat as before too (the hub's console proxy).
+    queued = (await rig.steer("fleet-service", session, "more", "m2")).json()
+    assert queued == {"ok": True, "id": "m2", "pending": 1}
+    rig.release.set()
+
+    task = await poll_terminal(rig.op, started["started_turn"])
+    assert task["history"][0]["parts"] == [{"text": "hold on"}] and "more" in rig.folded[0]["messages"][0].content
+    assert rig.seen == [("hello", False), ("hold on", False)]
+    rows = await rig.rows()  # ordinary rows only: the operator's owner, no private partition
+    assert len(rows) == 2 and all((row.owner, row.private_payload, row.public_visible) == ("", None, None) for row in rows)
