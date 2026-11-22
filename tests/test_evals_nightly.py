@@ -59,6 +59,10 @@ def _counts(**over: int) -> dict[str, dict[str, int]]:
     return counts
 
 
+#: The nightly's real store seam, captured before the autouse stub below replaces it.
+_REAL_READ_INTERRUPTIONS = nightly._read_interruptions
+
+
 @pytest.fixture(autouse=True)
 def interruption_counts(monkeypatch):
     # Never read a real instance's stores: every main() run counts from this stub
@@ -880,6 +884,36 @@ def test_main_prints_and_writes_interruption_counts(tmp_path, monkeypatch, capsy
     assert section["thresholds"]["watch"] == {"cards": 20, "needs_you": 5}
     assert section["over"] == []
     assert rec.calls == []  # at or under every threshold: nothing recorded
+
+
+def test_main_counts_through_slice_one_module(tmp_path, monkeypatch, capsys):
+    # Undo the autouse stub: the nightly's real seam calls evals.interruptions, whose
+    # pure counter runs over these records (only the instance store reader is faked).
+    from datetime import UTC, datetime
+
+    import evals.interruptions as interruptions
+
+    monkeypatch.setattr(nightly, "_read_interruptions", _REAL_READ_INTERRUPTIONS)
+    ts = 1_800_000_000
+    inside = datetime.fromtimestamp(ts - 3600, UTC).isoformat()
+    outside = datetime.fromtimestamp(ts - 2 * 86400, UTC).isoformat()
+    monkeypatch.setattr(interruptions, "load_records", lambda: {
+        "activity": [
+            {"created_at": inside, "context_id": "", "origin": "watch", "task_id": "w1"},
+            {"created_at": outside, "context_id": "", "origin": "watch", "task_id": "w0"},
+        ],
+    })
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly.time, "time", lambda: ts)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", True)]))
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: _FakeRecorder())
+
+    assert nightly.main(["--model", "vendor/m"]) == 0
+
+    rep = json.loads((tmp_path / f"run-nightly-{ts}.json").read_text())
+    assert rep["interruptions"]["sources"]["watch"] == {"activity_cards": 1, "needs_you": 0}
+    assert set(rep["interruptions"]["sources"]) == set(interruptions.SOURCES)
+    assert "1 / 20" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("n,over", [(5, []), (6, ["interruptions:scheduler:cards"])])
