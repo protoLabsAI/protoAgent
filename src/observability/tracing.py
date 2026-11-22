@@ -1028,9 +1028,9 @@ def io_allowed() -> bool:
     args/result, the fleet generation span, and the background/terminal span writers), so
     suppressing here suppresses all of them, nested and background spans included.
 
-    The boundary is dormant in production — its source reader is unbound, so every
-    conversation reads unpartitioned and this stays ``not incognito``. If the boundary module
-    is unavailable at all (an isolated import of this module), behaviour is likewise unchanged.
+    In production the boundary reads the private-steer record (``public_memory.production_source``):
+    a conversation with none reads unpartitioned and this stays ``not incognito``. If the boundary
+    module is unavailable at all (an isolated import of this module), behaviour is likewise unchanged.
     """
     if _io_suppressed_ctx.get():
         return False

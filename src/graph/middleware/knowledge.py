@@ -503,7 +503,8 @@ class KnowledgeMiddleware(AgentMiddleware):
             return "", []
         from graph import public_memory
 
-        if policy == "relevant" or public_memory._source_reader is not None:
+        # A test/integration reader other than the production default bypasses the pool cache.
+        if policy == "relevant" or public_memory._source_reader not in (None, public_memory.production_source):
             from graph.middleware.memory import load_digest
 
             return load_digest(
