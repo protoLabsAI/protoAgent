@@ -805,9 +805,11 @@ async def _decision_expiry_loop() -> None:
         if STATE.decision_store is not None:
             try:
                 from graph.decision_expiry import sweep_expired_decisions
-                from operator_api.decision_routes import _resume_parked_turn
+                from operator_api.decision_routes import _resume_parked_turn, deliver_decision_answer
 
-                await sweep_expired_decisions(STATE.decision_store, _resume_parked_turn)
+                # A paused decision resumes its parked turn; a no-pause one (#5678 3a) closes
+                # in the ledger and, when it has a default, starts a turn delivering it.
+                await sweep_expired_decisions(STATE.decision_store, _resume_parked_turn, deliver_decision_answer)
             except Exception:
                 log.exception("[decision] expiry sweep failed")
         await asyncio.sleep(DECISION_EXPIRY_INTERVAL_S)

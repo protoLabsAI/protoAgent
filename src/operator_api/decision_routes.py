@@ -367,9 +367,10 @@ def register_decision_routes(app) -> None:
         # clear: withdrawing the record IS the whole dismissal — a clearing resume would
         # instead start a fresh turn on the job session, which only Re-run may do. The
         # held occurrence stays parked, visible in the job's diagnostics.
-        parked = False if restart_recovery_ref(rec) is not None else await interrupt_parked(
-            getattr(STATE, "graph", None), rec
-        )
+        # A no-pause decision (#5678 3a) has no checkpoint pause either: withdrawing the
+        # record closes it, and a clearing resume would only start an unwanted fresh turn.
+        no_pause = restart_recovery_ref(rec) is not None or is_unpaused_decision(rec)
+        parked = False if no_pause else await interrupt_parked(getattr(STATE, "graph", None), rec)
         # No await from here to the claim: the check-and-claim is atomic with respect to the
         # answer route's claim (both run on this event loop), and the claim is held across the
         # threaded withdraw (#5112 review).

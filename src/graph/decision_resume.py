@@ -203,6 +203,12 @@ async def _post_loopback(
         return ResumeOutcome.NOT_DELIVERED, ""
 
 
+def _has_deliverable_answer(rec) -> bool:
+    """An operator answer, or an expiry that applied a default. An expiry with no default
+    and a dismissal carry nothing to deliver, so they never start a turn."""
+    return rec.state == "answered" or (rec.state == "expired" and rec.answer is not None)
+
+
 def decision_answer_message(decision_id: str, session_id: str) -> str:
     """Read a no-pause answer from the ledger, never from delivery message text.
 
@@ -213,8 +219,13 @@ def decision_answer_message(decision_id: str, session_id: str) -> str:
 
     rec = decision_store().get(decision_id)
     if (rec is None or rec.session_id != session_id or not is_unpaused_decision(rec)
-            or rec.state != "answered"):
+            or not _has_deliverable_answer(rec)):
         raise DecisionError("decision is not an answered no-pause decision on this session")
+    if rec.state == "expired":
+        # Expiry applied the stated default (#5678 slice 3a): say so, never "the operator chose".
+        return (f"Your decision expired with no answer from the operator, so its stated default applies.\n"
+                f"Question: {rec.question}\n"
+                f"Default: {rec.option_label(rec.answer)} ({rec.answer})")
     answer = (f"Operator chose: {rec.option_label(rec.answer)} ({rec.answer})"
               if rec.answer_kind == "option" else rec.answer)
     return f"The operator answered your decision.\nQuestion: {rec.question}\nAnswer: {answer}"
@@ -222,6 +233,8 @@ def decision_answer_message(decision_id: str, session_id: str) -> str:
 
 async def deliver_decision_answer(decision_id: str) -> ResumeOutcome:
     """Start a new turn for a saved answer, stamping delivery only on acceptance.
+
+    The saved answer is the operator's, or the default an expiry applied (#5678 slice 3a).
 
     Decision metadata carries only its id. Receivers use ``decision_answer_message``
     instead of trusting message text. Failed delivery preserves the saved answer for
@@ -234,7 +247,7 @@ async def deliver_decision_answer(decision_id: str) -> ResumeOutcome:
 
     store = decision_store()
     rec = await asyncio.to_thread(store.get, decision_id)
-    if rec is None or not is_unpaused_decision(rec) or rec.state != "answered":
+    if rec is None or not is_unpaused_decision(rec) or not _has_deliverable_answer(rec):
         return ResumeOutcome.NOT_DELIVERED
     if rec.delivered_at:
         return ResumeOutcome.DELIVERED
