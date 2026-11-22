@@ -929,6 +929,8 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     [true, 503, PRIVATE_STEER_DELIVERY_FAILED, SERVER_DETAIL[503]],
     [false, 503, PRIVATE_STEER_DELIVERY_FAILED, SERVER_DETAIL[503]],
     [true, 502, PRIVATE_STEER_DELIVERY_FAILED, "upstream failed"],
+    // A fleet member being down is not the thread waiting on the peer's question.
+    [true, 409, PRIVATE_STEER_DELIVERY_FAILED, "agent 'scout' is not running"],
   ] as const)("listed=%s: a %i refusal shows its plain sentence and hands the text back", async (listed, status, sentence, detail) => {
     await listFromOthers(listed ? sessionId : "ctx-someone-else");
     stubSteerFetch(refused(status, detail));
@@ -963,21 +965,6 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     expect(draftBox.value).toBe("new words\n\nchange course");
     expect(r.current.steerQueue).toEqual([]);
     expect(loadSteers(sessionId)).toEqual([]);
-  });
-
-  it("a private steer that meets the fleet proxy's member-down 409 is not told the thread waits on the peer", async () => {
-    await listFromOthers(sessionId);
-    stubSteerFetch(refused(409, "agent 'scout' is not running"));
-    const onError = vi.fn();
-    const r = renderHook(baseOpts({ draft: "go", onError }));
-    await act(() => r.current.queueSteer());
-    await flush();
-    expect(bodies[0]).toMatchObject({ private: true });
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0][0]).not.toBe(PRIVATE_STEER_WAITING_ON_PEER);
-    expect(onError).toHaveBeenCalledWith(PRIVATE_STEER_DELIVERY_FAILED);
-    expect(draftBox.value).toBe("go");
-    expect(r.current.steerQueue).toEqual([]);
   });
 
   it("an ordinary chat keeps its own failure line for the same status", async () => {
