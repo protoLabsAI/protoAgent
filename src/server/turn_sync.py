@@ -176,6 +176,10 @@ async def _native_turn(
     decisions = []
     async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
         started_at = datetime.now(UTC).isoformat()
+        if not overflow_retry and not hitl_resume:
+            typed = await _turn_control.answer_typed_decision(config, turn_message, session_id, turn_metadata)
+            if typed is not None:
+                config, turn_message = typed
         # HITL hold (#1560) — same contract as the streaming path: while the
         # thread is parked at a form/question/approval interrupt, hold a fresh
         # operator message (it folds in right after the form response) and echo

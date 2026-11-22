@@ -2926,6 +2926,10 @@ async def _chat_langgraph_stream_impl(
                 # Only a verified human operator answers a paused decision (#5678 5b): from
                 # anyone else a ``decision_id`` / ``decision_resolution`` is ignored, and a
                 # message naming the paused task runs as an ordinary message (held below).
+                if not resume and not _private_ref:
+                    typed = await _turn_control.answer_typed_decision(config, message, session_id, request_metadata)
+                    if typed is not None:
+                        config, message = typed
                 if (decision_id := (request_metadata or {}).get("decision_id")) and (
                     _turn_control.caller_may_answer_decision()
                 ):
