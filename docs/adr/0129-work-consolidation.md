@@ -343,9 +343,11 @@ forming new groups:
   identity; a transport retry uses the original full snapshot and identity, so
   A2A dedup joins the same turn. Never send a reduced `{B}` or enlarged
   `{A, B, C}` under a new identity while `{A, B}` is unresolved. Known acceptance
-  or any delivered member switches to completion-only reconciliation, not payload
-  replay. Missing/unreadable task evidence or a missing member row does not prove
-  failure: keep the binding and defer with evidence, rather than inventing a
+  switches to completion-only reconciliation. A delivered member alone does not
+  prove batch acceptance (a pull consumer may have delivered it); defer the remaining
+  members with evidence and retain the binding, without payload replay.
+  Missing/unreadable task evidence or a missing member row does not prove failure:
+  keep the binding and defer with evidence, rather than inventing a
   smaller batch. Pin unresolved membership and snapshots across pruning.
 
 **Per-member settlement.** On acceptance, record the same task id on every
@@ -378,7 +380,9 @@ exactly-once external side effects; D7's interrupted-task policy still applies.
 
 **Wire provenance and StormGuard.** Batch message metadata contains
 `origin: "inbox"`, `inbox_source`, the group's `priority`, and `inbox_ids` (the
-sorted full member list). Do not disguise a batch as one arbitrary `inbox_id`.
+sorted full member list). For existing singular attribution consumers, `inbox_id`
+is the lowest member id and `created_at` is that member's queued time; `inbox_ids`
+remains authoritative for full batch membership.
 The durable member-to-context mappings let `origin_for_context` resolve the
 common origin; request attribution must expose the full membership while keeping
 singleton attribution unchanged. Activity uses inbox origin/source and the
