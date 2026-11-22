@@ -74,7 +74,7 @@ Most-explicit / most-immediate wins, exactly like `plugins/artifact`'s ENV > UI 
 
 1. **Env override** — `PROTOAGENT_FLAG_<ID>=on|off` (headless / CI / deployment escape hatch).
 2. **Query param** — `?flag:<id>=on|off` (a shareable "try this build" link; this-load only).
-3. **Developer-panel toggle** — a per-session override persisted device-locally (D4).
+3. **Developer-panel toggle** — an override stored on the agent (D4), which the backend applies too.
 4. **Channel-vs-tier** (D2) — the declared rollout stage.
 5. **Off** — unknown/unset denies by default.
 
@@ -90,6 +90,16 @@ the `createUISlice`/`uiStore` pattern, `apps/web/src/ext/uiStateRegistry.ts:39-4
 don't leak into shared config. The section is **hidden unless `channel ≥ beta`** (or revealed by the
 `?flag:` query param), so production users never see it. Backend also honors `PROTOAGENT_FLAG_*` for
 headless/ACP where there's no panel.
+
+**Amended 2026-11-21: the toggle is stored on the agent.** A device-local toggle only changed what the
+console drew, so a flag gating *server* behaviour (Home's routes answer 404 while it is off) could not be
+enabled from the panel at all; the environment variable was the only way, and the desktop app loses that
+at a reboot. The toggle now calls `PUT /api/flags/<id>` (`DELETE` to reset), which writes
+`<instance root>/developer-flags.json`; `flag_enabled()` reads it between the env override and the
+channel default, re-reading only when the file changes (D5 holds). `/api/flags` reports
+`source: "override"` and the channel `default`. The env override still wins, and the panel shows such a
+flag as "set by environment" with the toggle disabled. Overrides are per agent, not fleet-wide. The
+device-local layer remains only as a fallback against an agent too old to store one.
 
 ### D5 — A flag check is a cheap in-memory lookup, never a per-render network call
 

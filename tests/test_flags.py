@@ -129,6 +129,7 @@ def test_resolved_flags_payload(monkeypatch):
             "remove_by": "v1.0",
             "enabled": True,
             "source": "channel",
+            "default": True,
         }
     ]
     # an env override flips enabled + tags the source.

@@ -2465,8 +2465,12 @@ export type FlagInfo = {
   tier: FlagTier;
   owner: string;
   remove_by: string;
-  enabled: boolean; // channel-resolved (before any device-local override)
-  source: "channel" | "env";
+  enabled: boolean; // server-resolved (before any device-local override)
+  /** `env`: pinned by PROTOAGENT_FLAG_<ID>, the panel can't change it. `override`: stored
+   *  on this agent by the Developer panel. `channel`: the tier's default for the channel. */
+  source: "channel" | "env" | "override";
+  /** What the channel alone would give. Absent from a server older than stored overrides. */
+  default?: boolean;
 };
 export type FlagsPayload = { channel: FlagChannel; flags: FlagInfo[] };
 
