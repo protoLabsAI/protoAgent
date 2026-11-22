@@ -230,6 +230,61 @@ What it does:
 4. **Flags flaky gate cases.** A gate case that flips pass/fail twice within the
    last 7 nightlies is printed as flaky with "demote to tracked or fix". Nothing is
    auto-demoted — demoting a case is an operator judgement.
+5. **Counts interruptions and gates them on thresholds.** See below.
+
+### Interruptions — how often unattended work reached you
+
+Each night also counts, for the **24 hours before the run**, how many times unattended
+work interrupted the operator, per source (`scheduler`, `inbox`, `watch`,
+`background`):
+
+- **Activity cards** posted (`cards`). A scheduled run that ended `NO_UPDATE`, or
+  repeated its last result, posted no card and is not counted.
+- **Needs-you items** raised (`needs_you`): priority-now operator-class inbox items,
+  and decisions parked by an unattended run (not ones raised in your own chat).
+
+The counter is `evals/interruptions.py` (`python -m evals.interruptions` prints the
+same counts on demand; its module docstring names the exact store each count reads).
+It reads **this process's** instance stores, read-only — the same instance whose
+ledger the nightly writes to by default (`--friction-log` moves only the ledger, not
+the counts). The nightly prints a per-source table of `count / threshold`, with a `!`
+on each count over its threshold, and writes the counts, the thresholds in force and
+the over-threshold ids into the report JSON under `interruptions`, so later runs (and
+`jq` over `evals/results/run-nightly-*.json`) can trend them:
+
+```json
+"interruptions": {
+  "window_end": "2026-11-22T06:00:00+00:00", "window_hours": 24,
+  "sources": {"scheduler": {"activity_cards": 7, "needs_you": 0}, "...": {}},
+  "thresholds": {"scheduler": {"cards": 20, "needs_you": 5}, "...": {}},
+  "over": []
+}
+```
+
+**Thresholds.** Every source has a daily limit per kind; the defaults are **20 Activity
+cards** and **5 Needs-you items**. A count **above** its limit (not at it) records one
+`harness` friction entry (source `evals-nightly`) through the same path as a gate
+regression, with the stable summary
+`nightly gate regression: interruptions:<source>:<cards|needs_you>` — no dates or
+counts, so the ledger keeps one row per source and kind however many nights it stays
+over; the detail carries that night's count, threshold and report path. The first
+night a count that was over is back under (or no longer gated), the nightly resolves
+that entry, the same way a recovered gate case is resolved. An over-threshold count
+fails the night (exit 1) even on a baseline run with no previous nightly, because it is
+compared with its limit, not with last night. It does not trigger the eval-case rerun
+or the regression triage job, which work on eval case ids. If the stores can't be read
+the night prints a warning, writes no `interruptions` key and gates nothing on them.
+
+Change a limit with the repeatable `--interruption-threshold [SOURCE:]KIND=LIMIT`
+flag. Leave out `SOURCE` to set the limit for every source; `off` stops gating that count:
+
+```bash
+python scripts/evals_nightly.py --interruption-threshold scheduler:cards=40
+python scripts/evals_nightly.py --interruption-threshold needs_you=2 --interruption-threshold watch:cards=off
+```
+
+`--dry-run` prints the same table and lists each over-threshold count as
+`OVER THRESHOLD … (not recorded)`. It records and resolves nothing.
 
 ### Which ledger does it write to?
 

@@ -50,6 +50,29 @@ def triage_jobs(monkeypatch):
     return jobs
 
 
+def _counts(**over: int) -> dict[str, dict[str, int]]:
+    """Interruption counts shaped like evals.interruptions; ``scheduler_cards=30`` etc."""
+    counts = {src: {"activity_cards": 0, "needs_you": 0} for src in ("scheduler", "inbox", "watch", "background")}
+    for key, n in over.items():
+        src, kind = key.split("_", 1)
+        counts[src]["activity_cards" if kind == "cards" else "needs_you"] = n
+    return counts
+
+
+@pytest.fixture(autouse=True)
+def interruption_counts(monkeypatch):
+    # Never read a real instance's stores: every main() run counts from this stub
+    # (all zeros unless a test sets ``state["counts"]``) and records what it was asked.
+    state = {"counts": _counts(), "ends": []}
+
+    def read(window_end):
+        state["ends"].append(window_end)
+        return state["counts"]
+
+    monkeypatch.setattr(nightly, "_read_interruptions", read)
+    return state
+
+
 def _row(cid: str, passed: bool, *, tier: str = "gate", trace_id: str = "", skipped: bool = False) -> dict:
     """One report row in the shape evals.runner writes."""
     row = {
@@ -830,3 +853,145 @@ def test_record_regressions_carries_the_failing_check():
     line = next(l for l in rec.calls[0]["detail"].splitlines() if l.startswith("failed: "))
     assert line.startswith("failed: missing tools: ['memory_list']; saw: ")
     assert len(line) == len("failed: ") + nightly.FAILED_DETAIL_MAX
+
+
+# ── interruptions: per-source counts vs thresholds (#5518) ─────────────────────
+
+
+def test_main_prints_and_writes_interruption_counts(tmp_path, monkeypatch, capsys, interruption_counts):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly.time, "time", lambda: 1_800_000_000)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", True)]))
+    rec = _FakeRecorder()
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: rec)
+    interruption_counts["counts"] = _counts(scheduler_cards=7, inbox_needs=2)
+
+    assert nightly.main(["--model", "vendor/m"]) == 0
+
+    # The window ends at the night's own timestamp.
+    assert [e.timestamp() for e in interruption_counts["ends"]] == [1_800_000_000]
+    out = capsys.readouterr().out
+    assert "interruptions — 24h to" in out
+    assert "scheduler" in out and "7 / 20" in out and "2 / 5" in out
+    rep = json.loads((tmp_path / "run-nightly-1800000000.json").read_text())
+    section = rep["interruptions"]
+    assert section["sources"]["scheduler"]["activity_cards"] == 7
+    assert section["sources"]["inbox"]["needs_you"] == 2
+    assert section["thresholds"]["watch"] == {"cards": 20, "needs_you": 5}
+    assert section["over"] == []
+    assert rec.calls == []  # at or under every threshold: nothing recorded
+
+
+@pytest.mark.parametrize("n,over", [(5, []), (6, ["interruptions:scheduler:cards"])])
+def test_threshold_is_exceeded_only_above_the_limit(interruption_counts, n, over):
+    from datetime import UTC, datetime
+
+    interruption_counts["counts"] = _counts(scheduler_cards=n)
+    section = nightly.measure_interruptions(
+        datetime(2026, 11, 22, tzinfo=UTC), nightly.interruption_thresholds(["scheduler:cards=5"])
+    )
+    assert section["over"] == over
+    assert [r["id"] for r in nightly.interruption_regressions(section)] == over
+
+
+def test_over_threshold_records_once_dedups_and_resolves(tmp_path, monkeypatch, interruption_counts):
+    from plugins.friction import grouped_entries
+
+    ledger = tmp_path / "friction.jsonl"
+    monkeypatch.setenv("FRICTION_LOG", str(ledger))
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", True)]))
+    summary = "nightly gate regression: interruptions:watch:needs_you"
+
+    def rows():
+        return grouped_entries(include_resolved=True)
+
+    # Night 1 (a baseline night still gates thresholds): 6 watch Needs-you items > 5.
+    interruption_counts["counts"] = _counts(watch_needs=6)
+    monkeypatch.setattr(nightly.time, "time", lambda: 100)
+    assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 1
+    assert [(r["kind"], r["summary"]) for r in rows()] == [("harness", summary)]
+    assert "evals-nightly" in json.loads(ledger.read_text().splitlines()[0])["source"]
+    assert grouped_entries() != []  # open
+
+    # Night 2, still over (a different count): the same grouped row, seen twice.
+    interruption_counts["counts"] = _counts(watch_needs=9)
+    monkeypatch.setattr(nightly.time, "time", lambda: 200)
+    assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 1
+    assert [(r["summary"], r["count"]) for r in rows()] == [(summary, 2)]
+
+    # Night 3, back under: resolved, nothing new written.
+    interruption_counts["counts"] = _counts(watch_needs=1)
+    monkeypatch.setattr(nightly.time, "time", lambda: 300)
+    assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 0
+    assert [(r["summary"], r["count"]) for r in rows()] == [(summary, 2)]
+    assert grouped_entries() == []  # nothing open any more
+    entries = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert all(e["resolved_at"] for e in entries)
+    assert str(tmp_path / "run-nightly-300.json") in entries[0]["resolved_reason"]
+
+
+def test_over_threshold_friction_shape_and_no_triage(tmp_path, monkeypatch, triage_jobs, interruption_counts):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", True)]))
+    rec = _FakeRecorder()
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: rec)
+    interruption_counts["counts"] = _counts(background_cards=3)
+
+    assert nightly.main(["--model", "vendor/m", "--interruption-threshold", "background:cards=2"]) == 1
+
+    assert len(rec.calls) == 1
+    call = rec.calls[0]
+    assert call["summary"] == "nightly gate regression: interruptions:background:cards"
+    assert (call["kind"], call["source"]) == ("harness", "evals-nightly")
+    assert "3 background Activity cards" in call["detail"]
+    assert triage_jobs == []  # eval-case triage reads case ids, not interruption counts
+
+
+def test_dry_run_prints_over_threshold_and_records_nothing(tmp_path, monkeypatch, capsys, interruption_counts):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    _seed_nightly(tmp_path, [_row("a", True)], nightly_ts=1)
+    _seed_nightly(tmp_path, [_row("a", True)], nightly_ts=2)
+
+    def unexpected():
+        pytest.fail("dry-run reached friction plugin")
+
+    monkeypatch.setattr(nightly, "_friction_recorder", unexpected)
+    monkeypatch.setattr(nightly, "_friction_resolver", unexpected)
+    interruption_counts["counts"] = _counts(inbox_cards=50)
+
+    assert nightly.main(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "50 / 20!" in out
+    assert "OVER THRESHOLD interruptions:inbox:cards" in out and "(not recorded)" in out
+
+
+def test_unreadable_stores_skip_interruptions_without_failing(tmp_path, monkeypatch, capsys):
+    def broken(window_end):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(nightly, "_read_interruptions", broken)
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly.time, "time", lambda: 5)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", True)]))
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: _FakeRecorder())
+
+    assert nightly.main(["--model", "vendor/m"]) == 0
+    assert "interruption counts unavailable" in capsys.readouterr().err
+    assert "interruptions" not in json.loads((tmp_path / "run-nightly-5.json").read_text())
+
+
+def test_interruption_threshold_overrides():
+    t = nightly.interruption_thresholds(["needs_you=3", "scheduler:cards=40", "watch:cards=off"])
+    assert t["inbox"] == {"cards": 20, "needs_you": 3}
+    assert t["scheduler"] == {"cards": 40, "needs_you": 3}
+    assert t["watch"]["cards"] is None
+    for bad in ["cards", "nope:cards=1", "scheduler:mail=1", "cards=-1", "cards=many"]:
+        with pytest.raises(ValueError):
+            nightly.interruption_thresholds([bad])
+
+
+def test_bad_threshold_flag_is_a_usage_error():
+    with pytest.raises(SystemExit) as exc:
+        nightly.main(["--dry-run", "--interruption-threshold", "cards=lots"])
+    assert exc.value.code == 2
