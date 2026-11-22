@@ -1,3 +1,4 @@
+import { hasResolvingAction } from "./workAttention";
 import { needsOperatorAttention } from "../lib/queries";
 import type { Status } from "@protolabsai/ui/primitives";
 import type { BackgroundJobDTO, GoalState, InboxItem, ScheduledJob, Task, WatchState } from "../lib/types";
@@ -31,6 +32,15 @@ export type GroupableWorkItem = (WorkItem & {
 
 /** Pure classification on source state: WorkStatus deliberately loses task detail. */
 export function groupFor(item: GroupableWorkItem): WorkGroupId | null {
+  const group = candidateGroupFor(item);
+  return group === "needs-you" && !hasResolvingAction(item) ? null : group;
+}
+
+export function isWorkInformation(item: GroupableWorkItem): boolean {
+  return candidateGroupFor(item) === "needs-you" && !hasResolvingAction(item);
+}
+
+function candidateGroupFor(item: GroupableWorkItem): WorkGroupId | null {
   const raw = item.raw as Record<string, unknown> | null;
   switch (item.kind) {
     case "decision": return raw?.state === "pending" ? "needs-you" : null;

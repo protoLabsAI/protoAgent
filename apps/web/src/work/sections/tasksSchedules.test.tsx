@@ -67,7 +67,7 @@ it("annotates tasks without overriding per-row goal/task/watch classification", 
   const base = { id: "item", title: "Item", meta: "", status: "waiting" as const };
   const groups = workGroups([
     { ...base, id: "active", kind: "goal", raw: { status: "active" } },
-    { ...base, id: "stopped", kind: "goal", raw: { status: "exhausted" } },
+    { ...base, id: "stopped", kind: "goal", raw: { status: "exhausted", session_id: "stopped" } },
     { ...base, id: "achieved", kind: "goal", raw: { status: "achieved" } },
     { ...base, id: "running", kind: "task", raw: { status: "in_progress" } },
     { ...base, id: "queued", kind: "task", raw: { status: "open" } },
@@ -911,11 +911,12 @@ describe("A waiting job shows the question and links what it waits on (#5676)", 
       .toBe("All 5 audits done; 5 repeated problems, 5 house rules.");
   });
 
-  it("falls back to the description's first line as the ask without repeating it", async () => {
+  it("shows the full description as the fallback ask without repeating it", async () => {
     await open(waiting({ ask: undefined, description: "Can we ship?\nWorking notes." }));
-    expect(labeledField("Ask")!.querySelector("dd")?.textContent).toBe("Can we ship?");
+    expect(labeledField("Ask")!.querySelector("dd")?.textContent).toBe("Can we ship?\nWorking notes.");
     await act(async () => button("Technical details").click());
-    expect(labeledField("Description")!.querySelector("dd")?.textContent).toBe("Working notes.");
+    expect(labeledField("Description")).toBeNull();
+    expect(allText().split("Working notes.")).toHaveLength(2);
   });
 
   it("turns an artifact id, a board card id and a GitHub ref in the ask into links that open the item (r2)", async () => {

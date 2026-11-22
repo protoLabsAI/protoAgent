@@ -298,9 +298,9 @@ describe("phone Needs you indicator", () => {
     expect(byLabel("Menu")!.querySelector(".pl-dot")).toBeNull();
   });
 
-  it("counts Work's Needs you group via workGroups: pending decisions, stopped goals and undelivered pages", () => {
+  it("counts Work's Needs you group via workGroups: resolving decisions and goals, excluding Dismiss-only pages", () => {
     const decision = (id: string, state: string): WorkItem => ({
-      id, kind: "decision", title: "Question", meta: "", raw: { state }, status: state === "pending" ? "needs-you" : "done", sessionId: id,
+      id, kind: "decision", title: "Question", meta: "", raw: { state, options: [{ id: "yes", label: "Yes" }] }, status: state === "pending" ? "needs-you" : "done", sessionId: id,
     });
     const source = (status: WorkSource["status"], items: WorkItem[] = []): WorkSource => ({
       status, items, loadedAt: null, error: null, retry: () => {},
@@ -321,9 +321,9 @@ describe("phone Needs you indicator", () => {
         status: "needs-you", raw: { id: 77, priority: "now", delivered_at: null, needs_human: true } } as never] },
       directives: source("ready", [{ id: "d1", kind: "directive", title: "Hold main", meta: "", status: "waiting", raw: { id: "d1", status: "in_force" } }]),
     };
-    expect(needsYouCount(sources)).toBe(3); // pending decision + stopped goal + undelivered page
+    expect(needsYouCount(sources)).toBe(2); // answer + restart; Dismiss is not a resolution
     sources.decisions.items = [decision("answered", "answered")];
-    expect(needsYouCount(sources)).toBe(2);
+    expect(needsYouCount(sources)).toBe(1);
     sources.goals.items = [];
     sources.activity.groupItems = [];
     expect(needsYouCount(sources)).toBe(0);

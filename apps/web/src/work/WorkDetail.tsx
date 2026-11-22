@@ -7,6 +7,8 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { useWorkActionSize } from "../shell/SurfaceFrame";
 import { copyText } from "../lib/clipboard";
 import { statusTone, statusWord, type WorkStatus } from "./tone";
+import { hasResolvingAction, workCause, workLead } from "./workAttention";
+import type { GroupableWorkItem } from "./tone";
 import "./work-detail.css";
 
 export type WorkField = { label: string; value: ReactNode };
@@ -23,6 +25,7 @@ export type WorkAction = {
   id: string;
   label: string;
   destructive?: boolean;
+  resolves?: boolean;
   confirm?: WorkConfirm;
   /** Overrides the undo toast's "{Type} deleted." line when the action's verb isn't
    *  delete — e.g. "Goal dropped." for a stopped goal's Drop the goal (§2). */
@@ -35,6 +38,9 @@ export type WorkAction = {
 
 export type WorkDetailProps = {
   title: string;
+  lead?: string;
+  cause?: string;
+  instruction?: string;
   status: WorkStatus;
   fields: WorkField[];
   actions: WorkAction[];
@@ -69,6 +75,9 @@ function verbOf(action: WorkAction): string {
 
 export function WorkDetail({
   title,
+  lead,
+  cause,
+  instruction,
   status,
   fields,
   actions,
@@ -155,7 +164,7 @@ export function WorkDetail({
   }
 
   const visibleFields = fields.filter((f) => !isEmpty(f.value));
-  const techEntries = Object.entries(technical);
+  const techEntries = Object.entries(lead ? { Title: title, ...technical } : technical);
   const techFields = technicalFields.filter((f) => !isEmpty(f.value));
 
   return (
@@ -163,10 +172,13 @@ export function WorkDetail({
       <header className="work-detail__header">
         <StatusDot status={statusTone(status)} pulse={status === "running"} />
         <h2 className="work-detail__title" data-surface-focus tabIndex={-1}>
-          {title}
+          {lead ?? title}
         </h2>
         <Badge status={statusTone(status)}>{statusLabel ?? statusWord(status)}</Badge>
       </header>
+
+      {cause && <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{cause}</p>}
+      {instruction && <p>{instruction}</p>}
 
       {changedNotice && (
         <Callout tone="info">
@@ -373,4 +385,24 @@ function UndoToast({ message, token, onUndo, size }: { message: string; token: s
       </Button>
     </span>
   );
+}
+
+/** A shared cause keeps each affected item's existing resolution path available. */
+export function WorkIssueDetail({ item, onOpen }: {
+  item: GroupableWorkItem; onOpen: (item: GroupableWorkItem) => void;
+}) {
+  const affected = item.affected ?? [];
+  return <WorkDetail title={item.title} lead={workLead(item)}
+    cause={workCause(item)} instruction={item.instruction}
+    status={hasResolvingAction(item) ? "needs-you" : "paused"}
+    statusLabel={hasResolvingAction(item) ? undefined : "Information"}
+    fields={affected.length ? [{ label: "Affected work", value: <ul>
+      {affected.map((member) => <li key={member.kind + member.id}>{member.title}</li>)}
+    </ul> }] : []}
+    actions={affected.length ? affected.map((member) => ({
+      id: member.kind + member.id, label: `Open ${member.title}`, resolves: true,
+      run: async () => onOpen(member),
+    })) : item.actions ?? []}
+    technical={Object.fromEntries((affected.length ? affected : [item])
+      .map((member, index) => [`Id ${index + 1}`, member.id]))} />;
 }

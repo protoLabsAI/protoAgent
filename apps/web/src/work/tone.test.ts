@@ -19,7 +19,7 @@ describe("groupFor raw state classification", () => {
   ];
   for (const [kind, states] of cases) {
     it.each(Object.entries(states))(`${kind} %s → %s regardless of lossy status`, (state, expected) => {
-      const item = { kind, id: "x", title: "x", meta: "", status: "running", raw: { status: state, state } } as GroupableWorkItem;
+      const item = { kind, id: "x", title: "x", meta: "", status: "running", raw: { status: state, state, session_id: "chat" } } as GroupableWorkItem;
       expect(groupFor(item)).toBe(expected);
     });
   }
@@ -50,16 +50,14 @@ describe("groupFor raw state classification", () => {
   it("accepts typed delivery and wait adapters", () => {
     const item = { id: "x", title: "x", meta: "", status: "waiting" as const };
     for (const delivered of [true, false]) for (const needsHuman of [true, false]) {
-      expect(groupFor({ ...item, kind: "delivery", raw: { delivered, needsHuman } })).toBe(!delivered && needsHuman ? "needs-you" : null);
+      expect(groupFor({ ...item, kind: "delivery", raw: { delivered, needsHuman } })).toBeNull();
     }
-    // Inbox rows: a pending now page Needs-you only when operator-class (needs_human) —
-    // a merely queued page retries on its own once the agent is free.
+    // Delivery notices have only Dismiss, so even operator-class pages are information.
     const page = { id: 7, priority: "now", delivered_at: null, text: "p", source: "", created_at: "", dedup_key: null } as const;
-    expect(groupFor({ ...item, kind: "delivery", raw: { ...page, needs_human: true } })).toBe("needs-you");
+    expect(groupFor({ ...item, kind: "delivery", raw: { ...page, needs_human: true } })).toBeNull();
     expect(groupFor({ ...item, kind: "delivery", raw: { ...page } })).toBeNull();
-    // Retries spent: no sweep ever picks the page up again (and the Feed carries no
-    // dismiss), so it needs the operator — unless it was delivered after all.
-    expect(groupFor({ ...item, kind: "delivery", raw: { ...page, retries_exhausted: true } })).toBe("needs-you");
+    // Exhausting automatic retries does not invent a resolving action.
+    expect(groupFor({ ...item, kind: "delivery", raw: { ...page, retries_exhausted: true } })).toBeNull();
     expect(groupFor({ ...item, kind: "delivery", raw: { ...page, retries_exhausted: true, delivered_at: "2026-09-03T10:01:00Z" } })).toBeNull();
     for (const state of ["pending", "completed", "cancelled"] as const) {
       expect(groupFor({ ...item, kind: "wait", raw: { state } })).toBe(state === "pending" ? "coming-up" : null);

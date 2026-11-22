@@ -48,13 +48,13 @@ describe("shared workGroups projection", () => {
   });
 
   it("filters other groups to the same session but never filters Needs you", () => {
-    const decision: GroupableWorkItem = { ...base, kind: "decision", sessionId: "elsewhere", status: "needs-you", raw: { state: "pending" } };
+    const decision: GroupableWorkItem = { ...base, kind: "decision", sessionId: "elsewhere", status: "needs-you", raw: { state: "pending", session_id: "elsewhere" } };
     const delivery: GroupableWorkItem = { ...base, kind: "delivery", sessionId: "elsewhere", status: "needs-you", raw: { delivered: false, needsHuman: true } };
     const items = [decision, delivery, { ...goal("exhausted"), sessionId: "elsewhere" }, task("in_progress"), task("in_progress", "other"),
       { ...task("open"), sessionId: undefined }, task("deferred"), directive(), { ...directive(), sessionId: "other" }];
-    expect(workGroups(items, { thisChatOnly: true, sessionId: "chat" }).map((g) => g.count)).toEqual([3, 1, 1, 1]);
-    expect(workGroups(items, { thisChatOnly: true }).map((g) => g.count)).toEqual([3, 0, 0, 0]);
-    expect(workGroups(items).map((g) => g.count)).toEqual([3, 2, 2, 2]);
+    expect(workGroups(items, { thisChatOnly: true, sessionId: "chat" }).map((g) => g.count)).toEqual([2, 1, 1, 1]);
+    expect(workGroups(items, { thisChatOnly: true }).map((g) => g.count)).toEqual([2, 0, 0, 0]);
+    expect(workGroups(items).map((g) => g.count)).toEqual([2, 2, 2, 2]);
   });
 
   it.each(["exhausted", "unachievable"])("projects %s goals neutrally without changing raw or cached rows", (status) => {

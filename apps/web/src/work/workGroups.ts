@@ -1,3 +1,4 @@
+import { workCause, workLead } from "./workAttention";
 import type { DecisionRow } from "../lib/api/decisions";
 import { isInstanceWide, type DirectiveRow } from "../lib/api/chat";
 import type { WorkItems } from "./useWorkItems";
@@ -95,8 +96,21 @@ export function workGroups(input: readonly GroupableWorkItem[] | WorkItems, {
     if (!inWorkScope(item, { thisChatOnly, sessionId })) continue;
     const group = groups.find((candidate) => candidate.id === id)!;
     // A stopped goal needs attention without painting its failure as an error.
-    group.items.push(item.kind === "goal" && id === "needs-you" ? { ...item, status: "paused" } : item);
+    group.items.push(item.kind === "goal" && id === "needs-you" ? { ...item, status: "paused" } : { ...item });
   }
+  const needs = groups.find((group) => group.id === "needs-you")!;
+  const causes = new Map<string, GroupableWorkItem>();
+  needs.items = needs.items.filter((item) => {
+    const cause = workCause(item);
+    // Identical questions can offer different choices; keep decisions separate.
+    if (!cause || item.kind === "decision") return true;
+    const key = JSON.stringify([cause, item.instruction ?? ""]);
+    const existing = causes.get(key);
+    if (!existing) { causes.set(key, item); return true; }
+    existing.affected = [...(existing.affected ?? [{ ...existing }]), item];
+    existing.title = existing.kind === item.kind ? workLead(item) : "Work cannot continue until this is resolved.";
+    return false;
+  });
   // Instance-wide orders sort FIRST in Your instructions, then the chat's own; each keeps
   // its source order, oldest first (§3.2). A stable partition, applied here once so the
   // Overview, the picked group and the rail list them identically.

@@ -63,6 +63,11 @@ export type WorkItemKind =
 
 /** One normalized row, whatever its source — the shape every Work surface renders (§5). */
 export type WorkItem = {
+  /** Producer actions must explicitly resolve the underlying problem. */
+  actions?: import("./WorkDetail").WorkAction[];
+  cause?: string;
+  instruction?: string;
+  affected?: GroupableWorkItem[];
   kind: WorkItemKind;
   id: string;
   status: WorkStatus;
@@ -428,7 +433,7 @@ export function useWorkItems({ sessionId, thisChatOnly }: UseWorkItemsParams): W
         // The row title is the short summary, never the whole page (the full text lives
         // in the delivery detail's Message field) — same rule as a schedule's prompt.
         kind: "delivery", id: String(row.id), title: summaryTitle(row.text), meta: row.source || "",
-        status: "needs-you", raw: row,
+        status: "paused", raw: row,
       })),
     },
     directives: directiveSource,

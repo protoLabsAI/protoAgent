@@ -7,8 +7,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@protolabsai/ui/overlays";
-import { WorkDetail, type WorkAction, type WorkDetailProps } from "./WorkDetail";
+import { WorkDetail, WorkIssueDetail, type WorkAction, type WorkDetailProps } from "./WorkDetail";
 import { SurfaceFrameContext } from "../shell/SurfaceFrame";
+import { WorkOverview } from "./WorkOverview";
+import { workGroups } from "./workGroups";
+import type { GroupableWorkItem } from "./tone";
+import type { WorkItems } from "./useWorkItems";
 import cssSource from "./work-detail.css?raw";
 import componentSource from "./WorkDetail.tsx?raw";
 
@@ -272,4 +276,75 @@ it("uses actual md phone actions, including confirmation and retry, with destruc
   await act(async () => button("Delete").click());
   expect(button("Try again").classList.contains("pl-btn--sm")).toBe(false);
   expect(button("Keep it").classList.contains("pl-btn--sm")).toBe(false);
+});
+
+describe("actionable Work items", () => {
+  const sourcesFor = (items: GroupableWorkItem[]): WorkItems => Object.fromEntries(
+    ["decisions", "goals", "watches", "tasks", "schedules", "background", "activity", "directives"]
+      .map((kind) => [kind, { items: [], groupItems: kind === "tasks" ? items : [],
+        status: "ready", error: null, loadedAt: 1, retry: () => {} }]),
+  ) as unknown as WorkItems;
+  const task = (id: string, title: string): GroupableWorkItem => ({
+    kind: "task", id, title, meta: "", status: "needs-you",
+    raw: { id, title, status: "waiting", ask: "Free disk space on the build machine. Then ask me to check again." },
+  });
+
+  it("lists a Dismiss-only notice as information in What happened", async () => {
+    const item = { ...task("card-1", "Build stopped"),
+      actions: [{ id: "dismiss", label: "Dismiss", run: async () => {} }] };
+    const sources = sourcesFor([item]);
+    await mount(base());
+    await act(async () => root!.render(h(ToastProvider, null,
+      h(WorkOverview, { sources, groups: workGroups(sources), onOpen: () => {} }))));
+    expect(host!.querySelector('[aria-label="Needs you"]')).toBeNull();
+    const information = host!.querySelector('[aria-label="What happened"]');
+    expect(information?.textContent).toContain("Build stopped");
+    expect(information?.textContent).toContain("Information");
+  });
+
+  it("shows one cause with both affected cards and opens each existing fix", async () => {
+    const first = Object.freeze(task("card-1", "Build Linux"));
+    const second = Object.freeze(task("card-2", "Build Windows"));
+    const sources = sourcesFor([first, second]);
+    const groups = workGroups(sources);
+    expect(groups[0].count).toBe(1);
+    expect(first.title).toBe("Build Linux");
+    await mount(base());
+    const onOpen = vi.fn();
+    await act(async () => root!.render(h(ToastProvider, null,
+      h(WorkOverview, { sources, groups, onOpen }))));
+    const needs = host!.querySelector('[aria-label="Needs you"]')!;
+    expect(needs.querySelectorAll("li")).toHaveLength(1);
+    expect(needs.textContent).toContain("Build Linux");
+    expect(needs.textContent).toContain("Build Windows");
+    await act(async () => root!.render(h(ToastProvider, null,
+      h(WorkIssueDetail, { item: groups[0].items[0], onOpen }))));
+    expect(text()).toContain("Build Linux");
+    expect(text()).toContain("Build Windows");
+    await act(async () => button("Open Build Windows").click());
+    expect(onOpen).toHaveBeenCalledWith(second);
+    expect(workGroups(sourcesFor([second]))[0].count).toBe(1);
+    expect(workGroups(sourcesFor([]))[0].count).toBe(0);
+  });
+
+  it("leads with plain words, keeps ids technical, and shows the entire cause and retry instruction", async () => {
+    const cause = "No space left.\n".repeat(40) + "The final diagnostic.";
+    const run = vi.fn().mockRejectedValueOnce(new Error("still full")).mockResolvedValueOnce(undefined);
+    const item = { ...task("card-42", "card-42 build-worker"), cause,
+      instruction: "Free disk space, then check again.",
+      actions: [{ id: "retry", label: "Check again", resolves: true, run }] };
+    await mount(base());
+    await act(async () => root!.render(h(ToastProvider, null, h(WorkIssueDetail, { item, onOpen: () => {} }))));
+    expect(host!.querySelector("h2")!.textContent).toBe("Your reply is needed before work can continue.");
+    expect(text()).not.toContain("card-42");
+    expect(text()).toContain(cause);
+    expect(text()).toContain(item.instruction);
+    await act(async () => button("Check again").click());
+    expect(host!.querySelector('[role="alert"]')).not.toBeNull();
+    await act(async () => button("Try again").click());
+    expect(run).toHaveBeenCalledTimes(2);
+    await act(async () => button("Technical details").click());
+    expect(text()).toContain("card-42");
+    expect(text()).toContain("build-worker");
+  });
 });
