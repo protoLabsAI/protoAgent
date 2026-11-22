@@ -18,6 +18,11 @@ import { useWorkActionSize } from "../../shell/SurfaceFrame";
  * Start / Mark open and Close job / Close / Reopen status transitions (the PATCH/close routes),
  * Edit (the existing PATCH, reusing `TaskCreateDialog`) and Delete…, which hands back an
  * `undo_token` (bd-0ia51.5) driving the §4.5 undo toast.
+ *
+ * A job waiting on the operator (#5676) shows the question instead of the record: who is
+ * asking, the ask once (its artifact, board card and GitHub references as links), what it
+ * points at, and the reply box. Its description, type, priority and dates sit in Technical
+ * details with the id.
  */
 import { useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,12 +37,14 @@ import { chatStore } from "../../chat/chat-store";
 import { useConversations, type ConversationRow } from "../../chat/conversations-store";
 import { navigate } from "../../app/palette/nav";
 import { api } from "../../lib/api";
-import { queryKeys } from "../../lib/queries";
+import { brandName } from "../../lib/brand";
+import { queryKeys, runtimeStatusQuery } from "../../lib/queries";
 import type { Task } from "../../lib/types";
 import { TaskCreateDialog } from "../../app/TasksPanel";
 import { issueStatus, issueType, type IssueDraft } from "../../app/tasks";
 import { groupFor, relTime, staleTaskMeta, taskStaleDays, type GroupableWorkItem } from "../tone";
 import { typeAndPriority } from "../rowMeta";
+import { AskRefLink, AskText, classifyRef, parseAskRefs, refLabel, type AskRef } from "../askRefs";
 import { WorkDetail, type WorkAction, type WorkField } from "../WorkDetail";
 import { WorkRow } from "../WorkRow";
 import { registerWorkSection, type WorkSectionContext } from "../sectionRegistry";
@@ -242,6 +249,11 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
     refetchOnMount: "always",
   });
   const ask = task.ask?.trim() || task.description?.trim() || "";
+  // Who is asking: the agent this console is on. Read from the runtime status the shell already
+  // keeps loaded (never fetched from here); until it is known the line still says who.
+  const runtime = useQuery({ ...runtimeStatusQuery(), enabled: false });
+  const agentName = runtime.data?.identity?.name?.trim();
+  const asker = agentName ? brandName(agentName) : "Your agent";
   const send = useMutation({
     mutationFn: async (message: string = reply.trim()) => {
       if (!attempt.current) {
@@ -289,18 +301,32 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
   // no turns. A `chat-` id whose chat is gone has no shared value — keep the existing deleted-chat
   // line there; an empty source has nothing to point at, so the field drops out.
   const provenance: ReactNode = startedIn ?? (source.startsWith("chat-") ? "Its chat was deleted" : null);
+  // The operator reads four things, in order: who is asking, the ask (once), what it points at,
+  // and the reply box (#5676). The record behind them moves into Technical details.
+  const linkRefs = [...parseAskRefs(ask).filter((part): part is AskRef => typeof part !== "string").map(({ ref }) => ref),
+    ...(Array.isArray(task.links) ? task.links.map(({ ref }) => ref) : [])]
+    .filter((ref, i, all) => ref && all.indexOf(ref) === i);
+  // The ask is stated once: where the description repeats it (or the ask was read off the
+  // description), Technical details shows only what's left.
+  const description = (ask && task.description?.includes(ask) ? task.description.replace(ask, "") : task.description ?? "")
+    .replace(/\n{3,}/g, "\n\n").trim();
   return <WorkDetail title={task.title} lead="Your reply is needed before work can continue."
-    cause={ask} status="needs-you" type="Job" technical={{ Id: task.id }}
+    status="needs-you" type="Job" technical={{ Id: task.id }}
     onUndo={async (token) => { await api.undo(token); await refresh(); }}
     actions={send.isPending ? [] : [...waitingActions, ...actions]}
-    fields={[
-      { label: "Links", value: Array.isArray(task.links) && task.links.length ? <ul>{task.links.map(({ ref }) => <li key={ref}>
-        {/^(https?:)\/\//i.test(ref) ? <a href={ref} target="_blank" rel="noreferrer">{ref}</a> : ref}
-      </li>)}</ul> : null },
+    technicalFields={[
       { label: "Waiting since", value: task.updated_at || task.created_at
         ? relTime((task.updated_at || task.created_at)!).text : null },
-      { label: "Description", value: task.description ? <div style={{ whiteSpace: "pre-wrap" }}>{task.description}</div> : null },
+      { label: "Description", value: description ? <Description text={description} /> : null },
       ...taskFields(task).filter((field) => field.label !== "Description"),
+    ]}
+    fields={[
+      { label: "Asked by", value: asker },
+      { label: "Ask", value: ask ? <AskText text={ask} /> : null },
+      { label: "Links", value: linkRefs.length ? <ul>{linkRefs.map((ref) => {
+        const item = classifyRef(ref);
+        return <li key={ref}>{item ? <AskRefLink item={item} label={refLabel(item)} /> : ref}</li>;
+      })}</ul> : null },
       { label: "Source", value: history.isError ? <Alert status="warning">Couldn't check this chat. <Button size={size}
         onClick={() => void history.refetch()}>Retry</Button></Alert>
         : history.isPending ? "Checking source chat…" : !history.data ? provenance : null },

@@ -45,6 +45,9 @@ export type WorkDetailProps = {
   fields: WorkField[];
   actions: WorkAction[];
   technical: Record<string, string>;
+  /** Bookkeeping fields shown inside Technical details, above the copyable ids — what a
+   *  reader acting on the item doesn't need first (a waiting job's description, type, dates). */
+  technicalFields?: WorkField[];
   /** Restores the just-deleted item when the §4.5 undo toast is used. */
   onUndo?: (token: string) => Promise<void>;
   /** "{Type} deleted." in the undo toast — the item's plain-word kind (Goal, Watch…). */
@@ -79,6 +82,7 @@ export function WorkDetail({
   fields,
   actions,
   technical,
+  technicalFields = [],
   onUndo,
   type = "Item",
   statusLabel,
@@ -161,6 +165,7 @@ export function WorkDetail({
 
   const visibleFields = fields.filter((f) => !isEmpty(f.value));
   const techEntries = Object.entries(lead ? { Title: title, ...technical } : technical);
+  const techFields = technicalFields.filter((f) => !isEmpty(f.value));
 
   return (
     <div className="work-detail">
@@ -274,9 +279,19 @@ export function WorkDetail({
 
       {children}
 
-      {techEntries.length > 0 && (
+      {(techEntries.length > 0 || techFields.length > 0) && (
         <Accordion>
           <AccordionItem title="Technical details">
+            {techFields.length > 0 && (
+              <dl className="work-detail__fields work-detail__fields--technical">
+                {techFields.map((field, i) => (
+                  <div className="work-detail__field" key={`${field.label}-${i}`}>
+                    <dt>{field.label}</dt>
+                    <dd>{field.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
             <dl className="work-detail__tech">
               {techEntries.map(([key, value]) => (
                 <div className="work-detail__tech-row" key={key}>

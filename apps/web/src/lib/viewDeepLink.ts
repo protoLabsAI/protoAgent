@@ -127,3 +127,13 @@ export function runDeepLinkUrl(runId: string, loc: Pick<Location, "origin" | "pa
   q.set(RUN_LINK_KEY, runId);
   return `${loc.origin}${loc.pathname}?${q.toString()}`;
 }
+
+/** The console link that opens `plugin`'s first view with `query` as its view params: this
+ *  console's own path (so the agent slug rides along) with `?plugin=<id>&vp=<query>`, keeping
+ *  unrelated params and dropping any other deep link. The reader is `parseViewDeepLink`. */
+export function viewDeepLinkUrl(plugin: string, query = "", loc: Pick<Location, "origin" | "pathname" | "search"> = window.location): string {
+  const q = new URLSearchParams(stripRunDeepLink(stripViewDeepLink(loc.search)));
+  q.set("plugin", plugin);
+  if (query) q.set("vp", query);
+  return `${loc.origin}${loc.pathname}?${q.toString()}`;
+}
