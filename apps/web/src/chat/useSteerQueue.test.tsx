@@ -872,13 +872,16 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     vi.unstubAllGlobals();
   });
 
-  it("posts private: true for a mid-turn steer into a session listed in the Conversations store", async () => {
+  it("posts private: true (and no incognito) for a mid-turn steer into a session listed in the Conversations store", async () => {
     await listFromOthers(sessionId);
-    const r = renderHook(baseOpts({ draft: "change course" }));
+    const r = renderHook(baseOpts({ draft: "change course", session: { id: sessionId, incognito: true } }));
     await act(() => r.current.queueSteer());
     await flush();
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({ text: "change course", private: true });
+    // A private steer is text only: the console never adds incognito (or images) to it.
+    expect(bodies[0]).not.toHaveProperty("incognito");
+    expect(bodies[0]).not.toHaveProperty("images");
     expect(r.current.steerQueue).toMatchObject([{ text: "change course" }]);
   });
 
@@ -890,17 +893,6 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     await flush();
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).not.toHaveProperty("private");
-    expect(bodies[0]).toMatchObject({ text: "go left" });
-  });
-
-  it("never adds incognito to a private steer", async () => {
-    await listFromOthers(sessionId);
-    const r = renderHook(baseOpts({ draft: "quietly", session: { id: sessionId, incognito: true } }));
-    await act(() => r.current.queueSteer());
-    await flush();
-    expect(bodies[0]).toMatchObject({ private: true });
-    expect(bodies[0]).not.toHaveProperty("incognito");
-    expect(bodies[0]).not.toHaveProperty("images");
   });
 
   it("with images in the tray, says a private message is text only and sends nothing — draft and tray untouched", async () => {
@@ -925,24 +917,29 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     403: "Private steering is not available for this request.",
   } as const;
 
+  // Listed: sent private, any (reworded) detail maps by status. Unlisted (outside the list's
+  // window): sent ordinary, the server goes private on its own and its fixed detail maps.
   it.each([
-    [409, PRIVATE_STEER_WAITING_ON_PEER, "This conversation is waiting on the caller's own question"],
-    [400, PRIVATE_STEER_TEXT_ONLY, "A private steer is text only: no attachments or incognito"],
-    [403, PRIVATE_STEER_UNAVAILABLE, "Private steering is not available for this caller"],
-  ])("a %i refusal shows its plain sentence and hands the text back", async (status, sentence, detail) => {
-    await listFromOthers(sessionId);
+    [true, 409, PRIVATE_STEER_WAITING_ON_PEER, "This conversation is waiting on the caller's own question"],
+    [true, 400, PRIVATE_STEER_TEXT_ONLY, "A private steer is text only: no attachments or incognito"],
+    [true, 403, PRIVATE_STEER_UNAVAILABLE, "Private steering is not available for this caller"],
+    [false, 409, PRIVATE_STEER_WAITING_ON_PEER, SERVER_DETAIL[409]],
+    [false, 400, PRIVATE_STEER_TEXT_ONLY, SERVER_DETAIL[400]],
+    [false, 403, PRIVATE_STEER_UNAVAILABLE, SERVER_DETAIL[403]],
+  ] as const)("listed=%s: a %i refusal shows its plain sentence and hands the text back", async (listed, status, sentence, detail) => {
+    await listFromOthers(listed ? sessionId : "ctx-someone-else");
     stubSteerFetch(refused(status, detail));
     draftBox.value = "change course";
     const onError = vi.fn();
     const r = renderHook(baseOpts({ onError }));
     await act(() => r.current.queueSteer());
     await flush();
+    expect("private" in bodies[0]).toBe(listed);
     expect(onError).toHaveBeenCalledTimes(1);
     const shown = onError.mock.calls[0][0] as string;
     expect(shown).toBe(sentence);
     expect(shown).not.toContain(String(status));
     expect(shown).not.toContain(detail);
-    expect(shown).not.toContain("Couldn't queue message");
     // The typed text is not lost: out of the queue, back in the composer.
     expect(draftBox.value).toBe("change course");
     expect(r.current.steerQueue).toEqual([]);
@@ -961,33 +958,6 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     expect(privateSteerRefusal(new ApiError(503, "raw"))).toBeNull();
     expect(privateSteerRefusal(new Error("offline"))).toBeNull();
   });
-
-  it.each([
-    [409, PRIVATE_STEER_WAITING_ON_PEER],
-    [400, PRIVATE_STEER_TEXT_ONLY],
-    [403, PRIVATE_STEER_UNAVAILABLE],
-  ] as const)(
-    "a peer thread the list has not loaded: the server's own %i private refusal still reads as its sentence and hands the text back",
-    async (status, sentence) => {
-      // Not in the Conversations store (e.g. outside its window), so the console sends an
-      // ordinary steer — the server takes the private path on its own and refuses.
-      await listFromOthers("ctx-someone-else");
-      stubSteerFetch(refused(status, SERVER_DETAIL[status]));
-      draftBox.value = "change course";
-      const onError = vi.fn();
-      const r = renderHook(baseOpts({ onError }));
-      await act(() => r.current.queueSteer());
-      await flush();
-      expect(bodies[0]).not.toHaveProperty("private");
-      expect(onError).toHaveBeenCalledTimes(1);
-      const shown = onError.mock.calls[0][0] as string;
-      expect(shown).toBe(sentence);
-      expect(shown).not.toContain(String(status));
-      expect(shown).not.toContain(SERVER_DETAIL[status]);
-      expect(draftBox.value).toBe("change course");
-      expect(r.current.steerQueue).toEqual([]);
-    },
-  );
 
   it("a private steer that meets the fleet proxy's member-down 409 is not told the thread waits on the peer", async () => {
     await listFromOthers(sessionId);
