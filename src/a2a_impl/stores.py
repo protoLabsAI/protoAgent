@@ -38,7 +38,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import bindparam, delete, insert, or_, select, text, update
+from sqlalchemy import bindparam, delete, event, insert, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from a2a.server.context import ServerCallContext
@@ -1175,9 +1175,22 @@ def _resolve_db_path(leaf: str) -> str:
 
 
 def make_sqlite_engine(db_path: str) -> AsyncEngine:
-    """Async SQLAlchemy engine for a local SQLite file (aiosqlite driver)."""
+    """Async SQLite engine with WAL readers and a five-second wait for writers."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    return create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5.0})
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _configure_sqlite(dbapi_connection, _connection_record):
+        # The timeout applies before WAL setup, which itself can need a lock.
+        # Task saves and private scheduling use separate pooled connections;
+        # readers must not prevent those writers from committing.
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+        finally:
+            cursor.close()
+
+    return engine
 
 
 def build_a2a_stores() -> tuple[
