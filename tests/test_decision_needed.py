@@ -26,7 +26,10 @@ from graph.decisions import (
     STATE_PENDING,
     DecisionClosed,
     DecisionError,
+    DecisionNotFound,
     DecisionStore,
+    is_spend_cap_decision,
+    is_unpaused_decision,
     normalize_options,
 )
 from graph.plugins import host
@@ -1001,3 +1004,151 @@ def test_reopening_an_answered_decision_clears_its_kind(store):
     again = store.get(rec.id)
     assert (again.state, again.answer, again.answer_kind) == (STATE_PENDING, None, None)
     assert store.answer(rec.id, "something else").answer_kind == "text"
+
+
+# --- #5678 slice 1: records with no pause, requires_pick, reminded_at, delivered_at ---
+
+
+def test_new_fields_default_off_and_setters_stamp_once(store):
+    rec = store.create("s-ledger", "Ship?", ["yes", "no"], thread_id="a2a:s-ledger")
+    assert (rec.requires_pick, rec.reminded_at, rec.delivered_at) == (False, None, None)
+    assert store.get(rec.id) == rec
+    body = rec.to_dict()
+    assert (body["requires_pick"], body["reminded_at"], body["delivered_at"]) == (False, None, None)
+
+    stamp = _fixed_clock().isoformat(timespec="seconds")
+    assert store.mark_reminded(rec.id).reminded_at == stamp
+    assert store.get(rec.id).delivered_at is None
+    assert store.mark_delivered(rec.id).delivered_at == stamp
+    for missing in ("dec-missing", ""):
+        with pytest.raises(DecisionNotFound):
+            store.mark_reminded(missing)
+        with pytest.raises(DecisionNotFound):
+            store.mark_delivered(missing)
+
+
+def test_a_second_stamp_keeps_the_first_time():
+    now = [_fixed_clock()]
+    s = DecisionStore(":memory:", clock=lambda: now[0])
+    rec = s.create("s-ledger", "Ship?", ["yes", "no"], thread_id="a2a:s-ledger")
+    first = s.mark_reminded(rec.id).reminded_at
+    s.mark_delivered(rec.id)
+    now[0] = datetime(2026, 11, 9, 12, 0, 0, tzinfo=UTC)
+    assert s.mark_reminded(rec.id).reminded_at == first
+    assert s.mark_delivered(rec.id).delivered_at == first
+
+
+def test_stamps_do_not_change_state_or_publish(store, monkeypatch):
+    rec = store.create("s-ledger", "Ship?", ["yes", "no"], thread_id="a2a:s-ledger", requires_pick=True)
+    events = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    store.mark_reminded(rec.id)
+    store.mark_delivered(rec.id)
+    assert events == []
+    assert store.get(rec.id).state == STATE_PENDING
+    answered = store.answer(rec.id, "yes", answer_kind="option")
+    assert (answered.requires_pick, answered.reminded_at is not None, answered.delivered_at is not None) == (
+        True, True, True,
+    )
+
+
+@pytest.mark.platform_sensitive
+def test_new_fields_survive_a_store_reopen(tmp_path):
+    path = tmp_path / "decisions.db"
+    first = DecisionStore(path, clock=_fixed_clock)
+    rec = first.create("s-ledger", "Ship?", ["yes", "no"], thread_id="a2a:s-ledger", requires_pick=True)
+    plain = first.create("s-ledger", "Tag it?", ["yes", "no"], thread_id="a2a:s-ledger")
+    first.mark_reminded(rec.id)
+    first.answer(rec.id, "yes", answer_kind="option")
+    first.mark_delivered(rec.id)
+
+    reopened = DecisionStore(path, clock=_fixed_clock)
+    stamp = _fixed_clock().isoformat(timespec="seconds")
+    again = reopened.get(rec.id)
+    assert (again.requires_pick, again.reminded_at, again.delivered_at) == (True, stamp, stamp)
+    assert (again.thread_id, again.interrupt_id, again.state) == ("a2a:s-ledger", "", STATE_ANSWERED)
+    untouched = reopened.get(plain.id)
+    assert (untouched.requires_pick, untouched.reminded_at, untouched.delivered_at) == (False, None, None)
+    assert {r.id for r in reopened.list(session_id="s-ledger")} == {rec.id, plain.id}
+
+
+@pytest.mark.platform_sensitive
+def test_database_without_the_ledger_columns_gains_them_on_open(tmp_path):
+    path = tmp_path / "decisions.db"
+    DecisionStore(path, clock=_fixed_clock)
+    new = ("requires_pick", "reminded_at", "delivered_at")
+    db = sqlite3.connect(path)
+    for column in new:
+        db.execute(f"ALTER TABLE decisions DROP COLUMN {column}")
+    db.execute(
+        "INSERT INTO decisions (id, session_id, agent, question, options, created_at, state, thread_id, interrupt_id) "
+        "VALUES ('old-1', 's-old', 'engineer', 'Deploy?', '[]', '2026-11-01T00:00:00+00:00', 'pending', "
+        "'a2a:s-old', 'interrupt-1')"
+    )
+    db.commit()
+    assert not set(new) & {r[1] for r in db.execute("PRAGMA table_info(decisions)")}
+    db.close()
+
+    migrated = DecisionStore(path, clock=_fixed_clock)
+    db = sqlite3.connect(path)
+    assert set(new) <= {r[1] for r in db.execute("PRAGMA table_info(decisions)")}
+    db.close()
+    old = migrated.get("old-1")
+    assert (old.requires_pick, old.reminded_at, old.delivered_at) == (False, None, None)
+    assert (old.state, old.thread_id, old.interrupt_id) == (STATE_PENDING, "a2a:s-old", "interrupt-1")
+    assert migrated.for_interrupt("a2a:s-old", "interrupt-1") == old
+    assert migrated.mark_reminded("old-1").reminded_at is not None
+    fresh = migrated.create("s-old", "Again?", ["yes", "no"], thread_id="a2a:s-old", requires_pick=True)
+    # A second open is a no-op migration and keeps what was written.
+    again = DecisionStore(path, clock=_fixed_clock)
+    assert again.get(fresh.id).requires_pick is True
+    assert again.get("old-1").reminded_at is not None
+
+
+def test_records_with_no_pause_are_separate_and_not_another_kind(store):
+    first = store.create("s-free", "Ship?", ["yes", "no"], thread_id="a2a:s-free")
+    second = store.create("s-free", "Ship?", ["yes", "no"], thread_id="a2a:s-free")
+    assert first.id != second.id
+    assert is_unpaused_decision(first) and is_unpaused_decision(second)
+    assert not is_spend_cap_decision(first)
+
+    paused = store.create("s-free", "Tag?", ["yes", "no"], thread_id="a2a:s-free", interrupt_id="interrupt-1")
+    spend = store.create("s-cap", "Raise the cap?", ["yes"], interrupt_id="spend-cap:2026-11-08")
+    recovery = store.create("s-job", "Resume?", ["resume"], interrupt_id=RESTART_RECOVERY_PREFIX + '{"job_id":"j1"}')
+    assert [is_unpaused_decision(r) for r in (paused, spend, recovery)] == [False, False, False]
+    assert is_spend_cap_decision(spend)
+    assert store.spend_cap_decision("2026-11-08") == spend
+
+
+async def test_pending_record_with_no_pause_is_never_closed_as_stranded(store, decision_graph):
+    from graph.decision_reconcile import interrupt_parked, reconcile_pending_decisions
+
+    # Nothing is parked on this thread: the checkpoint is readable and holds no interrupt.
+    thread = "a2a:s-free"
+    config = {"configurable": {"thread_id": thread}}
+    free = store.create("s-free", "Ship?", ["yes", "no"], thread_id=thread)
+    paused = store.create("s-free", "Tag?", ["yes", "no"], thread_id=thread, interrupt_id="interrupt-gone")
+
+    assert await interrupt_parked(decision_graph, free) is None
+    assert await interrupt_parked(decision_graph, paused) is False
+
+    # The answer guard refuses the old resume path for it, and leaves the record open.
+    with pytest.raises(DecisionClosed):
+        await turn_control.validate_decision_resume(config, free.id)
+    with pytest.raises(DecisionClosed):
+        await turn_control.validate_decision_resume(config, free.id, "s-free")
+    assert store.get(free.id).state == STATE_PENDING
+
+    # Boot reconcile closes the record whose pause is gone, and only that one.
+    assert await reconcile_pending_decisions(store, decision_graph) == 1
+    assert store.get(paused.id).state == "withdrawn"
+    assert store.get(free.id).state == STATE_PENDING
+    assert await reconcile_pending_decisions(store, decision_graph) == 0
+
+    # A later turn on the same chat (it parks a pause of its own) changes nothing for it either.
+    await decision_graph.ainvoke({"messages": [], "session_id": "s-free"}, config)
+    assert await interrupt_parked(decision_graph, free) is None
+    assert await reconcile_pending_decisions(store, decision_graph) == 0
+    assert store.get(free.id).state == STATE_PENDING
+
+    assert store.answer(free.id, "yes", answer_kind="option").state == STATE_ANSWERED
