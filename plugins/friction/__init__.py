@@ -1105,6 +1105,10 @@ class FrictionMiddleware(AgentMiddleware):
 
 
 _EVAL_REGRESSION_PREFIX = "nightly gate regression: "
+# The nightly also records over-threshold interruption counts under the same
+# prefix (``interruptions:<source>:<kind>``, #5518). Those are not eval cases, so
+# the case-id triage tools below never treat them as one.
+_INTERRUPTION_REGRESSION_PREFIX = _EVAL_REGRESSION_PREFIX + "interruptions:"
 EVAL_CASE_EDIT_GUARDRAIL = (
     "Never reword a case's prompt to name the expected tool. Never tell the agent to "
     "delegate or not to use tools. Never loosen an assertion just to get a pass. "
@@ -1125,6 +1129,8 @@ async def eval_regression_entries() -> str:
     for rec in read_entries():
         summary = str(rec.get("summary", ""))
         if rec.get("source") != "plugin:evals-nightly" or not summary.startswith(_EVAL_REGRESSION_PREFIX):
+            continue
+        if summary.startswith(_INTERRUPTION_REGRESSION_PREFIX):
             continue
         rid = entry_id(str(rec.get("kind", "")), summary)
         # Nightly repeats are one friction row. Keep the newest occurrence's
@@ -1159,6 +1165,8 @@ async def eval_regression_trace(trace_id: str) -> str:
 
 def _regression_model(case_id: str) -> str:
     """Recover the tested model from the latest open regression's nightly report."""
+    if (_EVAL_REGRESSION_PREFIX + case_id).startswith(_INTERRUPTION_REGRESSION_PREFIX):
+        raise ValueError("No open nightly regression for this case")
     entries = [r for r in read_entries()
                if r.get("source") == "plugin:evals-nightly"
                and r.get("summary") == _EVAL_REGRESSION_PREFIX + case_id]
