@@ -633,7 +633,8 @@ async def test_no_pause_expiry_applies_default_as_a_turn_and_no_default_starts_n
     resume.assert_not_called()  # nothing is parked, so nothing is resumed
     applied = store.get(with_default.id)
     assert (applied.state, applied.answer) == ("expired", "hold")
-    assert applied.delivered_at
+    # A queued HTTP response is not consumption: only the accepting driver stamps it.
+    assert applied.delivered_at is None
     assert len(wire) == 1
     message = wire[0]["message"]
     assert message["contextId"] == "s"

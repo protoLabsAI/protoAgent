@@ -1,0 +1,1 @@
+- **Completed turns carry decision cards.** No-pause decisions now include their durable identity and question payload in non-streaming replies and completed A2A answer artifacts without requiring input. Refs #5678.

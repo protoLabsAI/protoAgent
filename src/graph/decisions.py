@@ -442,7 +442,7 @@ class DecisionStore:
                     agent=(agent or "").strip(),
                     question=question,
                     options=opts,
-                    created_at=self._now(),
+                    created_at=self._clock().isoformat(),
                     state=STATE_PENDING,
                     expires_at=expires_at,
                     default_option=default_option,
@@ -527,6 +527,25 @@ class DecisionStore:
             finally:
                 self._close(db)
         return [Decision.from_row(r) for r in rows]
+
+    def pending_unpaused_since(self, thread_id: str, started_at: str) -> list[Decision]:
+        """Pending no-pause asks created on this thread during the locked graph pass.
+
+        Creation timestamps retain microseconds to distinguish turns in one second.
+        Query directly rather than the bounded inbox list.
+        """
+        if not thread_id:
+            return []
+        with self._reading():
+            db = self._connect()
+            try:
+                return [Decision.from_row(row) for row in db.execute(
+                    "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = '' "
+                    "AND state = ? AND created_at >= ? ORDER BY created_at, rowid",
+                    (thread_id, STATE_PENDING, started_at),
+                )]
+            finally:
+                self._close(db)
 
     def spend_cap_decision(self, day: str) -> Decision | None:
         """Pending instance pause (even across midnight), or today's durable approval."""
@@ -648,7 +667,7 @@ class DecisionStore:
         return self._stamp(decision_id, "delivered_at")
 
     def claim_delivery(self, decision_id: str) -> bool:
-        """Stamp ``delivered_at`` on an ANSWERED record only if nothing stamped it yet (#5678
+        """Stamp ``delivered_at`` on a saved answer/default only if nothing stamped it yet (#5678
         2c). Returns whether THIS call made the stamp: the chat driver calls it under the
         session lock before running a delivery turn, so two turns delivering the same saved
         answer can never both reach the agent."""
@@ -658,8 +677,9 @@ class DecisionStore:
             try:
                 db.execute("BEGIN IMMEDIATE")
                 claimed = db.execute(
-                    "UPDATE decisions SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL AND state = ?",
-                    (self._now(), decision_id, STATE_ANSWERED),
+                    "UPDATE decisions SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL "
+                    "AND (state = ? OR (state = ? AND answer IS NOT NULL))",
+                    (self._now(), decision_id, STATE_ANSWERED, STATE_EXPIRED),
                 ).rowcount == 1
                 db.commit()
             except BaseException:
@@ -781,6 +801,21 @@ def decision_store() -> DecisionStore:
 
     store = getattr(STATE, "decision_store", None)
     return store if store is not None else DecisionStore()
+
+
+def turn_decision_payloads(thread_id: str, started_at: str) -> list[dict]:
+    """Best-effort completed-turn cards, using the same payload as decision pauses."""
+    try:
+        return [
+            {"kind": "decision", "decision_id": rec.id, "question": rec.question,
+             "options": rec.options, "context": rec.context,
+             "default_option": rec.default_option, "default_action": rec.default_action,
+             "expires_at": rec.expires_at, "requires_pick": rec.requires_pick}
+            for rec in decision_store().pending_unpaused_since(thread_id, started_at)
+        ]
+    except Exception:  # noqa: BLE001 — a ledger read must not fail a finished turn
+        log.warning("Could not read completed-turn decisions for %s", thread_id, exc_info=True)
+        return []
 
 
 def push_eligible(notice_id: str) -> bool:

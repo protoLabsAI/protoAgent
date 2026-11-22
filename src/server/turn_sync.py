@@ -32,7 +32,11 @@ re-export is a copy of the binding, so a ``setattr`` there intercepts nothing
 import contextlib
 import importlib
 import logging
+from datetime import UTC, datetime
+
 from typing import Any
+
+from graph.decisions import turn_decision_payloads
 
 from graph.middleware.redaction import redact as _redact
 from graph.middleware.wait_yield import schedule_turn_reply, wait_turn_reply
@@ -128,7 +132,9 @@ async def _native_turn(
     operator surfaces (``local`` / ``api-chat`` / ``v1`` / ``plugin``) stay attended.
 
     Decision pauses also include the full ``hitl`` payload beside the reply text,
-    with ``decision_id`` only when the ledger write succeeds.
+    with ``decision_id`` only when the ledger write succeeds. Completed no-pause asks
+    carry ``decision_id`` and ``hitl`` on the reply; multiple asks additionally carry
+    all payloads in ``decisions``, preserving the single assistant reply contract.
 
     ``telemetry_sink`` is the wrapper's telemetry sink: a turn that ends parked at a HITL
     ask (or held behind one) stamps ``state = "input_required"`` on it, so its row says
@@ -167,7 +173,9 @@ async def _native_turn(
     # unlocked graph turn here could lost-update a concurrent one (e.g. the
     # desktop /api/chat fallback racing a console /compact on the same tab).
     auto = _goal_loop.UnattendedPolicy(_goal_loop.is_autonomous_turn(turn_metadata, goal_active=goal_active))
+    decisions = []
     async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
+        started_at = datetime.now(UTC).isoformat()
         # HITL hold (#1560) — same contract as the streaming path: while the
         # thread is parked at a form/question/approval interrupt, hold a fresh
         # operator message (it folds in right after the form response) and echo
@@ -254,6 +262,7 @@ async def _native_turn(
         if auto.autonomous and not _turn_control.is_decision_interrupt(interrupt_val):
             interrupt_val = None
         interrupt_val = await _turn_control.decision_pause_payload(session_id, interrupt_val, config)
+        decisions.extend(turn_decision_payloads(config["configurable"]["thread_id"], started_at))
     raw = _last_ai(result)
     response = extract_output(raw)
 
@@ -291,6 +300,8 @@ async def _native_turn(
     if not response:
         last_tool_out = _chat()._last_tool_text(result)
         response = wait_turn_reply(last_tool_out) or schedule_turn_reply(last_tool_out) or last_tool_out
+    if not response and decisions:
+        response = decisions[0]["question"]
     if not response:
         no_reply = response = (
             "**Error:** the turn produced no reply — it may have stalled or been "
@@ -329,6 +340,7 @@ async def _native_turn(
             # thread directly; fresh-context ones still exclude compact/rewind/
             # streaming turns keyed on the base id.
             async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
+                started_at = datetime.now(UTC).isoformat()
                 with goal_turn() as step.goal_pass, auto.scope():
                     result = await STATE.graph.ainvoke(
                         {
@@ -351,6 +363,7 @@ async def _native_turn(
                     if auto.autonomous and not _turn_control.is_decision_interrupt(interrupt_val):
                         interrupt_val = None
                     interrupt_val = await _turn_control.decision_pause_payload(session_id, interrupt_val, cont_config)
+                    decisions.extend(turn_decision_payloads(cont_config["configurable"]["thread_id"], started_at))
             step.text = extract_output(_last_ai(result))
             if interrupt_val is not None:
                 _parked()
@@ -373,6 +386,10 @@ async def _native_turn(
         reply["error"] = _chat().turn_error(
             None, "the turn produced no reply — it may have stalled or been interrupted; retry it"
         )
+    if decisions:
+        reply.update(decision_id=decisions[0]["decision_id"], hitl=decisions[0])
+        if len(decisions) > 1:
+            reply["decisions"] = decisions
     return [reply]
 
 

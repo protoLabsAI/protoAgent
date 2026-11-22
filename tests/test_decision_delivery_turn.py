@@ -9,7 +9,7 @@ refused before any graph input. A record that names a pause still goes through
 """
 
 import importlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, TypedDict
 
 import pytest
@@ -105,7 +105,7 @@ async def test_delivery_turn_runs_on_the_records_thread_with_the_ledger_answer(r
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["pending", "delivered", "other_session", "withdrawn"])
+@pytest.mark.parametrize("case", ["pending", "delivered", "other_session", "withdrawn", "expired_without_default"])
 async def test_delivery_turn_is_refused_and_starts_no_turn(rig, case):
     store, graph, seen = rig
     if case == "pending":
@@ -115,6 +115,11 @@ async def test_delivery_turn_is_refused_and_starts_no_turn(rig, case):
         rec = store.cancel(rec.id)
     elif case == "other_session":
         rec = _answered(store, session="someone-else", thread="someone-else:thread")
+    elif case == "expired_without_default":
+        rec = store.create(SESSION, "Release now?", OPTIONS, thread_id=SCOPED_THREAD, expires_in_minutes=1)
+        now = store._clock() + timedelta(minutes=1)
+        store._clock = lambda: now
+        rec = store.expire(rec.id)
     else:
         rec = _answered(store)
         rec = store.mark_delivered(rec.id)
@@ -127,12 +132,26 @@ async def test_delivery_turn_is_refused_and_starts_no_turn(rig, case):
 
 
 @pytest.mark.asyncio
-async def test_a_second_delivery_turn_for_the_same_answer_is_refused(rig):
+@pytest.mark.parametrize("expired", [False, True])
+async def test_a_second_delivery_turn_for_the_same_answer_is_refused(rig, expired):
     store, _graph, seen = rig
-    rec = _answered(store)
+    if expired:
+        rec = store.create(SESSION, "Release now?", OPTIONS, thread_id=SCOPED_THREAD,
+                           expires_in_minutes=1, default_option="hold")
+        now = store._clock() + timedelta(minutes=1)
+        store._clock = lambda: now
+        rec = store.expire(rec.id)
+        expected = ("Your decision expired with no answer from the operator, so its stated default applies.\n"
+                    "Question: Release now?\nDefault: Keep holding (hold)")
+    else:
+        rec = _answered(store)
+        expected = LEDGER_TEXT
     assert "error" not in [kind for kind, _ in await _drive("first", {"decision_id": rec.id})]
+    stamp = store.get(rec.id).delivered_at
+    assert stamp
     assert [kind for kind, _ in await _drive("again", {"decision_id": rec.id})][-1] == "error"
-    assert seen == [(SCOPED_THREAD, LEDGER_TEXT)]
+    assert seen == [(SCOPED_THREAD, expected)]
+    assert store.get(rec.id).delivered_at == stamp
 
 
 def test_claim_delivery_is_a_single_winner_and_needs_an_answer():
