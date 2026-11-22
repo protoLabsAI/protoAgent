@@ -418,6 +418,16 @@ export function useConversationRow(contextId: string): ConversationRow | null {
   return useMemo(() => s.rows.find((r) => r.session_id === contextId) ?? null, [s.rows, contextId]);
 }
 
+/** Is this session one a PEER started — a row listed under From others? Read live (not through
+ *  a hook) for the code that must decide at the moment it acts: a steer into such a thread is
+ *  always sent private (#5400), and the closure sending it may be older than the newest rows.
+ *  Only as good as what is loaded: a thread the list has not hydrated, or one paged out of it,
+ *  reads false — the server still takes the private path for it on its own, and the steer
+ *  callers recognise its refusal by the server's fixed detail (`privateSteerRefusal`). */
+export function isFromOthers(sessionId: string | null | undefined): boolean {
+  return Boolean(sessionId) && indexOf(sessionId as string) !== -1;
+}
+
 export function subscribeForTest(l: () => void) {
   return subscribe(l);
 }

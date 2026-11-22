@@ -435,11 +435,20 @@ def interruption_regressions(section: dict | None) -> list[dict]:
     return rows
 
 
-def interruption_recoveries(prev: dict | None, section: dict | None) -> list[dict]:
-    """Counts over threshold in the previous nightly and measured back under it now."""
-    if not prev or not section:
+def interruption_recoveries(previous_reports: list[dict], section: dict | None) -> list[dict]:
+    """Counts over in the last measured nightly and measured back under now.
+
+    A failed store read contributes no observation, so skip those reports instead
+    of losing the outstanding regression when measurements resume.
+    """
+    if not section:
         return []
-    before = (prev.get("interruptions") or {}).get("over") or []
+    previous = next(
+        (report["interruptions"] for report in reversed(previous_reports)
+         if report.get("interruptions") is not None),
+        {},
+    )
+    before = previous.get("over") or []
     now = set(section.get("over") or [])
     return [{"id": rid} for rid in before if rid not in now]
 
@@ -769,7 +778,7 @@ def main(argv: list[str] | None = None) -> int:
     over_threshold: list[dict] = []
     if interruptions is not None:
         print(format_interruptions(interruptions))
-        resolve_recoveries(interruption_recoveries(prev, interruptions), report_path)
+        resolve_recoveries(interruption_recoveries(nightlies[:-1], interruptions), report_path)
         over_threshold = interruption_regressions(interruptions)
         if over_threshold:
             recorded = record_regressions(over_threshold, report_path)

@@ -928,7 +928,10 @@ def test_threshold_is_exceeded_only_above_the_limit(interruption_counts, n, over
     assert [r["id"] for r in nightly.interruption_regressions(section)] == over
 
 
-def test_over_threshold_records_once_dedups_and_resolves(tmp_path, monkeypatch, interruption_counts):
+@pytest.mark.parametrize("failed_read_nights", [0, 1, 2])
+def test_over_threshold_records_once_dedups_and_resolves(
+    tmp_path, monkeypatch, interruption_counts, failed_read_nights,
+):
     from plugins.friction import grouped_entries
 
     ledger = tmp_path / "friction.jsonl"
@@ -954,7 +957,20 @@ def test_over_threshold_records_once_dedups_and_resolves(tmp_path, monkeypatch, 
     assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 1
     assert [(r["summary"], r["count"]) for r in rows()] == [(summary, 2)]
 
-    # Night 3, back under: resolved, nothing new written.
+    # Missing measurements must neither resolve nor forget the open entry (#5518).
+    def broken_read(window_end):
+        raise OSError("store unavailable")
+
+    for offset in range(failed_read_nights):
+        with monkeypatch.context() as missing:
+            missing.setattr(nightly, "_read_interruptions", broken_read)
+            missing.setattr(nightly.time, "time", lambda: 201 + offset)
+            assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 0
+        report = json.loads((tmp_path / f"run-nightly-{201 + offset}.json").read_text())
+        assert "interruptions" not in report
+        assert [(r["summary"], r["count"]) for r in grouped_entries()] == [(summary, 2)]
+
+    # Next measured night, back under: resolved, nothing new written.
     interruption_counts["counts"] = _counts(watch_needs=1)
     monkeypatch.setattr(nightly.time, "time", lambda: 300)
     assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 0

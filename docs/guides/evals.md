@@ -274,6 +274,8 @@ fails the night (exit 1) even on a baseline run with no previous nightly, becaus
 compared with its limit, not with last night. It does not trigger the eval-case rerun
 or the regression triage job, which work on eval case ids. If the stores can't be read
 the night prints a warning, writes no `interruptions` key and gates nothing on them.
+Recovery compares with the most recent nightly that measured interruptions, so
+failed-read nights leave entries open until a later measurement is back under its limit.
 
 Change a limit with the repeatable `--interruption-threshold [SOURCE:]KIND=LIMIT`
 flag. Leave out `SOURCE` to set the limit for every source; `off` stops gating that count:

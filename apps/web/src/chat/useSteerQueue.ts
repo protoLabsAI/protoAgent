@@ -6,7 +6,9 @@ import type { ChatImagePart, SteerTurnSettings } from "../lib/api/chat";
 import { errMsg } from "../lib/format";
 import type { ChatMessage, ConsumedSteer, HitlPayload, QueuedSteer } from "../lib/types";
 import { chatStore, effectiveReasoningEffort, type SessionStatus } from "./chat-store";
+import { isFromOthers } from "./conversations-store";
 import { messageId } from "./messageId";
+import { PRIVATE_STEER_TEXT_ONLY, privateSteerRefusal } from "./privateSteer";
 import { loadSteers, saveSteers } from "./scratchState";
 import { settleAnsweredPause } from "./reattach";
 import { liveMessageId } from "./server-turn-store";
@@ -178,6 +180,16 @@ export function useSteerQueue({
     // send, as on the server. Only a true mid-turn steer carries the tray's images (#4645).
     const images = hitlRef.current ? [] : (trayImages?.() ?? []);
     if (!session || (!text && !images.length)) return;
+    // A conversation a peer started (From others) is always steered PRIVATE (#5400) — no
+    // toggle, the operator's words must not land in the thread the peer reads. Read live:
+    // the rows may have arrived after this render.
+    const isPrivate = isFromOthers(session.id);
+    if (isPrivate && images.length) {
+      // Private is text only, and the server refuses rather than drop the images. Say so
+      // before anything is sent: the draft and the tray are left exactly as they are.
+      onError(PRIVATE_STEER_TEXT_ONLY);
+      return;
+    }
     if (text) recordSubmitted(text); // steered messages join the same recall ring
     const id = messageId();
     setDraft("");
@@ -185,18 +197,32 @@ export function useSteerQueue({
     try {
       // Text-only steers carry incognito too: a steer that STARTS a turn (below) must
       // pass the thread's no-memory-trail promise to that fresh turn — and the tab's
-      // model/effort/bypass ride every steer for the same reason.
-      const res = await api.steerChat(
-        session.id,
-        id,
-        text,
-        images.length ? images : undefined,
-        session.incognito ? true : undefined,
-        sendSettings(),
-      );
+      // model/effort/bypass ride every steer for the same reason. A private steer carries
+      // neither images nor incognito (the server refuses both on that path).
+      const res = isPrivate
+        ? await api.steerChat(session.id, id, text, undefined, undefined, sendSettings(), true)
+        : await api.steerChat(
+            session.id,
+            id,
+            text,
+            images.length ? images : undefined,
+            session.incognito ? true : undefined,
+            sendSettings(),
+          );
       if (images.length) clearTrayImages?.();
       if (res.started_turn) attachStartedTurn([{ id, text }], res.started_turn);
     } catch (e) {
+      // The server refused a private steer (409 / 400 / 403): one plain sentence, and the
+      // words go back to the composer — never the raw detail, never lost. That includes a
+      // steer the console sent ordinary into a peer thread it has not loaded (outside the
+      // Conversations window): the server took the private path on its own, and its fixed
+      // refusal detail names it. Text only is handed back; the tray is only cleared on
+      // success, so any images stay there.
+      const refusal = privateSteerRefusal(e, isPrivate);
+      if (refusal) {
+        handBackQueued([{ id, text }], refusal);
+        return;
+      }
       setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
       onError(`Couldn't queue message: ${errMsg(e)}`);
     }
@@ -617,6 +643,8 @@ export function useSteerQueue({
     if (!session) return;
     const lost = "Your message couldn't be handed to the running turn — its text is in the composer.";
     for (const item of items) {
+      // Keep the request's privacy choice if the list refreshes while the POST is pending.
+      const isPrivate = !serverTaskId && isFromOthers(session.id);
       try {
         // An attended server turn takes it through its control task (the same guarded path
         // Enter uses); this browser's own stream takes it as an ordinary steer.
@@ -627,7 +655,10 @@ export function useSteerQueue({
             continue;
           }
         } else {
-          const res = await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings());
+          // A conversation a peer started is steered private here too (#5400).
+          const res = isPrivate
+            ? await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings(), true)
+            : await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings());
           if (res.started_turn) {
             // The turn ended between the liveness check above and this POST, so the
             // server ran the message as a fresh turn instead of queueing it: attach.
@@ -640,8 +671,11 @@ export function useSteerQueue({
             q.id === item.id ? { id: q.id, text: q.text, ...(serverTaskId ? { serverTaskId } : {}) } : q,
           ),
         );
-      } catch {
-        handBackQueued([item], lost);
+      } catch (e) {
+        // A refused private steer names its reason in a plain sentence; anything else keeps
+        // the generic hand-back line. Either way the text returns to the composer.
+        const refusal = privateSteerRefusal(e, isPrivate);
+        handBackQueued([item], refusal ?? lost);
       }
     }
   }
