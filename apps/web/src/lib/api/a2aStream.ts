@@ -748,6 +748,9 @@ function replayTaskSnapshot(
     }
   }
   for (const artifact of arts) {
+    // Non-pausing decisions ride the finished answer, not an input-required status.
+    const decision = hitlFromParts(artifact.parts);
+    if (decision?.kind === "decision") handlers.onHitlPayload?.(decision);
     const usage = costFromMeta(artifact.metadata);
     if (usage) handlers.onCost?.(usage);
     const context = contextFromParts(artifact.parts);
@@ -842,6 +845,8 @@ export function makeA2ADispatcher(
     if (artifactUpdate) {
       nameTask(artifactUpdate.taskId);
       const aParts = artifactUpdate.artifact?.parts;
+      const decision = hitlFromParts(aParts);
+      if (decision?.kind === "decision") handlers.onHitlPayload?.(decision);
       const text = textFromParts(aParts);
       if (text) handlers.onText?.(text, artifactAppends(artifactUpdate));
       // The terminal answer artifact carries cost-v1 in its URI-keyed METADATA and

@@ -264,10 +264,9 @@ export function DecisionCard({
         // 202: accepted, but the agent hasn't taken it yet (its session is busy). Not sent,
         // not failed — watch for it to land (#5099).
         setPhase({ kind: "checking", optionId, note: "onItsWay", attempt: 0 });
-      } else if (!outcome.resumed) {
-        // 200 but the parked turn was NOT resumed: the server confirmed delivery failed and
-        // the decision is still pending (operator_api/decision_routes.py). Never claim
-        // success; keep the options enabled to retry (§4.4).
+      } else if (!outcome.resumed && outcome.decision.state !== "answered") {
+        // A no-pause decision can be durably answered without resuming a parked turn.
+        // Otherwise, failed delivery leaves it pending: keep retry available (§4.4).
         setPhase({ kind: "error", optionId });
       } else {
         setPhase({ kind: "sent", label: optionLabel(optionId) });

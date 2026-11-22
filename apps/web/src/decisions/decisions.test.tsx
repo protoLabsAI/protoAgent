@@ -7,6 +7,11 @@ import { DecisionsPanel, DecisionsSheet } from "./DecisionsPanel";
 import { createDecisionsStore, useDecision, type DecisionLookup } from "./useDecisions";
 import { decisionsApi, type DecisionRow } from "../lib/api/decisions";
 import { ApiError } from "../lib/api/http";
+import { ChatMessageView } from "../chat/ChatMessageView";
+import { messagesFromDurableTurn } from "../chat/sessionHydration";
+import { applyDecisionIdentity } from "../chat/turnReducers";
+import { makeA2ADispatcher } from "../lib/api/a2aStream";
+import type { ChatMessage } from "../lib/types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,6 +37,7 @@ vi.mock("../lib/events", () => ({
   },
 }));
 vi.mock("../lib/notify", () => ({ notifyIfHidden: mocks.notify }));
+vi.mock("../chat/LazyMarkdown", () => ({ Markdown: ({ children }: { children: string }) => <p>{children}</p> }));
 
 /** Fire one bus topic's listeners by hand (the store is driven, not transported). */
 const emit = (topic: string, data: Record<string, unknown> = {}) =>
@@ -119,6 +125,66 @@ function mountStore() {
   cleanup.push(store.subscribe(() => {}));
   return store;
 }
+
+describe("ledger-backed decision transcript", () => {
+  it.each(["finished replay", "finished live", "parked"] as const)(
+    "%s renders the ledger card and answers through the existing route",
+    async (path) => {
+      const id = `ledger-${path}`;
+      let row = decision(id, { interrupt_id: path === "parked" ? "i1" : "" });
+      const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const route = String(url);
+        if (route.endsWith(`/api/decisions/${encodeURIComponent(id)}/answer`)) {
+          row = { ...row, state: "answered", answer: "merge", answer_label: "Merge with the WARN", answer_kind: "option" };
+          return new Response(JSON.stringify({ decision: row, resumed: path === "parked" }));
+        }
+        if (route.includes("/api/decisions?")) return new Response(JSON.stringify(listOf([])));
+        if (route.endsWith(`/api/decisions/${encodeURIComponent(id)}`)) return new Response(JSON.stringify(row));
+        throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${route}`);
+      });
+      vi.stubGlobal("fetch", fetch);
+      const parts = [{ data: { kind: "decision", decision_id: id, question: "Stale wire question" },
+        metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" } }];
+      let message: ChatMessage;
+      const onInputRequired = vi.fn();
+      if (path === "finished replay") {
+        message = messagesFromDurableTurn({
+          task_id: "finished", state: "completed", last_updated: null, text: "Done.",
+          status: { state: "completed" }, history: [], artifacts: [{ parts }],
+        }).find((m) => m.role === "assistant")!;
+      } else {
+        message = { role: "assistant", content: "Done.", status: "done" };
+        const dispatch = makeA2ADispatcher("s1", {
+          onHitlPayload: (payload) => { message = applyDecisionIdentity(message, payload); },
+          onInputRequired,
+        });
+        if (path === "parked") {
+          dispatch({ result: { statusUpdate: { taskId: "parked", status: {
+            state: "input-required", message: { parts },
+          } } } });
+          message = { ...message, status: "streaming", paused: true };
+        } else {
+          dispatch({ result: { artifactUpdate: { taskId: "finished", artifact: { parts } } } });
+        }
+        expect(onInputRequired).toHaveBeenCalledTimes(path === "parked" ? 1 : 0);
+      }
+      expect(message.decisionId).toBe(id);
+      await renderNode(<ChatMessageView message={message} />);
+      expect(document.body.textContent).toContain("Merge the release?");
+      expect(document.body.textContent).not.toContain("Stale wire question");
+      await click("Merge with the WARN");
+      const answer = fetch.mock.calls.find(([url]) => String(url).endsWith("/answer"));
+      expect(answer?.[1]?.method).toBe("POST");
+      expect(JSON.parse(answer?.[1]?.body as string)).toEqual({ option_id: "merge", surface: "console" });
+      expect(document.body.textContent).toContain('Sent: "Merge with the WARN"');
+      expect(document.body.textContent).not.toContain("Couldn't send your answer");
+      // A fresh mount reads the settled record from the same cache.
+      await renderNode(null);
+      await renderNode(<ChatMessageView message={message} />);
+      expect(document.body.textContent).toContain('You chose "Merge with the WARN"');
+    },
+  );
+});
 
 // ── useDecisions store ────────────────────────────────────────────────────────────────────
 describe("useDecisions store", () => {
