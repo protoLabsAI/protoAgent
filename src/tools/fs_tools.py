@@ -811,6 +811,9 @@ def open_in_host_editor(
     return target
 
 
+_warned_missing_projects: set[tuple[str, str]] = set()
+
+
 def _registry_from_config(config, *, create: bool = True, quiet: bool = False) -> ProjectRegistry:
     projects: list[Project] = []
     missing: dict[str, Path] = {}
@@ -831,7 +834,9 @@ def _registry_from_config(config, *, create: bool = True, quiet: bool = False) -
             # Skipped from the fence, NOT forgotten (#3643): the other projects keep
             # working, a call into this one says its folder is missing, and
             # ``_RegistryRef`` re-admits it the moment the folder is back.
-            if not quiet:
+            warning_key = (name, str(root))
+            if not quiet and warning_key not in _warned_missing_projects:
+                _warned_missing_projects.add(warning_key)
                 log.warning(
                     "[fs] project %r folder is missing: %s — its files are unavailable until it's back "
                     "(other projects unaffected)",
@@ -861,19 +866,30 @@ def missing_projects_warning(config) -> str | None:
     registry): the default workspace is created by the tools' own build, so a fresh
     install that hasn't built yet isn't "missing" anything. Read-only and quiet — it's
     polled, so it never mkdirs and never re-logs the build's skip warnings."""
-    if config is None or not bool(getattr(config, "filesystem_enabled", False)):
-        return None
-    if not (getattr(config, "filesystem_projects", None) or getattr(config, "projects", None)):
-        return None
-    missing = _registry_from_config(config, create=False, quiet=True).missing()
+    missing = missing_projects(config)
     if not missing:
         return None
-    listed = ", ".join(f"{name} ({root})" for name, root in missing.items())
+    listed = ", ".join(f"{entry['name']} ({entry['path']})" for entry in missing)
     one = len(missing) == 1
     return (
         f"Work {'folder is' if one else 'folders are'} missing: {listed}. The agent's file tools can't "
         f"reach {'it' if one else 'them'} until restored; other projects are unaffected."
     )
+
+
+def missing_projects(config) -> list[dict[str, str]]:
+    """Live, quiet structured counterpart of ``missing_projects_warning``."""
+    if config is None or not bool(getattr(config, "filesystem_enabled", False)):
+        return []
+    if not (getattr(config, "filesystem_projects", None) or getattr(config, "projects", None)):
+        return []
+    missing = _registry_from_config(config, create=False, quiet=True).missing()
+    implicit = getattr(config, "filesystem_workspace_is_implicit", False)
+    return [
+        {"name": name, "path": str(root)}
+        for name, root in missing.items()
+        if not (implicit and name == "workspace")
+    ]
 
 
 def project_roots(config) -> dict[str, str]:

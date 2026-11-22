@@ -134,9 +134,12 @@ async def _operator_runtime_status():
     # missing" and the other projects keep working, but the operator should see it
     # without asking the agent. Live + self-clearing: stats each configured root per
     # poll, so it's off the loop, and it clears once the folder is back.
+    missing_folder_entries: list[dict] = []
+    missing_folders = None
     try:
-        from tools.fs_tools import missing_projects_warning
+        from tools.fs_tools import missing_projects, missing_projects_warning
 
+        missing_folder_entries = await asyncio.to_thread(missing_projects, config)
         missing_folders = await asyncio.to_thread(missing_projects_warning, config)
         if missing_folders:
             warnings.append(missing_folders)
@@ -213,6 +216,8 @@ async def _operator_runtime_status():
     )
     # Structured setup-gap projection (bd-ai7x) — additive; `warnings[]` above is
     # untouched. Present in both the pre-setup (config is None) and full status shapes.
+    status["missing_folders"] = missing_folder_entries
+    status["missing_folders_warning"] = missing_folders
     status["setup_gaps"] = structured_gaps
     return status
 
@@ -1328,3 +1333,87 @@ def _operator_chat_commands() -> dict:
     )
     commands.extend(resolve_slash_commands())
     return {"commands": commands}
+
+
+async def _operator_missing_folder_action(body: dict):
+    """Repair one work-folder entry through the host's serialized config writer."""
+    import asyncio
+    from pathlib import Path
+
+    from fastapi import HTTPException
+
+    from graph.plugins.host import HOST
+
+    name, raw_path = body.get("name"), body.get("path")
+    action = body.get("action")
+    if not isinstance(name, str) or not isinstance(raw_path, str) or not raw_path.strip():
+        raise HTTPException(400, "name and path are required")
+    if action not in ("remove", "relocate"):
+        raise HTTPException(400, "action must be remove or relocate")
+
+    def path_key(raw):
+        return os.path.normcase(str(Path(str(raw)).expanduser().resolve()))
+
+    old_path = path_key(raw_path)
+    new_path = None
+    if action == "relocate":
+        raw_new = body.get("new_path")
+        if not isinstance(raw_new, str) or not raw_new.strip():
+            raise HTTPException(400, "new_path is required")
+        candidate = Path(raw_new.strip()).expanduser()
+        if not candidate.is_absolute() or not candidate.is_dir():
+            raise HTTPException(400, "new path must be an absolute, existing folder")
+        new_path = str(candidate.resolve())
+
+    result = {"ok": True, "board_projects": []}
+
+    def updates(current):
+        explicit = list(getattr(current, "filesystem_projects", []) or [])
+        registry = list(getattr(current, "projects", []) or [])
+
+        def same_path(entry):
+            return isinstance(entry, dict) and entry.get("path") and path_key(entry["path"]) == old_path
+
+        def matches(entry):
+            return same_path(entry) and str(entry.get("name") or "").strip() == name
+
+        source = explicit or registry
+        if not any(matches(entry) for entry in source):
+            raise HTTPException(409, "Work folder changed or was removed; refresh and try again")
+        if new_path is not None and not Path(new_path).is_dir():
+            raise HTTPException(400, "new path no longer exists")
+        result["board_projects"] = [str(e.get("name") or "") for e in registry if same_path(e)]
+        if action == "remove":
+            # Keep board identity/path, but opt it out of the filesystem projection.
+            # Otherwise deleting the last explicit root resurrects it via the registry.
+            changed_registry = [{**e, "fs": False} if same_path(e) else e for e in registry]
+            patch = {"filesystem": {"projects": [e for e in explicit if not matches(e)]}}
+            if changed_registry != registry:
+                patch["projects"] = changed_registry
+            return patch
+        if explicit:
+            return {"filesystem": {"projects": [
+                {**e, "path": new_path} if matches(e) else e for e in explicit
+            ]}}
+        result["board_projects"] = [str(e.get("name") or "") for e in registry if same_path(e) and not matches(e)]
+        return {"projects": [{**e, "path": new_path} if matches(e) else e for e in registry]}
+
+    if HOST.apply_settings is None:
+        raise HTTPException(503, "Config writer is unavailable")
+    # The host converts callback exceptions to its (ok, messages) contract.
+    # Retain validation status codes even when a conflict is found under the lock.
+    validation_errors: list[HTTPException] = []
+
+    def under_lock(current):
+        try:
+            return updates(current)
+        except HTTPException as exc:
+            validation_errors.append(exc)
+            raise
+
+    ok, messages = await asyncio.to_thread(HOST.apply_settings, under_lock)
+    if validation_errors:
+        raise validation_errors[0]
+    if not ok:
+        raise HTTPException(500, "; ".join(messages) or "Config reload failed")
+    return result
