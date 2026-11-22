@@ -723,6 +723,34 @@ class DecisionStore:
         :class:`DecisionNotFound` for an unknown id. Returns the record as it now stands."""
         return self._stamp(decision_id, "reminded_at")
 
+    def claim_reminder(self, thread_id: str, created_before: str) -> Decision | None:
+        """Stamp ``reminded_at`` on this thread's oldest open no-pause decision asked before
+        ``created_before`` and never reminded, and return it (#5678 7b); None when there is
+        none. One atomic claim under the writers' lock, so two replies racing on the same
+        thread can never both carry the reminder for one decision. Pause-id decisions are
+        never claimed: their interrupt already holds the turn."""
+        if not thread_id:
+            return None
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = '' AND state = ? "
+                    "AND reminded_at IS NULL AND created_at < ? ORDER BY created_at, rowid LIMIT 1",
+                    (thread_id, STATE_PENDING, created_before),
+                ).fetchone()
+                if row is not None:
+                    db.execute("UPDATE decisions SET reminded_at = ? WHERE id = ?", (self._now(), row["id"]))
+                    row = db.execute("SELECT * FROM decisions WHERE id = ?", (row["id"],)).fetchone()
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+            finally:
+                self._close(db)
+        return Decision.from_row(row) if row is not None else None
+
     def mark_delivered(self, decision_id: str) -> Decision:
         """Stamp ``delivered_at``: the answer reached the agent as a new turn (#5678). The
         first stamp wins, so calling it again changes nothing. Raises

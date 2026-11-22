@@ -33,7 +33,7 @@ def _thread_id() -> str | None:
     return (get_config().get("configurable") or {}).get("thread_id")
 
 
-def _caller_is_operator() -> bool:
+def caller_is_operator() -> bool:
     """Whether the turn's server-verified caller is the human operator.
 
     Reads only the principal authentication bound (never request metadata). A turn with
@@ -103,7 +103,7 @@ class DecisionContextMiddleware(AgentMiddleware):
             records = decision_store().pending_unpaused(thread_id)
             if not records:
                 return None
-            return open_decision_note([rec.question for rec in records], operator=_caller_is_operator())
+            return open_decision_note([rec.question for rec in records], operator=caller_is_operator())
         except Exception:  # noqa: BLE001 — ledger availability must not fail a turn
             logger.warning("Could not read open decisions", exc_info=True)
             return None

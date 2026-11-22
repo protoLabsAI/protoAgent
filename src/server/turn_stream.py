@@ -1269,3 +1269,47 @@ async def _run_turn_stream(
     for payload in turn_decision_payloads(config["configurable"]["thread_id"], started_at):
         yield ("decision", payload)
     yield ("__raw__", st.accumulated_raw)
+
+
+# ── The once-per-decision reminder (#5678 7b) ──
+# Both drivers (the stream's ``_run_native_turn`` in server.chat, and server.turn_sync)
+# append it to the reply of the first operator turn that leaves an open no-pause decision
+# unanswered, then never again for that decision.
+DECISION_REMINDER = 'Still waiting on your decision: "{question}"'
+
+
+def decision_reminder(config: dict, started_at: str, *, request_metadata: dict | None,
+                      answering: bool, autonomous: bool) -> str:
+    """The reminder line for this turn's reply, or ``""``; a non-empty line is already
+    stamped as given (``reminded_at``), so the caller MUST append it.
+
+    Only for a decision asked BEFORE this turn started (never the asking turn), only when
+    this turn did not answer one (``answering``: a resume or an overflow/drop retry; a
+    ``decision_id`` delivery turn; a typed answer closes its decision, so it no longer
+    matches), and only for the verified human operator — never a peer agent, a federation
+    caller, the fleet service token or an unattended/autonomous turn, whose reply neither
+    carries the question nor stamps the record. Pause-id decisions are never matched. A
+    ledger failure drops the reminder rather than the turn."""
+    if answering or autonomous or (request_metadata or {}).get("decision_id"):
+        return ""
+    thread_id = ((config or {}).get("configurable") or {}).get("thread_id") or ""
+    try:
+        from graph.decisions import decision_store
+        from graph.middleware.decision_context import caller_is_operator
+
+        if not thread_id or not caller_is_operator():
+            return ""
+        rec = decision_store().claim_reminder(thread_id, started_at)
+    except Exception:  # noqa: BLE001 — a reminder must never fail the reply
+        log.warning("[decision] could not read or stamp the open-decision reminder", exc_info=True)
+        return ""
+    if rec is None:
+        return ""
+    return DECISION_REMINDER.format(question=" ".join(str(rec.question or "").split()))
+
+
+def with_decision_reminder(text: str, reminder: str) -> str:
+    """``text`` with the reminder line appended as its own final paragraph."""
+    if not reminder:
+        return text
+    return f"{text.rstrip()}\n\n{reminder}" if (text or "").strip() else reminder

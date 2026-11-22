@@ -176,6 +176,8 @@ async def _native_turn(
     decisions = []
     async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
         started_at = datetime.now(UTC).isoformat()
+        # A decision asked from here on is this turn's own, never one to remind of (#5678 7b).
+        turn_started_at = started_at
         if not overflow_retry and not hitl_resume:
             typed = await _turn_control.answer_typed_decision(config, turn_message, session_id, turn_metadata)
             if typed is not None:
@@ -390,6 +392,16 @@ async def _native_turn(
         reply["error"] = _chat().turn_error(
             None, "the turn produced no reply — it may have stalled or been interrupted; retry it"
         )
+    # The once-per-decision reminder (#5678 7b), as the streaming driver appends it: a first
+    # operator turn that leaves an open no-pause decision unanswered ends with one fixed line.
+    # Not on a failed (empty) turn, whose reply is an error.
+    if "error" not in reply:
+        reminder = _turn_stream.decision_reminder(
+            config, turn_started_at, request_metadata=turn_metadata,
+            answering=bool(hitl_resume or overflow_retry or hold is _turn_control._HITL_RESUME),
+            autonomous=auto.autonomous,
+        )
+        reply["content"] = _turn_stream.with_decision_reminder(reply["content"], reminder)
     if decisions:
         reply.update(decision_id=decisions[0]["decision_id"], hitl=decisions[0])
         if len(decisions) > 1:
