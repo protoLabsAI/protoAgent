@@ -1,0 +1,1 @@
+- **Decision cards hide chat replies when an option pick is required.** Hide “Reply in chat instead” for decisions with `requires_pick` set, preserving the control for all other decisions. Refs #5678.

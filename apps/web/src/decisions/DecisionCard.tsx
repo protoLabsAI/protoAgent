@@ -538,7 +538,7 @@ export function DecisionCard({
           )}
           {(answerable || !isTranscript) && (
             <div style={footerActions}>
-              {answerable && (
+              {answerable && !decision.requires_pick && (
                 <Button variant="ghost" size={optionSize} onClick={() => onReplyInChat?.(decision)}>
                   Reply in chat instead
                 </Button>
