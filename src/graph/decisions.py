@@ -640,6 +640,28 @@ class DecisionStore:
         :class:`DecisionNotFound` for an unknown id. Returns the record as it now stands."""
         return self._stamp(decision_id, "delivered_at")
 
+    def claim_delivery(self, decision_id: str) -> bool:
+        """Stamp ``delivered_at`` on an ANSWERED record only if nothing stamped it yet (#5678
+        2c). Returns whether THIS call made the stamp: the chat driver calls it under the
+        session lock before running a delivery turn, so two turns delivering the same saved
+        answer can never both reach the agent."""
+        decision_id = (decision_id or "").strip()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                claimed = db.execute(
+                    "UPDATE decisions SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL AND state = ?",
+                    (self._now(), decision_id, STATE_ANSWERED),
+                ).rowcount == 1
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+            finally:
+                self._close(db)
+        return claimed
+
     def _stamp(self, decision_id: str, column: str) -> Decision:
         """Set a nullable timestamp column once. ``column`` is a fixed name from the two
         setters above, never caller input. Not a state change, so nothing is published."""

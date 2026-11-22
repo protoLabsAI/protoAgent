@@ -944,6 +944,35 @@ async def validate_decision_resume(config: dict, decision_id: str, session_id: s
     return config
 
 
+async def claim_decision_delivery(config: dict, decision_id: str, session_id: str) -> tuple[dict, str] | None:
+    """Accept a turn that delivers a no-pause decision's saved answer (#5678 2c), under the lock.
+
+    ``None`` when the record is not a no-pause one (unknown, or it names a pause): the caller
+    sends it through :func:`validate_decision_resume` exactly as before. For a no-pause record
+    the turn is refused (:class:`DecisionClosed`, before any graph input) unless the record
+    belongs to this session, is answered, and was not delivered yet; the delivery is then
+    claimed atomically, so a duplicate turn can never feed the answer twice. Returns the config
+    on the record's thread and the message to run, which is built from the LEDGER — the
+    incoming message text is never trusted to carry the answer."""
+    from graph.decision_resume import decision_answer_message
+    from graph.decisions import DecisionClosed, decision_store, is_unpaused_decision
+
+    store = decision_store()
+    rec = store.get(decision_id)
+    if rec is None or not is_unpaused_decision(rec):
+        return None
+    if rec.session_id != session_id:
+        raise DecisionClosed("decision belongs to another session")
+    if rec.state != "answered":
+        raise DecisionClosed("decision has no saved answer to deliver")
+    if rec.delivered_at:
+        raise DecisionClosed("decision answer was already delivered")
+    message = decision_answer_message(decision_id, session_id)
+    if not store.claim_delivery(decision_id):
+        raise DecisionClosed("decision answer was already delivered")
+    return {**config, "configurable": {**config["configurable"], "thread_id": rec.thread_id}}, message
+
+
 @contextlib.asynccontextmanager
 async def decision_resume(config: dict, answer):
     """Close the exact ledger entry only once its checkpoint interrupt is consumed.

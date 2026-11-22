@@ -221,7 +221,7 @@ def decision_answer_message(decision_id: str, session_id: str) -> str:
 
 
 async def deliver_decision_answer(decision_id: str) -> ResumeOutcome:
-    """Start a new turn for a saved answer, stamping delivery only on acceptance.
+    """Start a new turn for a saved answer; its chat driver stamps delivery on acceptance.
 
     Decision metadata carries only its id. Receivers use ``decision_answer_message``
     instead of trusting message text. Failed delivery preserves the saved answer for
@@ -254,5 +254,8 @@ async def deliver_decision_answer(decision_id: str) -> ResumeOutcome:
     if not state:
         # No task came back, so nothing proves a turn was started: keep it undelivered.
         return ResumeOutcome.NOT_DELIVERED
-    await asyncio.to_thread(store.mark_delivered, decision_id)
+    # The accepted turn's driver stamps ``delivered_at`` itself, under the session lock,
+    # when it takes the answer (``server.turn_control.claim_decision_delivery``). Stamping
+    # here as well would race a turn still queued behind a busy session: the driver would
+    # find the answer "already delivered" and refuse the very turn that delivers it.
     return ResumeOutcome.DELIVERED

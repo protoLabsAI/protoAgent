@@ -2929,9 +2929,17 @@ async def _chat_langgraph_stream_impl(
                 if (decision_id := (request_metadata or {}).get("decision_id")) and (
                     _turn_control.caller_may_answer_decision()
                 ):
-                    config = await _turn_control.validate_decision_resume(config, decision_id, session_id)
-                    resolution = {**((request_metadata or {}).get("decision_resolution") or {}), "id": decision_id}
-                    config = {**config, "configurable": {**config["configurable"], "decision_resolution": resolution}}
+                    # A no-pause decision (#5678 2c) has no interrupt to resume: the answer
+                    # route saved its answer and started this turn to deliver it. It runs as an
+                    # ordinary new turn on the record's thread, carrying the LEDGER's answer.
+                    delivery = await _turn_control.claim_decision_delivery(config, decision_id, session_id)
+                    if delivery is not None:
+                        config, message = delivery
+                        resume = False
+                    else:
+                        config = await _turn_control.validate_decision_resume(config, decision_id, session_id)
+                        resolution = {**((request_metadata or {}).get("decision_resolution") or {}), "id": decision_id}
+                        config = {**config, "configurable": {**config["configurable"], "decision_resolution": resolution}}
                 if resume:
                     _pending_resume = await _pending_interrupt_value(config)
                     if _pending_resume is None:

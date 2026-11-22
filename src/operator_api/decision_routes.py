@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from a2a_impl.auth import is_human_operator, open_mode
 from graph.decision_resume import CANCELLED_RESUME as CANCELLED_RESUME
-from graph.decision_resume import deliver_decision_answer
+from graph.decision_resume import ResumeOutcome, deliver_decision_answer
 from graph.decision_resume import resume_parked_turn as _resume_parked_turn
 
 log = logging.getLogger("protoagent.decisions")
@@ -216,7 +216,8 @@ def register_decision_routes(app) -> None:
         still queued after :data:`ACCEPT_WAIT_S` (the session is busy) is 202
         ``delivering: true``; answering again meanwhile joins it rather than sending twice.
         No-pause decisions close before dispatch: failed delivery retains that answer for
-        next-turn recovery, and ``resumed`` reports transport acceptance via delivered_at."""
+        next-turn recovery, and ``resumed`` reports that a delivery turn was accepted (its
+        driver stamps delivered_at when it takes the answer)."""
         _require_human_operator(request)
         store = decision_store()
         rec = await asyncio.to_thread(store.get, decision_id)
@@ -243,6 +244,7 @@ def register_decision_routes(app) -> None:
                 raise HTTPException(status_code=409, detail=with_delivery(rec) if rec else None)
         mine = loop.create_future()
         inflight[decision_id] = mine
+        turn_accepted = False  # a no-pause answer's delivery turn was accepted (#5678 2c)
         # _resolve_answer rejects a blank option_id, so a non-None one here names an option.
         text = f"Operator chose: {rec.option_label(answer)} ({answer})" if body.option_id is not None else answer
         # Every accepted credential represents the operator, including a paired phone or
@@ -275,7 +277,8 @@ def register_decision_routes(app) -> None:
                     except DecisionClosed as exc:
                         current = await asyncio.to_thread(store.get, decision_id)
                         raise HTTPException(status_code=409, detail=with_delivery(current) if current else None) from exc
-                    await deliver_decision_answer(decision_id)
+                    nonlocal turn_accepted
+                    turn_accepted = await deliver_decision_answer(decision_id) is ResumeOutcome.DELIVERED
                     return
                 if recovery_ref is not None:
                     # ADR 0129 D7 S7: no parked interrupt — the answer performs
@@ -335,7 +338,9 @@ def register_decision_routes(app) -> None:
         # The checkpoint is authoritative even if the HTTP response was lost or timed out.
         resumed = updated.state == "answered"
         if is_unpaused_decision(rec):
-            resumed = bool(updated.delivered_at)
+            # The accepted turn's driver stamps ``delivered_at`` when it takes the answer,
+            # which can be after this reply while the session is busy.
+            resumed = bool(updated.delivered_at) or turn_accepted
         return {"decision": with_delivery(updated), "resumed": resumed}
 
     @app.post("/api/decisions/{decision_id}/cancel")

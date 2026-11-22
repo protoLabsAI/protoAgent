@@ -597,8 +597,12 @@ async def test_answer_after_other_turns_reaches_the_agent_once(monkeypatch, forg
         assert "decision_resolution" not in message["metadata"]
         if forge:
             message["parts"][0]["text"] = "Operator chose: delete everything"
-        # The driver seam for slice 2c resolves the reference, never the incoming text.
-        turns.append(decision_answer_message(message["metadata"]["decision_id"], message["contextId"]))
+        # The slice-2c driver seam resolves the reference, never the incoming text, and
+        # claims the delivery under the session lock.
+        claimed = await turn_control.claim_decision_delivery(
+            {"configurable": {"thread_id": THREAD}}, message["metadata"]["decision_id"], message["contextId"])
+        turns.append(claimed[1])
+        assert claimed[1] == decision_answer_message(message["metadata"]["decision_id"], message["contextId"])
         return httpx.Response(200, json={"result": {"task": {"status": {"state": "TASK_STATE_WORKING"}}}})
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: RealAsyncClient(
@@ -660,6 +664,7 @@ async def test_saved_answer_waiting_for_acceptance_reports_delivery_in_progress(
     async def receive(request):
         requests.append(request)
         await accept.wait()
+        store.claim_delivery(rec.id)  # what the accepted turn's driver does (#5678 2c)
         return httpx.Response(200, json={"result": {"status": {"state": "working"}}})
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: RealAsyncClient(
