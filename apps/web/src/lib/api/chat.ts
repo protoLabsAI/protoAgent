@@ -772,6 +772,12 @@ export const chatApi = {
     images?: ChatImagePart[],
     incognito?: boolean,
     settings?: SteerTurnSettings,
+    // Ask for a PRIVATE steer (#5400): the words stay between the operator and their agent,
+    // out of the thread a peer reads. The server refuses rather than downgrade one (403 off /
+    // not a signed-in operator, 409 the thread is waiting on the peer's own question, 400 it
+    // carries images or incognito) — see chat/privateSteer.ts for the sentences. Unset, the
+    // body is exactly what it was.
+    isPrivate?: boolean,
   ) {
     return request<{ ok: boolean; id: string | null; pending: number; started_turn?: string | null }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
@@ -784,6 +790,7 @@ export const chatApi = {
           // the route skips the media bridge on it, and a steer that STARTS a turn
           // (started_turn below) must carry it or the fresh turn would leave a memory trail.
           ...(incognito ? { incognito: true } : {}),
+          ...(isPrivate ? { private: true } : {}),
           ...turnSettingsBody(settings),
           ...(images && images.length
             ? { images: images.map((img) => [img.mime, `data:${img.mime};base64,${img.b64}`]) }

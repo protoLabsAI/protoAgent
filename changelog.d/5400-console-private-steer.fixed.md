@@ -1,0 +1,1 @@
+- **Console steers into From others conversations stay private.** Mid-turn messages and requeued steers explicitly request private delivery without adding a toggle. Private steers omit incognito, keep image-bearing drafts unsent, and explain server refusals in plain language while returning the text to the composer. Refs #5400 and #5401.
