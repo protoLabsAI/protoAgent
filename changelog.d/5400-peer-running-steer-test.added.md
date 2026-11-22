@@ -1,1 +1,0 @@
-- **Running peer turn privacy coverage.** Exercise fleet and paired-agent credentials against the Phase 0 A2A projection rig, checking private steering stays out of retained streams, subscriptions, task polling, push callbacks, reply text and reopened SQLite history. Refs #5400.

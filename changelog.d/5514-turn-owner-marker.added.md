@@ -1,1 +1,0 @@
-- **Add a per-tab owner marker for a streaming chat turn.** A console tab no longer reattaches to a turn while another live tab holds that turn's marker, and picks it up once the marker is released or its heartbeat goes stale. Nothing claims a marker yet, so behaviour is unchanged until the follow-up that saves the task id at once. Refs #5514.

@@ -1,1 +1,0 @@
-- **Inbox batch delivery design.** Amend ADR 0129 with source-grouped recovery turns, durable batch identities, retry deduplication, per-member settlement, provenance and StormGuard accounting. Implementation follows in a separate slice. Refs #5519.

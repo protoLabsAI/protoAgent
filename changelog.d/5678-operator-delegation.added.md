@@ -1,1 +1,0 @@
-- **Fleet proxies preserve human operator identity.** Authenticated human calls to local members carry a signed, single-use delegation; fleet service callers remain peers. Members verify the hub signature and request binding without a new credential type. Refs #5678.
