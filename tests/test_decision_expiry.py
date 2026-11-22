@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from graph import decision_resume
 from graph.decision_expiry import sweep_expired_decisions
-from graph.decisions import DecisionClosed, DecisionStore
+from graph.decisions import DecisionClosed, DecisionError, DecisionStore
 from operator_api import decision_routes
 from runtime.state import STATE
 from tools.lg_tools import request_decision, withdraw_decision
@@ -596,3 +596,117 @@ async def test_withdraw_reports_resume_delivery_failure(ledger, monkeypatch):
     assert "Warning: could not resume the parked turn" in result
     assert store.get(rec.id).state == "withdrawn"
     resume.assert_awaited_once_with("s", decision_resume.CANCELLED_RESUME)
+
+
+def _no_pause_wire(monkeypatch):
+    """Route the loopback new-turn delivery into a recording fake ``/a2a`` endpoint."""
+    import json
+
+    real_client = httpx.AsyncClient
+    wire = []
+
+    async def receive(request):
+        wire.append(json.loads(request.content)["params"])
+        return httpx.Response(200, json={"result": {"task": {"status": {"state": "TASK_STATE_WORKING"}}}})
+
+    monkeypatch.setattr(STATE, "active_port", 7871)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(receive), **kw))
+    return wire
+
+
+@pytest.mark.asyncio
+async def test_no_pause_expiry_applies_default_as_a_turn_and_no_default_starts_none(ledger, monkeypatch):
+    """#5678 3a: a no-pause decision has no parked turn. On expiry its default is applied in
+    the ledger and delivered as a new turn; without a default it just expires, no turn."""
+    store, clock = ledger
+    wire = _no_pause_wire(monkeypatch)
+    resume = AsyncMock(return_value=True)
+    with_default = store.create("s", "Release?", OPTIONS, thread_id="s", default_option="hold",
+                                default_action="keep holding", expires_in_minutes=5)
+    no_default = store.create("s", "Rename?", OPTIONS, thread_id="s", expires_in_minutes=5)
+    forever = store.create("s", "Wait?", OPTIONS, thread_id="s")
+    assert await sweep_expired_decisions(store, resume) == 0
+    assert store.get(with_default.id).pending and store.get(no_default.id).pending
+
+    clock.now += timedelta(minutes=5)
+    assert await sweep_expired_decisions(store, resume) == 2
+    resume.assert_not_called()  # nothing is parked, so nothing is resumed
+    applied = store.get(with_default.id)
+    assert (applied.state, applied.answer) == ("expired", "hold")
+    assert applied.delivered_at
+    assert len(wire) == 1
+    message = wire[0]["message"]
+    assert message["contextId"] == "s"
+    assert message["metadata"]["decision_id"] == with_default.id
+    assert "hitl_resume" not in message["metadata"]
+    assert wire[0]["configuration"] == {"returnImmediately": True}
+    assert message["parts"][0]["text"] == decision_resume.decision_answer_message(with_default.id, "s")
+    assert "Keep holding (hold)" in message["parts"][0]["text"]
+    assert "operator answered" not in message["parts"][0]["text"]
+    lapsed = store.get(no_default.id)
+    assert (lapsed.state, lapsed.answer, lapsed.delivered_at) == ("expired", None, None)
+    assert await decision_resume.deliver_decision_answer(no_default.id) is decision_resume.ResumeOutcome.NOT_DELIVERED
+    assert len(wire) == 1
+
+    clock.now += timedelta(days=1)
+    assert await sweep_expired_decisions(store, resume) == 0
+    assert len(wire) == 1  # closed records are never redelivered
+    assert store.get(forever.id).pending
+
+
+@pytest.mark.asyncio
+async def test_no_pause_expiry_keeps_an_operator_answer_that_landed_first(ledger, monkeypatch):
+    store, clock = ledger
+    wire = _no_pause_wire(monkeypatch)
+    rec = store.create("s", "Release?", OPTIONS, thread_id="s", default_option="hold", expires_in_minutes=5)
+    clock.now += timedelta(minutes=5)
+    stale = store.get(rec.id)
+    store.answer(rec.id, "go", answer_kind="option")
+    monkeypatch.setattr(store, "list", lambda **kw: [stale])  # the sweep read it while pending
+    assert await sweep_expired_decisions(store, AsyncMock()) == 0
+    assert (store.get(rec.id).state, store.get(rec.id).answer) == ("answered", "go")
+    assert wire == []
+
+
+@pytest.mark.asyncio
+async def test_host_loop_delivers_no_pause_default_through_the_answer_path(ledger, monkeypatch):
+    import asyncio
+
+    loops = importlib.import_module("server.maintenance_loops")
+    store, clock = ledger
+    rec = store.create("s", "Release?", OPTIONS, thread_id="s", default_option="hold", expires_in_minutes=1)
+    clock.now += timedelta(minutes=1)
+    delivered = []
+    resume = AsyncMock()
+
+    async def deliver(decision_id):
+        delivered.append(decision_id)
+
+    async def stop(seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(STATE, "graph", None)
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", resume)
+    monkeypatch.setattr(decision_routes, "deliver_decision_answer", deliver)
+    monkeypatch.setattr(loops, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": stop}))
+    with pytest.raises(asyncio.CancelledError):
+        await loops._decision_expiry_loop()
+    assert delivered == [rec.id]
+    resume.assert_not_called()
+    assert store.get(rec.id).state == "expired"
+
+
+def test_dismiss_closes_a_no_pause_decision_without_starting_a_turn(ledger, monkeypatch):
+    store, _ = ledger
+    wire = _no_pause_wire(monkeypatch)
+    resume = AsyncMock(return_value=True)
+    monkeypatch.setattr(decision_routes, "_resume_parked_turn", resume)
+    rec = store.create("s", "Release?", OPTIONS, thread_id="s", default_option="hold", expires_in_minutes=5)
+    c = client()
+    data = c.post(f"/api/decisions/{rec.id}/cancel", json={"reason": "Not needed"}).json()["decision"]
+    assert (data["state"], data["withdraw_reason"]) == ("withdrawn", "Not needed")
+    resume.assert_not_called()
+    assert wire == []
+    assert c.post(f"/api/decisions/{rec.id}/cancel").status_code == 409
+    with pytest.raises(DecisionError):  # a dismissal has nothing to deliver
+        decision_resume.decision_answer_message(rec.id, "s")

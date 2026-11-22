@@ -410,7 +410,11 @@ class DecisionStore:
             if expires_in_minutes <= 0:
                 raise DecisionError("expires_in_minutes must be positive")
             expires_at = (self._clock() + timedelta(minutes=expires_in_minutes)).isoformat(timespec="seconds")
-        if bool(expires_at) != bool(default_option):
+        # A paused decision's expiry must resume its turn with something, so it needs a
+        # default. A no-pause one (thread, no pause id — #5678) may simply lapse: it expires
+        # with no answer and starts no turn. A default without an expiry is never valid.
+        no_pause = bool((thread_id or "").strip()) and not interrupt_id
+        if bool(default_option) and not expires_at or (expires_at and not default_option and not no_pause):
             raise DecisionError("pass both expiry and default_option, or neither")
         if default_action is not None and not expires_at:
             raise DecisionError("default_action requires an expiry")
@@ -578,6 +582,9 @@ class DecisionStore:
         return self._close_record(decision_id, STATE_WITHDRAWN, withdraw_reason=reason)
 
     def expire(self, decision_id: str) -> Decision:
+        """Close a due decision as ``expired``, recording its default option as the answer.
+        Refused (:class:`DecisionError`) before its deadline, and for a paused decision with
+        no default; a no-pause decision without a default expires with no answer."""
         return self._close_record(decision_id, STATE_EXPIRED)
 
     def reopen(self, decision_id: str) -> Decision:
@@ -682,7 +689,12 @@ class DecisionStore:
                 if is_spend_cap_decision(rec) and state != STATE_ANSWERED:
                     raise DecisionError("Answer the spend-cap decision to resume unattended work.")
                 if state == STATE_EXPIRED:
-                    if not rec.expires_at or not rec.default_option or datetime.fromisoformat(rec.expires_at) > self._clock():
+                    # A paused decision only expires by applying its default (its turn must be
+                    # resumed with something). A no-pause one (#5678) may also expire with no
+                    # default: it closes with no answer and no turn is started.
+                    needs_default = not is_unpaused_decision(rec)
+                    if (not rec.expires_at or (needs_default and not rec.default_option)
+                            or datetime.fromisoformat(rec.expires_at) > self._clock()):
                         raise DecisionError("decision is not due for expiry")
                     answer = rec.default_option
                 rec.state = state
