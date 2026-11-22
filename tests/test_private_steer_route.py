@@ -317,7 +317,12 @@ async def test_completion_race_and_duplicate_id_give_exactly_one_private_turn(ri
 # ── A conversation a peer started: every steer is private, flag or no flag (#5400, #5401) ──
 # The federation thread is told by its first task's owner (even under a console-shaped id); the
 # fleet peer saves under the operator's owner, so its thread is told by its context id.
-PEER_THREADS = [("federation", "chat-from-fed"), ("fleet-service", "thread-from-fleet")]
+PEER_THREADS = [
+    ("federation", "chat-from-fed"),
+    ("federation", "api-from-fed"),
+    ("federation", "openai-compat-from-fed"),
+    ("fleet-service", "thread-from-fleet"),
+]
 
 
 def _peer_send(rig, peer, session, text, method="SendMessage"):
@@ -411,8 +416,10 @@ async def test_steer_into_a_peer_conversation_is_refused_rather_than_sent_public
     assert await rig.rows() == before and rig.seen == [("hello", False)] and steering.pending_items(session) == []
 
 
-async def test_a_steer_in_an_operator_started_chat_is_delivered_as_before(rig):
-    session = "chat-op"
+@pytest.mark.parametrize("session", ["chat-op", "api-op", "openai-compat-op"])
+@pytest.mark.parametrize("private_enabled", [False, True])
+async def test_a_steer_in_an_operator_started_chat_is_delivered_as_before(rig, session, private_enabled):
+    rig.config.private_steering_enabled = private_enabled
     first = (await _peer_send(rig, "shared-bearer", session, "hello")).json()["result"]["task"]["id"]
     await poll_terminal(rig.op, first)
 

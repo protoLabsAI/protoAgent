@@ -1202,15 +1202,16 @@ async def _peer_started(session_id: str) -> bool:
 
     A conversation belongs to whoever STARTED it: its first-created stored task, the rule
     ``stores.context_foreign`` uses. It is peer-started when that task is federation-owned, or
-    when the context is outside the console's own namespaces (``conversation_policy``: the
-    threads the From others list shows). A fleet peer saves under the operator's owner, so the
+    when the context is outside the console and API chat namespaces. API-minted sessions
+    may appear in From others, but ordinary operator-owned API chats remain public.
+    A fleet peer saves under the operator's owner, so the
     context id is the only stored signal telling its thread from an operator chat. A context
     with no stored task yet, or one the operator opened with a private steer, is not a peer's.
     (A thread's first turn is stored with its first frame; until then it is not listed either.)
 
     A failed read answers by context id alone, so it never opens a peer's thread to an
     ordinary, peer-readable steer."""
-    outside = not session_id.startswith(conversation_policy.CONVERSATION_EXCLUDE_PREFIXES)
+    outside = not session_id.startswith(conversation_policy.CONVERSATION_EXCLUDE_PREFIXES + _API_SESSION_PREFIXES)
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
         return False
