@@ -2119,7 +2119,13 @@ async def _run_native_turn(
     a recovery re-run (overflow or stream drop), whose prompt is never goal-kicked-off (#3891 F1).
     ``fence`` (the overflow retry's) replaces the request metadata's fence: the retry
     keeps the fence the failed pass narrowed to (``_turn_stream._carried_fence``)."""
+    from datetime import UTC, datetime
+
     from graph.goals.goal_turn import goal_turn
+
+    # When this turn started (the caller holds the thread lock): a decision asked from here
+    # on is this turn's own, never one the reply reminds the operator of (#5678 7b).
+    _started_at = datetime.now(UTC).isoformat()
 
     # Per-tab model + reasoning-effort override (the console puts the tab's chosen model +
     # the /effort level in the A2A request metadata). Threaded into every turn this stream
@@ -2330,6 +2336,16 @@ async def _run_native_turn(
                 return
             step.text = extract_output(cont["raw"])
     final_text = drive.text
+
+    # The once-per-decision reminder (#5678 7b): a first operator turn that leaves an open
+    # no-pause decision unanswered ends with one fixed line, streamed live and in `done`.
+    _reminder = _turn_stream.decision_reminder(
+        config, _started_at, request_metadata=request_metadata,
+        answering=bool(resume or overflow_retry), autonomous=_auto.autonomous,
+    )
+    if _reminder:
+        yield ("text", "\n\n" + _reminder if final_text.strip() else _reminder)
+        final_text = _turn_stream.with_decision_reminder(final_text, _reminder)
 
     yield ("done", final_text)
 
