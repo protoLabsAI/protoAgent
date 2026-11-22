@@ -1524,6 +1524,9 @@ FIELDS: list[Field] = [
           description="IANA timezone, for example America/Los_Angeles. Leave empty to use this computer's local time."),
     Field("push.all_notices", "push_all_notices", "Push every notice", "bool", "Notifications",
           description="Off: only questions and urgent notices reach your devices. On: every notice does."),
+    Field("decisions.never_block", "decisions_never_block", "Ask decisions without pausing", "bool", "Decisions",
+          description="On: a decision the agent asks is saved and the turn ends, so the chat stays free for any "
+                      "message. Off: the turn pauses until the decision is answered."),
     Field("spend_cap.enabled", "spend_cap_enabled", "Cap unattended spend", "bool", "Spend cap",
           description="Pause all unattended turns at either daily hard limit until an operator answers the decision."),
     Field("spend_cap.daily_cost_hard_limit", "spend_cap_daily_cost_hard_limit", "Daily cost hard limit (USD)",
@@ -2694,6 +2697,7 @@ _SECTION_CATEGORY = {
     "Spend cap": "Behavior",
     "Quiet hours": "Behavior",
     "Notifications": "Behavior",
+    "Decisions": "Behavior",
     # Secrets — the external secrets manager (ADR 0080); the console renders this
     # category as its own sidenav section with a status/test/sync card.
     "Secrets manager": "Secrets",
