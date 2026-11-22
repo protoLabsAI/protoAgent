@@ -947,7 +947,7 @@ async def validate_decision_resume(config: dict, decision_id: str, session_id: s
 async def answer_typed_decision(config: dict, message: str, session_id: str,
                                 request_metadata: dict | None = None) -> tuple[dict, str] | None:
     """Save an exact operator answer before delivering it in this already-locked turn."""
-    from a2a_impl.auth import is_human_operator
+    from a2a_impl.auth import is_human_operator, open_mode
     from graph.decisions import decision_store
     from graph.middleware.request_context import current_verified_principal
 
@@ -957,8 +957,9 @@ async def answer_typed_decision(config: dict, message: str, session_id: str,
     origin = str(md.get("origin") or "").strip().lower()
     server_started = origin not in {"", "local", "console", "api-chat", "v1", "plugin", "a2a"}
     principal = current_verified_principal()
+    operator = is_human_operator(principal) or (principal == "open/unknown" and open_mode())
     if (server_started or _truthy(md.get("unattended")) or md.get("decision_id")
-            or not is_human_operator(principal)):
+            or not operator):
         return None
     # A parked form/question still owns the next input; never consume its answer here.
     if await _chat()._pending_interrupt_value(config) is not None:

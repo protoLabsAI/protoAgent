@@ -3,7 +3,7 @@
 import unicodedata
 from collections.abc import Sequence
 
-from a2a_impl.auth import is_human_operator
+from a2a_impl.auth import is_human_operator, open_mode
 from graph.decisions import Decision, is_unpaused_decision
 
 
@@ -15,12 +15,13 @@ def _normalized(text: str) -> str:
 
 def match_decision(text: str, decisions: Sequence[Decision], *, principal: str | None,
                    server_started: bool = False) -> tuple[Decision, str] | None:
-    """Return the sole matching option's canonical id, or leave the message ordinary.
+    """Return the sole matching (decision, canonical option id) pair, or None.
 
     ``decisions`` contains the chat's open records, including paused decisions. Identity
     must come from authentication, never message metadata. Ambiguous labels fail closed.
     """
-    if server_started or not is_human_operator(principal) or len(decisions) != 1:
+    operator = is_human_operator(principal) or (principal == "open/unknown" and open_mode())
+    if server_started or not operator or len(decisions) != 1:
         return None
     rec = decisions[0]
     if not rec.pending or not is_unpaused_decision(rec) or rec.requires_pick:

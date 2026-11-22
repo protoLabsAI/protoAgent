@@ -1,6 +1,7 @@
 """Typed decisions require an exact option and a live verified operator."""
 
 import importlib
+from contextlib import nullcontext
 from typing import Annotated, TypedDict
 
 import pytest
@@ -59,16 +60,23 @@ class State(TypedDict):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("driver", ["sync", "stream"])
-@pytest.mark.parametrize("text,origin,principal,answered", [
-    ("Ship it.", "", "shared-operator-bearer", True),
-    ("hold on, one question first", "", "shared-operator-bearer", False),
-    ("ship", "scheduler", "shared-operator-bearer", False),
-    ("ship", "inbox", "shared-operator-bearer", False),
-    ("ship", "background-resume", "shared-operator-bearer", False),
-    ("ship", "", "agent-device", False),
+@pytest.mark.parametrize("text,origin,principal,open_mode,answered", [
+    ("Ship it.", "", "shared-operator-bearer", False, True),
+    ("hold on, one question first", "", "shared-operator-bearer", False, False),
+    ("ship", "scheduler", "shared-operator-bearer", False, False),
+    ("ship", "inbox", "shared-operator-bearer", False, False),
+    ("ship", "background-resume", "shared-operator-bearer", False, False),
+    ("ship", "", "agent-device", False, False),
+    # Open-mode operators must have the same typed-answer path as button answers (#5678).
+    ("Ship it.", "", "open/unknown", True, True),
+    ("ship", "", "open/unknown", False, False),
+    ("ship", "scheduler", "open/unknown", True, False),
+    ("ship", "", "agent-device", True, False),
+    ("ship", "", None, True, False),
 ])
 async def test_drivers_save_before_delivery_or_run_normal_message(store, monkeypatch, driver,
-                                                                text, origin, principal, answered):
+                                                                text, origin, principal, open_mode, answered):
+    monkeypatch.setattr("a2a_impl.auth.open_mode", lambda: open_mode)
     rec = store.create("s", "Release?", OPTIONS, thread_id="a2a:s")
     seen = []
 
@@ -89,7 +97,7 @@ async def test_drivers_save_before_delivery_or_run_normal_message(store, monkeyp
     monkeypatch.setattr(STATE, "graph", builder.compile(checkpointer=InMemorySaver()))
     monkeypatch.setattr(STATE, "graph_config", LangGraphConfig())
     monkeypatch.setattr(STATE, "goal_controller", None)
-    with verified_principal_scope(principal):
+    with verified_principal_scope(principal) if principal is not None else nullcontext():
         if driver == "sync":
             await _native_turn(text, None, session_id="s", config={"configurable": {"thread_id": "a2a:s"}},
                                usage_cb=UsageMetadataCallbackHandler(), state_extra={}, tool_fence=None,
