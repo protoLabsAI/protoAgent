@@ -12,16 +12,16 @@ import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 import { useDecisions } from "../decisions/useDecisions";
 import { decisionMeta, fromDecision, relTime, WORK_GROUP_LABELS, type GroupableWorkItem, type WorkGroupId } from "./tone";
-import { summaryTitle } from "./rowMeta";
+import { workLead } from "./workAttention";
 import type { InboxItem } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import type { SurfaceState } from "../shell/surfaceState";
 import { useWorkItems, type WorkItems } from "./useWorkItems";
 import { openSourceChat as openSourceChatShared } from "./openSourceChat";
-import { withSharedDecisions, workGroups } from "./workGroups";
+import { flattenWorkItems, withSharedDecisions, workGroups } from "./workGroups";
 import { WorkCreateDialog } from "./WorkCreateDialog";
 import type { SavedWork } from "./workPersistence";
-import { WorkDetail } from "./WorkDetail";
+import { WorkDetail, WorkIssueDetail } from "./WorkDetail";
 import { SpendToday } from "./SpendToday";
 import { WorkOverview, WorkGroupNew, WorkGroupSection, groupSources, itemKey, workSections } from "./WorkOverview";
 import { endThisChatVisit, isThisChatVisit, subscribeThisChatVisit, trackWorkViewMount } from "./visitScope";
@@ -81,19 +81,17 @@ function DeliveryDetail({ item, onDone }: { item: GroupableWorkItem; onDone: () 
   const qc = useQueryClient();
   const row = item.raw as InboxItem;
   return <WorkDetail
-    // The heading is the short summary, never the whole message (a page can run to
-    // paragraphs); the full text is the Message field below. Recomputed from the raw row
-    // so a title that still carries the full text can never become the heading.
-    title={summaryTitle(row.text ?? item.title) || "Delivery"}
-    status="needs-you"
+    title={item.title}
+    lead={workLead(item)}
+    status="paused"
+    statusLabel="Information"
     fields={[
       { label: "Message", value: row.text?.trim()
         ? <div style={{ whiteSpace: "pre-wrap" }}>{row.text}</div> : null },
-      { label: "From", value: row.source || null },
       { label: "Waiting since", value: row.created_at ? relTime(row.created_at).text : null },
       { label: "Status", value: row.retries_exhausted
         ? "Couldn't be delivered automatically — retries used up"
-        : row.needs_human ? "Needs you" : null },
+        : null },
     ]}
     actions={[{
       id: "dismiss",
@@ -113,7 +111,7 @@ function DeliveryDetail({ item, onDone }: { item: GroupableWorkItem; onDone: () 
         onDone();
       },
     }]}
-    technical={{ Id: String(row.id), "Dedup key": row.dedup_key ?? "" }}
+    technical={{ Id: String(row.id), From: row.source ?? "", "Dedup key": row.dedup_key ?? "" }}
     type="Delivery"
   />;
 }
@@ -157,8 +155,11 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
   const group = groups.find((candidate) => candidate.id === section);
   const total = groups.reduce((sum, candidate) => sum + candidate.count, 0);
   const items = [...groups.flatMap((candidate) => candidate.items),
-    ...Object.values(sources).flatMap((source) => source.items)];
-  const selected = items.find((item) => itemKey(item) === state.itemId || item.id === state.itemId);
+    ...flattenWorkItems(sources), ...Object.values(sources).flatMap((source) => source.items)];
+  const [detailMember, setDetailMember] = useState<string | null>(null);
+  useEffect(() => setDetailMember(null), [state.itemId]);
+  const selectedGroup = items.find((item) => itemKey(item) === state.itemId || item.id === state.itemId);
+  const selected = (detailMember ? flattenWorkItems(sources).find((item) => itemKey(item) === detailMember) : undefined) ?? selectedGroup;
   const selectedKey = selected ? itemKey(selected) : state.itemId;
   const loading = Object.values(sources).some((source) => source.status === "loading");
   const groupLoading = (id: WorkGroupId) => groupSources[id].some((kind) => sources[kind].status === "loading");
@@ -393,7 +394,9 @@ export function WorkView({ frame = "rail", sessionId }: { frame?: "rail" | "moda
       </div>
       {state.itemId && <div className="work-view__detail" ref={detailRef}>
         <div className="work-view__close"><Tooltip label="Close details"><Button icon variant="ghost" size="sm" aria-label="Close details" onClick={onBack}><X aria-hidden="true" /></Button></Tooltip></div>
-        {selected?.kind === "delivery" ? <DeliveryDetail item={selected} onDone={onBack} />
+        {selected && (selected.affected || selected.actions) ? <WorkIssueDetail item={selected}
+          onOpen={(item) => setDetailMember(itemKey(item))} />
+          : selected?.kind === "delivery" ? <DeliveryDetail item={selected} onDone={onBack} />
           : detailRenderer?.render(context) ?? <Empty title={selected?.title ?? "Item unavailable"} description="Details will appear here." />}
       </div>}
     </div>

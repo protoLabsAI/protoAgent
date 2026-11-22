@@ -39,7 +39,7 @@ function task(id: string, rawStatus = "in_progress", extra: Partial<WorkItem> = 
 }
 function decision(id: string, state = "pending", extra: Partial<WorkItem> = {}): WorkItem {
   return { id, kind: "decision", status: state === "pending" ? "needs-you" : "done", title: id, meta: "",
-    raw: { id, question: id, state, session_id: "", agent: "protoAgent", created_at: new Date().toISOString(), options: [] }, ...extra };
+    raw: { id, question: id, state, session_id: "", agent: "protoAgent", created_at: new Date().toISOString(), options: [{ id: "yes", label: "Yes" }] }, ...extra };
 }
 function goal(id: string, rawStatus = "active", extra: Partial<WorkItem> = {}): WorkItem {
   return { id, kind: "goal", status: rawStatus === "active" ? "running" : "failed", title: id, meta: "Turn 3",
@@ -217,14 +217,14 @@ it("tags every row with its kind and icon per the approved table", async () => {
   data.sources.directives.items = [{ kind: "directive", id: "d1", status: "waiting", title: "Hold main", meta: "", raw: { id: "d1", status: "in_force", quote: "Hold main" } }];
   await render("modal");
   const badges = Array.from(host.querySelectorAll(".work-row .pl-badge")).map((node) => node.textContent);
-  expect(badges).toEqual(["Decision", "Goal stopped", "Delivery", "Goal", "Job", "Job", "Condition", "Job", "Time", "Time", "Instruction"]);
+  expect(badges).toEqual(["Information", "Decision", "Goal stopped", "Goal", "Job", "Job", "Condition", "Job", "Time", "Time", "Instruction"]);
   // A stopped goal is neutral — never the error fill (§2, §6) — while the decision keeps info
   // and the delivery warning; the not-started job wears the dashed circle, the running one the
   // spinner, and time/condition their clock/eye glyphs.
   const row = (title: string) => Array.from(host.querySelectorAll<HTMLElement>(".work-row")).find((node) => node.textContent?.includes(title))!;
   expect(row("stuck").querySelector(".pl-badge")?.className).toBe("pl-badge");
   expect(row("ask").querySelector(".pl-badge--info")).toBeTruthy();
-  expect(row("Deploy failed page").querySelector(".pl-badge--warning")).toBeTruthy();
+  expect(row("Deploy failed page").querySelector(".pl-badge--warning")).toBeNull();
   expect(row("queued").querySelector(".lucide-circle-dashed")).toBeTruthy();
   expect(row("queued").textContent).toContain("not started");
   expect(row("Crunching").querySelector(".pl-spinner")).toBeTruthy();
@@ -371,14 +371,13 @@ it("a wait opens the existing schedule detail; a delivery opens the delivery det
   await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(".work-row")).find((node) => node.textContent?.includes("Deploy failed page"))!.click());
   const detail = host.querySelector(".work-view__detail")!;
   expect(detail.textContent).toContain("Deploy failed page");
+  await click("Technical details");
   expect(detail.textContent).toContain("ops");
-  expect(detail.querySelector(".pl-badge")?.textContent).toBe("needs you");
+  expect(detail.querySelector(".pl-badge")?.textContent).toBe("Information");
 });
 
-// A retries-exhausted page is permanently stuck (no sweep retries it, and the Feed carries
-// no deliver/dismiss control — docs/design/feed.md §1), so it lands in Needs-you and the
-// Delivery detail's Dismiss is the one operator path that clears it.
-it("a retries-exhausted page lands in Needs-you and its Dismiss marks it delivered", async () => {
+// An exhausted delivery remains dismissible in What happened without paging the operator.
+it("a retries-exhausted page stays information and its Dismiss still marks it delivered", async () => {
   const deliver = vi.spyOn(api, "deliverInbox").mockResolvedValue({ ok: true, delivered: 1 });
   data.sources.activity.groupItems = [{ kind: "delivery", id: "81", status: "needs-you", title: "card assigned", meta: "a2a",
     raw: { id: 81, priority: "now", delivered_at: null, source: "a2a:sister", text: "card assigned", created_at: new Date().toISOString(),
@@ -395,10 +394,8 @@ it("a retries-exhausted page lands in Needs-you and its Dismiss marks it deliver
   expect(useUI.getState().surfaceStates.work.itemId).toBeUndefined();
 });
 
-// Josh 2026-11-12: a page's detail rendered the entire message — a 900-character paragraph —
-// as the bold heading. The heading is the short summary (first sentence of the first line,
-// ~80 chars, ellipsis); the full text shows once, as body text, in the Message field.
-it("a delivery titles with the short summary and shows the full text once in a Message field", async () => {
+// The full message stays in the body; provenance is technical, not the headline.
+it("a delivery uses a plain lead and shows the full text once in a Message field", async () => {
   const text = "The nightly importer stalled on the vendor feed and left 412 rows unprocessed, so the morning digest is incomplete.\nIt needs a manual re-run before 9:00.\nCheck the importer logs first.";
   data.sources.activity.groupItems = [{ kind: "delivery", id: "91", status: "needs-you", title: text, meta: "ops",
     raw: { id: 91, priority: "now", delivered_at: null, source: "ops", text, created_at: new Date().toISOString(),
@@ -406,7 +403,7 @@ it("a delivery titles with the short summary and shows the full text once in a M
   await render("modal");
   await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>(".work-row")).find((node) => node.textContent?.includes("The nightly importer"))!.click());
   const detail = host.querySelector(".work-view__detail")!;
-  expect(detail.querySelector("h2")?.textContent).toBe("The nightly importer stalled on the vendor feed and left 412 rows unprocessed,…");
+  expect(detail.querySelector("h2")?.textContent).toBe("A message was not delivered.");
   const message = Array.from(detail.querySelectorAll(".work-detail__field")).find((field) => field.querySelector("dt")?.textContent === "Message");
   expect(message, "Message field").toBeTruthy();
   const body = message!.querySelector<HTMLElement>("dd div")!;
@@ -414,20 +411,21 @@ it("a delivery titles with the short summary and shows the full text once in a M
   expect(body.style.whiteSpace).toBe("pre-wrap"); // …rendered wrapping, as body text
   expect(detail.textContent!.split(text)).toHaveLength(2); // the full text appears exactly once
   // The existing From / Waiting since fields and the Dismiss action survive.
+  await click("Technical details");
   expect(detail.textContent).toContain("From");
   expect(detail.textContent).toContain("ops");
   expect(detail.textContent).toContain("Waiting since");
   expect(detail.textContent).toContain("Dismiss…");
 });
 
-it("a delivery with an empty text keeps the Delivery fallback title and no Message field", async () => {
+it("a delivery with empty text keeps its plain lead and no Message field", async () => {
   data.sources.activity.groupItems = [{ kind: "delivery", id: "92", status: "needs-you", title: "", meta: "ops",
     raw: { id: 92, priority: "now", delivered_at: null, source: "ops", text: "", created_at: new Date().toISOString(),
       dedup_key: null, needs_human: true } } as GroupableWorkItem];
   await render("modal");
   await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
   const detail = host.querySelector(".work-view__detail")!;
-  expect(detail.querySelector("h2")?.textContent).toBe("Delivery");
+  expect(detail.querySelector("h2")?.textContent).toBe("A message was not delivered.");
   expect(detail.textContent).not.toContain("Message");
 });
 
@@ -685,8 +683,8 @@ it.each([
   expect(detail.textContent).toContain(provenance);
   expect(detail.textContent).not.toContain("Open chat");
   expect(Array.from(detail.querySelectorAll("dt")).slice(0, 4).map((node) => node.textContent))
-    .toEqual(["Ask", "Links", "Waiting since", "Description"]);
-  expect(detail.querySelector("dd")?.textContent).toBe("Can we ship?");
+    .toEqual(["Links", "Waiting since", "Description", "Type and priority"]);
+  expect(detail.textContent).toContain("Can we ship?");
   expect(detail.querySelector("a")?.href).toBe("https://example.com/pull/7");
 });
 
@@ -703,7 +701,7 @@ it("opens a waiting detail whose links arrive as the server's JSON string (v0.24
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   const detail = host.querySelector(".work-view__detail")!;
   expect(detail).not.toBeNull();
-  expect(detail.querySelector("dd")?.textContent).toBe("Can we ship?");
+  expect(detail.textContent).toContain("Can we ship?");
 });
 
 it.each([false, true])("sends a reply with durable source=%s and resumes the task", async (durable) => {
@@ -734,7 +732,7 @@ it.each([["Done", "done"], ["Dismiss", "dismissed"]] as const)("%s closes with a
   vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
   const close = vi.spyOn(api, "closeTask").mockResolvedValue({ issue: { id: "parked", title: "Ship release", status: "closed" } });
   await openWaiting("a2a-session", null);
-  expect(host.querySelector(".work-detail dd")?.textContent).toBe("Review the release");
+  expect(host.querySelector(".work-detail")?.textContent).toContain("Review the release\nFull context");
   await click(`${label}…`);
   // The reply is the first input; the confirmation owns the last one.
   const input = host.querySelector<HTMLInputElement>(".work-detail__confirm input")!;
@@ -746,15 +744,16 @@ it.each([["Done", "done"], ["Dismiss", "dismissed"]] as const)("%s closes with a
   expect(close).toHaveBeenCalledWith("parked", "Handled elsewhere", outcome);
 });
 
-it("retries a failed task update without sending the reply twice", async () => {
+it.each(["reply", "check"])("retries a failed task update without sending the %s twice", async (mode) => {
   vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
   vi.spyOn(api, "registerSession").mockResolvedValue({ ok: true, session_id: "new" });
   const send = vi.spyOn(api, "steerChat").mockResolvedValue({ ok: true, id: "reply", pending: 0, started_turn: "turn" });
   const update = vi.spyOn(api, "updateTask").mockRejectedValueOnce(new Error("offline"))
     .mockResolvedValue({ issue: { id: "parked", title: "Ship release" } });
   await openWaiting();
-  await fillInput("Go ahead");
-  await click("Send reply");
+  if (mode === "reply") await fillInput("Go ahead");
+  await click(mode === "reply" ? "Send reply" : "Check again");
+  expect(send.mock.calls[0][2]).toContain(mode === "reply" ? "Go ahead" : "check again whether the reported blocker is resolved");
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect(openChat).not.toHaveBeenCalled();
   await click("Retry reply");
@@ -921,4 +920,22 @@ it("mounts the spend block above the groups on every Work surface, Overview or a
       expect(content.querySelectorAll("[data-spend-today]")).toHaveLength(1);
     }
   }
+});
+
+it("opens each affected task from a shared cause and retains its reply controls", async () => {
+  vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+  data.sources.tasks.items = ["Linux build", "Windows build"].map((title, index) => task("card-" + index, "waiting", {
+    title, raw: { id: "card-" + index, title, status: "waiting", ask: "Free disk space, then check again." },
+  }));
+  await render();
+  expect(host.querySelectorAll(".work-row")).toHaveLength(1);
+  await act(async () => host.querySelector<HTMLButtonElement>(".work-row")!.click());
+  expect(host.querySelector(".work-view__detail")?.textContent).toContain("Free disk space, then check again.");
+  await click("Open Windows build");
+  data.sources.tasks.items = data.sources.tasks.items.slice(1);
+  await render();
+  expect(host.querySelector(".work-view__detail")?.textContent).toContain("Send reply");
+  expect(host.querySelector(".work-view__detail")?.textContent).toContain("Check again");
+  await click("Technical details");
+  expect(host.querySelector(".work-view__detail")?.textContent).toContain("card-1");
 });

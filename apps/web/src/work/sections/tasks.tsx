@@ -241,17 +241,17 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
     refetchOnWindowFocus: false,
     refetchOnMount: "always",
   });
-  const ask = task.ask?.trim() || task.description?.split("\n")[0]?.trim() || "";
+  const ask = task.ask?.trim() || task.description?.trim() || "";
   const send = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (message: string = reply.trim()) => {
       if (!attempt.current) {
         // Recheck before sending: a source may have gained turns since detail opened.
         const hasTurns = await sourceHasTurns(source);
         attempt.current = {
           sessionId: hasTurns ? source : `chat-${crypto.randomUUID()}`,
           id: crypto.randomUUID(), fresh: !hasTurns, sent: false,
-          text: hasTurns ? reply.trim() : [task.title, ask].filter(Boolean).map((text) =>
-            text.split("\n").map((line) => `> ${line}`).join("\n")).join("\n>\n") + `\n\n${reply.trim()}`,
+          text: hasTurns ? message : [task.title, ask].filter(Boolean).map((text) =>
+            text.split("\n").map((line) => `> ${line}`).join("\n")).join("\n>\n") + `\n\n${message}`,
         };
       }
       const pending = attempt.current;
@@ -289,26 +289,30 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
   // no turns. A `chat-` id whose chat is gone has no shared value — keep the existing deleted-chat
   // line there; an empty source has nothing to point at, so the field drops out.
   const provenance: ReactNode = startedIn ?? (source.startsWith("chat-") ? "Its chat was deleted" : null);
-  return <WorkDetail title={task.title} status="needs-you" type="Job" technical={{ Id: task.id }}
+  return <WorkDetail title={task.title} lead="Your reply is needed before work can continue."
+    cause={ask} status="needs-you" type="Job" technical={{ Id: task.id }}
     onUndo={async (token) => { await api.undo(token); await refresh(); }}
     actions={send.isPending ? [] : [...waitingActions, ...actions]}
     fields={[
-      { label: "Ask", value: ask },
       { label: "Links", value: Array.isArray(task.links) && task.links.length ? <ul>{task.links.map(({ ref }) => <li key={ref}>
         {/^(https?:)\/\//i.test(ref) ? <a href={ref} target="_blank" rel="noreferrer">{ref}</a> : ref}
       </li>)}</ul> : null },
       { label: "Waiting since", value: task.updated_at || task.created_at
         ? relTime((task.updated_at || task.created_at)!).text : null },
-      { label: "Description", value: task.description ? <Description text={task.description} /> : null },
+      { label: "Description", value: task.description ? <div style={{ whiteSpace: "pre-wrap" }}>{task.description}</div> : null },
       ...taskFields(task).filter((field) => field.label !== "Description"),
       { label: "Source", value: history.isError ? <Alert status="warning">Couldn't check this chat. <Button size={size}
         onClick={() => void history.refetch()}>Retry</Button></Alert>
         : history.isPending ? "Checking source chat…" : !history.data ? provenance : null },
-      { label: "Reply", value: <form onSubmit={(event) => { event.preventDefault(); if (reply.trim() && !send.isPending && !closing && !history.isPending && !history.isError) send.mutate(); }}>
+      { label: "Reply", value: <form onSubmit={(event) => { event.preventDefault(); if ((reply.trim() || attempt.current) && !send.isPending && !closing && !history.isPending && !history.isError) send.mutate(reply.trim()); }}>
         <FormField label="Your reply"><Input value={reply} disabled={send.isPending || !!attempt.current}
           onChange={(event) => setReply(event.target.value)} /></FormField>
-        <Button size={size} type="submit" disabled={!reply.trim() || history.isPending || history.isError || send.isPending || closing}>
+        <Button size={size} type="submit" disabled={(!reply.trim() && !attempt.current) || history.isPending || history.isError || send.isPending || closing}>
           {send.isError ? "Retry reply" : "Send reply"}
+        </Button>
+        <Button size={size} type="button" disabled={history.isPending || history.isError || send.isPending || closing || !!attempt.current}
+          onClick={() => send.mutate("Please check again whether the reported blocker is resolved, and continue if it is.")}>
+          Check again
         </Button>
         {send.isError && <Alert status="warning">Couldn't finish sending your reply. Retry to continue.</Alert>}
       </form> },

@@ -269,6 +269,7 @@ function GoalDetailView({ ctx, item }: { ctx: WorkSectionContext; item: WorkItem
   return (
     <WorkDetail
       title={title}
+      lead={stopped ? "Work stopped before the goal was reached." : undefined}
       status={stopped ? "paused" : item.status}
       statusLabel={stopped ? "Goal stopped" : undefined}
       fields={goalFields(g)}

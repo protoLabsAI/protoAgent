@@ -63,7 +63,7 @@ it("annotates tasks without overriding per-row goal/task/watch classification", 
   const base = { id: "item", title: "Item", meta: "", status: "waiting" as const };
   const groups = workGroups([
     { ...base, id: "active", kind: "goal", raw: { status: "active" } },
-    { ...base, id: "stopped", kind: "goal", raw: { status: "exhausted" } },
+    { ...base, id: "stopped", kind: "goal", raw: { status: "exhausted", session_id: "stopped" } },
     { ...base, id: "achieved", kind: "goal", raw: { status: "achieved" } },
     { ...base, id: "running", kind: "task", raw: { status: "in_progress" } },
     { ...base, id: "queued", kind: "task", raw: { status: "open" } },

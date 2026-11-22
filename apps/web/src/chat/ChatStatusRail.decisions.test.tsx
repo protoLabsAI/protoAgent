@@ -151,8 +151,8 @@ describe("the fleet-wide marker", () => {
     const stale = row("q1", { created_at: new Date(Date.now() - 31 * 60_000).toISOString() });
     const items = [decision(stale), decision(row("q2")), delivery(71), stoppedGoal("g1")];
     await render(rail(items));
-    expect([markerCount(), expectedCount()]).toEqual(["4", 4]);
-    expect(marker()!.getAttribute("aria-label")).toBe(needsYouSpokenLabel(4));
+    expect([markerCount(), expectedCount()]).toEqual(["3", 3]);
+    expect(marker()!.getAttribute("aria-label")).toBe(needsYouSpokenLabel(3));
     expect(marker()).toBe(host.querySelector('[data-testid="chat-status-rail"]')!.firstElementChild);
     // The marker adds no second live region — the rail keeps its ONE polite announcer (§6).
     expect([...host.querySelectorAll("[aria-live], [role='status']")]
@@ -160,7 +160,7 @@ describe("the fleet-wide marker", () => {
     expect(marker()!.getAttribute("aria-haspopup")).toBe("dialog");
     await click(marker());
     expect(marker()!.getAttribute("aria-expanded")).toBe("true");
-    expect(panel()!.querySelector("h2")!.textContent).toBe("Needs you · 4");
+    expect(panel()!.querySelector("h2")!.textContent).toBe("Needs you · 3");
     // One expanded card (the first decision): recommended option primary + suggested, the
     // ≥30-minute muted hint with NO warning callout, and the exact-time tooltip on the age.
     expect(section()!.querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(1);
@@ -177,8 +177,8 @@ describe("the fleet-wide marker", () => {
     await click(rowBtn);
     expect(section()!.querySelectorAll('[role="group"][aria-label="Answer"]')).toHaveLength(2);
     // Delivery page and stopped goal are neutral rows, never DecisionCards.
-    expect(section()!.textContent).toContain("Page 71");
-    expect(section()!.textContent).toContain("couldn't be delivered");
+    expect(section()!.textContent).not.toContain("Page 71");
+    expect(section()!.textContent).not.toContain("couldn't be delivered");
     expect(section()!.textContent).toContain("Goal stopped");
     await act(async () => panel()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(panel()).toBeNull();
@@ -187,7 +187,7 @@ describe("the fleet-wide marker", () => {
     dec.records = { q1: row("q1", { state: "answered", answer: "a", answer_label: "Go" }) };
     dec.missing = { q2: true };
     await render(rail(items));
-    expect([markerCount(), expectedCount()]).toEqual(["2", 2]);
+    expect([markerCount(), expectedCount()]).toEqual(["1", 1]);
   });
 
   it("counts a `waiting` task (ADR 0129 Q1) in the marker — its row opens its Work detail", async () => {
@@ -309,3 +309,19 @@ it("stopped goal: Keep going re-arms; Drop confirms then clears; a failure says 
   expect(button("Keep going")!.disabled).toBe(false);
 });
 
+
+it("opens grouped goals in Work so every affected goal can be resolved", async () => {
+  const goals = ["first", "second"].map((id) => {
+    const item = stoppedGoal(id);
+    return { ...item, cause: "The build machine is out of disk space." };
+  });
+  await render(rail(goals));
+  expect(markerCount()).toBe("1");
+  await click(marker());
+  const grouped = section()!.querySelector<HTMLButtonElement>(".chat-status-row")!;
+  expect(grouped.textContent).toContain(goals[0].title);
+  expect(grouped.textContent).toContain(goals[1].title);
+  await click(grouped);
+  expect(useUI.getState().surfaceStates.work.itemId).toBe("goal:first");
+  expect(dec.rearm).not.toHaveBeenCalled();
+});

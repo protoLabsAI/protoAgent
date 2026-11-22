@@ -118,7 +118,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { WorkView } from "../work/WorkView";
 import { useWorkItems, type WorkItems } from "../work/useWorkItems";
-import { workGroups } from "../work/workGroups";
+import { withSharedDecisions, workGroups } from "../work/workGroups";
 // Load the seven built-in Work sections for their registration side-effect (#4955 §5), so
 // the Work surface mounts with every section live — none falls back to the unregistered Empty.
 import "../work/sections";
@@ -158,7 +158,7 @@ import { readKey, writeKey } from "../lib/storage";
 // its notebook, its task board, and its goals.
 
 /** The same rows Work's Needs you group shows, via the shared selector (work-consolidation
- *  §5): stopped goals and undelivered priority-now pages count here too, and the group is
+ *  §5): only items with a resolving action count here, and shared causes count once. The group is
  *  never chat-filtered — so the mobile menu badge can't drift from the Work list. */
 export function needsYouCount(sources: WorkItems): number {
   return workGroups(sources).find((group) => group.id === "needs-you")!.count;
@@ -904,7 +904,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   );
 
   const workSources = useWorkItems({ sessionId: workSessionId ?? undefined, thisChatOnly: false });
-  const attentionCount = needsYouCount(workSources);
+  const attentionCount = needsYouCount(withSharedDecisions(workSources, decisions));
 
   // `frame` tells a framed surface whether it's rendering inside the right-rail dock or the
   // large shell modal — the rail host passes the default, the modal mount passes "modal". Only

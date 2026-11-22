@@ -1,3 +1,4 @@
+import { isWorkInformation } from "./tone";
 // useWorkItems (#4955 §7.2) — the one data hook over all eight Work sources. Driven through
 // the same minimal createRoot/act renderHook the rest of the console uses (no testing-library
 // dep), a real QueryClient whose server lists come from spied `api`/`decisionsApi` calls, and
@@ -391,12 +392,12 @@ describe("live group adapters", () => {
     needs_human: true,
   });
 
-  it("projects only pending now pages and retires delivered pages after a stale read", async () => {
+  it("keeps Dismiss-only pages as information and retires delivered pages after a stale read", async () => {
     const pending = { ...page(1, "now"), text: "Please help with the vendor sync. It failed twice overnight." };
     spies.inbox.mockResolvedValue({ items: [pending, page(2, "next"), page(3, "later"), page(4, "now", "today")] });
     const r = mount({ sessionId: "elsewhere", thisChatOnly: true });
     await flush();
-    const deliveries = () => workGroups(r.current, { thisChatOnly: true, sessionId: "elsewhere" })[0].items.filter((i) => i.kind === "delivery");
+    const deliveries = () => (r.current.activity.groupItems ?? []).filter(isWorkInformation);
     expect(deliveries()).toHaveLength(1);
     // The row title is the short summary (first sentence), never the whole message.
     expect(deliveries()[0].title).toBe("Please help with the vendor sync.");
@@ -463,7 +464,8 @@ describe("live group adapters", () => {
     act(() => mocks.conn.forEach((fn) => fn(true)));
     await flush();
     const groups = workGroups(r.current);
-    expect(groups[0].items.filter((i) => i.kind === "delivery").map((i) => i.id)).toEqual(["2"]);
+    expect(groups[0].items.filter((i) => i.kind === "delivery")).toEqual([]);
+    expect(r.current.activity.groupItems?.filter(isWorkInformation).map((i) => i.id)).toEqual(["2"]);
     expect(groups[2].items.filter((i) => i.kind === "wait")).toEqual([]);
     expect(groups[3].items.map((i) => i.id)).toEqual(["new"]);
   });

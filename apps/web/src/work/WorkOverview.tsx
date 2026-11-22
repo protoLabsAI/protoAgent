@@ -12,10 +12,10 @@ import { WorkEmpty as Empty } from "./WorkEmpty";
 import { WorkHeading } from "./WorkHeading";
 import { useDecisions } from "../decisions/useDecisions";
 import { goalProgress, scheduleFailureNote } from "./rowMeta";
-import { decisionMeta, relTime, staleTaskMeta, taskStaleDays, type GroupableWorkItem, type WorkGroupId } from "./tone";
+import { decisionMeta, relTime, staleTaskMeta, taskStaleDays, isWorkInformation, type GroupableWorkItem, type WorkGroupId } from "./tone";
 import type { DecisionRow } from "../lib/api/decisions";
 import type { GoalState, ScheduledJob, Task } from "../lib/types";
-import type { WorkGroup } from "./workGroups";
+import { flattenWorkItems, type WorkGroup } from "./workGroups";
 import { WorkRow } from "./WorkRow";
 import { instructionRowPresentation } from "./sections/directives";
 import { activityLead } from "./sections/tasks";
@@ -95,6 +95,8 @@ function withStatusWord(word: string, meta: string): string {
 function rowPresentation(item: GroupableWorkItem, group: Exclude<WorkGroupId, "instructions">): {
   tag: string; tone: Status; icon: ReactNode; meta?: string; title?: string; scope?: string;
 } {
+  if (item.affected) return { tag: "Affected work", tone: "neutral", icon: <StatusDot status="neutral" />,
+    title: item.title, meta: item.affected.map((member) => member.title).join(" · ") };
   switch (group) {
     case "needs-you":
       // Work lists every chat, so a decision row keeps its agent name (§2.4 field 5).
@@ -243,16 +245,24 @@ export function WorkOverview({ groups, sources, onOpen, sessionId, onNew }: {
 }) {
   const loading = Object.values(sources).some((source) => source.status === "loading");
   const failed = Object.values(sources).some((source) => source.status === "error");
+  const information = flattenWorkItems(sources).filter(isWorkInformation);
   const visible = groups.filter((group) => group.items.length > 0);
   return <div className="work-overview">
     <SourceNotices sources={sources} />
     {loading && <div aria-label="Loading work" aria-busy="true"><Skeleton lines={3} /><Skeleton lines={3} /></div>}
-    {!loading && !visible.length && !failed && <Empty title="Nothing to track."
+    {!loading && !visible.length && !information.length && !failed && <Empty title="Nothing to track."
       description={onNew ? <>
         Nothing needs you, nothing is running or planned, and you haven&apos;t given standing instructions.<br />
         Tell the agent what to do, and when: now, later, when something happens, or as a standing rule.
       </> : "Nothing needs you, nothing is running or planned, and you haven't given standing instructions."}
       action={onNew && <Button variant="primary" onClick={() => onNew()}><Plus aria-hidden="true" size={14} /> New</Button>} />}
+    {information.length > 0 && <section aria-label="What happened">
+      <WorkHeading label="What happened" count={information.length} />
+      <ul className="work-group">{information.map((item) => <li key={itemKey(item)}>
+        <WorkRow title={item.title} status="paused" tag="Information" meta={item.meta}
+          focusKey={itemKey(item)} onOpen={() => onOpen(item)} />
+      </li>)}</ul>
+    </section>}
     {visible.map((group) => <section key={group.id} aria-label={group.label}>
       <WorkHeading label={group.label} count={group.count} action={<WorkGroupNew group={group} onNew={onNew} />} />
       <WorkGroupRows group={group} sources={sources} onOpen={onOpen} sessionId={sessionId} />

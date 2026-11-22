@@ -224,6 +224,15 @@ export function NeedsYouSection({ items, held, onHold, records, answer, mobile, 
             );
           })}
           {goals.map((item) => {
+            if (item.affected) return <li key={`goal:${item.id}`}>
+              <button type="button" className="chat-status-row" onClick={() => {
+                onNavigate();
+                openWork(`goal:${item.id}`);
+              }}>
+                <span className="chat-status-row__text">{item.title}</span>
+                <span className="chat-status-row__cue">{item.affected.map((member) => member.title).join(" · ")}</span>
+              </button>
+            </li>;
             // A stopped goal keeps its own Keep going / Drop the goal controls (with the inline
             // confirm), so it is a quiet-framed row, not a navigable button.
             const goal = item.raw as GoalState;

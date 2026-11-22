@@ -1,0 +1,1 @@
+- **Make Needs you actionable.** Notices with only Dismiss appear as information in What happened. Shared causes appear once with links to affected work; details show the full cause and keep identifiers under Technical details. Waiting work can ask its producer to check again. Fixes #5681.
