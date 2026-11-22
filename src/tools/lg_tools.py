@@ -165,7 +165,7 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 @tool
 def request_decision(question: str, options: list[str | dict], context: str = "",
                      expires_in_minutes: int | None = None, default_option: str | None = None,
-                     default_action: str | None = None) -> str:
+                     default_action: str | None = None, requires_pick: bool = False) -> str:
     # Maintainer notes (kept out of the model-facing docstring): unlike ask_human /
     # request_user_input, a ``kind: "decision"`` interrupt PARKS even on an autonomous turn
     # (server/turn_control.py) — the agent deliberately chose to stop rather than guess — and
@@ -183,6 +183,7 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
     Pass both ``expires_in_minutes`` (positive) and ``default_option`` (an option id)
     to apply that default on expiry, or neither to wait indefinitely. ``default_action``
     is an optional verb phrase describing that action, valid only with expiry.
+    Set ``requires_pick=True`` for approvals that must use an option instead of typed text.
     At most one option may carry ``recommended: true``.
     """
     from langgraph.types import interrupt
@@ -203,7 +204,7 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
         return f"Error: {exc}"
     answer = interrupt({"kind": "decision", "question": question, "options": options, "context": context,
                         "expires_in_minutes": expires_in_minutes, "default_option": default_option,
-                        "default_action": default_action})
+                        "default_action": default_action, "requires_pick": requires_pick})
     return answer if isinstance(answer, str) else str(answer)
 
 

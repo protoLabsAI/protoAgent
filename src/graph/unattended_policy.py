@@ -162,7 +162,7 @@ def ask_payload(payload: dict, *, tool: str, args: Any, action: str = "", call_i
     """A ``request_decision`` payload that shows the exact action an ask-tier tool wants.
 
     It replaces the tool's own pause, so the existing decision path parks it, records it and
-    resumes it. For an approval card the options are Approve / Deny; a plain question keeps
+    resumes it. An approval card requires an explicit Approve / Deny pick; a plain question keeps
     its own text and takes a typed answer."""
     kind = str(payload.get("kind") or "")
     shown = describe_args(args)
@@ -187,6 +187,7 @@ def ask_payload(payload: dict, *, tool: str, args: Any, action: str = "", call_i
         "kind": "decision",
         "question": question,
         "options": options,
+        "requires_pick": kind == "approval",
         "context": "An unattended turn needs your approval before it acts.\n" + "\n".join(lines),
         "expires_in_minutes": None,
         "default_option": None,

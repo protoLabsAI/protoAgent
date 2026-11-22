@@ -84,7 +84,8 @@ def _resolve_answer(rec, body: AnswerRequest) -> str:
     """The answer string to resume the turn with, validated against the record's options.
 
     An ``option_id`` must name one of the decision's options (matched by id, then by label)
-    and resolves to that option's canonical id; a free-text ``text`` is taken verbatim. Raises
+    and resolves to that option's canonical id; a free-text ``text`` is taken verbatim unless
+    the decision requires an explicit pick. Raises
     :class:`fastapi.HTTPException` 400 on an unknown option or when neither field is given."""
     from fastapi import HTTPException
 
@@ -101,6 +102,8 @@ def _resolve_answer(rec, body: AnswerRequest) -> str:
             valid = ", ".join(by_id) or "(none)"
             raise HTTPException(status_code=400, detail=f"unknown option {option_id!r} — valid options: {valid}")
         return resolved
+    if rec.requires_pick:
+        raise HTTPException(status_code=400, detail="this decision requires picking an option_id")
     if text:
         return text
     raise HTTPException(status_code=400, detail="provide an option_id or free-text answer")
