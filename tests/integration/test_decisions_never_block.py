@@ -11,6 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from a2a.types import TaskState
 
 from tests.integration.conftest import http_get, http_post, poll, requires_integration
 
@@ -217,7 +218,15 @@ def test_non_operator_message_is_processed_and_cannot_answer(fleet):
         with _SEEN_LOCK:
             calls = len(_SEEN)
         refused = _post_message(hub.base, token, session, "Ship it", mid=f"{kind}-continue", task_id=task_id)
-        assert "already completed" in (refused.get("error") or {}).get("message", ""), refused
+        # The SDK's refusal depends on whether its finished ActiveTask was cleaned up;
+        # the executor also guards terminal tasks if execution reaches its backstop.
+        assert (refused.get("error") or {}).get("code") == -32004, refused  # UnsupportedOperation
+        assert (refused.get("error") or {}).get("message", "") in {
+            f"Task {task_id} is in terminal state: {TaskState.TASK_STATE_COMPLETED}",
+            f"Task {task_id} is already completed.",
+            f"Task {task_id} is already completed. Cannot start it again.",
+            f"Task {task_id} has already ended",
+        }, refused
         with _SEEN_LOCK:
             assert len(_SEEN) == calls, f"{kind}: a refused continuation must not reach the model"
         _assert_pending(hub.base, dec, f"{kind} after the continuation")

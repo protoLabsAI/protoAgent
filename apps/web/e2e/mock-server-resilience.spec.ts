@@ -71,7 +71,7 @@ test.describe("a request that fails costs that request, not the server", () => {
     const res = await fetch(`http://127.0.0.1:${port}/__e2e/throw`);
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ error: "e2e deliberate handler failure" });
-    expect(server.stderr()).toContain("[e2e mock] GET /__e2e/throw handler failed: Error: e2e deliberate handler failure");
+    await expect.poll(() => server.stderr()).toContain("[e2e mock] GET /__e2e/throw handler failed: Error: e2e deliberate handler failure");
     expect(await healthz(port)).toBe(200);
     expect(server.child.exitCode).toBeNull();
 
