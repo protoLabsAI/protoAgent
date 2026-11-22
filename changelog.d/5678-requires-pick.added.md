@@ -1,1 +1,0 @@
-- **Approval decisions require an explicit option pick.** Unattended ask-tier approvals reject typed answers, and agents can opt other decisions into the same protection with `request_decision(requires_pick=True)`. Other decisions retain typed answers. Refs #5678.

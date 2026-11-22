@@ -1,1 +1,0 @@
-- **Exact typed decision answers.** Verified operator messages can answer a single open no-pause decision by matching an option's full id or label, ignoring case and punctuation. Other messages, server-started turns, and decisions requiring a pick remain pending. Refs #5678.
