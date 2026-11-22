@@ -318,6 +318,10 @@ def _inbox_batch_snapshot(members: list[dict], *, now: datetime | None = None) -
             "inbox_source": source,
             "priority": priority,
             "inbox_ids": ids,
+            # Stable representative for singular attribution consumers; inbox_ids
+            # remains the authoritative full membership.
+            "inbox_id": ids[0],
+            "created_at": first.get("created_at"),
         },
     }
 
@@ -358,6 +362,9 @@ async def _fire_activity_from_inbox_batch(members: list[dict], binding: dict | N
     metadata = dict(snapshot.get("metadata") or {})
     metadata.setdefault("origin", "inbox")
     metadata.setdefault("inbox_ids", ids)
+    # Older frozen snapshots predate the compatibility attribution key.
+    if ids:
+        metadata.setdefault("inbox_id", min(ids))
     body = {
         "jsonrpc": "2.0",
         "id": mid,

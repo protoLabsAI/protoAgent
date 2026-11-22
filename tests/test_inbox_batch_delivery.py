@@ -136,7 +136,10 @@ async def test_same_source_items_run_as_one_turn_with_one_shared_identity(env):
     # The late member keeps its own staleness line; the fresh members carry none.
     assert text.count("delivered 3h late") == 1
     assert msg["contextId"].startswith("job:")
-    assert msg["metadata"] == {"origin": "inbox", "inbox_source": "ci", "priority": "now", "inbox_ids": ids}
+    assert msg["metadata"] == {
+        "origin": "inbox", "inbox_source": "ci", "priority": "now",
+        "inbox_ids": ids, "inbox_id": a["id"], "created_at": a["created_at"],
+    }
 
     assert _pending(store) == []
     rows = _executions(store, ids)
@@ -326,7 +329,8 @@ def test_bind_aborts_when_a_member_claim_changed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_partial_claim_of_an_uncertain_batch_resends_the_full_frozen_snapshot(env):
+@pytest.mark.parametrize("mark_fails", [False, True])
+async def test_partial_claim_of_an_uncertain_batch_resends_the_full_frozen_snapshot(env, monkeypatch, mark_fails):
     """A pass that claims only SOME members of an unresolved batch never sends a reduced
     batch under a new identity: it re-sends the original full snapshot under the original
     identity, and acceptance completes every frozen member."""
@@ -342,6 +346,14 @@ async def test_partial_claim_of_an_uncertain_batch_resends_the_full_frozen_snaps
     db.commit()
     db.close()
 
+    mark_delivered = store.mark_delivered
+
+    def mark(ids):
+        if mark_fails and ids == [a["id"]]:
+            raise OSError("write unavailable")
+        return mark_delivered(ids)
+
+    monkeypatch.setattr(store, "mark_delivered", mark)
     fake.mode = "ok"
     assert await _recover() == {"claimed": 1, "accepted": 1, "failed": 0}
     first, retry = fake.messages()
@@ -349,3 +361,39 @@ async def test_partial_claim_of_an_uncertain_batch_resends_the_full_frozen_snaps
     assert "first of pair" in retry["parts"][0]["text"] and "second of pair" in retry["parts"][0]["text"]
     assert len(fake.turns) == 1
     assert _pending(store) == []  # a rode the accepted turn and is completed too
+    if mark_fails:
+        assert store.get(a["id"])["recovery_accepted_at"]
+        assert store.get(a["id"])["delivered_at"] is None
+        monkeypatch.setattr(store, "mark_delivered", mark_delivered)
+        # Durable completion bypasses the exhausted attempt budget, even while busy.
+        assert await stores.recover_pending_now_inbox_items(is_busy=lambda: True) == {
+            "claimed": 1, "accepted": 1, "failed": 0,
+        }
+        assert store.get(a["id"])["delivered_at"]
+        assert len(fake.posted) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_delivered_member_only_completes_remaining_batch_with_acceptance(env, accepted):
+    store, fake = env
+    items = [store.add(f"note {n}", priority="now", source="peer") for n in range(2)]
+    ids = [i["id"] for i in items]
+    fake.mode = "refuse"
+    assert await _recover() == {"claimed": 2, "accepted": 0, "failed": 2}
+    binding = store.batch_bindings(ids)[ids[0]]
+    # A pull consumer may deliver one item after the refused send releases its claim.
+    store.mark_delivered([ids[0]])
+    if accepted:
+        store.record_batch_acceptance(binding["context_id"], "accepted-task")
+
+    assert await _recover() == {"claimed": 1, "accepted": int(accepted), "failed": int(not accepted)}
+    assert len(fake.posted) == 1
+    remaining = store.get(ids[1])
+    assert bool(remaining["delivered_at"]) == accepted
+    if not accepted:
+        assert remaining["recovery_claimed_at"] is None
+        assert remaining["recovery_attempts"] == 1
+        assert "acceptance is unknown" in remaining["recovery_error"]
+        assert store.batch_bindings(ids)[ids[1]]["context_id"] == binding["context_id"]
+        assert [p["id"] for p in _pending(store)] == [ids[1]]

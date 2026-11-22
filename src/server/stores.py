@@ -556,12 +556,21 @@ async def recover_pending_now_inbox_items(
         if unit.get("members"):
             members = unit["members"]
             binding = unit.get("binding")
-            # Completion-only: the frozen batch is already accepted (or a member already
-            # delivered), or every claimed member carries a durable accepted marker — mark
+            # Completion-only: the frozen batch is already accepted, or every claimed
+            # member carries a durable accepted marker — mark
             # them delivered without a fire, even while busy, and consume no storm budget.
-            completion_only = bool(binding and (binding.get("task_id") or binding.get("delivered_ids"))) or all(
+            completion_only = bool(binding and binding.get("task_id")) or all(
                 m.get("recovery_accepted_at") for m in members
             )
+            if not completion_only and binding and binding.get("delivered_ids"):
+                # A pull consumer can deliver one member without accepting the batch.
+                # Keep the frozen identity and defer with evidence, without replaying
+                # delivered payload or silently completing the remaining members.
+                reason = "batch acceptance is unknown after a member was delivered; awaiting reconciliation"
+                for m in members:
+                    failed += 1
+                    await _restore(int(m["id"]), reason, m.get("recovery_claimed_at"), refund_attempt=True)
+                continue
             if not completion_only and is_busy is not None and is_busy():
                 await _restore_remaining(
                     _unit_items(units[idx:]), "the agent is busy — retrying when it is free", refund_attempt=True
@@ -608,13 +617,7 @@ async def recover_pending_now_inbox_items(
             claimed_ids = {int(m["id"]) for m in members}
             for other in (binding or {}).get("member_ids") or []:
                 if int(other) not in claimed_ids:
-                    try:
-                        await asyncio.to_thread(store.mark_delivered, [int(other)])
-                        from server.a2a import settle_owed_inbox_restore
-
-                        await asyncio.to_thread(settle_owed_inbox_restore, int(other))
-                    except Exception:  # noqa: BLE001 — a later pass completes it from the batch record
-                        log.exception("[inbox] now-recovery could not complete batch member %s", other)
+                    await _complete(int(other), None)
             continue
 
         item = unit["item"]
