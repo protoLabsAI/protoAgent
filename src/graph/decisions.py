@@ -66,6 +66,18 @@ def is_spend_cap_decision(rec: Decision) -> bool:
     return not rec.thread_id and rec.interrupt_id.startswith(SPEND_CAP_PREFIX)
 
 
+def is_unpaused_decision(rec: Decision) -> bool:
+    """Whether the record lives in the ledger on its own, with no checkpoint pause (#5678).
+
+    Such a record belongs to a chat thread (non-empty ``thread_id``) but was never raised
+    on an interrupt (empty ``interrupt_id``), so there is no pause for a later turn on that
+    thread to drop. It is never "stranded": the stranded-record reconcile
+    (``graph/decision_reconcile.py``) only closes a record whose checkpoint provably lost
+    the interrupt it names, and this one names none. Spend-cap and restart-recovery
+    records are a different kind: they carry a marker ``interrupt_id`` and no thread."""
+    return bool(rec.thread_id) and not rec.interrupt_id
+
+
 # One lock for every store object: :func:`decision_store` may hand out a fresh one per call,
 # and the SQLite file is shared; serialize the read-modify-write of answer/cancel so two
 # store objects over the same db can't race a non-pending transition.
@@ -152,6 +164,12 @@ class Decision:
     # How the answer was given: "option" (a listed option was picked) or "text" (typed).
     # None while pending, and on an expired, withdrawn or cancelled record.
     answer_kind: str | None = None
+    # Typed text never answers this decision: the operator must pick a listed option (#5678).
+    requires_pick: bool = False
+    # When the operator was reminded this decision is still open; None until reminded.
+    reminded_at: str | None = None
+    # When the answer reached the agent as a new turn; None until delivered.
+    delivered_at: str | None = None
 
     def option_label(self, option: str | None) -> str | None:
         return next(
@@ -196,6 +214,9 @@ class Decision:
             interrupt_id=row["interrupt_id"],
             context=row["context"],
             **{k: row[k] for k in ("default_action", "withdraw_reason", "answered_by", "answered_surface", "answer_kind")},
+            requires_pick=bool(row["requires_pick"]),
+            reminded_at=row["reminded_at"],
+            delivered_at=row["delivered_at"],
         )
 
 
@@ -338,6 +359,11 @@ class DecisionStore:
             for column in ("default_action", "withdraw_reason", "answered_by", "answered_surface", "answer_kind"):
                 if column not in columns:
                     db.execute(f"ALTER TABLE decisions ADD COLUMN {column} TEXT")
+            if "requires_pick" not in columns:
+                db.execute("ALTER TABLE decisions ADD COLUMN requires_pick INTEGER NOT NULL DEFAULT 0")
+            for column in ("reminded_at", "delivered_at"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE decisions ADD COLUMN {column} TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_state ON decisions(state, created_at)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_session ON decisions(session_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_decisions_interrupt ON decisions(thread_id, interrupt_id)")
@@ -361,9 +387,16 @@ class DecisionStore:
         expires_at: str | None = None,
         expires_in_minutes: int | None = None,
         default_action: str | None = None,
+        requires_pick: bool = False,
     ) -> Decision:
         """Record a new pending decision. ``options`` is the tool's raw ``list[str | dict]``
-        (normalized here). Publishes ``decision.changed`` with ``state="pending"``."""
+        (normalized here). Publishes ``decision.changed`` with ``state="pending"``.
+
+        ``interrupt_id`` names the checkpoint pause the decision was raised on. Leave it
+        empty (with a ``thread_id``) to record a decision that has no pause: it is never
+        deduplicated against another record and never treated as stranded
+        (:func:`is_unpaused_decision`). ``requires_pick`` marks a decision only a listed
+        option may answer."""
         session_id = (session_id or "").strip()
         if not session_id:
             raise DecisionError("a decision belongs to a chat — no session id was given")
@@ -410,6 +443,7 @@ class DecisionStore:
                     expires_at=expires_at,
                     default_option=default_option,
                     default_action=default_action[:MAX_QUESTION_CHARS] if default_action else None,
+                    requires_pick=bool(requires_pick),
                 )
                 db.execute(
                     "INSERT INTO decisions (id, session_id, agent, question, options, created_at, state, "
@@ -429,8 +463,9 @@ class DecisionStore:
                     ),
                 )
                 db.execute(
-                    "UPDATE decisions SET thread_id = ?, interrupt_id = ?, context = ?, default_action = ? WHERE id = ?",
-                    (rec.thread_id, rec.interrupt_id, rec.context, rec.default_action, rec.id),
+                    "UPDATE decisions SET thread_id = ?, interrupt_id = ?, context = ?, default_action = ?, "
+                    "requires_pick = ? WHERE id = ?",
+                    (rec.thread_id, rec.interrupt_id, rec.context, rec.default_action, int(rec.requires_pick), rec.id),
                 )
                 db.commit()
             finally:
@@ -576,9 +611,12 @@ class DecisionStore:
                 rec.answered_by = None
                 rec.answered_surface = None
                 rec.answer_kind = None
+                # No answer any more, so no answer can have been delivered.
+                rec.delivered_at = None
                 db.execute(
                     "UPDATE decisions SET state = ?, answer = NULL, answered_at = NULL, "
-                    "answered_by = NULL, answered_surface = NULL, answer_kind = NULL WHERE id = ? AND state = ?",
+                    "answered_by = NULL, answered_surface = NULL, answer_kind = NULL, delivered_at = NULL "
+                    "WHERE id = ? AND state = ?",
                     (STATE_PENDING, rec.id, STATE_ANSWERED),
                 )
                 db.commit()
@@ -589,6 +627,41 @@ class DecisionStore:
                 self._close(db)
         _publish("decision.changed", {"id": rec.id, "session_id": rec.session_id, "state": rec.state})
         return rec
+
+    def mark_reminded(self, decision_id: str) -> Decision:
+        """Stamp ``reminded_at``: the operator was told once that this decision is still
+        open (#5678). The first stamp wins, so calling it again changes nothing. Raises
+        :class:`DecisionNotFound` for an unknown id. Returns the record as it now stands."""
+        return self._stamp(decision_id, "reminded_at")
+
+    def mark_delivered(self, decision_id: str) -> Decision:
+        """Stamp ``delivered_at``: the answer reached the agent as a new turn (#5678). The
+        first stamp wins, so calling it again changes nothing. Raises
+        :class:`DecisionNotFound` for an unknown id. Returns the record as it now stands."""
+        return self._stamp(decision_id, "delivered_at")
+
+    def _stamp(self, decision_id: str, column: str) -> Decision:
+        """Set a nullable timestamp column once. ``column`` is a fixed name from the two
+        setters above, never caller input. Not a state change, so nothing is published."""
+        decision_id = (decision_id or "").strip()
+        with self._lock:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute(
+                    f"UPDATE decisions SET {column} = ? WHERE id = ? AND {column} IS NULL",
+                    (self._now(), decision_id),
+                )
+                row = db.execute("SELECT * FROM decisions WHERE id = ?", (decision_id,)).fetchone()
+                if row is None:
+                    raise DecisionNotFound(f"no decision {decision_id!r}")
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+            finally:
+                self._close(db)
+        return Decision.from_row(row)
 
     def _close_record(self, decision_id: str, state: str, *, answer: str | None = None,
                       answered_by: str | None = None, answered_surface: str | None = None,
