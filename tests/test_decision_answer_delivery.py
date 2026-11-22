@@ -625,7 +625,7 @@ async def test_no_pause_delivery_failure_preserves_answer(monkeypatch, failure):
     store = DecisionStore(":memory:")
     monkeypatch.setattr(STATE, "decision_store", store)
     monkeypatch.setattr(STATE, "active_port", 7871)
-    rec = store.create(SESSION, "Release?", ["yes", "no"])
+    rec = store.create(SESSION, "Release?", ["yes", "no"], thread_id=THREAD)
 
     async def receive(request):
         if failure == "timeout":
@@ -653,7 +653,7 @@ async def test_saved_answer_waiting_for_acceptance_reports_delivery_in_progress(
     monkeypatch.setattr(STATE, "decision_store", store)
     monkeypatch.setattr(STATE, "active_port", 7871)
     monkeypatch.setattr(decision_routes, "ACCEPT_WAIT_S", 0.01)
-    rec = store.create(SESSION, "Release?", ["yes", "no"])
+    rec = store.create(SESSION, "Release?", ["yes", "no"], thread_id=THREAD)
     accept = asyncio.Event()
     requests = []
 
@@ -681,3 +681,41 @@ async def test_saved_answer_waiting_for_acceptance_reports_delivery_in_progress(
             accept.set()
             await _until(lambda: store.get(rec.id).delivered_at is not None)
         assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_threadless_record_without_pause_id_keeps_the_resume_path(monkeypatch):
+    """Only an unpaused record ON A THREAD is saved first and delivered as a new turn; a
+    legacy record with neither id goes down the unchanged resume path (stays pending until
+    a turn driver consumes it) and is never handed to the new-turn reader."""
+    from graph.decision_resume import ResumeOutcome, decision_answer_message, deliver_decision_answer
+    from graph.decisions import DecisionError
+
+    store = DecisionStore(":memory:")
+    monkeypatch.setattr(STATE, "decision_store", store)
+    monkeypatch.setattr(STATE, "active_port", 7871)
+    monkeypatch.setattr(decision_routes, "ACCEPT_WAIT_S", 0.2)
+    legacy = store.create(SESSION, "Old?", ["yes", "no"])
+    wire = []
+
+    async def receive(request):
+        wire.append(json.loads(request.content)["params"])
+        return httpx.Response(200, json={"result": {"task": {"status": {"state": "TASK_STATE_WORKING"}}}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: RealAsyncClient(
+        transport=httpx.MockTransport(receive), **kw))
+    app = FastAPI()
+    as_operator(app)
+    decision_routes.register_decision_routes(app)
+    async with RealAsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/decisions/{legacy.id}/answer", json={"option_id": "yes"})
+    assert response.status_code == 200
+    assert len(wire) == 1
+    assert wire[0]["message"]["metadata"]["hitl_resume"] is True
+    assert "configuration" not in wire[0]
+    saved = store.get(legacy.id)
+    assert saved.pending and saved.delivered_at is None
+    assert await deliver_decision_answer(legacy.id) is ResumeOutcome.NOT_DELIVERED
+    assert len(wire) == 1
+    with pytest.raises(DecisionError):
+        decision_answer_message(legacy.id, SESSION)

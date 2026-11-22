@@ -135,7 +135,12 @@ def register_decision_routes(app) -> None:
         decision_store,
         restart_recovery_ref,
         is_spend_cap_decision,
+        is_unpaused_decision,
     )
+
+    def awaiting_delivery(rec) -> bool:
+        # Pending, or a no-pause answer saved in the ledger but not yet accepted as a turn.
+        return rec.pending or (is_unpaused_decision(rec) and not rec.delivered_at)
 
     @app.get("/api/decisions")
     async def _api_decisions(state: str | None = None, session_id: str | None = None, limit: int = 200):
@@ -173,7 +178,7 @@ def register_decision_routes(app) -> None:
 
     def with_delivery(rec) -> dict:
         # Every single-record response carries it, so a 409 detail equals a fresh GET.
-        return {**rec.to_dict(), "delivering": (rec.pending or (not rec.interrupt_id and not rec.delivered_at)) and delivering(rec.id)}
+        return {**rec.to_dict(), "delivering": awaiting_delivery(rec) and delivering(rec.id)}
 
     def delivery_done(task):
         deliveries.discard(task)
@@ -262,7 +267,7 @@ def register_decision_routes(app) -> None:
                     except DecisionClosed as exc:
                         raise HTTPException(status_code=409, detail=str(exc)) from exc
                     return
-                if not current.interrupt_id and recovery_ref is None:
+                if is_unpaused_decision(current):
                     try:
                         await asyncio.to_thread(store.answer, decision_id, answer,
                                                 answered_by=actor, answered_surface=body.surface,
@@ -312,7 +317,7 @@ def register_decision_routes(app) -> None:
         await asyncio.wait({accepted_delivery}, timeout=max(0.0, deadline - loop.time()))
         if not accepted_delivery.done():
             current = await asyncio.to_thread(store.get, decision_id)
-            if current is not None and (current.pending or (not current.interrupt_id and not current.delivered_at)):
+            if current is not None and awaiting_delivery(current):
                 return on_its_way(current)
             await accepted_delivery  # consumed at the deadline; settles at once
         elif (exc := accepted_delivery.exception()) is not None:
@@ -329,7 +334,7 @@ def register_decision_routes(app) -> None:
             raise HTTPException(status_code=409, detail=with_delivery(updated))
         # The checkpoint is authoritative even if the HTTP response was lost or timed out.
         resumed = updated.state == "answered"
-        if not rec.interrupt_id and restart_recovery_ref(rec) is None and not is_spend_cap_decision(rec):
+        if is_unpaused_decision(rec):
             resumed = bool(updated.delivered_at)
         return {"decision": with_delivery(updated), "resumed": resumed}
 

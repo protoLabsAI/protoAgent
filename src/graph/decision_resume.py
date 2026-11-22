@@ -120,20 +120,12 @@ async def resume_parked_turn(
     defaults. Either way a turn that ends failed is a WARNING naming the decision, never
     silent — including one that fails after consuming the answer (``TURN_FAILED``).
     """
-    import uuid
-
-    import httpx
-
-    from a2a_impl.auth import self_invocation_headers
     from runtime.state import STATE
 
     port = getattr(STATE, "active_port", None)
     if not port:
         log.warning("[decision] no active port — cannot resume parked turn for %s", session_id)
         return ResumeOutcome.NOT_DELIVERED
-    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-    headers.update(self_invocation_headers())
-    message_id = str(uuid.uuid4())
     # The operator is answering/dismissing: a live human, so an empty origin (interactive) —
     # `hitl_resume` converts this to a graph resume rather than a fresh turn. A `decision_id`
     # is carried only on the answer path (it gates validate_decision_resume); the cancel path
@@ -145,49 +137,70 @@ async def resume_parked_turn(
         metadata["decision_id"] = decision_id
         if resolution:
             metadata["decision_resolution"] = resolution
-    body = {
-        "jsonrpc": "2.0",
-        "id": message_id,
-        "method": "SendMessage",
-        "params": {
-            "message": {
-                "role": "ROLE_USER",
-                "parts": [{"text": answer}],
-                "messageId": message_id,
-                "contextId": session_id,
-                "metadata": metadata,
-            },
-        },
-    }
     if wait_for_turn is None:
         wait_for_turn = bool(decision_id and resolution and resolution.get("state") == "answered")
-    timeout = httpx.Timeout(RESUME_TIMEOUT_S, read=None) if wait_for_turn else RESUME_TIMEOUT_S
     label = f"decision {decision_id}" if decision_id else "dismissal"
+    outcome, state = await _post_loopback(port, session_id, answer, metadata, label=label,
+                                          wait_for_turn=wait_for_turn)
+    if outcome is ResumeOutcome.DELIVERED and wait_for_turn:
+        log.info("[decision] resumed turn for %s (%s) finished: %s", session_id, label, state or "ok")
+    return outcome
+
+
+async def _post_loopback(
+    port, session_id: str, text: str, metadata: dict, *, label: str,
+    wait_for_turn: bool = False, configuration: dict | None = None,
+) -> tuple[ResumeOutcome, str]:
+    """POST one SendMessage to this server's own ``/a2a`` and classify the reply.
+
+    Shared by the parked-turn resume and the no-pause new-turn delivery: same envelope,
+    self-invocation headers, and outcome mapping. Returns ``(outcome, task state)``;
+    ``DELIVERED`` covers any non-failed reply, including one with no task state."""
+    import uuid
+
+    import httpx
+
+    from a2a_impl.auth import self_invocation_headers
+
+    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
+    headers.update(self_invocation_headers())
+    message_id = str(uuid.uuid4())
+    params: dict = {
+        "message": {
+            "role": "ROLE_USER",
+            "parts": [{"text": text}],
+            "messageId": message_id,
+            "contextId": session_id,
+            "metadata": metadata,
+        },
+    }
+    if configuration:
+        params = {"configuration": configuration, **params}
+    body = {"jsonrpc": "2.0", "id": message_id, "method": "SendMessage", "params": params}
+    timeout = httpx.Timeout(RESUME_TIMEOUT_S, read=None) if wait_for_turn else RESUME_TIMEOUT_S
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"http://127.0.0.1:{port}/a2a", headers=headers, json=body)
         if r.status_code >= 400:
             log.warning("[decision] resume for %s failed: HTTP %d %s", session_id, r.status_code, r.text[:200])
-            return ResumeOutcome.NOT_DELIVERED
+            return ResumeOutcome.NOT_DELIVERED, ""
         payload = r.json()
         if payload.get("error"):
             log.warning("[decision] resume for %s (%s) refused: %s", session_id, label, str(payload["error"])[:200])
-            return ResumeOutcome.NOT_DELIVERED
-        state, text = _task_outcome(payload)
+            return ResumeOutcome.NOT_DELIVERED, ""
+        state, reply = _task_outcome(payload)
         if state in _FAILED_TASK_STATES:
-            log.warning("[decision] resumed turn for %s (%s) ended %s: %s", session_id, label, state, text[:300])
-            return ResumeOutcome.TURN_FAILED
-        if wait_for_turn:
-            log.info("[decision] resumed turn for %s (%s) finished: %s", session_id, label, state or "ok")
-        return ResumeOutcome.DELIVERED
+            log.warning("[decision] resumed turn for %s (%s) ended %s: %s", session_id, label, state, reply[:300])
+            return ResumeOutcome.TURN_FAILED, state
+        return ResumeOutcome.DELIVERED, state
     except httpx.TimeoutException:
         # The turn may still be running server-side: delivery is unknown, not refused.
         log.warning("[decision] resume for %s (%s) timed out after %ss; the turn may still be running",
                     session_id, label, RESUME_TIMEOUT_S)
-        return ResumeOutcome.UNKNOWN
+        return ResumeOutcome.UNKNOWN, ""
     except Exception:  # noqa: BLE001 — a resume transport error must not 500 the answer route
         log.exception("[decision] resume POST failed for %s", session_id)
-        return ResumeOutcome.NOT_DELIVERED
+        return ResumeOutcome.NOT_DELIVERED, ""
 
 
 def decision_answer_message(decision_id: str, session_id: str) -> str:
@@ -196,10 +209,11 @@ def decision_answer_message(decision_id: str, session_id: str) -> str:
     Chat drivers can use this reader under their turn lock. Bind the reference to
     its session so another thread cannot obtain the answer.
     """
-    from graph.decisions import DecisionError, decision_store
+    from graph.decisions import DecisionError, decision_store, is_unpaused_decision
 
     rec = decision_store().get(decision_id)
-    if rec is None or rec.session_id != session_id or rec.interrupt_id or rec.state != "answered":
+    if (rec is None or rec.session_id != session_id or not is_unpaused_decision(rec)
+            or rec.state != "answered"):
         raise DecisionError("decision is not an answered no-pause decision on this session")
     answer = (f"Operator chose: {rec.option_label(rec.answer)} ({rec.answer})"
               if rec.answer_kind == "option" else rec.answer)
@@ -214,54 +228,31 @@ async def deliver_decision_answer(decision_id: str) -> ResumeOutcome:
     next-turn recovery. The answer route's claim and ledger CAS arbitrate submissions.
     """
     import asyncio
-    import uuid
 
-    import httpx
-
-    from a2a_impl.auth import self_invocation_headers
-    from graph.decisions import decision_store
+    from graph.decisions import decision_store, is_unpaused_decision
     from runtime.state import STATE
 
     store = decision_store()
     rec = await asyncio.to_thread(store.get, decision_id)
-    if rec is None or rec.interrupt_id or rec.state != "answered":
+    if rec is None or not is_unpaused_decision(rec) or rec.state != "answered":
         return ResumeOutcome.NOT_DELIVERED
     if rec.delivered_at:
         return ResumeOutcome.DELIVERED
     port = getattr(STATE, "active_port", None)
     if not port:
+        log.warning("[decision] no active port — cannot deliver answer for %s", decision_id)
         return ResumeOutcome.NOT_DELIVERED
     text = await asyncio.to_thread(decision_answer_message, decision_id, rec.session_id)
     metadata = {"decision_id": decision_id}
     if grant := mint_resume_grant(rec.session_id, decision_id):
         metadata[RESUME_GRANT_KEY] = grant
-    message_id = str(uuid.uuid4())
-    body = {
-        "jsonrpc": "2.0", "id": message_id, "method": "SendMessage",
-        "params": {
-            "configuration": {"returnImmediately": True},
-            "message": {
-                "role": "ROLE_USER", "parts": [{"text": text}],
-                "messageId": message_id, "contextId": rec.session_id, "metadata": metadata,
-            },
-        },
-    }
-    headers = {"Content-Type": "application/json", "A2A-Version": "1.0", **self_invocation_headers()}
-    try:
-        async with httpx.AsyncClient(timeout=RESUME_TIMEOUT_S) as client:
-            response = await client.post(f"http://127.0.0.1:{port}/a2a", headers=headers, json=body)
-        if response.status_code >= 400 or response.json().get("error"):
-            return ResumeOutcome.NOT_DELIVERED
-        state, _ = _task_outcome(response.json())
-        if state in _FAILED_TASK_STATES:
-            return ResumeOutcome.TURN_FAILED
-        if not state:
-            return ResumeOutcome.NOT_DELIVERED
-        await asyncio.to_thread(store.mark_delivered, decision_id)
-        return ResumeOutcome.DELIVERED
-    except httpx.TimeoutException:
-        log.warning("[decision] new-turn delivery timed out for %s", decision_id)
-        return ResumeOutcome.UNKNOWN
-    except Exception:  # noqa: BLE001 — transport failure must preserve the saved answer
-        log.exception("[decision] new-turn delivery failed for %s", decision_id)
+    outcome, state = await _post_loopback(port, rec.session_id, text, metadata,
+                                          label=f"decision {decision_id}",
+                                          configuration={"returnImmediately": True})
+    if outcome is not ResumeOutcome.DELIVERED:
+        return outcome
+    if not state:
+        # No task came back, so nothing proves a turn was started: keep it undelivered.
         return ResumeOutcome.NOT_DELIVERED
+    await asyncio.to_thread(store.mark_delivered, decision_id)
+    return ResumeOutcome.DELIVERED
