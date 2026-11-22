@@ -169,14 +169,22 @@ function routeHref(route: unknown, id: unknown): string | null {
   return url.pathname + url.search;
 }
 
-/** A tapped notification, from any of the three ways a tap reaches the console. Home's entry
- *  for the notice wins; without one the tap goes where it went before Home existed: a
- *  decision's answer form, else the worker's `route` when that is another console page. */
+/** A tapped notification, from any of the three ways a tap reaches the console. A decision
+ *  opens its answer form, in the console of the agent that asked, whether or not Home holds
+ *  an entry for it: the next step after that tap is always "answer", and Home's entry is a
+ *  pointer card one more tap away (operator, 2026-11-22, from the phone's tap log: one tap
+ *  landed on the form and one on Home for the same kind of decision). Any other notice goes
+ *  to its Home entry when there is one, else to the worker's `route` when that is another
+ *  console page. */
 export async function openClickedNotice(
   id: unknown, route?: unknown, go: (href: string) => void = (href) => window.location.assign(href),
 ): Promise<boolean> {
   // The latest tap wins: a slower Home read for an earlier tap must not replace it.
   const mine = ++latestTap;
+  if (typeof id === "string" && id.startsWith(DECISION_PREFIX)) {
+    if (await openNotice(id, go)) return true;
+    if (mine !== latestTap) return false;
+  }
   if (await openHomeEntry(id)) {
     logTap("home", `${String(id)} shown in Home`);
     return true;

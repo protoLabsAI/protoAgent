@@ -281,13 +281,25 @@ it("a tap whose id matches a Home entry selects Home and scrolls to that entry",
   if (before) chatStore.switchSession(before);
 });
 
-it("a decision's tap lands on its Home entry, not straight on the answer form", async () => {
+it("a decision's tap opens the answer form even when Home holds an entry for it", async () => {
+  // From the operator's phone (#5664): the same kind of decision landed on the form once and
+  // on Home's pointer card once, depending on whether Home had recorded it.
   const homeId = await homeWith([homeEntry("decision-dec-21", "decision")]);
+  const before = chatStore.getSnapshot().currentSessionId;
   tap("decision-dec-21");
   await settled();
+  expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-21");
+  expect(chatStore.getSnapshot().currentSessionId).toBe(before);
+  expect(chatStore.getSnapshot().currentSessionId).not.toBe(homeId);
+  expect(scrolled).not.toHaveBeenCalled();
+});
+
+it("a notice that is not a decision still lands on its Home entry", async () => {
+  const homeId = await homeWith([homeEntry("ntc_brief")]);
+  tap("ntc_brief");
+  await settled();
   expect(chatStore.getSnapshot().currentSessionId).toBe(homeId);
-  expect(scrolled).toHaveBeenCalledWith("decision-dec-21");
-  expect(openWorkGroup).not.toHaveBeenCalled();
+  expect(scrolled).toHaveBeenCalledWith("ntc_brief");
 });
 
 it("reads Home's entries when the transcript doesn't show the tapped one yet", async () => {
