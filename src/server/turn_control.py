@@ -722,6 +722,33 @@ def _is_hitl_resume(request_metadata: dict | None) -> bool:
     return bool((request_metadata or {}).get("hitl_resume"))
 
 
+#: The ``answered_by`` every decision answered through a turn records (#5678 5b). Only a
+#: verified human-operator credential (``caller_may_answer_decision``) can resume a paused
+#: decision, and every such credential — the console bearer, a paired phone, a hub delegation —
+#: is the operator; the answer route records the same actor. Never read from message data.
+DECISION_ANSWERER = "operator"
+
+
+def caller_may_answer_decision() -> bool:
+    """Whether the caller driving this turn may ANSWER a paused ``request_decision`` (#5678 5b).
+
+    Reads the principal kind authentication stamped for the request (``verified_principal_scope``
+    — the HTTP middleware, upgraded by the executor for this process's own resume grant), never
+    request metadata: ``hitl_resume``, a named task id or ``decision_resolution`` data are all
+    caller-supplied. A human operator passes (shared operator bearer, paired phone, a verified
+    hub delegation); a federation caller, the fleet service token and a paired agent device do
+    not, and their message is handled as an ordinary message while the decision stays pending.
+    Open mode (no credential enforced) rates every caller the operator, as the answer route
+    does; no bound principal is an in-process turn (a test, the SDK), not a remote caller."""
+    from a2a_impl.auth import is_human_operator, open_mode
+    from graph.middleware.request_context import current_verified_principal
+
+    kind = current_verified_principal()
+    if kind is None:
+        return True
+    return is_human_operator(kind) or (kind == "open/unknown" and open_mode())
+
+
 # _hold_if_hitl_pending's "this message answers the pending interrupt" signal — a
 # sentinel (not a string) so it can never collide with an interrupt VALUE.
 _HITL_RESUME = object()
@@ -786,7 +813,11 @@ async def _hold_if_hitl_pending(
     if pending_val is None:
         return None
     if _is_hitl_resume(request_metadata):
-        return _HITL_RESUME
+        if not is_decision_interrupt(pending_val) or caller_may_answer_decision():
+            return _HITL_RESUME
+        # Only the operator answers a decision (#5678 5b): a peer's ``hitl_resume`` is an
+        # ordinary message, held below like any other while the decision stays pending.
+        log.info("[decision] non-operator hitl_resume on session %s held — decision stays pending", session_id)
     from graph import steering
 
     if images:
@@ -951,12 +982,13 @@ async def decision_resume(config: dict, answer):
                             # No resolution = the operator typed the answer into the chat
                             # composer (hitl_resume): a text answer (#5668). The resolution
                             # rides request metadata, so an unknown kind falls back to text
-                            # rather than failing the settle.
+                            # rather than failing the settle. ``answered_by`` is the verified
+                            # credential's actor, never the resolution's (#5678 5b).
                             answer_kind = resolution.get("answer_kind", "text")
                             if answer_kind not in ANSWER_KINDS:
                                 answer_kind = "text"
                             store.answer(rec.id, resolution.get("answer", str(answer)),
-                                         answered_by=resolution.get("answered_by", "operator"),
+                                         answered_by=DECISION_ANSWERER,
                                          answered_surface=resolution.get("answered_surface", "chat"),
                                          answer_kind=answer_kind)
                     except DecisionClosed:

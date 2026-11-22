@@ -702,6 +702,51 @@ def _principal_kind(context: Any, origin: str = "") -> str:
     return "unknown"
 
 
+#: ``graph.decision_resume.RESUME_GRANT_KEY`` (kept literal so the import stays lazy).
+_RESUME_GRANT_KEY = "decision_resume_grant"
+
+
+def _loopback_operator_principal(context: Any) -> str | None:
+    """The human-operator principal a loopback grant in this message confers, else None.
+
+    Two loopback deliveries act for a human the transport credential cannot show (#5678 5b): a
+    decision answer / dismissal / expiry resume (``graph.decision_resume.mint_resume_grant``)
+    and a private steer (ADR 0131 P1b.2, the delegation the chat runner redeems again). Each is
+    a delegation signed with THIS process's own key and bound to this context (and its decision
+    or private reference), verified fail-closed with an idempotent redeem. A missing, forged,
+    expired, revoked or wrong-target grant confers nothing: the request's own verified
+    principal stands."""
+    try:
+        md = _request_metadata(context)
+        ctx = str(getattr(context, "context_id", "") or "")
+        if not ctx:
+            return None
+        from types import SimpleNamespace
+
+        from a2a_impl.auth import resolve_human_operator
+        from graph.decision_resume import RESUME_GRANT_AUDIENCE, RESUME_GRANT_KEY, resume_grant_operation
+        from graph.fleet.delegation import DELEGATION_HEADER, ISSUER_LOOPBACK
+
+        candidates = []
+        if grant := str(md.get(RESUME_GRANT_KEY) or ""):
+            decision_id = str(md.get("decision_id") or "") or None
+            candidates.append((grant, RESUME_GRANT_AUDIENCE, resume_grant_operation(decision_id)))
+        if md.get("private_input") and (token := str(md.get(DELEGATION_HEADER) or "")):
+            # server.chat._LOOPBACK_AUDIENCE: the private steer's delegation, bound to its reference.
+            candidates.append((token, "loopback-self", context.get_user_input()))
+        for token, audience, operation in candidates:
+            grant = resolve_human_operator(
+                SimpleNamespace(headers={DELEGATION_HEADER: token}),
+                audience=audience, method="SendMessage", context=ctx, operation=operation,
+                task_id="", idempotent=True, allowed_issuers=frozenset({ISSUER_LOOPBACK}),
+            )
+            if grant is not None:
+                return grant.principal_kind
+    except Exception:  # noqa: BLE001 — an unverifiable grant confers nothing
+        logger.debug("[a2a] loopback operator grant check failed", exc_info=True)
+    return None
+
+
 def _drop_parked_turn_files(context_id: str) -> None:
     try:
         from infra import media
@@ -937,6 +982,21 @@ class ProtoAgentExecutor(AgentExecutor):
         return [*parts, _ext_data_part(emit)] if emit else parts
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        # Who may answer a paused decision is read from the verified principal (#5678 5b,
+        # ``server.turn_control.caller_may_answer_decision``). This process's own loopback
+        # resumes present the instance credential — on a fleet member that is the fleet
+        # service token, a peer kind — so a grant it minted for this context upgrades the
+        # turn to the human operator it acts for; nothing a remote caller sends can.
+        principal = _loopback_operator_principal(context)
+        if principal is None:
+            await self._execute(context, event_queue)
+            return
+        from graph.middleware.request_context import verified_principal_scope
+
+        with verified_principal_scope(principal):
+            await self._execute(context, event_queue)
+
+    async def _execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         projection = None
         if self._requester_projection_factory is not None:
             projection = await self._requester_projection_factory(context, event_queue)
@@ -998,6 +1058,8 @@ class ProtoAgentExecutor(AgentExecutor):
             raise InvalidParamsError(message="Invalid contextId: reserved for this agent's own jobs")
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
         _md = _request_metadata(context)
+        # Spent by ``execute`` above; it never rides into the turn's request context.
+        _md.pop(_RESUME_GRANT_KEY, None)
         # One parked task per context (#3930). A turn that ANSWERED the pause (a resume, or
         # a hitl_resume) or that PARKED (a held message re-parks on the pending interrupt)
         # makes every other task parked in the context BEFORE it ended stale — their pause
