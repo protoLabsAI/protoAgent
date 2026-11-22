@@ -49,6 +49,10 @@ import { workGroups } from "../workGroups";
 import { groupFor, type GroupableWorkItem } from "../tone";
 import { WorkGroupRows } from "../WorkOverview";
 import { scheduleMeta } from "../rowMeta";
+import { parseAskRefs } from "../askRefs";
+import { ARTIFACT_VIEW_KEY } from "../../artifacts/artifactRef";
+import { resetPluginViewInbox, takePluginViewMessages } from "../../lib/pluginViewInbox";
+import { useUI } from "../../state/uiStore";
 
 vi.mock("../../schedule/schedule-builder", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../schedule/schedule-builder")>(),
@@ -150,6 +154,8 @@ type TaskRaw = {
   assignee: string; description: string; created_at: string; updated_at: string; closed_at: string | null;
   session_id?: string;
   activity?: "driven" | "idle" | "stalled";
+  ask?: string;
+  links?: { ref: string; kind?: string }[];
 };
 
 async function mount(node: ReactNode) {
@@ -864,5 +870,121 @@ describe("'Started in' on an open job (§11.1 items 5–6)", () => {
     await settleUntil(() => conversationsSnapshot().status === "ready"); // let the thread resolve first
     expect(labeledField("Started in")).toBeNull();
     expect(document.querySelector('a[href="#/conversations/ctx-55"]')).toBeNull();
+  });
+});
+
+describe("A waiting job shows the question and links what it waits on (#5676)", () => {
+  const ARTIFACT = "a-1795238555984-27d9a2";
+  const ASK = `Approve the scope in ${ARTIFACT} for bd-kms4m.g1 (protoLabsAI/protoAgent#5676)?`;
+  const BOARD_KEY = "plugin:project_board:board";
+  const railBefore = useUI.getState().railOrder;
+  function rail(right: string[]) {
+    useUI.setState({ railOrder: { left: ["chat"], right, bottom: [], hidden: [] } });
+  }
+  function waiting(over: Partial<TaskRaw> = {}): WorkItem {
+    return taskItem({
+      status: "waiting", session_id: "job:weekly", ask: ASK,
+      description: `${ASK}\nAll 5 audits done; 5 repeated problems, 5 house rules.`, ...over,
+    });
+  }
+  async function open(item: WorkItem) {
+    await mount(h(TasksSection, ctx({ sources: sources({ tasks: src([item]) }), state: { itemId: "task:task-3" } })));
+    await settleUntil();
+  }
+  const shownLabels = () => Array.from(document.querySelectorAll(".work-detail__fields:not(.work-detail__fields--technical) dt"))
+    .map((node) => node.textContent);
+  const technicalLabels = () => Array.from(document.querySelectorAll(".work-detail__fields--technical dt"))
+    .map((node) => node.textContent);
+
+  beforeEach(() => { resetPluginViewInbox(); rail([ARTIFACT_VIEW_KEY, BOARD_KEY]); });
+  afterEach(() => useUI.setState({ railOrder: railBefore }));
+
+  it("leads with who is asking and the ask, then links and the reply box, stating the ask once (r1)", async () => {
+    await open(waiting());
+    expect(shownLabels()).toEqual(["Asked by", "Ask", "Links", "Source", "Reply"]);
+    expect(labeledField("Asked by")!.querySelector("dd")?.textContent).toBe("Your agent");
+    expect(labeledField("Ask")!.querySelector("dd")?.textContent).toBe(ASK);
+    expect(allText().split(ASK)).toHaveLength(2); // once on the page before the accordion opens
+    await act(async () => button("Technical details").click());
+    expect(allText().split(ASK)).toHaveLength(2); // and Description doesn't repeat it
+    expect(labeledField("Description")!.querySelector("dd")?.textContent)
+      .toBe("All 5 audits done; 5 repeated problems, 5 house rules.");
+  });
+
+  it("falls back to the description's first line as the ask without repeating it", async () => {
+    await open(waiting({ ask: undefined, description: "Can we ship?\nWorking notes." }));
+    expect(labeledField("Ask")!.querySelector("dd")?.textContent).toBe("Can we ship?");
+    await act(async () => button("Technical details").click());
+    expect(labeledField("Description")!.querySelector("dd")?.textContent).toBe("Working notes.");
+  });
+
+  it("turns an artifact id, a board card id and a GitHub ref in the ask into links that open the item (r2)", async () => {
+    await open(waiting());
+    const ask = labeledField("Ask")!;
+    const artifact = ask.querySelector<HTMLAnchorElement>('a[data-ask-ref="artifact"]')!;
+    expect(artifact.textContent).toBe(ARTIFACT);
+    const card = ask.querySelector<HTMLAnchorElement>('a[data-ask-ref="card"]')!;
+    expect(card.textContent).toBe("bd-kms4m.g1");
+    const cardUrl = new URL(card.href);
+    expect(cardUrl.searchParams.get("plugin")).toBe("project_board");
+    expect(cardUrl.searchParams.get("vp")).toBe("card=bd-kms4m.g1"); // the board view reads ?card=
+    expect(card.target).toBe("_blank"); // a reload would drop a half-written reply
+    const issue = ask.querySelector<HTMLAnchorElement>('a[data-ask-ref="github"]')!;
+    expect(issue.textContent).toBe("protoLabsAI/protoAgent#5676");
+    expect(issue.href).toBe("https://github.com/protoLabsAI/protoAgent/issues/5676");
+
+    // The artifact opens in the Artifact panel, on its newest version, without leaving Work.
+    await act(async () => artifact.click());
+    const [select] = takePluginViewMessages(ARTIFACT_VIEW_KEY);
+    expect(select).toMatchObject({ type: "protoArtifact:select", id: ARTIFACT });
+    expect(select.ver as number).toBeGreaterThan(1_000_000);
+  });
+
+  it("lists what the ask and the task's links reference once each, under Links (r2)", async () => {
+    await open(waiting({ links: [{ ref: "bd-kms4m.g1", kind: "card" }, { ref: "https://example.com/pull/7" }, { ref: "job-2" }] }));
+    const items = Array.from(labeledField("Links")!.querySelectorAll("li"));
+    expect(items.map((li) => li.textContent)).toEqual([
+      "Open the artifact", "Board card bd-kms4m.g1", "protoLabsAI/protoAgent#5676", "https://example.com/pull/7", "job-2",
+    ]);
+    expect(items.map((li) => !!li.querySelector("a"))).toEqual([true, true, true, true, false]);
+  });
+
+  it("leaves a ref as plain text when its panel or board isn't on this agent", async () => {
+    rail([]);
+    await open(waiting());
+    const ask = labeledField("Ask")!;
+    expect(ask.querySelector("dd")?.textContent).toBe(ASK);
+    expect(Array.from(ask.querySelectorAll("a")).map((a) => a.textContent)).toEqual(["protoLabsAI/protoAgent#5676"]);
+    expect(labeledField("Links")!.querySelector("li")?.textContent).toBe(ARTIFACT); // the id, not a dead "Open the artifact"
+  });
+
+  it("keeps the record inside Technical details (r3)", async () => {
+    await open(waiting());
+    for (const label of ["Description", "Type and priority", "Updated", "Created", "Waiting since"]) {
+      expect(shownLabels()).not.toContain(label);
+    }
+    expect(allText()).not.toContain("Bug · high");
+    expect(technicalLabels()).toEqual([]); // collapsed: not on the page at all
+    await act(async () => button("Technical details").click());
+    expect(technicalLabels()).toEqual(["Waiting since", "Description", "Type and priority", "Assignee", "Updated", "Created"]);
+    expect(allText()).toContain("Bug · high");
+    expect(allText()).toContain("task-3"); // the id stays there too
+  });
+
+  it("an open (not waiting) job renders as before: its fields up front, none in Technical details (r3)", async () => {
+    await open(taskItem({ status: "open", ask: ASK }));
+    expect(shownLabels()).toEqual(["Type and priority", "Assignee", "Updated", "Description", "Created"]);
+    expect(document.querySelector("[data-ask-ref]")).toBeNull();
+    await act(async () => button("Technical details").click());
+    expect(technicalLabels()).toEqual([]);
+    expect(allText()).toContain("task-3");
+  });
+
+  it("parseAskRefs keeps sentence punctuation out of a ref and ids inside a URL whole", () => {
+    expect(parseAskRefs("See bd-c8r5h. Then https://example.com/a-1795238555984-27d9a2/x, ok?")).toEqual([
+      "See ", { kind: "card", ref: "bd-c8r5h" }, ". Then ",
+      { kind: "url", ref: "https://example.com/a-1795238555984-27d9a2/x" }, ", ok?",
+    ]);
+    expect(parseAskRefs("data-a-12 and abd-x1 stay text")).toEqual(["data-a-12 and abd-x1 stay text"]);
   });
 });

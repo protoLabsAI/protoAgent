@@ -684,9 +684,12 @@ it.each([
   const detail = host.querySelector(".work-view__detail")!;
   expect(detail.textContent).toContain(provenance);
   expect(detail.textContent).not.toContain("Open chat");
-  expect(Array.from(detail.querySelectorAll("dt")).slice(0, 4).map((node) => node.textContent))
-    .toEqual(["Ask", "Links", "Waiting since", "Description"]);
-  expect(detail.querySelector("dd")?.textContent).toBe("Can we ship?");
+  // #5676: who is asking, the ask, what it points at — the record sits in Technical details.
+  const labels = Array.from(detail.querySelectorAll("dt")).map((node) => node.textContent);
+  expect(labels.slice(0, 3)).toEqual(["Asked by", "Ask", "Links"]);
+  expect(labels).not.toContain("Waiting since");
+  expect(labels).not.toContain("Description");
+  expect(detail.querySelectorAll("dd")[1]?.textContent).toBe("Can we ship?");
   expect(detail.querySelector("a")?.href).toBe("https://example.com/pull/7");
 });
 
@@ -703,7 +706,7 @@ it("opens a waiting detail whose links arrive as the server's JSON string (v0.24
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   const detail = host.querySelector(".work-view__detail")!;
   expect(detail).not.toBeNull();
-  expect(detail.querySelector("dd")?.textContent).toBe("Can we ship?");
+  expect(detail.querySelectorAll("dd")[1]?.textContent).toBe("Can we ship?");
 });
 
 it.each([false, true])("sends a reply with durable source=%s and resumes the task", async (durable) => {
@@ -734,7 +737,7 @@ it.each([["Done", "done"], ["Dismiss", "dismissed"]] as const)("%s closes with a
   vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
   const close = vi.spyOn(api, "closeTask").mockResolvedValue({ issue: { id: "parked", title: "Ship release", status: "closed" } });
   await openWaiting("a2a-session", null);
-  expect(host.querySelector(".work-detail dd")?.textContent).toBe("Review the release");
+  expect(host.querySelectorAll(".work-detail dd")[1]?.textContent).toBe("Review the release");
   await click(`${label}…`);
   // The reply is the first input; the confirmation owns the last one.
   const input = host.querySelector<HTMLInputElement>(".work-detail__confirm input")!;
