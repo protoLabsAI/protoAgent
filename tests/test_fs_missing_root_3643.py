@@ -295,6 +295,39 @@ async def test_remove_folder_clears_banner_and_retains_board_reference(folder_ac
     assert not any(folder["path"] in w for w in after["warnings"])
 
 
+@pytest.mark.parametrize("source", ["last_explicit", "remaining_explicit", "registry"])
+async def test_remove_folder_never_activates_shadowed_registry_grants(folder_actions, tmp_path, source):
+    from operator_api.console_handlers import _operator_missing_folder_action, _operator_runtime_status
+
+    cfg, folder = folder_actions
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "secret.txt").write_text("private")
+    cfg.projects.append({"name": "other", "path": str(other), "repo": "owner/other", "fs": True})
+    if source == "registry":
+        cfg.filesystem_projects = []
+        folder["name"] = "Board project"
+    elif source == "remaining_explicit":
+        cfg.filesystem_projects.append({"name": "other", "path": str(other), "write": False})
+
+    result = await _operator_missing_folder_action({**folder, "action": "remove"})
+
+    assert result["board_projects"] == ["Board project"]
+    assert (await _operator_runtime_status())["missing_folders"] == []
+    assert cfg.projects[1] == {
+        "name": "other", "path": str(other), "repo": "owner/other", "fs": source != "last_explicit",
+    }
+    if source == "last_explicit":
+        assert cfg.filesystem_projects == []
+        assert cfg.effective_filesystem_projects() == []
+        assert build_fs_tools(cfg) == []
+    else:
+        tools = _tools(cfg)
+        assert "private" in _read(tools, "other", "secret.txt")
+        written = tools["write_file"].invoke({"project": "other", "path": "new.txt", "content": "x"})
+        assert written.startswith("Error:") == (source == "remaining_explicit")
+
+
 @pytest.mark.parametrize("destination", ["exists", "missing", "file", "relative"])
 async def test_relocate_folder_validates_destination_and_preserves_permissions(folder_actions, tmp_path, destination):
     from fastapi import HTTPException

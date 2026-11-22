@@ -1384,10 +1384,16 @@ async def _operator_missing_folder_action(body: dict):
             raise HTTPException(400, "new path no longer exists")
         result["board_projects"] = [str(e.get("name") or "") for e in registry if same_path(e)]
         if action == "remove":
+            remaining = [e for e in explicit if not matches(e)]
             # Keep board identity/path, but opt it out of the filesystem projection.
-            # Otherwise deleting the last explicit root resurrects it via the registry.
-            changed_registry = [{**e, "fs": False} if same_path(e) else e for e in registry]
-            patch = {"filesystem": {"projects": [e for e in explicit if not matches(e)]}}
+            # Empty explicit roots fall back to the registry. When removing the last
+            # one, suppress ALL previously shadowed grants so removal cannot widen
+            # the fence to unrelated board projects.
+            clear_projection = bool(explicit) and not remaining
+            changed_registry = [
+                {**e, "fs": False} if clear_projection or same_path(e) else e for e in registry
+            ]
+            patch = {"filesystem": {"projects": remaining}}
             if changed_registry != registry:
                 patch["projects"] = changed_registry
             return patch
