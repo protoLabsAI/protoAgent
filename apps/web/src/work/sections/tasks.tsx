@@ -34,9 +34,11 @@ import { WorkEmpty as Empty } from "../WorkEmpty";
 import { Tooltip, useToast } from "@protolabsai/ui/overlays";
 
 import { chatStore } from "../../chat/chat-store";
-import { useConversations, type ConversationRow } from "../../chat/conversations-store";
+import { isFromOthers, useConversations, type ConversationRow } from "../../chat/conversations-store";
+import { privateSteerRefusal } from "../../chat/privateSteer";
 import { navigate } from "../../app/palette/nav";
 import { api } from "../../lib/api";
+import { ApiError } from "../../lib/api/http";
 import { brandName } from "../../lib/brand";
 import { queryKeys, runtimeStatusQuery } from "../../lib/queries";
 import type { Task } from "../../lib/types";
@@ -220,6 +222,10 @@ function useStartedIn(task: Task, openChat?: (sessionId: string) => void | Promi
   return startedInValue({ task, convRow, conversationsReady: conversations.status === "ready" && !conversations.reason, chatTitle, openChat });
 }
 
+/** A reply the server refused to deliver as a private steer (#5400): its message is the plain
+ *  sentence from `privateSteerRefusal`, shown instead of the generic send failure. */
+class ReplyRefused extends Error {}
+
 async function sourceHasTurns(sessionId: string): Promise<boolean> {
   if (!sessionId) return false;
   const result = await api.chatSessionTurns(sessionId, 1);
@@ -238,7 +244,7 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
   const [closing, setClosing] = useState(false);
   // Keep the destination and message id through a failed PATCH or a lost send response.
   // Retrying finishes the same reply instead of creating another chat or turn.
-  const attempt = useRef<{ sessionId: string; id: string; text: string; sent: boolean; fresh: boolean } | null>(null);
+  const attempt = useRef<{ sessionId: string; id: string; text: string; sent: boolean; fresh: boolean; private: boolean } | null>(null);
   const source = task.session_id ?? "";
   const history = useQuery({
     queryKey: ["work-task-source", task.id, source],
@@ -262,6 +268,9 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
         attempt.current = {
           sessionId: hasTurns ? source : `chat-${crypto.randomUUID()}`,
           id: crypto.randomUUID(), fresh: !hasTurns, sent: false,
+          // A reply into a conversation a peer started (a From others row) is always sent
+          // private (#5400) — no toggle. A fresh `chat-` session is the operator's own.
+          private: hasTurns && isFromOthers(source),
           text: hasTurns ? message : [task.title, ask].filter(Boolean).map((text) =>
             text.split("\n").map((line) => `> ${line}`).join("\n")).join("\n>\n") + `\n\n${message}`,
         };
@@ -269,7 +278,21 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
       const pending = attempt.current;
       if (pending.fresh) await api.registerSession(pending.sessionId, { title: `Re: ${task.title}` });
       if (!pending.sent) {
-        const result = await api.steerChat(pending.sessionId, pending.id, pending.text);
+        let result: Awaited<ReturnType<typeof api.steerChat>>;
+        try {
+          result = pending.private
+            ? await api.steerChat(pending.sessionId, pending.id, pending.text, undefined, undefined, undefined, true)
+            : await api.steerChat(pending.sessionId, pending.id, pending.text);
+        } catch (error) {
+          // A refused private steer reads as one plain sentence, never the raw detail — also when
+          // the server took the private path for a thread the Conversations list hasn't loaded.
+          const refusal = privateSteerRefusal(error, pending.private);
+          if (!refusal) throw error;
+          // A definite refusal (409 / 400 / 403) was never delivered: start over on the next
+          // send, so the field is editable again. An uncertain delivery keeps the same id.
+          if (error instanceof ApiError && [400, 403, 409].includes(error.status)) attempt.current = null;
+          throw new ReplyRefused(refusal);
+        }
         if (!result.ok || (pending.fresh && !result.started_turn)) throw new Error("Reply has not started yet");
         pending.sent = true;
       }
@@ -340,7 +363,8 @@ function WaitingTaskDetail({ task, actions, openChat, refresh, startedIn }: {
           onClick={() => send.mutate("Please check again whether the reported blocker is resolved, and continue if it is.")}>
           Check again
         </Button>
-        {send.isError && <Alert status="warning">Couldn't finish sending your reply. Retry to continue.</Alert>}
+        {send.isError && <Alert status="warning">{send.error instanceof ReplyRefused
+          ? send.error.message : "Couldn't finish sending your reply. Retry to continue."}</Alert>}
       </form> },
     ]} />;
 }
