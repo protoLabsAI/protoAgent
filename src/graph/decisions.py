@@ -562,6 +562,34 @@ class DecisionStore:
             finally:
                 self._close(db)
 
+    def pending_unpaused(self, thread_id: str) -> list[Decision]:
+        """Every open no-pause decision on this exact thread, oldest first (#5678).
+
+        Pause-id decisions are excluded: the checkpoint's interrupt already holds the turn.
+        Queried directly, unbounded, rather than through the inbox :meth:`list`."""
+        if not thread_id:
+            return []
+        with self._reading():
+            db = self._connect()
+            try:
+                return [Decision.from_row(row) for row in db.execute(
+                    "SELECT * FROM decisions WHERE thread_id = ? AND interrupt_id = '' "
+                    "AND state = ? ORDER BY created_at, rowid",
+                    (thread_id, STATE_PENDING),
+                )]
+            finally:
+                self._close(db)
+
+    def open_unpaused_decision(self, thread_id: str) -> Decision | None:
+        """The thread's open (pending) no-pause decision — the oldest, if several."""
+        records = self.pending_unpaused(thread_id)
+        return records[0] if records else None
+
+    def unreminded_unpaused_decision(self, thread_id: str) -> Decision | None:
+        """The thread's oldest open no-pause decision the operator was not yet reminded of
+        (``reminded_at`` unset); None once every open one carries a reminder stamp."""
+        return next((rec for rec in self.pending_unpaused(thread_id) if not rec.reminded_at), None)
+
     def spend_cap_decision(self, day: str) -> Decision | None:
         """Pending instance pause (even across midnight), or today's durable approval."""
         with self._reading():
