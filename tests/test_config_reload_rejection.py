@@ -134,9 +134,10 @@ async def test_background_refresh_rejects_invalid_candidate(config_file, monkeyp
     )
     monkeypatch.setattr("infra.secrets.hydrate_from_docs", lambda *a, **k: calls.append(True))
 
-    async def one_iteration(*args):
-        sleeps.append(True)
-        if len(sleeps) > 1:
+    async def one_iteration(seconds, *args):
+        # The loop sleeps in short steps; stop on the step after one full interval.
+        sleeps.append(seconds)
+        if sum(sleeps) > 30:
             raise asyncio.CancelledError()
 
     monkeypatch.setattr(asyncio, "sleep", one_iteration)
