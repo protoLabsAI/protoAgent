@@ -1266,10 +1266,10 @@ def _agent_graph(monkeypatch, replies, *, tool_obj=None, checkpointer=None):
 
 
 async def _agent_turn(thread, message="ship it", *, origin="api-chat", resume=False, sink=None,
-                      session_id="s-nopause"):
+                      session_id="s-nopause", principal="shared-operator-bearer"):
     from server.turn_sync import _native_turn
 
-    with verified_principal_scope("shared-operator-bearer"):
+    with verified_principal_scope(principal):
         return await _native_turn(
             message, None, session_id=session_id, config={"configurable": {"thread_id": thread}},
             usage_cb=UsageMetadataCallbackHandler(), state_extra={}, tool_fence=None,
@@ -1363,3 +1363,42 @@ async def test_a_decision_paused_before_the_upgrade_is_answered_and_the_turn_res
     assert len(store.list()) == 1  # the resume asked nothing new
     snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
     assert not snapshot.interrupts
+
+
+@pytest.mark.asyncio
+async def test_open_mode_turn_records_a_no_pause_decision_a_loopback_caller_answers(store, monkeypatch):
+    """No credential configured (the desktop loopback default): the auth middleware stamps
+    every caller "open/unknown", which the answer route's operator gate accepts only because
+    ``open_mode()`` is true. Through the real router and the real auth middleware."""
+    from a2a_impl import auth
+
+    app = FastAPI()
+    decision_routes.register_decision_routes(app)
+    auth.install(app, bearer_token=None, api_key="", allowed_origins_raw="")
+    assert auth.open_mode()
+
+    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="unused")])
+    thread, sink = "a2a:s-open", {}
+    await _agent_turn(thread, sink=sink, session_id="s-open", principal="open/unknown")
+    assert len(model.seen) == 1 and sink.get("state") != "input_required"
+    snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
+    assert not snapshot.next and not snapshot.interrupts  # the turn ended completed
+    rec, = store.list(state="pending")
+    assert is_unpaused_decision(rec) and rec.session_id == "s-open"
+
+    delivered = []
+
+    async def deliver(decision_id):
+        delivered.append(decision_id)
+        return decision_routes.ResumeOutcome.DELIVERED
+
+    monkeypatch.setattr(decision_routes, "deliver_decision_answer", deliver)
+    with TestClient(app) as client:
+        response = await asyncio.to_thread(  # no Authorization header: the loopback caller
+            client.post, f"/api/decisions/{rec.id}/answer",
+            json={"option_id": "yes", "answered_by": "forged-actor"})
+    assert response.status_code == 200, response.text
+    assert response.json()["resumed"] is True
+    answered = store.get(rec.id)
+    assert (answered.state, answered.answer, answered.answered_by) == (STATE_ANSWERED, "yes", "operator")
+    assert delivered == [rec.id]

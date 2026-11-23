@@ -15,6 +15,12 @@ from runtime.state import STATE
 THREAD = "chat-one:scoped"
 OPTIONS = [{"id": "go", "label": "Release"}]
 CANNOT = "The caller of this turn is not the operator and cannot answer it."
+# The exact guidance that shapes the operator-visible reply (#5758).
+YOU = ('The person in this chat is the operator who answers your decisions. Address '
+       'them as "you", never by name or in the third person.')
+NO_IDS = "Never show decision ids in a reply."
+TAP_OR_TYPE = "They can answer by tapping an option on its card or by typing one option exactly."
+TAP_ONLY = "They answer it by tapping an option on its card."
 
 
 class RecordingModel(GenericFakeChatModel):
@@ -64,8 +70,49 @@ def test_every_operator_turn_names_the_open_question(store):
         assert call[-1] is note
         assert "Question: Release now?" in note.content
         assert CANNOT not in note.content
+        assert YOU in note.content and NO_IDS in note.content
     # Model-only: the note never lands in the saved thread the operator's view reads.
     assert not open_notes(results[-1]["messages"])
+
+
+def test_operator_note_says_you_tap_or_type_and_no_ids(store):
+    ask(store)
+    with verified_principal_scope("shared-operator-bearer"):
+        seen, _ = run()
+    (note,) = open_notes(seen[0])
+    assert note.content == "\n".join([
+        "A decision you asked the operator is still open. Keep it in mind; "
+        "do not answer it yourself or ask it again.",
+        "Question: Release now?",
+        TAP_OR_TYPE,
+        YOU,
+        NO_IDS,
+    ])
+    assert "must" not in note.content
+
+
+def test_requires_pick_operator_note_says_tap_only(store):
+    ask(store, "Approve the deploy?", requires_pick=True)
+    seen, _ = run()
+    (note,) = open_notes(seen[0])
+    assert note.content == "\n".join([
+        "A decision you asked the operator is still open. Keep it in mind; "
+        "do not answer it yourself or ask it again.",
+        "Question: Approve the deploy?",
+        TAP_ONLY,
+        YOU,
+        NO_IDS,
+    ])
+    assert "typ" not in note.content
+
+
+def test_mixed_decisions_each_say_how_to_answer(store):
+    ask(store, "Release now?")
+    ask(store, "Approve the deploy?", requires_pick=True)
+    seen, _ = run()
+    (note,) = open_notes(seen[0])
+    assert (f"Question: Release now?\n{TAP_OR_TYPE}\nQuestion: Approve the deploy?\n{TAP_ONLY}"
+            in note.content)
 
 
 def test_local_turn_counts_as_operator(store):
@@ -118,6 +165,8 @@ def test_non_operator_caller_is_told_it_cannot_answer(store, principal):
     assert "Question: Release now?" in note.content
     assert CANNOT in note.content
     assert "Do not ask this caller to answer or decide it." in note.content
+    # How-to-answer and "you" guidance is for the operator only.
+    assert TAP_OR_TYPE not in note.content and YOU not in note.content
 
 
 def test_federation_tier_without_principal_cannot_answer(store):

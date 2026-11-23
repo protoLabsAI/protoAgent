@@ -6,7 +6,7 @@ input-required. A later unrelated turn runs normally, the decision stays pending
 operator can still answer it. Since #5678 slice 10 the tool never pauses, so the setting is
 declared but has no effect: with it off (the default) the ask is the same no-pause record.
 
-Driven through the real non-streaming turn driver on a real ``create_agent`` graph with an
+Driven through both real turn drivers on a real ``create_agent`` graph with an
 in-memory checkpoint, a scripted fake model and an in-memory ``DecisionStore``.
 """
 
@@ -69,7 +69,7 @@ def _graph(monkeypatch, *, never_block: bool, replies: list[AIMessage]):
     config = LangGraphConfig(identity_name="deploy-agent", decisions_never_block=never_block)
     monkeypatch.setattr(STATE, "graph_config", config, raising=False)
     tool = next(t for t in get_all_tools(graph_config=config) if t.name == "request_decision")
-    model = ScriptedModel(messages=iter(replies))
+    model = ScriptedModel(messages=iter(replies), disable_streaming=True)
     model.seen = []
     graph = create_agent(model, tools=[tool], state_schema=ProtoAgentState, checkpointer=InMemorySaver())
     monkeypatch.setattr(STATE, "graph", graph)
@@ -112,9 +112,27 @@ async def test_the_asking_turn_ends_completed_with_one_no_pause_record(store, mo
     last = snapshot.values["messages"][-1]
     assert isinstance(last, ToolMessage) and last.content.startswith("Asked, waiting")
     assert rec.id in last.content
+    assert 'Address the operator as "you"' in last.content
+    assert "never by name or in the third person" in last.content
+    assert "Never show decision ids in a reply" in last.content
     # The reply is a completed one carrying the decision card, not an "Input needed" park.
-    assert "Input needed" not in reply[0]["content"]
+    assert reply[0]["content"] == "I've asked you this; answer whenever you're ready."
     assert reply[0]["hitl"]["decision_id"] == rec.id
+
+
+@pytest.mark.asyncio
+async def test_streaming_no_pause_ask_replies_without_model_instructions(store, monkeypatch):
+    chat = importlib.import_module("server.chat")
+    _graph(monkeypatch, never_block=True, replies=[_ask_call(), AIMessage(content="unused")])
+    with verified_principal_scope("shared-operator-bearer"):
+        frames = [frame async for frame in chat._run_native_turn(
+            "ship it", SESSION, {"configurable": {"thread_id": _thread()}},
+        )]
+
+    rec, = store.list(state="pending")
+    reply = next(payload for kind, payload in frames if kind == "done")
+    assert reply == "I've asked you this; answer whenever you're ready."
+    assert rec.id not in reply
 
 
 @pytest.mark.asyncio

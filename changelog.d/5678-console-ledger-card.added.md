@@ -1,1 +1,0 @@
-- **Decision cards after finished turns.** The console reads decision IDs from finished-turn artifacts and shows the existing ledger-backed card, with option answers accepted even when no parked turn resumes. Paused decisions keep their existing behavior. Refs #5678.

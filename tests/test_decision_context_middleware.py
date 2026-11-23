@@ -56,7 +56,9 @@ async def test_main_agent_recovers_ledger_answer_once(store, monkeypatch, answer
     state = {"messages": [HumanMessage("Continue; the answer is NOT this message.")], "session_id": "chat-one"}
     first = await agent.ainvoke(state, config)
     assert [m.content for m in notes(first)] == [
-        f"The operator answered your decision.\nQuestion: Release now?\nAnswer: {expected}"
+        f"The operator answered your decision.\nQuestion: Release now?\nAnswer: {expected}\n"
+        "When you mention this answer, address the operator as \"you\", never by name "
+        "or in the third person, and do not show the decision id."
     ]
     stamp = store.get(rec.id).delivered_at
     assert stamp

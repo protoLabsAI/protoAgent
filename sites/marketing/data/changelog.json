@@ -1,5 +1,29 @@
 [
   {
+    "version": "v0.261.0",
+    "date": "2026-11-22",
+    "changes": [
+      "Deliver saved decision answers as new turns (#5740).",
+      "Decision cards after finished turns (#5748).",
+      "Recover missed decision answers (#5749).",
+      "The agent receives a saved decision answer as an ordinary turn (#5742).",
+      "Ask decisions without pausing the chat, behind a setting (#5754).",
+      "Decisions without a paused turn expire and dismiss the way paused ones do (#5741).",
+      "The agent is reminded of an open no-pause decision on every model call (#5750).",
+      "Real-hub tests prove an open decision never holds a chat (#5756).",
+      "Remind the operator once that a decision is still waiting (#5752).",
+      "Approval decisions require an explicit option pick (#5746).",
+      "Completed turns carry decision cards (#5744).",
+      "Exact typed decision answers (#5745).",
+      "The agent can withdraw a decision that has no paused turn without starting one (#5743).",
+      "Keep chatting while a decision awaits an answer (#5751).",
+      "Decisions: a message from anyone but the operator never answers a paused decision (#5739).",
+      "Decision answers require a verified operator (#5738).",
+      "Decision cards hide chat replies when an option pick is required (#5747).",
+      "Mock-server resilience test waits for handler failure logs (#5755)."
+    ]
+  },
+  {
     "version": "v0.260.0",
     "date": "2026-11-22",
     "changes": [
