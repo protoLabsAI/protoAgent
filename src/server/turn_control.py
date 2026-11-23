@@ -606,12 +606,16 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
     return is_autonomous_origin(origin)
 
 
-# ── request_decision: the one HITL interrupt that parks even on an autonomous turn ──
-# ADR 0070 (this card's amendment): every HITL interrupt on an autonomous turn auto-answers
-# so the turn can't deadlock — EXCEPT a ``kind: "decision"`` one (tools.lg_tools.
-# request_decision). That is the agent deliberately stopping at a choice it is not allowed to
-# make on its own, not one it could guess at: so the turn parks exactly as an attended one
-# does, and the server writes a durable decisions-ledger record (graph/decisions.py) that
+# ── decision pauses: the one HITL interrupt that parks even on an autonomous turn ──
+# ADR 0070 (amended by #4725): every HITL interrupt on an autonomous turn auto-answers so the
+# turn can't deadlock — EXCEPT a ``kind: "decision"`` one. ``request_decision`` itself no
+# longer raises one (#5678 slice 10: it writes a no-pause ledger record and ends the turn, so
+# a new ask never parks or holds anything). Two sources of a decision interrupt remain: the
+# unattended policy's ask tier (graph/unattended_policy.ask_payload, ADR 0124 D5), which
+# stands in for an action's own approval card, and a ``request_decision`` pause written
+# before the upgrade, whose record still carries its interrupt id and must stay answerable.
+# Such a pause parks exactly as an attended one does, and the server writes (or, for a
+# pre-upgrade pause, finds) its durable decisions-ledger record (graph/decisions.py), which
 # outlives the input-required TTL sweep. The operator answers it over /api/decisions, which
 # resumes the parked turn. The streaming and non-streaming drivers consult these at call time.
 #
@@ -623,7 +627,8 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
 
 
 def is_decision_interrupt(payload: object) -> bool:
-    """Whether an interrupt payload is a ``request_decision`` pause (``kind == "decision"``)."""
+    """Whether an interrupt payload is a decision pause (``kind == "decision"``): the unattended
+    policy's ask tier, or a ``request_decision`` paused before #5678 slice 10."""
     return isinstance(payload, dict) and str(payload.get("kind") or "").strip().lower() == "decision"
 
 
@@ -648,8 +653,8 @@ async def _decision_interrupt_pending(config: dict) -> bool:
         found = await _chat()._pending_interrupt(config)
         interrupt_id = str((found[0] if found else "") or "")
         if not interrupt_id:
-            # An empty id would match a no-pause record (#5678 9a, ``decisions.never_block``):
-            # it has no pause to hold for, so it never parks an autonomous turn.
+            # An empty id would match a no-pause record (#5678, what request_decision now
+            # writes): it has no pause to hold for, so it never parks an autonomous turn.
             return False
         thread_id = str((config.get("configurable") or {}).get("thread_id") or "")
         rec = decision_store().for_interrupt(thread_id, interrupt_id)
@@ -673,8 +678,9 @@ def _current_agent_name() -> str:
 
 
 async def record_decision_pause(session_id: str, payload: object, config: dict) -> object | None:
-    """Write a durable decisions-ledger record for a parked ``request_decision`` pause, so the
-    park shows in the operator inbox and survives the checkpoint TTL.
+    """Write a durable decisions-ledger record for a parked decision pause, so the park shows in
+    the operator inbox and survives the checkpoint TTL. Idempotent per interrupt: a pause that
+    already has its record (a pre-upgrade ``request_decision`` pause) gets that record back.
 
     Best-effort by contract: the record is the durable HANDLE, not a gate — a ledger failure
     is logged and the park still stands (an autonomous turn must never un-park because a write
@@ -803,16 +809,17 @@ async def _hold_if_hitl_pending(
     when the caller has it (the non-streaming driver takes it as a parameter, not in its
     metadata); otherwise it is read from ``request_metadata``.
 
-    Autonomous turns are exempt EXCEPT when a decision is still awaiting an answer, and
+    Autonomous turns are exempt EXCEPT when a decision pause is still awaiting an answer, and
     with no pending interrupt this returns ``None`` and the turn is untouched. Callers must
     hold the per-thread lock (the check must not race a parking turn)."""
     pending_val = await _chat()._pending_interrupt_value(config)
     if _is_autonomous(request_metadata):
-        # An autonomous turn never parks for a human — EXCEPT on a request_decision pause
-        # that STILL has a pending ledger record (the agent chose to stop at a choice it may
-        # not make on its own). A decision interrupt with no pending record — cancelled,
-        # answered, expired, or never recorded — is STALE and must NOT hold the turn, or a
-        # dismissed decision would wedge every later scheduled fire on the session.
+        # An autonomous turn never parks for a human — EXCEPT on a decision PAUSE (the
+        # policy's ask tier, or a request_decision paused before #5678 slice 10) that STILL
+        # has a pending ledger record keyed to its interrupt. An open no-pause decision has
+        # no interrupt, so it never holds here. A decision interrupt with no pending record
+        # — cancelled, answered, expired, or never recorded — is STALE and must NOT hold the
+        # turn, or a dismissed decision would wedge every later scheduled fire on the session.
         if not (is_decision_interrupt(pending_val) and await _decision_interrupt_pending(config)):
             return None
     if pending_val is None:

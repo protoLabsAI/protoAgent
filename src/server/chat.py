@@ -2220,8 +2220,10 @@ async def _run_native_turn(
                         _pass_text += payload
                         yield (kind, payload)
                     elif kind == "input_required" and _turn_control.is_decision_interrupt(payload):
-                        # request_decision (#4725): the agent chose to stop at a choice it may
-                        # not make on its own. This parks even on an AUTONOMOUS turn — the one
+                        # A decision pause (#4725): the unattended policy's ask tier — or a
+                        # request_decision paused before #5678 slice 10 (the tool no longer
+                        # pauses) — stops at a choice the agent may not make on its own. This
+                        # parks even on an AUTONOMOUS turn — the one
                         # exception to the auto-answer below — and the server records it durably
                         # (the record outlives the input-required TTL and surfaces in the operator
                         # inbox; an attended turn parks the same way and writes the same record).

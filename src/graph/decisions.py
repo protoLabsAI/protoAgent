@@ -2,11 +2,14 @@
 
 When the agent reaches a choice it is not allowed to make on its own — a skill rule
 forbids proceeding on judgment, a destructive or outward-facing step, an operator-only
-call — it calls ``request_decision`` (``tools/lg_tools.py``). On an UNATTENDED turn
-(scheduler / inbox / background) every other HITL interrupt auto-answers so the turn can't
-deadlock (``server/turn_control.py``); a ``request_decision`` pause is the ONE exception
-(ADR 0070, this card): the turn parks and waits for a person, because the agent chose to
-stop rather than guess.
+call — it calls ``request_decision`` (``tools/lg_tools.py``). Since #5678 slice 10 that
+tool never pauses: it writes a NO-PAUSE record here (a thread, no interrupt id) and the turn
+ends; the answer reaches the agent later as a delivery turn. A decision PAUSE (``kind:
+"decision"`` interrupt) still comes from the unattended policy's ask tier and from a
+``request_decision`` paused before the upgrade. On an UNATTENDED turn (scheduler / inbox /
+background) every other HITL interrupt auto-answers so the turn can't deadlock
+(``server/turn_control.py``); a decision pause is the ONE exception (ADR 0070, #4725): the
+turn parks and waits for a person.
 
 A parked decision therefore has to outlive the turn's checkpoint — the ``input-required``
 A2A task is TTL-exempt, but the console needs a durable, queryable handle independent of

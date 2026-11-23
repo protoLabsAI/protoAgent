@@ -1525,8 +1525,8 @@ FIELDS: list[Field] = [
     Field("push.all_notices", "push_all_notices", "Push every notice", "bool", "Notifications",
           description="Off: only questions and urgent notices reach your devices. On: every notice does."),
     Field("decisions.never_block", "decisions_never_block", "Ask decisions without pausing", "bool", "Decisions",
-          description="On: a decision the agent asks is saved and the turn ends, so the chat stays free for any "
-                      "message. Off: the turn pauses until the decision is answered."),
+          description="No longer has an effect: a decision the agent asks is always saved and the turn ends, "
+                      "so the chat stays free for any message."),
     Field("spend_cap.enabled", "spend_cap_enabled", "Cap unattended spend", "bool", "Spend cap",
           description="Pause all unattended turns at either daily hard limit until an operator answers the decision."),
     Field("spend_cap.daily_cost_hard_limit", "spend_cap_daily_cost_hard_limit", "Daily cost hard limit (USD)",

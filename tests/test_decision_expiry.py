@@ -16,6 +16,7 @@ from graph.decision_expiry import sweep_expired_decisions
 from graph.decisions import DecisionClosed, DecisionError, DecisionStore
 from operator_api import decision_routes
 from runtime.state import STATE
+from tests._pre_upgrade_decision import PRE_UPGRADE_REQUEST_DECISION
 from tools.lg_tools import request_decision, withdraw_decision
 
 turn_control = importlib.import_module("server.turn_control")
@@ -122,7 +123,7 @@ def parked(ledger, monkeypatch, request):
 
     def choose(state):
         return {
-            "result": request_decision.invoke(
+            "result": PRE_UPGRADE_REQUEST_DECISION.invoke(
                 {
                     "question": "Release?",
                     "options": OPTIONS,

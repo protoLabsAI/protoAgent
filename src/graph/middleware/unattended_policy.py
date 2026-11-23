@@ -15,7 +15,8 @@ On an unattended turn, around each tool call:
 A pause that is not an approval (``ask_human``, a form) is a question, not an action. With
 no policy it passes through, and the driver answers it with the no-operator notice as before;
 listed under ``ask`` it becomes a decision; listed under ``never`` it is refused.
-``request_decision``'s own pause always passes through.
+A decision pause (``kind: "decision"``, e.g. a ``request_decision`` paused before #5678
+slice 10 removed that tool's pause) always passes through.
 
 Each tool call runs as its own graph task, so refusing one never disturbs another call's
 pause in the same model turn.
@@ -75,7 +76,7 @@ class UnattendedPolicyMiddleware(AgentMiddleware):
             payload = {"question": str(payload)} if payload is not None else {}
         kind = str(payload.get("kind") or "").strip().lower()
         if kind == "decision":
-            return exc  # request_decision parks on every turn
+            return exc  # a decision pause parks on every turn
         tool = str(request.tool_call.get("name") or "")
         args = request.tool_call.get("args") or {}
         call_id = str(request.tool_call.get("id") or "")

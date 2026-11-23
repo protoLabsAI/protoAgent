@@ -20,7 +20,7 @@ from graph.decisions import DecisionStore
 from graph.fleet.delegation import DELEGATED_PRINCIPAL_KIND
 from graph.middleware.request_context import current_verified_principal, verified_principal_scope
 from runtime.state import STATE
-from tools.lg_tools import request_decision
+from tests._pre_upgrade_decision import PRE_UPGRADE_REQUEST_DECISION as request_decision
 
 turn_control = importlib.import_module("server.turn_control")
 chat = importlib.import_module("server.chat")
@@ -33,7 +33,7 @@ SESSION = "s5b"
 
 @pytest.fixture
 def parked(monkeypatch, delegation_env):
-    """A real LangGraph thread parked on a ``request_decision`` at the session's default thread."""
+    """A real LangGraph thread parked on a pre-upgrade ``request_decision`` pause at the session's default thread."""
     from typing import TypedDict
 
     from langgraph.checkpoint.memory import InMemorySaver

@@ -1735,7 +1735,8 @@ class LangGraphConfig:
     # notices reach enrolled devices; on = every notice does.
     push_all_notices: bool = False
     # Decisions (#5678 slice 9a): on = ``request_decision`` records a no-pause decision and
-    # ends the turn instead of pausing it at ``interrupt()``. Off (default) = today's pause.
+    # ends the turn instead of pausing it at ``interrupt()``. Inert since slice 10: the tool
+    # never pauses, whatever this says. Still declared so saved configs keep loading.
     decisions_never_block: bool = False
 
     # Instance-wide unattended admission budget (ADR 0135 D12), per UTC day.
