@@ -28,9 +28,9 @@ export type PluginSettingsTab = PluginSettingsTabDescriptor & { groups: Settings
 
 // The `footer` slot is usually a plain node, but a caller that needs the panel's live unsaved
 // values (Settings ▸ Secrets' Test connection, #4702) can pass a render function instead — it
-// receives the current `dirty` map (keys are dotted config paths). A ReactNode footer keeps
+// receives dirty edits and current form values (keys are dotted config paths). A ReactNode footer keeps
 // working unchanged for every other caller.
-export type SettingsFooter = ReactNode | ((ctx: { dirty: Record<string, unknown> }) => ReactNode);
+export type SettingsFooter = ReactNode | ((ctx: { dirty: Record<string, unknown>; values: Record<string, unknown> }) => ReactNode);
 
 /** Build the ordered Configure tabs while retaining unassigned fields in the
  * backward-compatible Configuration fallback. Exported to pin the wire-to-UI
@@ -316,6 +316,7 @@ export function SettingsCategory({
       // The runtime status reports config-derived capabilities the shell gates on (e.g.
       // `code_pane.enabled`), so a save refreshes it too — the toggle applies without a reload.
       void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.secretsStatus });
     },
     onError: (e) => toast({ tone: "error", title: "Save failed", message: errMsg(e) }),
   });
@@ -618,9 +619,9 @@ export function SettingsCategory({
             })}
           </Accordion>
         )}
-        {/* A render-function footer (ADR 0080 Test connection, #4702) gets the live dirty
+        {/* A render-function footer (ADR 0080 Test connection, #4702) gets the current form
             values so it can probe what's typed but unsaved; a plain node renders as-is. */}
-        {typeof footer === "function" ? footer({ dirty }) : footer}
+        {typeof footer === "function" ? footer({ dirty, values: Object.fromEntries(currentValues) }) : footer}
       </div>
     </>
   );
