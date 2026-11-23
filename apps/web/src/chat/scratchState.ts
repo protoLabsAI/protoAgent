@@ -95,6 +95,8 @@ export function loadSteers(sessionId: string): QueuedSteer[] {
           .map((s) => ({
             id: s.id,
             text: s.text,
+            ...(typeof s.draftText === "string" ? { draftText: s.draftText } : {}),
+            ...(typeof s.sendAs === "string" ? { sendAs: s.sendAs } : {}),
             ...(Array.isArray(s.images)
               ? { images: s.images.filter((image: Record<string, unknown>) =>
                   image && typeof image.b64 === "string" && typeof image.mime === "string" && typeof image.name === "string",

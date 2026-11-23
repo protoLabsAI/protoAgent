@@ -475,14 +475,92 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     const trayImages = vi.fn(() => [IMG]);
     const clearTrayImages = vi.fn();
     const hitlRef = { current: { kind: "form" } as HitlPayload };
-    const r = renderHook(baseOpts({ draft: "answer later", hitlRef, trayImages, clearTrayImages }));
+    const trayContext = vi.fn(() => PIPED);
+    const clearTrayContext = vi.fn();
+    const r = renderHook(baseOpts({ draft: "answer later", hitlRef, trayImages, clearTrayImages, trayContext, clearTrayContext }));
     await act(() => r.current.queueSteer());
     await flush();
     const id = r.current.steerQueue[0].id;
     expect(steerChat).toHaveBeenCalledWith(sessionId, id, "answer later", undefined, undefined, SETTINGS);
+    expect(trayContext).not.toHaveBeenCalled();
+    expect(clearTrayContext).not.toHaveBeenCalled();
     expect(trayImages).not.toHaveBeenCalled();
     expect(clearTrayImages).not.toHaveBeenCalled();
   });
+});
+
+// #5775: pipeline context rides as text, while display and recall stay human-readable.
+const PIPED = { contexts: ["<context>large pasted content</context>"], names: ["Pasted text.txt"] };
+
+describe("pipeline attachments", () => {
+  it.each(["use this", ""])("sends context with draft %j and clears only after acceptance", async (draft) => {
+    let accept!: () => void;
+    steerChat.mockImplementation(() => new Promise((resolve) => {
+      accept = () => resolve({ ok: true, id: null, pending: 1 });
+    }));
+    const clearTrayContext = vi.fn();
+    const r = renderHook(baseOpts({ draft, trayContext: () => PIPED, clearTrayContext }));
+    let request!: Promise<void>;
+    act(() => { request = r.current.queueSteer(); });
+    const item = r.current.steerQueue[0];
+    const display = [draft, "Attached: Pasted text.txt"].filter(Boolean).join("\n\n");
+    expect(item.text).toBe(display);
+    expect(item.draftText).toBe(draft);
+    expect(steerChat.mock.calls[0][2]).toBe([...PIPED.contexts, draft].join("\n\n").trim());
+    expect(clearTrayContext).not.toHaveBeenCalled();
+    await act(async () => { accept(); await request; });
+    expect(clearTrayContext).toHaveBeenCalledOnce();
+    expect(loadSteers(sessionId)[0]).toEqual(item);
+    // Turn-end retry retains context while its user bubble remains readable.
+    pendingSteer.mockResolvedValue({ pending: [{ id: item.id, text: item.sendAs! }], drained: [] });
+    const runTurn = mkRun();
+    rerender(baseOpts({ runTurn }));
+    await act(() => r.current.reconcileSteer());
+    expect(runTurn).toHaveBeenCalledWith(display, { sendAs: item.sendAs, display });
+  });
+
+  it("hands back only typed words after accepted attachments were cleared", async () => {
+    const r = renderHook(baseOpts({ draft: "use this", trayContext: () => PIPED }));
+    await act(() => r.current.queueSteer());
+    act(() => r.current.clearQueueOnStop());
+    await flush();
+    expect(draftBox.value).toBe("use this");
+    expect(r.current.steerQueue).toEqual([]);
+  });
+
+  it("keeps pipeline attachments when a steer fails", async () => {
+    steerChat.mockRejectedValue(new Error("offline"));
+    const clearTrayContext = vi.fn();
+    const r = renderHook(baseOpts({ draft: "use this", trayContext: () => PIPED, clearTrayContext }));
+    await act(() => r.current.queueSteer());
+    expect(clearTrayContext).not.toHaveBeenCalled();
+    expect(r.current.steerQueue).toEqual([]);
+  });
+
+  it.each(["ok", "duplicate", "refused", "error"] as const)(
+    "server interjection %s carries context and clears only on acknowledgement",
+    async (outcome) => {
+      chatStore.setServerTurnControl({
+        sessionId, taskId: "t-live", origin: "scheduler", trigger: "x",
+        controllable: true, operatorControllable: true,
+      });
+      if (outcome === "error") serverTurnInterject.mockRejectedValue(new Error("offline"));
+      else serverTurnInterject.mockResolvedValue(
+        outcome === "ok" ? { ok: true, pending: 1 }
+          : { ok: false, pending: 0, reason: outcome === "duplicate" ? "duplicate" : "not_live" },
+      );
+      const clearTrayContext = vi.fn();
+      const r = renderHook(baseOpts({
+        draft: "use this", serverTurnControl: { taskId: "t-live" },
+        trayContext: () => PIPED, clearTrayContext,
+      }));
+      await act(() => r.current.queueServerInterjection());
+      expect(serverTurnInterject.mock.calls[0][3]).toBe(PIPED.contexts[0] + "\n\nuse this");
+      expect(clearTrayContext).toHaveBeenCalledTimes(outcome === "ok" || outcome === "duplicate" ? 1 : 0);
+      if (outcome === "refused") expect(draftBox.value).toBe("use this");
+      else expect(r.current.steerQueue[0].text).toBe("use this\n\nAttached: Pasted text.txt");
+    },
+  );
 });
 
 describe("useSteerQueue — settle + dequeue", () => {
@@ -882,6 +960,17 @@ describe("useSteerQueue — From others conversations are steered private (#5400
     expect(bodies[0]).not.toHaveProperty("incognito");
     expect(bodies[0]).not.toHaveProperty("images");
     expect(r.current.steerQueue).toMatchObject([{ text: "change course" }]);
+  });
+
+  it("carries pipeline context on a private steer without sending images", async () => {
+    await listFromOthers(sessionId);
+    const clearTrayContext = vi.fn();
+    const r = renderHook(baseOpts({ draft: "use this", trayContext: () => PIPED, clearTrayContext }));
+    await act(() => r.current.queueSteer());
+    expect(bodies[0]).toMatchObject({ text: PIPED.contexts[0] + "\n\nuse this", private: true });
+    expect(bodies[0]).not.toHaveProperty("images");
+    expect(clearTrayContext).toHaveBeenCalledOnce();
+    expect(r.current.steerQueue[0].text).toBe("use this\n\nAttached: Pasted text.txt");
   });
 
   it("an ordinary chat- session that is not in the store posts no private key", async () => {

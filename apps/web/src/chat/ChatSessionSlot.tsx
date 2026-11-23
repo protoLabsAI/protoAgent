@@ -744,6 +744,15 @@ export function ChatSessionSlot({
     // A steer carries whatever native-vision images are in the tray (#4645), built the
     // same way a normal send builds them; the queue clears them only once the steer is
     // accepted, so a failed queue leaves them for a retry.
+    trayContext: () => {
+      const piped = attachments.filter((a) => a.status === "ready" && a.context);
+      return { contexts: piped.map((a) => a.context as string), names: piped.map((a) => a.name) };
+    },
+    clearTrayContext: () => {
+      // This render captured submission; uploads finishing during the POST stay.
+      const sentIds = new Set(attachments.filter((a) => a.status === "ready" && a.context).map((a) => a.id));
+      setAttachments((atts) => atts.filter((a) => !sentIds.has(a.id)));
+    },
     trayImages: () => readyNativeImages(attachments),
     clearTrayImages: () => {
       // This render captured the submitted tray; uploads finishing during the POST stay.
@@ -861,14 +870,16 @@ export function ChatSessionSlot({
   async function editQueuedSteer(id: string) {
     const item = steerQueueRef.current.find((q) => q.id === id);
     if (!item) return;
-    setDraft(item.text);
+    // Cleared pipeline files are not restored; recall only the typed words.
+    const text = item.draftText ?? item.text;
+    setDraft(text);
     histIndexRef.current = null; // the pulled text IS the draft now, not a position in the ring
     histStashRef.current = "";
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (!ta) return;
       ta.focus();
-      ta.selectionStart = ta.selectionEnd = item.text.length; // readline: edit from the end
+      ta.selectionStart = ta.selectionEnd = text.length; // readline: edit from the end
       refreshSlash(); // the recalled text may itself start with a "/" or "@" token
     });
     const outcome = await dequeueSteer(id, true);
@@ -878,7 +889,7 @@ export function ChatSessionSlot({
       // the state + consequence plain and offers clear / send-anyway; the toast stays as an
       // immediate (screen-reader) announcement, but the operator no longer RELIES on it —
       // the persistent affordance is what carries the state until they resolve it (#3413).
-      setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "recall-consumed", sessionId, text: item.text }));
+      setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "recall-consumed", sessionId, text }));
       onError("The agent already read that message, so it stays in this turn. Your copy is in the composer — edit and send it as a follow-up, or clear it.");
     } else if (outcome === "removed") {
       // A clean recall is ordinary editable recall — clear any stale marker so a fresh ↑

@@ -27,6 +27,16 @@ function steerQueueRef_init(sessionId: string): QueuedSteer[] {
   return loadSteers(sessionId);
 }
 
+// Preserve display, recall and model text separately through persistence and retries.
+function pipelinePayload(text: string, piped?: { contexts: string[]; names: string[] }) {
+  if (!piped?.contexts.length) return { text };
+  return {
+    text: [text, `Attached: ${piped.names.join(", ")}`].filter(Boolean).join("\n\n"),
+    draftText: text,
+    sendAs: [...piped.contexts, text].join("\n\n").trim(),
+  };
+}
+
 export type UseSteerQueueOptions = {
   sessionId: string;
   /** The session this slot renders (`null` before hydration). Guards every server call. */
@@ -42,7 +52,7 @@ export type UseSteerQueueOptions = {
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   onError: (message: string) => void;
   /** The slot's turn runner: a reconcile re-sends never-seen messages as a fresh turn. */
-  runTurn: (content: string, opts?: { images?: ChatImagePart[] }) => Promise<void>;
+  runTurn: (content: string, opts?: { images?: ChatImagePart[]; sendAs?: string; display?: string }) => Promise<void>;
   /** useHitl's ref mirror. A parked HITL turn keeps its unread steers queued. */
   hitlRef: React.MutableRefObject<HitlPayload | null>;
   /** The slot's live-stream controller. The idle reconcile skips while this slot owns a stream. */
@@ -54,6 +64,10 @@ export type UseSteerQueueOptions = {
    *  Only the own-stream steer uses them — a server interjection / HITL hold stays
    *  text-only, so their attachments stay in the tray. Absent → a steer sends no images. */
   trayImages?: () => ChatImagePart[];
+  /** Ready pipeline context and filenames captured at submission. */
+  trayContext?: () => { contexts: string[]; names: string[] };
+  /** Clear only captured attachments, after acknowledgement. */
+  clearTrayContext?: () => void;
   /** Drop the images a steer just carried from the tray — called ONLY after the steer POST
    *  resolves, so a failed queue leaves them in place for a retry. */
   clearTrayImages?: () => void;
@@ -86,6 +100,8 @@ export function useSteerQueue({
   abortRef,
   recordSubmitted,
   trayImages,
+  trayContext,
+  clearTrayContext,
   clearTrayImages,
   restoreTrayImages,
 }: UseSteerQueueOptions) {
@@ -179,7 +195,9 @@ export function useSteerQueue({
     // the form answer and stays text-only — its attachments wait in the tray for a real
     // send, as on the server. Only a true mid-turn steer carries the tray's images (#4645).
     const images = hitlRef.current ? [] : (trayImages?.() ?? []);
-    if (!session || (!text && !images.length)) return;
+    const piped = hitlRef.current ? undefined : trayContext?.();
+    if (!session || (!text && !images.length && !piped?.contexts.length)) return;
+    const payload = pipelinePayload(text, piped);
     // A conversation a peer started (From others) is always steered PRIVATE (#5400) — no
     // toggle, the operator's words must not land in the thread the peer reads. Read live:
     // the rows may have arrived after this render.
@@ -193,24 +211,25 @@ export function useSteerQueue({
     if (text) recordSubmitted(text); // steered messages join the same recall ring
     const id = messageId();
     setDraft("");
-    setSteerQueue([...steerQueueRef.current, { id, text, ...(images.length ? { images } : {}) }]);
+    setSteerQueue([...steerQueueRef.current, { id, ...payload, ...(images.length ? { images } : {}) }]);
     try {
       // Text-only steers carry incognito too: a steer that STARTS a turn (below) must
       // pass the thread's no-memory-trail promise to that fresh turn — and the tab's
       // model/effort/bypass ride every steer for the same reason. A private steer carries
       // neither images nor incognito (the server refuses both on that path).
       const res = isPrivate
-        ? await api.steerChat(session.id, id, text, undefined, undefined, sendSettings(), true)
+        ? await api.steerChat(session.id, id, payload.sendAs ?? text, undefined, undefined, sendSettings(), true)
         : await api.steerChat(
             session.id,
             id,
-            text,
+            payload.sendAs ?? text,
             images.length ? images : undefined,
             session.incognito ? true : undefined,
             sendSettings(),
           );
       if (images.length) clearTrayImages?.();
-      if (res.started_turn) attachStartedTurn([{ id, text }], res.started_turn);
+      if (piped?.contexts.length) clearTrayContext?.();
+      if (res.started_turn) attachStartedTurn([{ id, ...payload }], res.started_turn);
     } catch (e) {
       // The server refused a private steer (409 / 400 / 403): one plain sentence, and the
       // words go back to the composer — never the raw detail, never lost. That includes a
@@ -289,21 +308,24 @@ export function useSteerQueue({
   async function queueServerInterjection() {
     const text = draft.trim();
     const control = chatStore.getSnapshot().serverTurnControls[sessionId];
-    if (!session || !text || !control) return;
-    recordSubmitted(text);
+    const piped = trayContext?.();
+    if (!session || (!text && !piped?.contexts.length) || !control) return;
+    const payload = pipelinePayload(text, piped);
+    if (text) recordSubmitted(text);
     const id = messageId();
     setDraft("");
     // Queued UNCONFIRMED until the server answers: persisted that way too, so a reload
     // mid-flight (or a request that never answers) comes back knowing the console never
     // learned whether the server has it — see QueuedSteer.unconfirmed.
-    setSteerQueue([...steerQueueRef.current, { id, text, serverTaskId: control.taskId, unconfirmed: true }]);
+    setSteerQueue([...steerQueueRef.current, { id, ...payload, serverTaskId: control.taskId, unconfirmed: true }]);
     interjectInFlightRef.current.add(id);
     try {
-      const res = await api.serverTurnInterject(session.id, control.taskId, id, text, sendSettings());
+      const res = await api.serverTurnInterject(session.id, control.taskId, id, payload.sendAs ?? text, sendSettings());
       if (res.ok || res.reason === "duplicate") {
+        if (piped?.contexts.length) clearTrayContext?.();
         // Acknowledged: the server has it, so its absence from the queue later can be read
         // as "drained" rather than "never arrived".
-        setSteerQueue(steerQueueRef.current.map((x) => (x.id === id ? { id, text, serverTaskId: control.taskId } : x)));
+        setSteerQueue(steerQueueRef.current.map((x) => (x.id === id ? { id, ...payload, serverTaskId: control.taskId } : x)));
       } else {
         // Refused, and answered 200: the turn ended (or stopped taking interjections)
         // between its last control frame and this POST. Nothing was queued, so nothing will
@@ -345,7 +367,9 @@ export function useSteerQueue({
     setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
     const images = items.flatMap((item) => item.images ?? []);
     if (images.length) restoreTrayImages?.(images);
-    const text = items.map((item) => item.text).join("\n\n");
+    // Cleared pipeline attachments are not restored on hand-back or ↑ recall.
+    // Only typed words return, never raw context.
+    const text = items.map((item) => item.draftText ?? item.text).join("\n\n");
     setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, "")}\n\n${text}` : text));
     onError(message);
   }
@@ -633,7 +657,7 @@ export function useSteerQueue({
     }
     const ids = new Set(send.map((item) => item.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
-    void runTurn(send.map((item) => item.text).join("\n\n"));
+    resendAsTurn(send);
   }
 
   /** Put dequeued interjections back on the steering queue for the turn that is running
@@ -649,7 +673,7 @@ export function useSteerQueue({
         // An attended server turn takes it through its control task (the same guarded path
         // Enter uses); this browser's own stream takes it as an ordinary steer.
         if (serverTaskId) {
-          const res = await api.serverTurnInterject(session.id, serverTaskId, item.id, item.text, sendSettings());
+          const res = await api.serverTurnInterject(session.id, serverTaskId, item.id, item.sendAs ?? item.text, sendSettings());
           if (!res.ok && res.reason !== "duplicate") {
             handBackQueued([item], lost);
             continue;
@@ -657,8 +681,8 @@ export function useSteerQueue({
         } else {
           // A conversation a peer started is steered private here too (#5400).
           const res = isPrivate
-            ? await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings(), true)
-            : await api.steerChat(session.id, item.id, item.text, undefined, undefined, sendSettings());
+            ? await api.steerChat(session.id, item.id, item.sendAs ?? item.text, undefined, undefined, sendSettings(), true)
+            : await api.steerChat(session.id, item.id, item.sendAs ?? item.text, undefined, undefined, sendSettings());
           if (res.started_turn) {
             // The turn ended between the liveness check above and this POST, so the
             // server ran the message as a fresh turn instead of queueing it: attach.
@@ -668,7 +692,7 @@ export function useSteerQueue({
         }
         setSteerQueue(
           steerQueueRef.current.map((q) =>
-            q.id === item.id ? { id: q.id, text: q.text, ...(serverTaskId ? { serverTaskId } : {}) } : q,
+            q.id === item.id ? { ...q, serverTaskId, unconfirmed: undefined } : q,
           ),
         );
       } catch (e) {
@@ -876,9 +900,19 @@ export function useSteerQueue({
     if (!send.length) return;
     const sent = new Set(send.map((q) => q.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !sent.has(q.id)));
+    resendAsTurn(send);
+  }
+
+  function resendAsTurn(send: QueuedSteer[]) {
     const text = send.map((u) => u.text).join("\n\n");
     const images = send.flatMap((u) => u.images ?? []);
-    void (images.length ? runTurn(text, { images }) : runTurn(text));
+    const opts = {
+      ...(images.length ? { images } : {}),
+      ...(send.some((u) => u.sendAs !== undefined)
+        ? { sendAs: send.map((u) => u.sendAs ?? u.text).join("\n\n"), display: text }
+        : {}),
+    };
+    void (Object.keys(opts).length ? runTurn(text, opts) : runTurn(text));
   }
 
   /** Settle Stop's account with the server for every message that was still queued.
