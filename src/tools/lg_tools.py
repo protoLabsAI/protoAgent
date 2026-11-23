@@ -252,7 +252,8 @@ def _record_unpaused_decision(state: Any, question: str, options, **fields) -> s
     except DecisionError as exc:
         return f"Error: {exc}"
     return (f"Asked, waiting for the operator's answer (decision {rec.id}): {rec.question} "
-            "Their answer arrives as a later message; do not ask again.")
+            'Their answer arrives as a later message; do not ask again. Address the operator as "you", '
+            "never by name or in the third person. Never show decision ids in a reply.")
 
 
 @tool

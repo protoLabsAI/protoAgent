@@ -784,6 +784,13 @@ def this_turn_messages(result) -> list:
     return list(messages)
 
 
+def _operator_tool_reply(name: str | None, text: str) -> str:
+    """Keep a successful no-pause ask's model instructions out of the chat reply."""
+    if name == "request_decision" and text.startswith("Asked, waiting for the operator's answer (decision "):
+        return "I've asked you this; answer whenever you're ready."
+    return text
+
+
 def _last_tool_text(result) -> str:
     """The last tool result's text in THIS turn — the fallback when a turn produced
     no assistant text (e.g. a ``wait`` yield, whose 'Wait scheduled…' confirmation
@@ -794,7 +801,7 @@ def _last_tool_text(result) -> str:
 
     for msg in reversed(this_turn_messages(result)):
         if isinstance(msg, ToolMessage) and msg.content:
-            return msg.content if isinstance(msg.content, str) else str(msg.content)
+            return _operator_tool_reply(msg.name, msg.content if isinstance(msg.content, str) else str(msg.content))
     return ""
 
 
@@ -2247,7 +2254,7 @@ async def _run_native_turn(
                         if kind == "text":
                             _pass_text += payload
                         if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
-                            out["last_tool_out"] = str(payload["output"])
+                            out["last_tool_out"] = _operator_tool_reply(payload.get("name"), str(payload["output"]))
                         yield (kind, payload)
             if _autoanswer_pending or _autonomous_giveup:
                 # This pass ended at an interrupt, not `__raw__`: keep its text for `done`.
