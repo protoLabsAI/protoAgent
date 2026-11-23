@@ -4,6 +4,7 @@ import { decisionsApi } from "../lib/api/decisions";
 import type { AnswerResult, DecisionList, DecisionRow } from "../lib/api/decisions";
 import { ApiError } from "../lib/api/http";
 import { onConnectionChange, onTopic } from "../lib/events";
+import { closeDecisionNotice, closeSettledDecisionNotices } from "../lib/closeDecisionNotices";
 import { notifyIfHidden } from "../lib/notify";
 
 /**
@@ -68,6 +69,17 @@ export function createDecisionsStore() {
   // In-flight GETs by id, so concurrent loadDecision callers share one request (and a
   // decision.changed re-read coalesces with a pending load).
   const inflight = new Map<string, Promise<DecisionRow | null>>();
+  // When the last successful pending list was requested — the sweep below leaves alone any
+  // notification delivered after it (a new decision that list could not have held yet).
+  let listedAt: number | undefined;
+
+  // Close this device's delivered notifications of decisions the held pending list no longer
+  // carries (#5664): on load, after each fresh read, and when the console comes to the front.
+  // Pending decisions keep theirs. Best effort; never throws.
+  function sweepSettledNotices() {
+    if (snapshot.state !== "ready") return;
+    void closeSettledDecisionNotices(snapshot.decisions, listedAt);
+  }
 
   function emit() {
     for (const listener of listeners) listener();
@@ -115,6 +127,7 @@ export function createDecisionsStore() {
       let result: DecisionList | null = null;
       do {
         dirty = false;
+        const readAt = Date.now();
         try {
           result = await decisionsApi.listDecisions("pending");
           let decisions = result.decisions;
@@ -140,6 +153,7 @@ export function createDecisionsStore() {
             loadedAt: Date.now(),
             records,
           };
+          listedAt = readAt;
           // Notify once per newly-seen pending id. notifyIfHidden itself no-ops when the window
           // is focused, so a reload while looking at the console stays quiet.
           for (const d of decisions) {
@@ -155,6 +169,7 @@ export function createDecisionsStore() {
         emit();
       } while (dirty);
       pending = null;
+      if (result) sweepSettledNotices();
       return result;
     })();
     return pending;
@@ -303,6 +318,11 @@ export function createDecisionsStore() {
       // terminal record named by the event, unless the refresh already replaced it (§7).
       const offTopic = onTopic("decision.changed", (payload) => {
         const id = typeof payload?.id === "string" ? payload.id : null;
+        // Settled anywhere (answered, cancelled, expired, withdrawn): close this device's
+        // delivered notification so the lock screen stops asking (#5664).
+        if (id != null && typeof payload?.state === "string" && payload.state !== "pending") {
+          void closeDecisionNotice(id);
+        }
         const cached = id != null ? snapshot.records[id] : undefined;
         void refresh().then(() => {
           if (id == null || !cached) return;
@@ -312,7 +332,13 @@ export function createDecisionsStore() {
           void fetchDecision(id);
         });
       });
+      // Coming back to the front: sweep against the list already held (no extra request).
+      const onVisible = () => {
+        if (typeof document !== "undefined" && document.visibilityState === "visible") sweepSettledNotices();
+      };
+      if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
       stop = () => {
+        if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
         offConn();
         offResync();
         offTopic();
