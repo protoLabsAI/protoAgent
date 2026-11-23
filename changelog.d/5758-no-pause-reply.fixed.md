@@ -1,1 +1,0 @@
-- **No-pause decisions show a plain chat reply.** Streaming and synchronous turns ending on a decision ask now say "I've asked you this; answer whenever you're ready." instead of exposing model instructions or decision ids. Model guidance also requires addressing you directly and keeping decision ids out of replies. Fixes #5758.

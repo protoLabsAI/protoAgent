@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.261.1] - 2026-11-23
+
+### Fixed
+- **No-pause decisions show a plain chat reply (#5760).** Streaming and synchronous turns ending on a decision ask now say "I've asked you this; answer whenever you're ready." instead of exposing model instructions or decision ids. Model guidance also requires addressing you directly and keeping decision ids out of replies. Fixes #5758.
+
+- **The agent speaks to you directly about an open decision (#5759).** While a no-pause decision is waiting, the agent's guidance now says the person in the chat is the operator: it addresses you as "you" (never by name or in the third person), tells you that you can tap an option on the card or type one option exactly (tap only, for approvals), and never shows decision ids. The note for an answered decision says the same. Refs #5758.
+
+### Removed
+- **A decision the agent asks never pauses the chat (#5761).** `request_decision` always saves the question and ends the turn; its old pausing path is gone, so no chat or scheduled turn can be held behind a decision the agent asks. The answer reaches the agent as a later message. Decisions paused before the upgrade can still be answered and resume their turn. `decisions.never_block` stays in config but no longer has an effect. Fixes #5678.
+
 ## [0.261.0] - 2026-11-22
 
 ### Added

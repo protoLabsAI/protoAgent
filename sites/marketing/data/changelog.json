@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.261.1",
+    "date": "2026-11-23",
+    "changes": [
+      "No-pause decisions show a plain chat reply (#5760).",
+      "The agent speaks to you directly about an open decision (#5759).",
+      "A decision the agent asks never pauses the chat (#5761)."
+    ]
+  },
+  {
     "version": "v0.261.0",
     "date": "2026-11-22",
     "changes": [
