@@ -19,11 +19,13 @@ let root: Root;
 let node: HTMLDivElement;
 let listeners: Array<(event: MessageEvent) => void>;
 let origin: string | null;
+// The console page `GET /api/notices/<id>` says the notice links to (#5664).
+let noticeLink: string | null;
 // What `GET /api/home/entries` answers; null is a console with Home off (404).
 let homeRead: unknown | null;
 const fetchMock = vi.fn(async (url: string) => String(url).includes("/api/home/entries")
   ? new Response(JSON.stringify(homeRead ?? { detail: "Not Found" }), { status: homeRead ? 200 : 404 })
-  : new Response(JSON.stringify({ ok: true, agent: origin })));
+  : new Response(JSON.stringify({ ok: true, agent: origin, link: noticeLink })));
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 const nextLook = () => act(async () => { await new Promise((r) => setTimeout(r, 500)); });
 
@@ -31,6 +33,7 @@ beforeEach(() => {
   openWorkGroup.mockClear();
   fetchMock.mockClear();
   origin = null;
+  noticeLink = null;
   homeRead = null;
   queryClient.removeQueries({ queryKey: homeQueryKey() });
   vi.stubGlobal("fetch", fetchMock);
@@ -353,4 +356,57 @@ it("with Home off a decision's tap opens the answer form without asking for Home
   expect(await openClickedNotice("decision-dec-30", "/app/?notice=decision-dec-30", go)).toBe(true);
   expect(fetchMock.mock.calls.map((call) => String(call[0])).some((url) => url.includes("/api/home"))).toBe(false);
   expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-30");
+});
+
+// ── a notice that is not a decision, with Home off: the hub's link (#5664) ─────────────
+const tapLog = () => (JSON.parse(localStorage.getItem("protoagent.noticeTapLog") || "[]") as Array<{ step: string; detail: string }>)
+  .map((r) => `${r.step}: ${r.detail}`);
+const homeOff = () => queryClient.setQueryData(homeQueryKey(), null);
+
+it("with Home off a tapped notice opens the console page the hub says it links to", async () => {
+  homeOff();
+  localStorage.removeItem("protoagent.noticeTapLog");
+  stubClickCache({ v: 1, id: "spend-cap-1", at: Date.now() }); // keeps the tap log
+  noticeLink = "/app/?view=work";
+  go.mockClear();
+  expect(await openClickedNotice("spend-cap-1", "/app/?notice=spend-cap-1", go)).toBe(true);
+  expect(go).toHaveBeenCalledExactlyOnceWith("/app/?view=work");
+  const lookups = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("/api/notices/"));
+  expect(lookups).toHaveLength(1);
+  expect(tapLog()).toContain("link: spend-cap-1 follows /app/?view=work");
+});
+
+it.each(["https://evil.example/x", "//evil", "/elsewhere/", "/app/" + "a".repeat(600)])(
+  "never follows the link %j", async (link) => {
+    homeOff();
+    noticeLink = link;
+    go.mockClear();
+    expect(await openClickedNotice("spend-cap-2", "/app/?notice=spend-cap-2", go)).toBe(false);
+    expect(go).not.toHaveBeenCalled();
+  });
+
+it("stays put when the hub can't be asked about the notice", async () => {
+  homeOff();
+  fetchMock.mockRejectedValueOnce(new Error("offline"));
+  go.mockClear();
+  expect(await openClickedNotice("spend-cap-3", "/app/?notice=spend-cap-3", go)).toBe(false);
+  expect(go).not.toHaveBeenCalled();
+});
+
+it("a notice another agent raised is handed over to that agent's console", async () => {
+  homeOff();
+  origin = "member-x";
+  go.mockClear();
+  expect(await openClickedNotice("member-down-1", "/app/?notice=member-down-1", go)).toBe(true);
+  expect(go).toHaveBeenCalledExactlyOnceWith(`${agentHref("member-x")}?notice=member-down-1`);
+  expect(openWorkGroup).not.toHaveBeenCalled();
+});
+
+it("Home's entry still wins over the hub's link", async () => {
+  const homeId = await homeWith([homeEntry("member-down-2")]);
+  noticeLink = "/app/?view=work";
+  go.mockClear();
+  expect(await openClickedNotice("member-down-2", "/app/?notice=member-down-2", go)).toBe(true);
+  expect(chatStore.getSnapshot().currentSessionId).toBe(homeId);
+  expect(go).not.toHaveBeenCalled();
 });

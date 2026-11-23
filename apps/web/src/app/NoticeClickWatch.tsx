@@ -33,21 +33,28 @@ const CLICK_MAX_AGE_MS = 5 * 60_000; // older than this is not "the tap that bro
 const POLL_EVERY_MS = 400;
 const POLL_FOR_MS = 10_000;
 
-/** The fleet member that raised a notice, or null for this hub's own. The push payload names
- *  no agent, so the hub is asked after authentication (`GET /api/notices/<id>`, #5614). Any
- *  failure reads as "here": the decision then opens in this console, as before. */
-async function agentOf(id: string): Promise<string | null> {
+/** What the hub knows about a notice: the fleet member that raised it (null for this hub's
+ *  own) and the console page it links to (`link`, #5664, a same-origin `/app/…` address or
+ *  null). The push payload names neither, so the hub is asked after authentication
+ *  (`GET /api/notices/<id>`, #5614). Any failure reads as both null: a decision then opens in
+ *  this console, as before, and any other notice stays where it is. */
+async function noticeOf(id: string): Promise<{ agent: string | null; link: string | null }> {
   try {
     const res = await fetch(apiUrl(`/api/notices/${encodeURIComponent(id)}`, { host: true }), {
       headers: applyAuth(new Headers()), cache: "no-store", signal: AbortSignal.timeout(5_000),
     });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { agent?: unknown };
-    return typeof body.agent === "string" && body.agent ? body.agent : null;
+    if (!res.ok) return { agent: null, link: null };
+    const body = (await res.json()) as { agent?: unknown; link?: unknown } | null;
+    return {
+      agent: typeof body?.agent === "string" && body.agent ? body.agent : null,
+      link: typeof body?.link === "string" && body.link ? body.link : null,
+    };
   } catch {
-    return null;
+    return { agent: null, link: null };
   }
 }
+
+const agentOf = async (id: string): Promise<string | null> => (await noticeOf(id)).agent;
 
 /** Open what a notice is about. False when the id names nothing this console can open, in
  *  which case the operator stays where they are. A decision another agent asked for opens
@@ -169,13 +176,28 @@ function routeHref(route: unknown, id: unknown): string | null {
   return url.pathname + url.search;
 }
 
+/** The console page a notice links to, as a same-origin address, or null. The hub already
+ *  checked it (#5664); nothing but a page of this console is followed here either. */
+function linkHref(link: unknown): string | null {
+  if (typeof link !== "string" || link.length > 512) return null;
+  let url: URL;
+  try {
+    url = new URL(link, window.location.origin);
+  } catch {
+    return null;
+  }
+  if (url.origin !== window.location.origin || !url.pathname.startsWith("/app/")) return null;
+  return url.pathname + url.search + url.hash;
+}
+
 /** A tapped notification, from any of the three ways a tap reaches the console. A decision
  *  opens its answer form, in the console of the agent that asked, whether or not Home holds
  *  an entry for it: the next step after that tap is always "answer", and Home's entry is a
  *  pointer card one more tap away (operator, 2026-11-22, from the phone's tap log: one tap
  *  landed on the form and one on Home for the same kind of decision). Any other notice goes
- *  to its Home entry when there is one, else to the worker's `route` when that is another
- *  console page. */
+ *  to its Home entry when there is one; else, as the hub says (#5664), to the console of the
+ *  agent that raised it, or to the console page it links to; else to the worker's `route`
+ *  when that is another console page. */
 export async function openClickedNotice(
   id: unknown, route?: unknown, go: (href: string) => void = (href) => window.location.assign(href),
 ): Promise<boolean> {
@@ -192,6 +214,22 @@ export async function openClickedNotice(
   if (mine !== latestTap) return false;
   if (await openNotice(id, go)) return true;
   if (mine !== latestTap) return false;
+  if (typeof id === "string" && NOTICE_ID.test(id) && !id.startsWith(DECISION_PREFIX)) {
+    const { agent, link } = await noticeOf(id);
+    if (mine !== latestTap) return false;
+    if (agent && agent !== currentSlug()) {
+      logTap("handover", `${id} raised by ${agent}; here is ${currentSlug()}`);
+      go(`${agentHref(agent)}?notice=${encodeURIComponent(id)}`);
+      return true;
+    }
+    const linked = linkHref(link);
+    if (linked) {
+      logTap("link", `${id} follows ${linked}`);
+      go(linked);
+      return true;
+    }
+    logTap("link", `${id} names ${link === null ? "no page" : "a page outside this console"}`);
+  }
   const href = routeHref(route, id);
   // The worker only messages a console already on the route's page, so this is normally
   // "stay here"; loading the same page again would only reload the console.
