@@ -30,6 +30,20 @@ class SecretsTestRequest(BaseModel):
     timeout_seconds: float | None = None
 
 
+def _live_overlay() -> dict:
+    """The live config's ``enabled`` / ``refresh_seconds`` for ``status()`` — empty
+    before the config has loaded (the last outcome is all there is then)."""
+    from runtime.state import STATE
+
+    cfg = getattr(STATE, "graph_config", None)
+    if cfg is None:
+        return {}
+    return {
+        "enabled": bool(getattr(cfg, "secrets_manager_enabled", False)),
+        "refresh_seconds": int(getattr(cfg, "secrets_manager_refresh_seconds", 0) or 0),
+    }
+
+
 def register_secrets_routes(app) -> None:
     from fastapi import APIRouter, HTTPException
 
@@ -39,10 +53,12 @@ def register_secrets_routes(app) -> None:
     async def _secrets_status() -> dict:
         """Last hydration outcome + the env-var names currently owned by the
         orchestrator (provenance for the Settings panel). Secret values are never
-        part of this surface."""
+        part of this surface. The live config's enabled flag and interval overlay
+        the last outcome, so a disabled manager reads as disabled (not the stale
+        last success) and the interval shown is the cadence the loop runs."""
         from infra.secrets import status
 
-        return status()
+        return status(**_live_overlay())
 
     @router.post("/api/secrets/sync")
     async def _secrets_sync() -> dict:
@@ -72,7 +88,7 @@ def register_secrets_routes(app) -> None:
                 detail="secrets manager is not enabled (secrets_manager.enabled) or hydration "
                 "is disabled (PROTOAGENT_NO_SECRETS_HYDRATE)",
             )
-        return status()
+        return status()  # just fetched from the saved config — already current
 
     @router.post("/api/secrets/test")
     async def _secrets_test(req: SecretsTestRequest) -> dict:

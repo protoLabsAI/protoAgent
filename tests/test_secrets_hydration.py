@@ -152,6 +152,141 @@ def test_refresh_updates_and_removes_owned_only(fake, monkeypatch):
     assert ext.applied_env_names() == ["ROTATES"]
 
 
+def test_override_removal_restores_the_operator_original(fake, monkeypatch):
+    import os
+
+    monkeypatch.setenv("OVERRIDDEN", "orig")
+    fake.values = {"OVERRIDDEN": "new-manager-value"}
+    hydrate_from_docs(*_docs(override_env=True))
+    assert os.environ["OVERRIDDEN"] == "new-manager-value"
+
+    # The key leaves the manager: the operator's original comes back, not a gap.
+    fake.values = {}
+    hydrate_from_docs(*_docs(override_env=True), force=True)
+    assert os.environ["OVERRIDDEN"] == "orig"
+    assert ext.applied_env_names() == []
+
+    # A fresh override after the restore remembers the original again.
+    fake.values = {"OVERRIDDEN": "newer-value"}
+    hydrate_from_docs(*_docs(override_env=True), force=True)
+    assert os.environ["OVERRIDDEN"] == "newer-value"
+    _reset_for_tests()  # teardown restores the original too, and clears the state
+    assert os.environ["OVERRIDDEN"] == "orig"
+    assert ext.applied_env_names() == []
+
+
+def test_removal_without_override_still_unsets(fake, monkeypatch):
+    import os
+
+    monkeypatch.delenv("PLAIN_VAR", raising=False)
+    fake.values = {"PLAIN_VAR": "manager-only"}
+    hydrate_from_docs(*_docs(override_env=True))
+    fake.values = {}
+    hydrate_from_docs(*_docs(override_env=True), force=True)
+    assert "PLAIN_VAR" not in os.environ
+
+
+def test_removal_logs_no_var_names_at_info(fake, monkeypatch, caplog):
+    monkeypatch.delenv("SECRET_NAMED_VAR", raising=False)
+    monkeypatch.setenv("OVERRIDDEN_NAMED_VAR", "orig")
+    fake.values = {"SECRET_NAMED_VAR": "value-12345", "OVERRIDDEN_NAMED_VAR": "value-67890"}
+    hydrate_from_docs(*_docs(override_env=True))
+    fake.values = {}
+    with caplog.at_level("DEBUG", logger="protoagent.secrets"):
+        hydrate_from_docs(*_docs(override_env=True), force=True)
+    loud = [r.getMessage() for r in caplog.records if r.levelno >= 20]
+    assert any("2 var(s) no longer in the manager" in m for m in loud)
+    for name in ("SECRET_NAMED_VAR", "OVERRIDDEN_NAMED_VAR"):
+        assert not any(name in m for m in loud)
+
+
+def test_status_reports_disabled_not_stale_success(fake):
+    fake.values = {"SOME_VAR": "value-123"}
+    hydrate_from_docs(*_docs())
+    assert ext.status()["enabled"] is True and ext.status()["connected"] is True
+
+    st = ext.status(enabled=False)
+    assert st["enabled"] is False
+    assert st["ok"] is False and st["connected"] is False
+    # Live-enabled keeps the last outcome.
+    assert ext.status(enabled=True)["connected"] is True
+
+
+def test_status_route_overlays_the_live_config(fake, monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from operator_api.secrets_routes import register_secrets_routes
+    from runtime.state import STATE
+
+    fake.values = {"SOME_VAR": "value-123"}
+    hydrate_from_docs(*_docs(refresh_seconds=300))
+    monkeypatch.setattr(
+        STATE, "graph_config", SimpleNamespace(secrets_manager_enabled=False, secrets_manager_refresh_seconds=5)
+    )
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        body = client.get("/api/secrets/status").json()
+    assert body["enabled"] is False and body["connected"] is False and body["ok"] is False
+    assert body["refresh_seconds"] == 30  # the effective (clamped) cadence the loop runs
+    assert body["configured_refresh_seconds"] == 5
+
+
+def test_status_reports_the_effective_refresh_cadence(fake):
+    from infra.secrets.hydrate import MIN_REFRESH_SECONDS
+
+    status = hydrate_from_docs(*_docs(refresh_seconds=5))
+    assert status.refresh_seconds == MIN_REFRESH_SECONDS
+    assert status.configured_refresh_seconds == 5
+    assert ext.status(refresh_seconds=120)["refresh_seconds"] == 120
+    assert ext.status(refresh_seconds=0)["refresh_seconds"] == 0
+    assert ext.effective_refresh_seconds(45) == 45
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_repaces_without_waiting_out_the_old_interval(monkeypatch):
+    """A shortened interval applies on the next step, and fetches land on exactly the
+    cadence status() reports (effective_refresh_seconds of the live value)."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import server.maintenance_loops as loops
+    from runtime.state import STATE
+
+    cfg = SimpleNamespace(secrets_manager_enabled=True, secrets_manager_refresh_seconds=3600)
+    monkeypatch.setattr(STATE, "graph_config", cfg)
+    monkeypatch.setattr("graph.config.load_config_docs", lambda *a, **k: ({}, {}))
+    clock = {"t": 0.0}
+    fetches: list[float] = []
+    monkeypatch.setattr("infra.secrets.hydrate_from_docs", lambda *a, **k: fetches.append(clock["t"]))
+
+    async def fake_sleep(seconds, *args):
+        clock["t"] += seconds
+        if clock["t"] >= 10 and cfg.secrets_manager_refresh_seconds == 3600:
+            cfg.secrets_manager_refresh_seconds = 40  # operator shortens mid-sleep
+        if clock["t"] > 130:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await loops._secrets_refresh_loop()
+    # The old 3600s sleep is not waited out: first fetch 40s after the loop started,
+    # then every 40s (the effective interval status() would report).
+    assert fetches == [40.0, 80.0, 120.0]
+    assert ext.status(refresh_seconds=40)["refresh_seconds"] == 40
+
+    # A sub-floor interval runs (and reports) the clamped cadence.
+    clock["t"], fetches[:] = 0.0, []
+    cfg.secrets_manager_refresh_seconds = 5
+    with pytest.raises(asyncio.CancelledError):
+        await loops._secrets_refresh_loop()
+    assert fetches == [30.0, 60.0, 90.0, 120.0]
+    assert ext.status(refresh_seconds=5)["refresh_seconds"] == 30
+
+
 def test_ttl_gate_dedups_and_force_bypasses(fake):
     fake.values = {"SOME_VAR": "value-123"}
     hydrate_from_docs(*_docs())

@@ -61,6 +61,18 @@ DISABLE_ENV = "PROTOAGENT_NO_SECRETS_HYDRATE"
 # config loads into a hammer; successful fetches gate on the refresh interval instead.
 FAILURE_RETRY_SECONDS = 30.0
 
+# Successful refreshes run no more often than this — the refresh loop's cadence and
+# the TTL gate both clamp to it, and ``status()`` reports the clamped value so the
+# console shows the cadence that actually runs (not a sub-floor configured value).
+MIN_REFRESH_SECONDS = 30
+
+
+def effective_refresh_seconds(configured: int) -> int:
+    """The refresh cadence that actually runs for a configured interval: ``0`` (off)
+    stays ``0``; anything positive is clamped up to :data:`MIN_REFRESH_SECONDS`."""
+    configured = int(configured or 0)
+    return max(MIN_REFRESH_SECONDS, configured) if configured > 0 else 0
+
 
 class SecretsRequiredError(RuntimeError):
     """A ``required: true`` source failed to fetch — the caller should fail fast."""
@@ -82,7 +94,8 @@ class SourceStatus:
     fetched_at: str = ""  # ISO-8601 UTC of the last *attempt*
     applied: int = 0  # vars currently owned by the orchestrator
     shadowed: list[str] = field(default_factory=list)  # skipped: pre-existing env won
-    refresh_seconds: int = 0
+    refresh_seconds: int = 0  # effective cadence (clamped to MIN_REFRESH_SECONDS)
+    configured_refresh_seconds: int = 0  # the raw configured value
 
     def as_dict(self) -> dict:
         return {
@@ -99,11 +112,14 @@ class SourceStatus:
             "applied": self.applied,
             "shadowed": list(self.shadowed),
             "refresh_seconds": self.refresh_seconds,
+            "configured_refresh_seconds": self.configured_refresh_seconds,
+            "connected": bool(self.enabled and self.ok),
         }
 
 
 _LOCK = threading.RLock()
 _APPLIED: dict[str, str] = {}  # env var → value we set (ownership + change detection)
+_ORIGINALS: dict[str, str] = {}  # env var → operator value an override_env write replaced
 _SENSITIVE_VALUES: set[str] = set()  # applied values, for redaction (D7)
 _LAST_STATUS: SourceStatus | None = None
 _LAST_FINGERPRINT = ""
@@ -164,7 +180,11 @@ def hydrate_from_docs(merged: dict | None, secrets_doc: dict | None, *, force: b
     with _LOCK:
         fp = cfg.fingerprint()
         if not force and fp == _LAST_FINGERPRINT and _LAST_STATUS is not None:
-            window = float(max(30, cfg.refresh_seconds)) if (_LAST_OK and cfg.refresh_seconds > 0) else 60.0
+            window = (
+                float(effective_refresh_seconds(cfg.refresh_seconds))
+                if (_LAST_OK and cfg.refresh_seconds > 0)
+                else 60.0
+            )
             if not _LAST_OK:
                 window = FAILURE_RETRY_SECONDS
             if (time.monotonic() - _LAST_ATTEMPT_MONO) < window:
@@ -194,7 +214,8 @@ def hydrate_from_docs(merged: dict | None, secrets_doc: dict | None, *, force: b
             error=result.error,
             error_kind=result.error_kind.value if result.error_kind else "",
             fetched_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            refresh_seconds=cfg.refresh_seconds,
+            refresh_seconds=effective_refresh_seconds(cfg.refresh_seconds),
+            configured_refresh_seconds=cfg.refresh_seconds,
         )
         if result.ok:
             protected = set(PROTECTED_BASE) | set(getattr(provider, "bootstrap_env", ()) or ())
@@ -255,6 +276,10 @@ def _apply(values: dict[str, str], cfg: SourceConfig, protected: set[str]) -> tu
         if not owned and name in os.environ and not cfg.override_env:
             shadowed.append(name)
             continue
+        if not owned and name in os.environ:
+            # override_env replacing an operator-set var: remember their value so a
+            # later removal from the manager restores it instead of unsetting it.
+            _ORIGINALS[name] = os.environ[name]
         if os.environ.get(name) != value:
             os.environ[name] = value
             changed += 1
@@ -263,26 +288,61 @@ def _apply(values: dict[str, str], cfg: SourceConfig, protected: set[str]) -> tu
             _SENSITIVE_VALUES.add(value)
 
     # A var we own that a *successful* fetch no longer returns was deleted/moved in the
-    # manager — un-export it (unless the operator overwrote it since; then it's theirs).
+    # manager — un-export it, or restore the operator's original value when an
+    # override_env write had replaced one (unless the operator overwrote it since; then
+    # it's theirs). Var names stay out of INFO logs (D7) — counts only, names at DEBUG.
+    removed = restored = 0
     for name in [n for n in _APPLIED if n not in fetched]:
+        original = _ORIGINALS.pop(name, None)
         if os.environ.get(name) == _APPLIED[name]:
-            os.environ.pop(name, None)
+            if original is not None:
+                os.environ[name] = original
+                restored += 1
+            else:
+                os.environ.pop(name, None)
+                removed += 1
             changed += 1
-            log.info("[secrets] %s no longer in the manager — removed from the environment", name)
+            log.debug(
+                "[secrets] %s no longer in the manager — %s",
+                name,
+                "restored to the prior value" if original is not None else "removed from the environment",
+            )
         del _APPLIED[name]
+    if removed or restored:
+        log.info(
+            "[secrets] %d var(s) no longer in the manager — %d removed from the environment, "
+            "%d restored to the prior value",
+            removed + restored,
+            removed,
+            restored,
+        )
 
     if invalid:
         log.warning("[secrets] skipped %d secret(s) whose names are not valid env vars", invalid)
     return changed, shadowed
 
 
-def status() -> dict:
+def status(*, enabled: bool | None = None, refresh_seconds: int | None = None) -> dict:
     """Status surface for the operator API — safe (no secret values; owned var *names*
-    only, which the operator-authed console needs to show provenance)."""
+    only, which the operator-authed console needs to show provenance).
+
+    ``enabled`` / ``refresh_seconds`` are the LIVE config's values (the route passes
+    them): the last fetch outcome goes stale once the operator disables the manager
+    or changes the interval. Disabled (live config off, or the
+    ``PROTOAGENT_NO_SECRETS_HYDRATE`` escape hatch) reports ``enabled: false`` with
+    ``ok``/``connected`` false instead of the last success. ``refresh_seconds`` is
+    always the effective (clamped) cadence; ``configured_refresh_seconds`` the raw one."""
     with _LOCK:
         base = _LAST_STATUS.as_dict() if _LAST_STATUS is not None else SourceStatus().as_dict()
         base["vars"] = sorted(_APPLIED)
-        return base
+    if refresh_seconds is not None:
+        base["configured_refresh_seconds"] = int(refresh_seconds or 0)
+        base["refresh_seconds"] = effective_refresh_seconds(refresh_seconds)
+    if enabled is False or os.environ.get(DISABLE_ENV, "").strip():
+        base["enabled"] = False
+        base["ok"] = False
+        base["connected"] = False
+    return base
 
 
 def applied_env_names() -> list[str]:
@@ -303,8 +363,12 @@ def _reset_for_tests() -> None:
     with _LOCK:
         for name, value in list(_APPLIED.items()):
             if os.environ.get(name) == value:
-                os.environ.pop(name, None)
+                if name in _ORIGINALS:
+                    os.environ[name] = _ORIGINALS[name]
+                else:
+                    os.environ.pop(name, None)
         _APPLIED.clear()
+        _ORIGINALS.clear()
         _SENSITIVE_VALUES.clear()
         _LAST_STATUS = None
         _LAST_FINGERPRINT = ""

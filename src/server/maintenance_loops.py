@@ -1451,30 +1451,45 @@ async def _plugin_autoupdate_loop() -> None:
         await asyncio.sleep((interval_h if interval_h > 0 else 1) * 3600)
 
 
+# The refresh loop's sleep granularity — a changed interval applies within this.
+_SECRETS_REFRESH_STEP_SECONDS = 5.0
+
+
 async def _secrets_refresh_loop() -> None:
     """Re-pull env vars from the external secrets manager on its interval (ADR 0080
-    D5) so rotation lands without a restart. Reads the live config each pass — a
-    reload re-paces or en/disables the loop without restarting it; while disabled it
-    idles on 5-minute checks. ``force=True`` bypasses the hydrator's TTL gate (this
-    loop IS the TTL). ``required: true`` is a boot gate only — a refresh failure
-    here warns and keeps the last-applied values."""
+    D5) so rotation lands without a restart. Sleeps in short steps and re-reads the
+    live config on every step, so a reload that re-paces or en/disables the loop
+    takes effect within one step instead of after the old interval. The cadence is
+    ``effective_refresh_seconds`` — the same clamped value ``status()`` reports, so
+    the panel shows what actually runs. ``force=True`` bypasses the hydrator's TTL
+    gate (this loop IS the TTL). ``required: true`` is a boot gate only — a refresh
+    failure here warns and keeps the last-applied values."""
     import asyncio
 
-    def _live() -> tuple[bool, int]:
-        cfg = STATE.graph_config
-        if cfg is None:
-            return False, 0
-        return (
-            bool(getattr(cfg, "secrets_manager_enabled", False)),
-            int(getattr(cfg, "secrets_manager_refresh_seconds", 0) or 0),
-        )
+    from infra.secrets.hydrate import effective_refresh_seconds
 
+    step = float(_SECRETS_REFRESH_STEP_SECONDS)
+
+    def _live() -> int:
+        """Effective interval from the live config; ``0`` = disabled/off."""
+        cfg = STATE.graph_config
+        if cfg is None or not bool(getattr(cfg, "secrets_manager_enabled", False)):
+            return 0
+        return effective_refresh_seconds(int(getattr(cfg, "secrets_manager_refresh_seconds", 0) or 0))
+
+    elapsed = 0.0  # seconds slept since the last fetch (or since the loop went active)
     while True:
-        enabled, refresh = _live()
-        await asyncio.sleep(float(max(30, refresh)) if (enabled and refresh > 0) else 300.0)
-        enabled, refresh = _live()  # re-read after the sleep — config may have changed
-        if not (enabled and refresh > 0):
+        interval = _live()
+        slept = min(step, interval - elapsed) if interval > elapsed else step
+        await asyncio.sleep(slept)
+        interval = _live()  # re-read after the sleep — config may have changed
+        if interval <= 0:
+            elapsed = 0.0  # disabled: a re-enable waits a full interval (the reload hydrates)
             continue
+        elapsed += slept
+        if elapsed < interval:  # a shortened interval already overdue fetches now
+            continue
+        elapsed = 0.0
         from graph.config import load_config_docs
         from graph.config_io import config_yaml_path
         from infra.secrets import SecretsRequiredError, hydrate_from_docs
