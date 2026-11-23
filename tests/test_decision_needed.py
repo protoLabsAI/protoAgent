@@ -43,6 +43,7 @@ from graph.decisions import (
     normalize_options,
 )
 from graph.middleware.request_context import verified_principal_scope
+from graph.middleware.subagent_fence import SubagentFenceMiddleware
 from graph.plugins import host
 from graph.state import ProtoAgentState
 from operator_api import decision_routes
@@ -1260,19 +1261,20 @@ def _agent_graph(monkeypatch, replies, *, tool_obj=None, checkpointer=None):
     model = _ScriptedModel(messages=iter(replies))
     model.seen = []
     graph = create_agent(model, tools=[tool_obj], state_schema=ProtoAgentState,
+                         middleware=[SubagentFenceMiddleware()],
                          checkpointer=checkpointer or InMemorySaver())
     monkeypatch.setattr(STATE, "graph", graph)
     return graph, model
 
 
 async def _agent_turn(thread, message="ship it", *, origin="api-chat", resume=False, sink=None,
-                      session_id="s-nopause", principal="shared-operator-bearer"):
+                      session_id="s-nopause", principal="shared-operator-bearer", tool_fence=None):
     from server.turn_sync import _native_turn
 
     with verified_principal_scope(principal):
         return await _native_turn(
             message, None, session_id=session_id, config={"configurable": {"thread_id": thread}},
-            usage_cb=UsageMetadataCallbackHandler(), state_extra={}, tool_fence=None,
+            usage_cb=UsageMetadataCallbackHandler(), state_extra={}, tool_fence=tool_fence,
             hitl_resume=resume, incognito=False, origin=origin, telemetry_sink=sink,
         )
 
@@ -1338,7 +1340,8 @@ def _pre_upgrade_tool(question: str, options: list[str]) -> str:
 
 
 @pytest.mark.asyncio
-async def test_a_decision_paused_before_the_upgrade_is_answered_and_the_turn_resumes(store, monkeypatch):
+@pytest.mark.parametrize("tool_fence", [None, ["current_time"]])
+async def test_a_decision_paused_before_the_upgrade_is_answered_and_the_turn_resumes(store, monkeypatch, tool_fence):
     # Park a turn the old way, then "upgrade": rebuild the graph with today's tool on the
     # same checkpoint. The operator's answer resumes the turn and the model acts on it.
     saver = InMemorySaver()
@@ -1354,7 +1357,7 @@ async def test_a_decision_paused_before_the_upgrade_is_answered_and_the_turn_res
     held = await _agent_turn(thread, "scheduled fire", origin="scheduler", session_id="s-legacy")
     assert "Input needed first" in held[0]["content"]
 
-    reply = await _agent_turn(thread, "yes", resume=True, session_id="s-legacy")
+    reply = await _agent_turn(thread, "yes", resume=True, session_id="s-legacy", tool_fence=tool_fence)
     assert reply[0]["content"].startswith("Deploying to prod now.")
     assert len(model.seen) == 1  # the resumed turn went back to the model with the answer
     tool_msg = next(m for m in model.seen[0] if isinstance(m, ToolMessage))

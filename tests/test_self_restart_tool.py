@@ -95,7 +95,7 @@ def test_self_restart_is_not_an_answer_type_fence_tool():
     # as an answer-type tool. Otherwise a resumer whose fence excludes it would run a process
     # restart instead of getting the decline. ask_human/request_user_input stay answer-type.
     assert "self_restart" not in _answer_tools()
-    assert _answer_tools() == HITL_TOOL_NAMES
+    assert _answer_tools() == HITL_TOOL_NAMES | {"request_decision"}
     assert "self_restart" in SUBAGENT_DENIED_TOOLS
 
 

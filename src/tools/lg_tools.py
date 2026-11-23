@@ -1171,7 +1171,7 @@ def load_skill(name: str) -> str:
 
 
 # Answer-type HITL tools: each interrupt ASKS A QUESTION and the resume is an ANSWER (not an
-# approval). SubagentFenceMiddleware keys its resume-exemption on exactly this set — a parked
+# approval). SubagentFenceMiddleware extends this set with legacy decision pauses — a parked
 # answer-type call completes on its own resume even when the resumer's fence excludes it, so
 # the operator's answer isn't dropped. An APPROVAL-type interrupt tool (``self_restart``) must
 # NOT be here: a resumer whose fence excludes it must DECLINE it, not run it. Add only

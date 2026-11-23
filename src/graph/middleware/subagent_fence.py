@@ -19,7 +19,8 @@ Fence rules (one place, so the drivers and the steering fold agree):
   list means "no fence" to this middleware, so it would fail OPEN.
 * **A parked ANSWER completes on its own resume; a parked APPROVAL does not.** When the
   call that parked the turn is an answer-type HITL tool (``HITL_TOOL_NAMES`` —
-  ``ask_human`` / ``request_user_input``), it runs to completion on the pass that resumes
+  ``ask_human`` / ``request_user_input``, plus legacy ``request_decision`` pauses),
+  it runs to completion on the pass that resumes
   it even when the resumer's fence excludes it — only that call (the LangGraph task that
   holds the resume value), only on that pass; every other call stays fenced. Otherwise a
   fenced resumer silently drops the operator's answer. Any OTHER parked call is an
@@ -151,7 +152,9 @@ def _answer_tools() -> frozenset[str]:
     DECLINE it (``_declined``), never run it, because its resume is an approval."""
     from tools.lg_tools import HITL_TOOL_NAMES
 
-    return HITL_TOOL_NAMES
+    # New decisions never interrupt, but checkpoints parked before the upgrade still
+    # carry an answer, not an approval. Keep their resume exemption local to the fence.
+    return HITL_TOOL_NAMES | frozenset({"request_decision"})
 
 
 class SubagentFenceMiddleware(AgentMiddleware):
