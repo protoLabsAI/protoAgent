@@ -1,0 +1,1 @@
+- **Memory baseline failure evidence is documented.** Audit all 26 never-passing cases with fixture row status, offline scorer controls and explicitly scoped FTS retrieval receipts. Preserve the frozen cases and baseline; original Qwen retrieval and grading remain unverified. Refs #4961.
