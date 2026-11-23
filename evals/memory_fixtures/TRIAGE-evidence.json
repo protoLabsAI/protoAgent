@@ -1,0 +1,2127 @@
+{
+  "date": "2026-11-23",
+  "retrieval": "memory_retrieval.topk; ProjectionOptions() top_k=5, inject_min_trust=1; embed_fn=None (real FTS fallback, NOT Qwen baseline)",
+  "scoring": "PV4 exact reference with distinct one-hot fake vectors and fake answer model; changed-fact real substring scorer, no model",
+  "records": [
+    {
+      "case_id": "pv4-u130-q45",
+      "label": "retrieval miss",
+      "question": "A junior colleague asks Milo how to turn a dry dataset about foot traffic near local shops into a more engaging narrative. During his next morning walk, what approach is Milo most likely to model in his own observation routine so he can later demonstrate this transformation at work?",
+      "store": "pv4/user_130.jsonl",
+      "checked": [
+        {
+          "id": 2,
+          "content": "[as of 2000-01-01] Leo prefers framing product data and marketing narratives as a hero's journey, with the user as the reluctant protagonist and the product as the mentor's gift.",
+          "superseded_by": null
+        },
+        {
+          "id": 29,
+          "content": "[as of 2000-01-12] Leo collects sunrise and shopfront snapshots taken on his College Hill walks.",
+          "superseded_by": null
+        },
+        {
+          "id": 32,
+          "content": "[as of 2000-01-13] Leo does his storefront observations on foot during walks through the neighborhood.",
+          "superseded_by": null
+        },
+        {
+          "id": 423,
+          "content": "[as of 2000-05-12] Leo takes a sunrise walk as part of his morning ritual.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 472,
+          "bm25": -19.43440555410059,
+          "content": "[as of 2000-05-26] Leo's sprint workload is often full and he is taking on more extra asks than he can handle."
+        },
+        {
+          "rank": 2,
+          "id": 347,
+          "bm25": -18.560176224279964,
+          "content": "[as of 2000-04-20] Leo refers to his at-home self as \"Milo.\""
+        },
+        {
+          "rank": 3,
+          "id": 406,
+          "bm25": -18.343957931398727,
+          "content": "[as of 2000-05-07] Milo is sketching a survey to invite local artists into future collaborations for the pop-up."
+        },
+        {
+          "rank": 4,
+          "id": 32,
+          "bm25": -14.21297036313472,
+          "content": "[as of 2000-01-13] Leo does his storefront observations on foot during walks through the neighborhood."
+        },
+        {
+          "rank": 5,
+          "id": 392,
+          "bm25": -13.921097459976856,
+          "content": "[as of 2000-05-03] Leo wants the carnival to feature his neighborhood's favorite local shops and get their owners excited to participate."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "He would mentally cast the busiest storefront as a main character, track how sunrise light changes its display mood, and later map those shifts onto a simple hero’s journey curve.",
+        "nearest": "He would mentally cast the busiest storefront as a main character, track how sunrise light changes its display mood, and later map those shifts onto a simple hero’s journey curve.",
+        "choices": [
+          "He would mentally cast the busiest storefront as a main character, track how sunrise light changes its display mood, and later map those shifts onto a simple hero’s journey curve.",
+          "He would mentally cast the busiest storefront as a main character, track how discount signs change its display mood, and later map those shifts onto a simple hero’s journey curve.",
+          "He would mentally cast the busiest storefront as a main character, track how security staff change its display mood, and later map those shifts onto a simple hero’s journey curve.",
+          "He would mentally cast the busiest storefront as a main character, track how street noise changes its display mood, and later map those shifts onto a simple hero’s journey curve.",
+          "He would mentally cast the busiest storefront as a main character, track how opening hours change its display mood, and later map those shifts onto a simple hero’s journey curve."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Live hero-journey, sunrise/shopfront and walking facts support the synthesis; the fallback omits the first two."
+    },
+    {
+      "case_id": "pv4-u131-q15",
+      "label": "retrieval miss",
+      "question": "Mason receives a substantial freelance commission to create a multimedia feature on coastal conservation, due the same week he plans several overnight “Wind‑Script” editing sprints. To keep both projects moving without losing creative momentum, how is he most likely to structure his late‑night work sessions?",
+      "store": "pv4/user_131.jsonl",
+      "checked": [
+        {
+          "id": 27,
+          "content": "[as of 2000-01-10] Leo layers real wind recordings into his sound mixes.",
+          "superseded_by": null
+        },
+        {
+          "id": 622,
+          "content": "[as of 2000-06-30] Leo's creativity drops on calm, windless days, and he gets jittery when the wind dies down.",
+          "superseded_by": null
+        },
+        {
+          "id": 685,
+          "content": "[as of 2000-07-16] Leo prefers to do editing work late at night, around 2 a.m., with the loft doors open.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 453,
+          "bm25": -14.13509896722254,
+          "content": "[as of 2000-05-11] Leo wants to make his work accessible to viewers without alienating them."
+        },
+        {
+          "rank": 2,
+          "id": 603,
+          "bm25": -14.08839380324336,
+          "content": "[as of 2000-06-25] Leo wants to trim excess material from scenes without losing their tone."
+        },
+        {
+          "rank": 3,
+          "id": 345,
+          "bm25": -13.803274335427584,
+          "content": "[as of 2000-04-08] Leo works as a video editor and sometimes runs long editing sprints where he doesn't want to stop for meals."
+        },
+        {
+          "rank": 4,
+          "id": 619,
+          "bm25": -12.88023827314536,
+          "content": "[as of 2000-06-29] Leo wants the assistant to send a reminder if he goes 48 hours without a Collision Log entry."
+        },
+        {
+          "rank": 5,
+          "id": 104,
+          "bm25": -12.692594969337492,
+          "content": "[as of 2000-01-30] Leo wants a daily routine that is flexible for freelance unpredictability but keeps momentum."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Use late nights for parallel progress, alternating between conservation footage and “The Wind‑Script” scenes whenever the wind intensifies, letting the gusts dictate which visual sequences he refines.",
+        "nearest": "Use late nights for parallel progress, alternating between conservation footage and “The Wind‑Script” scenes whenever the wind intensifies, letting the gusts dictate which visual sequences he refines.",
+        "choices": [
+          "Outsource routine conservation editing tasks to another freelancer so he can dedicate all nocturnal energy to “The Wind‑Script,” using only brief late‑night check‑ins to review external edits.",
+          "Use late nights for parallel progress, alternating between conservation footage and “The Wind‑Script” scenes whenever the wind intensifies, letting the gusts dictate which visual sequences he refines.",
+          "Front‑load the conservation project by pulling several consecutive all‑nighters solely on that work, then schedule a separate block of nocturnal sprints afterward devoted entirely to “The Wind‑Script.”",
+          "Commit entire nights to “The Wind‑Script” only, finishing conservation tasks strictly during daytime hours at the coworking space, keeping the two workflows completely separated by time and location.",
+          "Reserve nights exclusively for the conservation feature, treating it like a traditional nine‑to‑five shifted to nighttime, and push “The Wind‑Script” edits into early afternoons at the lighthouse coworking space."
+        ],
+        "similarities": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Live wind-dependent creativity and overnight editing facts support the inference, but none enters fallback top five."
+    },
+    {
+      "case_id": "pv4-u131-q3",
+      "label": "retrieval miss",
+      "question": "On a blustery morning when Atlantic gusts are already strong, Mason heads to the repurposed lighthouse co‑working space with a full afternoon of interviewing and editing ahead. How will he most likely leverage the wind’s effect on his energy across that day?",
+      "store": "pv4/user_131.jsonl",
+      "checked": [
+        {
+          "id": 27,
+          "content": "[as of 2000-01-10] Leo layers real wind recordings into his sound mixes.",
+          "superseded_by": null
+        },
+        {
+          "id": 235,
+          "content": "[as of 2000-03-11] Leo films interviews in the lighthouse co-working space.",
+          "superseded_by": null
+        },
+        {
+          "id": 622,
+          "content": "[as of 2000-06-30] Leo's creativity drops on calm, windless days, and he gets jittery when the wind dies down.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 235,
+          "bm25": -20.653879944975056,
+          "content": "[as of 2000-03-11] Leo films interviews in the lighthouse co-working space."
+        },
+        {
+          "rank": 2,
+          "id": 141,
+          "bm25": -17.625221058066344,
+          "content": "[as of 2000-02-12] The lighthouse co-working space is a location Leo's sources have used for in-person meetings."
+        },
+        {
+          "rank": 3,
+          "id": 622,
+          "bm25": -12.037575582783075,
+          "content": "[as of 2000-06-30] Leo's creativity drops on calm, windless days, and he gets jittery when the wind dies down."
+        },
+        {
+          "rank": 4,
+          "id": 551,
+          "bm25": -11.076590297631892,
+          "content": "[as of 2000-06-08] Leo is learning to follow the energy of a scene and cut padding until the writing breathes."
+        },
+        {
+          "rank": 5,
+          "id": 646,
+          "bm25": -10.6860305257587,
+          "content": "[as of 2000-07-07] Leo prefers tight, concise answers, especially when he is busy with editing."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "He would walk the last stretch along the harbor to feel the gusts, record a few wind snippets, then settle inside for interviews because the brief exposure sharpens him without draining social energy.",
+        "nearest": "He would walk the last stretch along the harbor to feel the gusts, record a few wind snippets, then settle inside for interviews because the brief exposure sharpens him without draining social energy.",
+        "choices": [
+          "He would walk the last stretch along the harbor to feel the gusts, record a few wind snippets, then settle inside for interviews because the brief exposure sharpens him without draining social energy.",
+          "He would arrive early, remain outside on the pier for extended journaling, and delay interviews because prolonged wind immersion gives him deeper introspective material to mine later.",
+          "He would bike past the harbor at maximum speed and skip recording entirely because he prefers wind purely as physical rush rather than as input for his journalistic projects.",
+          "He would drive to the lighthouse with windows closed and rely on indoor fans later because he believes simulated airflow works better than unpredictable gusts before structured work.",
+          "He would avoid the harbor entirely, take a sheltered route, and jump straight into interviews because minimizing wind contact helps him conserve mental bandwidth for complex conversation."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Wind recording, lighthouse interviews and wind-dependent creativity are live; the recording fact is omitted."
+    },
+    {
+      "case_id": "pv4-u131-q76",
+      "label": "retrieval miss",
+      "question": "To keep *The Wind‑Script* secret, Mason must choose how to describe his current work to friends at the co‑working lighthouse, while still explaining his late‑night wind‑heavy editing sessions and courtroom research. Which cover story aligns with his habits and concealment needs?",
+      "store": "pv4/user_131.jsonl",
+      "checked": [
+        {
+          "id": 253,
+          "content": "[as of 2000-03-15] Leo is developing a mini-doc series called \"Tideline Trades\" about seasonal coastal livelihoods such as kelp foraging, oyster cultivation, and baitmaking.",
+          "superseded_by": null
+        },
+        {
+          "id": 478,
+          "content": "[as of 2000-05-17] Leo's montage project covers how New England coastal industries changed over the last century.",
+          "superseded_by": null
+        },
+        {
+          "id": 685,
+          "content": "[as of 2000-07-16] Leo prefers to do editing work late at night, around 2 a.m., with the loft doors open.",
+          "superseded_by": null
+        },
+        {
+          "id": 686,
+          "content": "[as of 2000-07-17] Leo is developing a short film called The Wind-Script and is moving it from a secret sprint toward a sustainable creative practice.",
+          "superseded_by": 687
+        },
+        {
+          "id": 691,
+          "content": "[as of 2000-07-17] Leo has a loft that can serve as a shooting location for The Wind-Script.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 685,
+          "bm25": -15.947559644968475,
+          "content": "[as of 2000-07-16] Leo prefers to do editing work late at night, around 2 a.m., with the loft doors open."
+        },
+        {
+          "rank": 2,
+          "id": 479,
+          "bm25": -15.908125378367473,
+          "content": "[as of 2000-05-17] Leo has tide charts for his current editing project."
+        },
+        {
+          "rank": 3,
+          "id": 235,
+          "bm25": -15.745081642291591,
+          "content": "[as of 2000-03-11] Leo films interviews in the lighthouse co-working space."
+        },
+        {
+          "rank": 4,
+          "id": 324,
+          "bm25": -15.661219239358651,
+          "content": "[as of 2000-04-02] Leo layers natural wind recordings into his audio work, so he does not need wind to be fully eliminated at the source."
+        },
+        {
+          "rank": 5,
+          "id": 452,
+          "bm25": -15.029690372679088,
+          "content": "[as of 2000-05-11] Leo creates work under the name Mace and wants his output to stay recognizably Mace."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Describe it as a new mini‑documentary on coastal industries, claiming he is filming harbor work and local hearings, while downplaying that he’s scripting fictional legal drama and staging stylized courtroom scenes.",
+        "nearest": "Describe it as a new mini‑documentary on coastal industries, claiming he is filming harbor work and local hearings, while downplaying that he’s scripting fictional legal drama and staging stylized courtroom scenes.",
+        "choices": [
+          "Describe it as a new mini‑documentary on coastal industries, claiming he is filming harbor work and local hearings, while downplaying that he’s scripting fictional legal drama and staging stylized courtroom scenes.",
+          "Tell them he is writing a long‑form academic paper on atmospheric physics, emphasizing dense climate models, and explain the late hours as purely data crunching with almost no multimedia or narrative focus involved.",
+          "Pretend he is doing contract editing for a travel vlog, focusing on scenic B‑roll of beaches and lighthouses, insisting that the project barely involves any sustained dialogue or structured investigative elements.",
+          "Explain that he is developing a technical tutorial series on video editing, highlighting software workflows and color grading, with no mention of narrative themes, law, or the symbolic use of weather at all.",
+          "Say he is experimenting with an abstract sound‑art installation about storms, stressing that he’s mainly recording wind noise and ambient textures rather than shaping any recognizable characters or plotlines."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Live coastal-documentary material supports the proposed cover story; fallback returns late editing but omits both documentary facts. Secret-sprint history 686 is superseded; 691 only retains the shooting location."
+    },
+    {
+      "case_id": "pv4-u133-q101",
+      "label": "retrieval miss",
+      "question": "Elliot is planning the first underground tasting in the reclaimed bunker he hopes to fund, wanting the menu to reflect both his Caribbean‑British upbringing and his current single‑origin obsession. Which core espresso choice best expresses that blend of heritage warmth and third‑wave specificity?",
+      "store": "pv4/user_133.jsonl",
+      "checked": [
+        {
+          "id": 16,
+          "content": "[as of 2000-01-06] Leo is working with an Ethiopian Yirgacheffe single-origin coffee.",
+          "superseded_by": null
+        },
+        {
+          "id": 43,
+          "content": "[as of 2000-01-13] Leo adds the strawberry-balsamic reduction to cold brew and steamed milk and needs it to keep its texture and not split in milk.",
+          "superseded_by": null
+        },
+        {
+          "id": 262,
+          "content": "[as of 2000-04-02] In Leo's mystery, a lemony Ethiopian note hints at fresh alibis, a chocolatey Guatemalan note points to old grudges, and a strawberry-balsamic note signals a planted artifact.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 21,
+          "bm25": -12.53346969510521,
+          "content": "[as of 2000-01-08] Leo wants the menu rotation to stay low-cost."
+        },
+        {
+          "rank": 2,
+          "id": 10,
+          "bm25": -11.726439316803212,
+          "content": "[as of 2000-01-04] The strawberry cold brew is a special, marked on the menu with a tiny strawberry icon."
+        },
+        {
+          "rank": 3,
+          "id": 504,
+          "bm25": -11.506417679488019,
+          "content": "[as of 2000-06-26] Leo wants to voice his ideas in group discussions without sounding dismissive of others or dominating the conversation."
+        },
+        {
+          "rank": 4,
+          "id": 335,
+          "bm25": -11.491114251363511,
+          "content": "[as of 2000-04-29] Leo's milestone drink tiers are: Bronze (100) strawberry-balsamic cold brew, Silver (500) Bunker Blend single-origin pour-over, and Gold (1,000) velvet chocolate-stout mocha."
+        },
+        {
+          "rank": 5,
+          "id": 539,
+          "bm25": -11.33786919800564,
+          "content": "[as of 2000-07-05] Leo wants to identify transferable skills for a CV so he can get a better job outside the espresso bar."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "A single‑origin Ethiopian espresso with jasmine and citrus notes served alongside a small side of strawberry‑balsamic syrup inspired by his family’s fruit‑forward desserts.",
+        "nearest": "A single‑origin Ethiopian espresso with jasmine and citrus notes served alongside a small side of strawberry‑balsamic syrup inspired by his family’s fruit‑forward desserts.",
+        "choices": [
+          "A seasonal Colombian espresso with toffee and apple notes served alongside a small side of flapjacks inspired by his family’s casual post‑match kitchen snacks.",
+          "A house espresso blend with chocolate and nut notes served alongside a small side of ginger biscuits inspired by his family’s traditional afternoon tea rituals.",
+          "A single‑origin Brazilian espresso with caramel and peanut notes served alongside a small side of plantain chips inspired by his family’s occasional Caribbean snack platters.",
+          "A single‑origin Ethiopian espresso with jasmine and citrus notes served alongside a small side of strawberry‑balsamic syrup inspired by his family’s fruit‑forward desserts.",
+          "A dark roasted Italian‑style espresso with smoky and bitter notes served alongside a small side of shortbread inspired by his family’s nostalgic supermarket treats."
+        ],
+        "similarities": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      "reason": "Ethiopian coffee, strawberry-balsamic preparation and lemony Ethiopian flavor are live; none enters fallback top five."
+    },
+    {
+      "case_id": "pv4-u133-q114",
+      "label": "fixture gap",
+      "question": "One evening a curious coworker notices Elliot’s chalkboard covered in coffee notes mixed with cryptic phrases and asks, “What’s all this about?” How is Elliot most likely to respond to maintain his charming image while concealing the Strawberry Cipher?",
+      "store": "pv4/user_133.jsonl",
+      "checked": [
+        {
+          "id": 214,
+          "content": "[as of 2000-03-18] Maya draws strawberry doodles, and Leo keeps one on his chalkboard.",
+          "superseded_by": null
+        },
+        {
+          "id": 215,
+          "content": "[as of 2000-03-18] Leo keeps a strawberry doodle from Maya on his chalkboard.",
+          "superseded_by": null
+        },
+        {
+          "id": 270,
+          "content": "[as of 2000-04-05] Leo needs short chalkboard copy about espresso, likely for a coffee business.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 270,
+          "bm25": -15.90473271574916,
+          "content": "[as of 2000-04-05] Leo needs short chalkboard copy about espresso, likely for a coffee business."
+        },
+        {
+          "rank": 2,
+          "id": 214,
+          "bm25": -13.030692714739134,
+          "content": "[as of 2000-03-18] Maya draws strawberry doodles, and Leo keeps one on his chalkboard."
+        },
+        {
+          "rank": 3,
+          "id": 215,
+          "bm25": -10.255131754594178,
+          "content": "[as of 2000-03-18] Leo keeps a strawberry doodle from Maya on his chalkboard."
+        },
+        {
+          "rank": 4,
+          "id": 553,
+          "bm25": -10.140570022422992,
+          "content": "[as of 2000-07-08] Leo wants to keep his cipher nights without losing time with friends."
+        },
+        {
+          "rank": 5,
+          "id": 111,
+          "bm25": -9.631537292588872,
+          "content": "[as of 2000-02-06] Leo wants a way to link receipts and photocopies to his case notes."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "He calls it a personal “flavor diary and clue wall,” saying he tracks moods and tastes together while insisting none of it is serious and downplaying its investigative purpose.",
+        "nearest": "He calls it a personal “flavor diary and clue wall,” saying he tracks moods and tastes together while insisting none of it is serious and downplaying its investigative purpose.",
+        "choices": [
+          "He laughs it off as a mash‑up of latte recipes and “terrible detective fanfiction,” inviting them to suggest plot twists while steering attention away from any systematic markings.",
+          "He claims it’s a storyboard for a future graphic novel about a barista sleuth, joking about exaggerated characters while silently copying key codes to a private notebook.",
+          "He frames it as prep for a “coffee escape room” concept, explaining that he’s testing puzzle ideas while carefully avoiding mention of receipts, tunnels, or actual case files.",
+          "He calls it a personal “flavor diary and clue wall,” saying he tracks moods and tastes together while insisting none of it is serious and downplaying its investigative purpose.",
+          "He describes it as a training tool for tasting sessions and “barista brainteasers,” offering to run them through a mock quiz that distracts from the more cryptic annotations."
+        ],
+        "similarities": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      "reason": "Chalkboard doodles and espresso copy exist, but no row supplies the distinguishing flavor-diary-and-clue-wall framing. Related rows do not establish that cover explanation over the other choices."
+    },
+    {
+      "case_id": "pv4-u133-q115",
+      "label": "retrieval miss",
+      "question": "A journalist doing a feature on “London’s quirkiest baristas” asks Elliot for an on‑camera scene that captures “what makes you unique.” Which scene would he most likely stage to highlight his social charm while keeping his investigative obsession offscreen?",
+      "store": "pv4/user_133.jsonl",
+      "checked": [
+        {
+          "id": 16,
+          "content": "[as of 2000-01-06] Leo is working with an Ethiopian Yirgacheffe single-origin coffee.",
+          "superseded_by": null
+        },
+        {
+          "id": 486,
+          "content": "[as of 2000-06-20] Leo's server has an ongoing set of inside jokes built around latte art and detective clichés.",
+          "superseded_by": null
+        },
+        {
+          "id": 566,
+          "content": "[as of 2000-07-13] Leo enjoys sleuthing and hidden clues or puzzles.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 371,
+          "bm25": -13.528225891634666,
+          "content": "[as of 2000-05-10] Leo reads books, and a woman he's interested in asks him often what he's reading."
+        },
+        {
+          "rank": 2,
+          "id": 57,
+          "bm25": -10.977582030396825,
+          "content": "[as of 2000-01-17] Leo wants desserts where fruit is a central feature, not an afterthought."
+        },
+        {
+          "rank": 3,
+          "id": 333,
+          "bm25": -10.942799791399457,
+          "content": "[as of 2000-04-29] Leo is doing a cipher grind in which he encodes receipts, and he tracks progress at checkpoints of 100, 500, and 1,000 encoded receipts."
+        },
+        {
+          "rank": 4,
+          "id": 397,
+          "bm25": -10.280416082812463,
+          "content": "[as of 2000-05-20] Leo wants to train his observational focus through short five-minute drills he can do discreetly while working."
+        },
+        {
+          "rank": 5,
+          "id": 535,
+          "bm25": -9.232266219879726,
+          "content": "[as of 2000-07-04] Leo works a job with variable, unpredictable shifts, and he wants to protect that income while pursuing a side business."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Playfully explaining single‑origin beans to a group of regulars while slipping in light detective metaphors about “hidden clues” in flavors, never referencing specific cases or secret projects.",
+        "nearest": "Playfully explaining single‑origin beans to a group of regulars while slipping in light detective metaphors about “hidden clues” in flavors, never referencing specific cases or secret projects.",
+        "choices": [
+          "Guiding a tour of his flat’s collage wall, describing it as mood‑board inspiration for drinks while carefully omitting the true investigative purpose of marked alleyway photos.",
+          "Hosting a mini tasting where customers vote on mystery‑themed drink names, encouraging banter about fictional crimes while steering questions away from his personal note‑taking habits.",
+          "Performing a Bruno Mars sing‑along behind the counter as he pours latte art, joking about “stagecraft” in coffee without hinting at the coded markings on printed receipts.",
+          "Playfully explaining single‑origin beans to a group of regulars while slipping in light detective metaphors about “hidden clues” in flavors, never referencing specific cases or secret projects.",
+          "Leading a mock interrogation of a colleague about their favorite brew, using detective jargon in jest while avoiding any mention of his real research or unsolved London mysteries."
+        ],
+        "similarities": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      "reason": "Single-origin coffee, detective jokes and enjoyment of clues are live; fallback misses all three."
+    },
+    {
+      "case_id": "pv4-u133-q131",
+      "label": "retrieval miss",
+      "question": "Maya designs a postcard showing Elliot surrounded by strawberries and coffee cups, with a tiny heart hidden in the artwork, then jokes in a message, “maybe one day I’ll add an extra person next to you.” How is Elliot most likely to respond, balancing their playful bond with his discomfort about romance?",
+      "store": "pv4/user_133.jsonl",
+      "checked": [
+        {
+          "id": 365,
+          "content": "[as of 2000-05-08] Leo and Maya have a playful, teasing friendship, and Leo usually responds to her cheeky messages with roasts.",
+          "superseded_by": null
+        },
+        {
+          "id": 444,
+          "content": "[as of 2000-06-08] Leo likes the 🍓🔍 emoji pairing (strawberry and magnifying glass) in his reminders.",
+          "superseded_by": null
+        },
+        {
+          "id": 566,
+          "content": "[as of 2000-07-13] Leo enjoys sleuthing and hidden clues or puzzles.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 365,
+          "bm25": -15.180926688059342,
+          "content": "[as of 2000-05-08] Leo and Maya have a playful, teasing friendship, and Leo usually responds to her cheeky messages with roasts."
+        },
+        {
+          "rank": 2,
+          "id": 65,
+          "bm25": -13.823705759853425,
+          "content": "[as of 2000-01-20] Leo is interested in making cold-brew coffee infused with strawberries."
+        },
+        {
+          "rank": 3,
+          "id": 352,
+          "bm25": -13.711171208247244,
+          "content": "[as of 2000-05-02] Leo wants to display his dad's jerseys in his flat in a way that keeps their meaning."
+        },
+        {
+          "rank": 4,
+          "id": 479,
+          "bm25": -12.90597039175511,
+          "content": "[as of 2000-06-18] Leo lives in a tiny flat with limited space."
+        },
+        {
+          "rank": 5,
+          "id": 141,
+          "bm25": -12.896886909335779,
+          "content": "[as of 2000-02-19] The cafe-cipher uses counts of physical objects, such as strawberries, cups, and steps, as inputs to a numeric substitution cipher."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "He would suggest replacing the heart with a magnifying glass, because he wants to steer the theme toward mysteries instead of relationships.",
+        "nearest": "He would suggest replacing the heart with a magnifying glass, because he wants to steer the theme toward mysteries instead of relationships.",
+        "choices": [
+          "He would tease back about needing more room for football boots instead, because he wants to redirect the joke toward family nostalgia rather than potential partners.",
+          "He would suggest replacing the heart with a magnifying glass, because he wants to steer the theme toward mysteries instead of relationships.",
+          "He would joke that the extra person could be Bruno Mars, because he wants to keep it light by centering music rather than his own romantic possibilities.",
+          "He would quip about fitting the entire London Mystery Society in, because he wants to celebrate his community while avoiding talk of singular romantic figures.",
+          "He would propose adding their mum holding a frying pan, because he wants to emphasize family gatherings rather than hinting at any future romantic guest."
+        ],
+        "similarities": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Playful replies, magnifying-glass imagery and sleuthing are live; fallback returns friendship but omits the mystery imagery."
+    },
+    {
+      "case_id": "pv4-u137-q119",
+      "label": "retrieval miss",
+      "question": "The night before filming a “Project PawPrint” sequence about body image and pets, Ava feels anxious that the raw footage will show her dark circles and mid‑week fatigue. Considering her values and routines, how is she most likely to handle this perfectionistic discomfort?",
+      "store": "pv4/user_137.jsonl",
+      "checked": [
+        {
+          "id": 152,
+          "content": "[as of 2000-02-05] Leo's wellness segments focus on authenticity, small wins, and imperfect routines.",
+          "superseded_by": null
+        },
+        {
+          "id": 506,
+          "content": "[as of 2000-04-26] Leo prefers a warm mid-century palette, natural light, and a mix of handheld vlogs with studio B-roll.",
+          "superseded_by": null
+        },
+        {
+          "id": 671,
+          "content": "[as of 2000-06-07] Leo prefers authentic retouching that keeps natural skin texture and highlights, with minimal skin smoothing.",
+          "superseded_by": 672
+        },
+        {
+          "id": 672,
+          "content": "[as of 2000-06-07] Leo wants less smoothing around the eyes and nose lines, and a lighter hand with frequency separation and skin-soften filters.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 614,
+          "bm25": -17.332921156619495,
+          "content": "[as of 2000-05-22] Ava wants her boundary messages to stay warm and preserve the connection with fans while still setting limits."
+        },
+        {
+          "rank": 2,
+          "id": 726,
+          "bm25": -17.043519343795936,
+          "content": "[as of 2000-06-20] Leo is working on a documentary series called Project PawPrint about pets and women in media."
+        },
+        {
+          "rank": 3,
+          "id": 718,
+          "bm25": -14.922111809146802,
+          "content": "[as of 2000-06-19] Ava wants to keep work talk and venting separate from her public persona."
+        },
+        {
+          "rank": 4,
+          "id": 725,
+          "bm25": -14.736438097072142,
+          "content": "[as of 2000-06-20] Leo wants vlog prompts that address how Milo and Juniper shape Leo's work, body image, and on-camera composure."
+        },
+        {
+          "rank": 5,
+          "id": 673,
+          "bm25": -14.016694898812833,
+          "content": "[as of 2000-06-07] Leo wants to approve one lightly edited test image before a photographer batch-processes the rest of his final selects."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Record the footage anyway in soft natural window light, accept visible tiredness as part of the story, and later discuss the tension openly in a private voice memo to editors.",
+        "nearest": "Record the footage anyway in soft natural window light, accept visible tiredness as part of the story, and later discuss the tension openly in a private voice memo to editors.",
+        "choices": [
+          "Record the footage anyway in soft natural window light, accept visible tiredness as part of the story, and later discuss the tension openly in a private voice memo to editors.",
+          "Reschedule the shoot for a fully rested day, book an extra facial, and ask the editors in advance to prioritize smoothing any visible signs of exhaustion on camera.",
+          "Increase the studio lighting to hide shadows, apply heavier concealer, and plan to use only short, highly curated clips that show her in her most energized moments.",
+          "Shift the topic to dog‑training techniques, postpone the body image angle, and gather more external research before feeling comfortable appearing visibly vulnerable on film.",
+          "Switch the segment to a voice‑over with cutaway shots of Milo and Juniper, keep herself mostly off screen, and focus post‑production on audio polish instead of visuals."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Authenticity, natural light and minimal retouching remain live (671 is replaced by the more specific 672); fallback misses those supporting rows."
+    },
+    {
+      "case_id": "pv4-u137-q48",
+      "label": "fixture gap",
+      "question": "A researcher in animal‑assisted therapy reaches out, asking to collaborate on “Project PawPrint” and publish preliminary findings before the documentary is released. How is Ava most likely to structure this collaboration to protect the project’s secrecy and aims?",
+      "store": "pv4/user_137.jsonl",
+      "checked": [
+        {
+          "id": 270,
+          "content": "[as of 2000-03-04] Leo keeps a private folder of no-go footage that is never posted.",
+          "superseded_by": 271
+        },
+        {
+          "id": 271,
+          "content": "[as of 2000-03-04] Leo uses a clear approval gate, with himself or a trusted editor signing off before anything posts.",
+          "superseded_by": 272
+        },
+        {
+          "id": 510,
+          "content": "[as of 2000-04-26] Leo has a project called Project PawPrint that involves vlogs, ethical storytelling, and consent with collaborators.",
+          "superseded_by": 598
+        },
+        {
+          "id": 598,
+          "content": "[as of 2000-05-18] Leo is working on a creative project called Project PawPrint.",
+          "superseded_by": 599
+        },
+        {
+          "id": 726,
+          "content": "[as of 2000-06-20] Leo is working on a documentary series called Project PawPrint about pets and women in media.",
+          "superseded_by": null
+        },
+        {
+          "id": 781,
+          "content": "[as of 2000-07-05] Leo wants to avoid sharing private conversations on camera and prefers staged relatable moments such as morning routines and dog training wins.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 726,
+          "bm25": -18.122460783741577,
+          "content": "[as of 2000-06-20] Leo is working on a documentary series called Project PawPrint about pets and women in media."
+        },
+        {
+          "rank": 2,
+          "id": 345,
+          "bm25": -15.364737803411598,
+          "content": "[as of 2000-03-22] Leo prefers indie podcasts that feel intimate and tactical, similar in spirit to How I Built This."
+        },
+        {
+          "rank": 3,
+          "id": 806,
+          "bm25": -14.30202159097803,
+          "content": "[as of 2000-07-11] Leo is working on a project called Project PawPrint, which involves stories about animals' roles in people's lives."
+        },
+        {
+          "rank": 4,
+          "id": 745,
+          "bm25": -12.019409683762747,
+          "content": "[as of 2000-06-25] Leo's mother has made tamales for the family and is someone Leo wants to honor, not embarrass, in public."
+        },
+        {
+          "rank": 5,
+          "id": 673,
+          "bm25": -11.127694959298054,
+          "content": "[as of 2000-06-07] Leo wants to approve one lightly edited test image before a photographer batch-processes the rest of his final selects."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "She agrees to off‑camera consulting with anonymized data, because contributing insights without sharing raw footage safeguards both participants and the covert series.",
+        "nearest": "She agrees to off‑camera consulting with anonymized data, because contributing insights without sharing raw footage safeguards both participants and the covert series.",
+        "choices": [
+          "She agrees to off‑camera consulting with anonymized data, because contributing insights without sharing raw footage safeguards both participants and the covert series.",
+          "She invites the researcher onto her TV segment, because openly discussing human‑animal bonds might align research goals with her wellness brand.",
+          "She declines all collaboration until release, because avoiding any external involvement could reduce the risk of leaks or misinterpretation.",
+          "She grants full access to her encrypted archive, because rigorous academic analysis could legitimize the project and influence industry attitudes early.",
+          "She allows limited use of selected vignettes publicly, because showcasing examples might attract attention and potential distribution partners."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Live documentary and private-conversation boundaries do not preserve an anonymized off-camera research collaboration preference. The collaboration/consent description at 510 is superseded by a generic project description, not a research-sharing rule."
+    },
+    {
+      "case_id": "pv4-u137-q71",
+      "label": "retrieval miss",
+      "question": "For a “Week of Wellness” collaboration, Ava must choose one recurring anchor habit that ties together her sleep tracking, movement routine, and relationship with Milo and Juniper. Which anchor would feel most authentic?",
+      "store": "pv4/user_137.jsonl",
+      "checked": [
+        {
+          "id": 113,
+          "content": "[as of 2000-01-26] Leo is writing an on-air script about sleep tracking.",
+          "superseded_by": null
+        },
+        {
+          "id": 365,
+          "content": "[as of 2000-03-27] Leo runs dog drills, often in the morning.",
+          "superseded_by": 491
+        },
+        {
+          "id": 417,
+          "content": "[as of 2000-04-06] Leo takes a morning walk with Milo and Juniper.",
+          "superseded_by": null
+        },
+        {
+          "id": 528,
+          "content": "[as of 2000-05-01] Leo wants his workload to protect his sleep and dog time.",
+          "superseded_by": null
+        },
+        {
+          "id": 781,
+          "content": "[as of 2000-07-05] Leo wants to avoid sharing private conversations on camera and prefers staged relatable moments such as morning routines and dog training wins.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 372,
+          "bm25": -13.250132211844443,
+          "content": "[as of 2000-03-28] Ava maintains a disciplined wellness routine that includes bouldering and Pilates."
+        },
+        {
+          "rank": 2,
+          "id": 612,
+          "bm25": -11.932305391121215,
+          "content": "[as of 2000-05-22] Ava's personal account receives fan DMs containing medical and mental-health disclosures, which intrude on her downtime."
+        },
+        {
+          "rank": 3,
+          "id": 342,
+          "bm25": -11.471684613931588,
+          "content": "[as of 2000-03-21] Leo wants any habit tracking to stay practical and low-anxiety."
+        },
+        {
+          "rank": 4,
+          "id": 113,
+          "bm25": -11.379811627490799,
+          "content": "[as of 2000-01-26] Leo is writing an on-air script about sleep tracking."
+        },
+        {
+          "rank": 5,
+          "id": 298,
+          "bm25": -10.536864536171933,
+          "content": "[as of 2000-03-11] Leo prefers audience-question formats that are camera-friendly, simple for producers to run, and feel authentic rather than canned."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "A structured morning walk with obedience drills before work every day, because it unites dog training, light movement, and consistent circadian rhythm support.",
+        "nearest": "A structured morning walk with obedience drills before work every day, because it unites dog training, light movement, and consistent circadian rhythm support.",
+        "choices": [
+          "A midday high‑intensity bootcamp with loud music every day, because it combines maximal exertion, sensory overload, and variable nap schedules.",
+          "A predawn online gaming block with energy drinks every day, because it mixes digital immersion, stimulant intake, and inconsistent morning routines.",
+          "An afternoon bar meetup with cocktails and appetizers every day, because it fuses social connection, relaxed structure, and sporadic sleep patterns.",
+          "A nightly late‑TV marathon with random snacking before bed every day, because it links passive decompression, intuitive eating, and flexible bedtimes.",
+          "A structured morning walk with obedience drills before work every day, because it unites dog training, light movement, and consistent circadian rhythm support."
+        ],
+        "similarities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "reason": "Morning walks, sleep protection and dog-training content remain live despite superseded morning-drills row 365; fallback returns sleep tracking but omits the walk and dog-training evidence."
+    },
+    {
+      "case_id": "pv4-u144-q126",
+      "label": "retrieval miss",
+      "question": "Mia occasionally hosts small activist gatherings on her patio. She wants to ensure preparation steps—like checking maps, printing abstracts, and arranging dog distractions—are captured in her system without labeling them as meetings. Considering her covert caution and organizational habits, what would she most likely do?",
+      "store": "pv4/user_144.jsonl",
+      "checked": [
+        {
+          "id": 66,
+          "content": "[as of 2000-01-25] In Leo's color system, Green marks same-day personal items such as dog vet visits and Atlas drops, and Blue marks personal items due within 48 hours such as blog edits and errands.",
+          "superseded_by": null
+        },
+        {
+          "id": 572,
+          "content": "[as of 2000-07-07] Leo keeps Atlas notes and needs them kept private.",
+          "superseded_by": null
+        },
+        {
+          "id": 610,
+          "content": "[as of 2000-07-18] Leo keeps a leather planner and wants monthly and yearly actions formatted for it.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 522,
+          "bm25": -13.298184691913717,
+          "content": "[as of 2000-06-21] Leo wants low-mess toys and activities for Luna because she has chewed things in the living room before."
+        },
+        {
+          "rank": 2,
+          "id": 455,
+          "bm25": -11.871393800781378,
+          "content": "[as of 2000-06-03] Leo wants to avoid unauthorized practice of law and asks for clear limits on what a legal assistant may do."
+        },
+        {
+          "rank": 3,
+          "id": 548,
+          "bm25": -8.062106045826104,
+          "content": "[as of 2000-06-29] Leo prefers quiet trip destinations with a dog-friendly patio and at least one easy trail nearby."
+        },
+        {
+          "rank": 4,
+          "id": 293,
+          "bm25": -7.373828840445232,
+          "content": "[as of 2000-03-28] Leo wants newsletter readers to be able to skim issues on their commute, learn from them, and forward good issues to friends."
+        },
+        {
+          "rank": 5,
+          "id": 592,
+          "bm25": -7.349440265671644,
+          "content": "[as of 2000-07-15] Leo wants a simple weekly check-in every Sunday evening to see whether his choices line up with what he cares about."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Use innocuous labels with specific colors tied to Atlas work because she wants recognizable preparation markers for herself that remain mundane to anyone else scanning her planner pages quickly.",
+        "nearest": "Use innocuous labels with specific colors tied to Atlas work because she wants recognizable preparation markers for herself that remain mundane to anyone else scanning her planner pages quickly.",
+        "choices": [
+          "Create explicit planner entries named activist meeting prep because she prefers literal descriptions of tasks over oblique phrasing when coordinating multiple logistical and research‑related actions.",
+          "Use innocuous labels with specific colors tied to Atlas work because she wants recognizable preparation markers for herself that remain mundane to anyone else scanning her planner pages quickly.",
+          "Schedule them on a shared calendar with friends under social event titles because she prefers collaborative visibility for logistics beyond what her personal planner can provide alone.",
+          "Move all preparation into a private digital task manager because she believes electronic encryption alone offers enough protection compared to potentially visible paper‑based references at home.",
+          "Record these steps only as mental checklists without writing because she feels any written reference to gatherings, however vague, is too risky to preserve inside her daily planning routine."
+        ],
+        "similarities": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Atlas color coding, privacy and the leather planner are live; fallback misses all three."
+    },
+    {
+      "case_id": "pv4-u144-q56",
+      "label": "fixture gap",
+      "question": "On an unusually stressful day when a complex closing stalls and a secret Atlas Initiative meeting is scheduled for that evening, how is Mia most likely to use Jasper and Luna on her commute home to regulate her emotions while maintaining cover with neighbors?",
+      "store": "pv4/user_144.jsonl",
+      "checked": [
+        {
+          "id": 42,
+          "content": "[as of 2000-01-22] Leo gives Jasper a single gourmet biscuit as a nightly ritual signaling the work day is over.",
+          "superseded_by": 125
+        },
+        {
+          "id": 51,
+          "content": "[as of 2000-01-23] Leo has a dog named Jasper, who gets a ceremonial biscuit each evening.",
+          "superseded_by": null
+        },
+        {
+          "id": 125,
+          "content": "[as of 2000-02-10] Jasper is Leo's pet, and Leo sometimes shares food with him.",
+          "superseded_by": 280
+        },
+        {
+          "id": 530,
+          "content": "[as of 2000-06-22] Jasper gets a gourmet biscuit, which Leo saves separately as a reward.",
+          "superseded_by": null
+        },
+        {
+          "id": 539,
+          "content": "[as of 2000-06-25] Leo likes short loop trails under 5 miles for relaxed mornings.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 606,
+          "bm25": -15.450002967989503,
+          "content": "[as of 2000-07-18] Leo is involved in the Atlas Initiative, which focuses on property registry transparency."
+        },
+        {
+          "rank": 2,
+          "id": 245,
+          "bm25": -14.291056933165589,
+          "content": "[as of 2000-03-13] Wander & Deed's weekly mix includes one long-form investigative piece tied to the Atlas Initiative, two sensory travel essays (one domestic, one international), one how-to post on a legal or real-estate angle for travelers, one photo-essay with dataset-clue captions, and two social posts (a teaser a"
+        },
+        {
+          "rank": 3,
+          "id": 429,
+          "bm25": -14.237046532245607,
+          "content": "[as of 2000-05-25] Leo's community profile is connected to the Atlas Initiative."
+        },
+        {
+          "rank": 4,
+          "id": 165,
+          "bm25": -13.956268002963302,
+          "content": "[as of 2000-02-21] Leo has a quiet evening ritual at home with a backyard lamp on and his dogs at his feet."
+        },
+        {
+          "rank": 5,
+          "id": 518,
+          "bm25": -13.663905587877222,
+          "content": "[as of 2000-06-20] Leo is connected to something called the Atlas Initiative, which has a coded-clue aesthetic that he sometimes wants to reference in his posts."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "She would stop at the pet boutique to buy Jasper’s biscuit, then stroll the longer neighborhood loop, using light small talk about the dogs as a buffer between work tension and activist planning.",
+        "nearest": "She would stop at the pet boutique to buy Jasper’s biscuit, then stroll the longer neighborhood loop, using light small talk about the dogs as a buffer between work tension and activist planning.",
+        "choices": [
+          "She would stop at the pet boutique to buy Jasper’s biscuit, then stroll the longer neighborhood loop, using light small talk about the dogs as a buffer between work tension and activist planning.",
+          "She would bring only Luna on a short detour to a nearby park, using a brief game of fetch for emotional release while projecting casual normalcy to any acquaintances who might notice them together.",
+          "She would drive directly home with the dogs, letting them play in the backyard while she sits quietly on the porch, using their movements as a calming backdrop and avoiding street‑level interactions entirely.",
+          "She would review documents on her phone while briskly walking both dogs straight home, using their routine route to decompress privately and limiting conversation with neighbors to brief, polite greetings.",
+          "She would take a slower walk with both dogs through side streets, chatting casually with neighbors about training tips to appear relaxed while using their presence to shift her focus away from legal stress."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "The evening biscuit survives at 51, but no row preserves the pet-boutique stop and longer neighborhood commute loop distinguishing the reference. Row 539 is about morning trails, not that routine."
+    },
+    {
+      "case_id": "pv4-u149-q113",
+      "label": "retrieval miss",
+      "question": "Suppose Ethan wants to further reduce their reliance on grid power during three‑day low‑sun stretches, without expanding the rooftop array. Which combined behavioral and kinetic change is he most likely to implement?",
+      "store": "pv4/user_149.jsonl",
+      "checked": [
+        {
+          "id": 113,
+          "content": "[as of 2000-01-29] Leo's loop is powered intermittently by a standing bike generator, with about 5-10 minutes of pedaling per hour.",
+          "superseded_by": null
+        },
+        {
+          "id": 140,
+          "content": "[as of 2000-02-03] Leo has a bike generator that he pedals to produce DC power for lighting a bulb and charging a battery.",
+          "superseded_by": null
+        },
+        {
+          "id": 142,
+          "content": "[as of 2000-02-04] Leo is planning a small solar array to supplement the pedal input for his greenhouse.",
+          "superseded_by": null
+        },
+        {
+          "id": 176,
+          "content": "[as of 2000-02-12] The household generates energy with solar panels, a battery, and a standing bike.",
+          "superseded_by": null
+        },
+        {
+          "id": 590,
+          "content": "[as of 2000-05-17] Leo is interested in human-powered and kinetic systems as alternatives to grid-based solutions.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 444,
+          "bm25": -12.824304129466777,
+          "content": "[as of 2000-04-15] Leo's tomatoes struggle to keep soil moist during cloudy stretches between rain."
+        },
+        {
+          "rank": 2,
+          "id": 590,
+          "bm25": -12.726302473367468,
+          "content": "[as of 2000-05-17] Leo is interested in human-powered and kinetic systems as alternatives to grid-based solutions."
+        },
+        {
+          "rank": 3,
+          "id": 711,
+          "bm25": -12.123716814093848,
+          "content": "[as of 2000-06-13] The client wants a full restoration of the farmhouse, which Leo believes is not feasible without compromising safety."
+        },
+        {
+          "rank": 4,
+          "id": 662,
+          "bm25": -10.560047784479224,
+          "content": "[as of 2000-06-02] Leo has a pedal-powered greenhouse idea, which he wants to tie into his projects."
+        },
+        {
+          "rank": 5,
+          "id": 142,
+          "bm25": -10.233194327190686,
+          "content": "[as of 2000-02-04] Leo is planning a small solar array to supplement the pedal input for his greenhouse."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "He would add one extra daily ride and schedule heavier tool use for sunny hours, because he prefers pairing increased pedal generation with shifting discretionary loads toward times when solar contributes most.",
+        "nearest": "He would add one extra daily ride and schedule heavier tool use for sunny hours, because he prefers pairing increased pedal generation with shifting discretionary loads toward times when solar contributes most.",
+        "choices": [
+          "He would reduce bike riding and add decorative lighting, because he prefers pairing decreased pedal generation with increased aesthetic consumption irrespective of solar contribution levels.",
+          "He would maintain current riding and add new entertainment devices, because he prefers pairing unchanged pedal generation with additional evening screen loads during stretches without strong solar input.",
+          "He would add one extra daily ride and run power‑hungry heaters at night, because he prefers pairing increased pedal generation with concentrating the largest loads during periods without any solar contribution.",
+          "He would reduce bike riding and run fans continuously, because he prefers pairing decreased pedal generation with expanding always‑on circulation loads regardless of solar availability.",
+          "He would add one extra daily ride and schedule heavier tool use for sunny hours, because he prefers pairing increased pedal generation with shifting discretionary loads toward times when solar contributes most."
+        ],
+        "similarities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "reason": "Pedal generation, solar and reducing grid use are live; fallback returns only part of this context. The reference is a synthesis of those facts, not a literal stored schedule."
+    },
+    {
+      "case_id": "pv4-u151-q103",
+      "label": "fixture gap",
+      "question": "When planning how to document the Shelby build, Mack wants records detailed enough for future maintenance but safe if someone casually inspects his files. Given his secret purpose, how should he structure this documentation?",
+      "store": "pv4/user_151.jsonl",
+      "checked": [
+        {
+          "id": 94,
+          "content": "[as of 2000-01-27] Leo keeps a restoration ledger that he wants encrypted and backed up securely.",
+          "superseded_by": null
+        },
+        {
+          "id": 359,
+          "content": "[as of 2000-04-09] Leo has an encrypted drive that stores his Shelby files.",
+          "superseded_by": null
+        },
+        {
+          "id": 507,
+          "content": "[as of 2000-05-22] Leo keeps the Shelby's documentation (serials, receipts) in an encrypted ledger.",
+          "superseded_by": 508
+        },
+        {
+          "id": 508,
+          "content": "[as of 2000-05-22] Leo is handling legal and insurer queries for the Shelby.",
+          "superseded_by": 509
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 700,
+          "bm25": -15.942126186857848,
+          "content": "[as of 2000-07-08] Leo struggles with doomscrolling on his phone when he should be working in his shop."
+        },
+        {
+          "rank": 2,
+          "id": 555,
+          "bm25": -13.397552101542608,
+          "content": "[as of 2000-06-02] Leo needs to access his backed-up files from his garage, his shop, and the courthouse."
+        },
+        {
+          "rank": 3,
+          "id": 654,
+          "bm25": -12.724134339589302,
+          "content": "[as of 2000-06-29] Leo is curious about how radio encryption works for vehicle communications."
+        },
+        {
+          "rank": 4,
+          "id": 359,
+          "bm25": -12.110956169998838,
+          "content": "[as of 2000-04-09] Leo has an encrypted drive that stores his Shelby files."
+        },
+        {
+          "rank": 5,
+          "id": 744,
+          "bm25": -11.34895207168595,
+          "content": "[as of 2000-07-18] Leo has welding skills and muscle-car know-how."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "He labels each reinforcement as a routine “race upgrade” with torque notes, because the external drive ledger can store real armor specs under coded part numbers hidden in the tool chest compartment.",
+        "nearest": "He labels each reinforcement as a routine “race upgrade” with torque notes, because the external drive ledger can store real armor specs under coded part numbers hidden in the tool chest compartment.",
+        "choices": [
+          "He labels each reinforcement as a minor “rust repair” with torque notes, because the external drive ledger can store real armor specs under coded part numbers hidden in the tool chest compartment.",
+          "He labels each reinforcement as a standard “alignment check” with torque notes, because the external drive ledger can store real armor specs under coded part numbers hidden in the tool chest compartment.",
+          "He labels each reinforcement as a cosmetic “frame cleanup” with torque notes, because the external drive ledger can store real armor specs under coded part numbers hidden in the tool chest compartment.",
+          "He labels each reinforcement as a generic “safety fix” with torque notes, because the external drive ledger can store real armor specs under coded part numbers hidden in the tool chest compartment.",
+          "He labels each reinforcement as a routine “race upgrade” with torque notes, because the external drive ledger can store real armor specs under coded part numbers hidden in the tool chest compartment."
+        ],
+        "similarities": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "reason": "Encrypted ledger/drive facts survive, but the race-upgrade label and coded armor-spec ledger in the tool chest are absent. These are the distinguishing assertions; generic encryption cannot pick race upgrade over rust repair."
+    },
+    {
+      "case_id": "pv4-u151-q60",
+      "label": "fixture gap",
+      "question": "Lila’s husband is stuck at the hospital during a staffing crisis, and Lila calls Mack late, exhausted after a long pediatric shift, mentioning their fence gate is broken and stressing about safety before her next overnight. How does Mack most likely respond that night?",
+      "store": "pv4/user_151.jsonl",
+      "checked": [
+        {
+          "id": 70,
+          "content": "[as of 2000-01-21] The user's name is Mason Alvarez, who goes by Mack.",
+          "superseded_by": null
+        },
+        {
+          "id": 123,
+          "content": "[as of 2000-02-03] Leo regularly visits his Mom for her cooking and catches up with Lila and Rafa.",
+          "superseded_by": 412
+        },
+        {
+          "id": 257,
+          "content": "[as of 2000-03-11] Lila does charting during night shifts.",
+          "superseded_by": null
+        },
+        {
+          "id": 412,
+          "content": "[as of 2000-04-26] Leo speaks with family in Spanish, both at mealtimes and in the garage.",
+          "superseded_by": null
+        },
+        {
+          "id": 723,
+          "content": "[as of 2000-07-13] Rafa is a friend who helps Leo with hands-on workshop projects.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 257,
+          "bm25": -19.949366299037774,
+          "content": "[as of 2000-03-11] Lila does charting during night shifts."
+        },
+        {
+          "rank": 2,
+          "id": 70,
+          "bm25": -18.026645685672626,
+          "content": "[as of 2000-01-21] The user's name is Mason Alvarez, who goes by Mack."
+        },
+        {
+          "rank": 3,
+          "id": 553,
+          "bm25": -15.214895774183406,
+          "content": "[as of 2000-06-01] Leo does woodworking or metalworking shop tasks such as sanding and grinding, sometimes late at night."
+        },
+        {
+          "rank": 4,
+          "id": 654,
+          "bm25": -12.42563341808733,
+          "content": "[as of 2000-06-29] Leo is curious about how radio encryption works for vehicle communications."
+        },
+        {
+          "rank": 5,
+          "id": 578,
+          "bm25": -11.374155605816386,
+          "content": "[as of 2000-06-07] Leo is a longtime friend of Sofia and is proud of her work."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Drive over with basic tools to quietly secure and brace the gate that evening, framing it as a quick, practical stop so she can rest easier before returning to the hospital.",
+        "nearest": "Drive over with basic tools to quietly secure and brace the gate that evening, framing it as a quick, practical stop so she can rest easier before returning to the hospital.",
+        "choices": [
+          "Drive over with basic tools to quietly secure and brace the gate that evening, framing it as a quick, practical stop so she can rest easier before returning to the hospital.",
+          "Ask a nearby neighbor to check on the house and monitor the gate, offering to cover materials later while he keeps his current evening plans unchanged.",
+          "Order replacement hardware online for rush delivery and guide Lila through a simple temporary fix over the phone, promising to handle any major repairs later.",
+          "Encourage Lila to request hospital security advice about neighborhood safety, focusing on emotional support in their call while postponing hands‑on help until next week.",
+          "Schedule a weekend visit to fully rebuild the gate, reassuring her by phone that a few more nights with a temporary latch will be fine until he can do a perfect job."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Mack and Lila exist, but the family-visiting fact 123 is superseded by Spanish conversation at 412; no live fact establishes immediate practical help for Lila over postponement. Rafa helping Leo at 723 is the reverse direction."
+    },
+    {
+      "case_id": "pv4-u152-q125",
+      "label": "fixture gap",
+      "question": "A former classmate proposes turning “Project Maple” into a narrative case study for a design conference on ethical game‑driven activism, offering visibility that could boost “WildHeart.” Considering Avery’s secrecy, anxiety, and belief in quiet heroism, which response is most consistent with their priorities?",
+      "store": "pv4/user_152.jsonl",
+      "checked": [
+        {
+          "id": 280,
+          "content": "[as of 2000-03-15] Leo is building a longer-term project quietly, without much public visibility.",
+          "superseded_by": null
+        },
+        {
+          "id": 329,
+          "content": "[as of 2000-03-27] Leo wants privacy tools he can integrate into his daily workflow discreetly, without drawing attention to them.",
+          "superseded_by": null
+        },
+        {
+          "id": 371,
+          "content": "[as of 2000-04-05] Leo is working on a secret sanctuary project.",
+          "superseded_by": 372
+        },
+        {
+          "id": 373,
+          "content": "[as of 2000-04-05] Leo keeps land-parcel contacts related to the sanctuary project in Notion.",
+          "superseded_by": null
+        },
+        {
+          "id": 528,
+          "content": "[as of 2000-05-19] Leo prefers privacy-focused, low-risk setups and wants to stay discreet.",
+          "superseded_by": null
+        },
+        {
+          "id": 758,
+          "content": "[as of 2000-07-18] WildHeart runs a tiny, secret animal sanctuary that produces rehabilitation success reports.",
+          "superseded_by": 759
+        },
+        {
+          "id": 759,
+          "content": "[as of 2000-07-18] Leo has helped fund WildHeart's sanctuary rehabilitation work.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 210,
+          "bm25": -17.06404155529808,
+          "content": "[as of 2000-02-24] Leo is funding a sanctuary project, which is a financial priority in their career decisions."
+        },
+        {
+          "rank": 2,
+          "id": 280,
+          "bm25": -11.672472633397811,
+          "content": "[as of 2000-03-15] Leo is building a longer-term project quietly, without much public visibility."
+        },
+        {
+          "rank": 3,
+          "id": 484,
+          "bm25": -10.994798045349347,
+          "content": "[as of 2000-05-08] Leo prefers narrative games with minimal UI, diegetic design, or HUD-less design as references."
+        },
+        {
+          "rank": 4,
+          "id": 417,
+          "bm25": -10.474409564719942,
+          "content": "[as of 2000-04-16] Leo is considering selling a small run of prints under a pseudonym to keep the sanctuary project low-key."
+        },
+        {
+          "rank": 5,
+          "id": 393,
+          "bm25": -10.429350753497014,
+          "content": "[as of 2000-04-10] Leo lives with roommates in a neighbourhood where quiet matters."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "They agree only to a fictionalized composite case, remove identifying locations and structures, and focus the talk on general principles learned from blending games and animal advocacy.",
+        "nearest": "They agree only to a fictionalized composite case, remove identifying locations and structures, and focus the talk on general principles learned from blending games and animal advocacy.",
+        "choices": [
+          "They propose a panel featuring multiple sanctuaries, subtly insert “Project Maple” details under a pseudonym, and leave the audience guessing about which story is actually theirs.",
+          "They agree only to a fictionalized composite case, remove identifying locations and structures, and focus the talk on general principles learned from blending games and animal advocacy.",
+          "They decline any participation, avoid referencing “Project Maple” at all, and stick strictly to discussing visual aesthetics and storytelling techniques from “WildHeart” alone.",
+          "They offer to publish an in‑depth written case study with named collaborators, include shell‑corporation structures, and submit it to an academic ethics journal for peer review.",
+          "They accept a full behind‑the‑scenes feature, share real timelines and funding methods, and use the platform to recruit volunteers and donors for rapid sanctuary expansion."
+        ],
+        "similarities": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Discretion and sanctuary funding survive, but no row establishes willingness to present a fictional composite rather than decline. Secret-sanctuary history is superseded; the live replacement only records funding."
+    },
+    {
+      "case_id": "pv4-u152-q45",
+      "label": "fixture gap",
+      "question": "While researching “low‑impact animal habitats” and “remote land acquisition in BC,” Avery wants AI guidance on how to structure information in their encrypted journal so an outside reader could not easily infer Project Maple if the notebook were found. What kind of AI prompt design best aligns with their habits and secrecy needs?",
+      "store": "pv4/user_152.jsonl",
+      "checked": [
+        {
+          "id": 507,
+          "content": "[as of 2000-05-15] Leo keeps an encrypted journal that tracks projects, land, donors, and vet notes.",
+          "superseded_by": 508
+        },
+        {
+          "id": 508,
+          "content": "[as of 2000-05-15] Leo wants journal code names that remain understandable when he returns to them months later.",
+          "superseded_by": 509
+        },
+        {
+          "id": 509,
+          "content": "[as of 2000-05-15] Leo prefers short, consistent tags he can type quickly, with no long phrases.",
+          "superseded_by": 510
+        },
+        {
+          "id": 510,
+          "content": "[as of 2000-05-15] Leo wants a small legend for decoding tags that he can keep hidden in plain sight.",
+          "superseded_by": 511
+        },
+        {
+          "id": 511,
+          "content": "[as of 2000-05-15] Leo wants a rule for evolving tags without breaking searchability.",
+          "superseded_by": null
+        },
+        {
+          "id": 528,
+          "content": "[as of 2000-05-19] Leo prefers privacy-focused, low-risk setups and wants to stay discreet.",
+          "superseded_by": null
+        },
+        {
+          "id": 756,
+          "content": "[as of 2000-07-17] Leo's Project Maple planning involves land and low-impact builds.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 756,
+          "bm25": -18.342304173706527,
+          "content": "[as of 2000-07-17] Leo's Project Maple planning involves land and low-impact builds."
+        },
+        {
+          "rank": 2,
+          "id": 363,
+          "bm25": -16.03815224298897,
+          "content": "[as of 2000-04-04] Leo wants his art folder structure to sync easily with a private gallery."
+        },
+        {
+          "rank": 3,
+          "id": 571,
+          "bm25": -15.937401469588092,
+          "content": "[as of 2000-06-02] WildHeart is built in Unity and includes adaptive weather, simple physics puzzles, and an empathic AI companion."
+        },
+        {
+          "rank": 4,
+          "id": 210,
+          "bm25": -14.908247911270617,
+          "content": "[as of 2000-02-24] Leo is funding a sanctuary project, which is a financial priority in their career decisions."
+        },
+        {
+          "rank": 5,
+          "id": 373,
+          "bm25": -14.588864489379388,
+          "content": "[as of 2000-04-05] Leo keeps land-parcel contacts related to the sanctuary project in Notion."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "They would ask for abstract note‑taking templates using neutral codes for land, structures, and animals, avoiding direct mentions of British Columbia, sanctuaries, or specific rehabilitation procedures.",
+        "nearest": "They would ask for abstract note‑taking templates using neutral codes for land, structures, and animals, avoiding direct mentions of British Columbia, sanctuaries, or specific rehabilitation procedures.",
+        "choices": [
+          "They would ask for abstract note‑taking templates using neutral codes for land, structures, and animals, avoiding direct mentions of British Columbia, sanctuaries, or specific rehabilitation procedures.",
+          "They would ask for abstract note‑taking templates using donor aliases for land, structures, and animals, avoiding direct mentions of rehabilitation, secrecy, or any covert funding pathways.",
+          "They would ask for detailed note‑taking templates using spreadsheet labels for land, structures, and animals, avoiding direct mentions of sanctuaries, encryption, or British Columbia locations.",
+          "They would ask for detailed note‑taking templates using full names for land, structures, and animals, avoiding direct mentions of encryption, secrecy, or any covert operational planning.",
+          "They would ask for abstract note‑taking templates using poetic metaphors for land, structures, and animals, avoiding direct mentions of codes, ciphers, or explicit obfuscation strategies."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Encrypted journal, code names and short tags form a superseded chain; the live privacy and low-impact-build facts do not preserve the neutral journal-coding habit distinguishing the answer. The live terminal row 511 only preserves tag evolution/searchability, not the encrypted journal or neutral coding scheme."
+    },
+    {
+      "case_id": "pv4-u152-q53",
+      "label": "fixture gap",
+      "question": "Avery is considering using AI to sanity‑check the risk level of their covert land‑purchase pattern for Project Maple, but they are wary of leaving a searchable record that clearly describes an off‑grid wildlife sanctuary. What framing are they most likely to choose for that risk‑assessment question?",
+      "store": "pv4/user_152.jsonl",
+      "checked": [
+        {
+          "id": 329,
+          "content": "[as of 2000-03-27] Leo wants privacy tools he can integrate into his daily workflow discreetly, without drawing attention to them.",
+          "superseded_by": null
+        },
+        {
+          "id": 373,
+          "content": "[as of 2000-04-05] Leo keeps land-parcel contacts related to the sanctuary project in Notion.",
+          "superseded_by": null
+        },
+        {
+          "id": 528,
+          "content": "[as of 2000-05-19] Leo prefers privacy-focused, low-risk setups and wants to stay discreet.",
+          "superseded_by": null
+        },
+        {
+          "id": 756,
+          "content": "[as of 2000-07-17] Leo's Project Maple planning involves land and low-impact builds.",
+          "superseded_by": null
+        },
+        {
+          "id": 759,
+          "content": "[as of 2000-07-18] Leo has helped fund WildHeart's sanctuary rehabilitation work.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 308,
+          "bm25": -19.13373942482899,
+          "content": "[as of 2000-03-23] Avery uses they/them pronouns."
+        },
+        {
+          "rank": 2,
+          "id": 417,
+          "bm25": -15.539489409304638,
+          "content": "[as of 2000-04-16] Leo is considering selling a small run of prints under a pseudonym to keep the sanctuary project low-key."
+        },
+        {
+          "rank": 3,
+          "id": 208,
+          "bm25": -13.114578737903875,
+          "content": "[as of 2000-02-24] Leo is considering freelance illustration as an alternative or addition to the library job."
+        },
+        {
+          "rank": 4,
+          "id": 281,
+          "bm25": -12.995680287211583,
+          "content": "[as of 2000-03-15] Leo's parents may worry that he is failing because they don't yet understand his longer-term work."
+        },
+        {
+          "rank": 5,
+          "id": 210,
+          "bm25": -12.975250911307539,
+          "content": "[as of 2000-02-24] Leo is funding a sanctuary project, which is a financial priority in their career decisions."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "They would describe a hypothetical person quietly buying remote property through an intermediary for a private research retreat, and ask about financial audit risks without specifying animals, sanctuaries, or Canadian locations.",
+        "nearest": "They would describe a hypothetical person quietly buying remote property through an intermediary for a private research retreat, and ask about financial audit risks without specifying animals, sanctuaries, or Canadian locations.",
+        "choices": [
+          "They would describe a hypothetical person quietly buying remote property through an intermediary for a private wildlife sanctuary, and ask about financial audit risks without specifying animals, sanctuaries, or Canadian locations.",
+          "They would describe a hypothetical person quietly buying remote property directly in their name for a private research retreat, and ask about financial audit risks without specifying animals, sanctuaries, or Canadian locations.",
+          "They would describe a hypothetical person quietly buying remote property through an intermediary for a private family compound, and ask about financial audit risks without specifying animals, sanctuaries, or Canadian locations.",
+          "They would describe a hypothetical person quietly buying remote property through an intermediary for a private research retreat, and ask about financial audit risks without specifying animals, sanctuaries, or Canadian locations.",
+          "They would describe a hypothetical person quietly buying urban property through an intermediary for a private research retreat, and ask about financial audit risks without specifying animals, sanctuaries, or Canadian locations."
+        ],
+        "similarities": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      "reason": "Land contacts, privacy and sanctuary funding exist, but no row establishes purchasing through an intermediary or the research-retreat cover. Those distinguish the otherwise near-identical choices."
+    },
+    {
+      "case_id": "pv4-u154-q3",
+      "label": "retrieval miss",
+      "question": "The school asks Mara to design an after-school songwriting club that meets weekly, right when she usually sneaks into the basement for covert “Project Ashes” sessions before family time. How is she most likely to structure this commitment alongside her own secret creative work?",
+      "store": "pv4/user_154.jsonl",
+      "checked": [
+        {
+          "id": 232,
+          "content": "[as of 2000-03-03] Leo feels guilty when studio sessions cut into family time and wants to balance the two without abandoning his work.",
+          "superseded_by": null
+        },
+        {
+          "id": 430,
+          "content": "[as of 2000-04-21] Leo juggles teaching, late-night recording, and a secret side project.",
+          "superseded_by": null
+        },
+        {
+          "id": 589,
+          "content": "[as of 2000-06-06] Leo writes songs late at night, often about loss and small miracles.",
+          "superseded_by": null
+        },
+        {
+          "id": 757,
+          "content": "[as of 2000-07-14] The household has a porch after dinner that Leo wants to use as the setting for a shared family ritual.",
+          "superseded_by": null
+        },
+        {
+          "id": 777,
+          "content": "[as of 2000-07-18] Leo has a porch swing time and a 15-minute porch coffee debrief with Ethan after meetings as family non-negotiables.",
+          "superseded_by": 778
+        },
+        {
+          "id": 778,
+          "content": "[as of 2000-07-18] Leo's family does one shared jam per week.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 232,
+          "bm25": -23.45725615678403,
+          "content": "[as of 2000-03-03] Leo feels guilty when studio sessions cut into family time and wants to balance the two without abandoning his work."
+        },
+        {
+          "rank": 2,
+          "id": 334,
+          "bm25": -17.90691062541727,
+          "content": "[as of 2000-03-27] Leo restricts Project Ashes folder sharing to himself until the project is ready."
+        },
+        {
+          "rank": 3,
+          "id": 327,
+          "bm25": -17.28409821168794,
+          "content": "[as of 2000-03-27] The Project Ashes Google Drive root folder is named Project_Ashes_SaffronEmber and is kept private."
+        },
+        {
+          "rank": 4,
+          "id": 420,
+          "bm25": -15.787681458497604,
+          "content": "[as of 2000-04-19] Leo wants to avoid his songwriting blocking Lila's rehearsal time in the basement studio."
+        },
+        {
+          "rank": 5,
+          "id": 593,
+          "bm25": -15.188551778849483,
+          "content": "[as of 2000-06-06] Leo wants to learn production, collaboration, and narrative structure at the songwriting retreat."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "She would accept the club, keep meetings concise with focused prompts, then shift that day’s “Project Ashes” work to a shorter late-night window, protecting the family porch ritual from being displaced.",
+        "nearest": "She would accept the club, keep meetings concise with focused prompts, then shift that day’s “Project Ashes” work to a shorter late-night window, protecting the family porch ritual from being displaced.",
+        "choices": [
+          "She would accept the club, keep meetings concise with focused prompts, then shift that day’s “Project Ashes” work to a shorter late-night window, protecting the family porch ritual from being displaced.",
+          "She would accept the club, lengthen meetings for open jams, and then compress both dinner and family time so she can preserve her usual multi-hour secret studio schedule afterward.",
+          "She would accept the club, alternate weeks between student-led sessions and guest speakers, and reserve her own songwriting exclusively for weekends to avoid overloading school nights.",
+          "She would decline the club but volunteer to create asynchronous songwriting materials, using the freed time for more experimental recording and extra late-night lyrical drafting sessions.",
+          "She would decline the club, citing existing ensembles, and use that time to expand her album tracking into earlier evenings, even if it means occasionally missing the family’s porch tradition."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Balancing studio/family time, teaching and late songwriting remain live; fallback retrieves the balancing fact but omits late songwriting and the porch ritual. Row 777 is superseded, but 757 retains the porch setting."
+    },
+    {
+      "case_id": "pv4-u154-q48",
+      "label": "fixture gap",
+      "question": "Preparing to travel to Albuquerque to visit her parents, Mara worries about keeping “Project Ashes” files safe on the road while still being able to tweak mixes at night using AI tools. Which strategy best reflects her habits and secrecy goals?",
+      "store": "pv4/user_154.jsonl",
+      "checked": [
+        {
+          "id": 327,
+          "content": "[as of 2000-03-27] The Project Ashes Google Drive root folder is named Project_Ashes_SaffronEmber and is kept private.",
+          "superseded_by": null
+        },
+        {
+          "id": 365,
+          "content": "[as of 2000-04-05] Leo uses Google Drive to sync recordings from his mobile device to his home studio.",
+          "superseded_by": 366
+        },
+        {
+          "id": 366,
+          "content": "[as of 2000-04-05] Leo wants recording apps to support quick chord labels and tempo tags on takes.",
+          "superseded_by": 367
+        },
+        {
+          "id": 627,
+          "content": "[as of 2000-06-13] Leo uses unique file names, passworded drives, and limits late-night session prints for studio security.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 746,
+          "bm25": -21.39068797224067,
+          "content": "[as of 2000-07-11] Leo wants to support Lila's drive to succeed in music while teaching her boundaries and emotional check-ins without making her feel criticized."
+        },
+        {
+          "rank": 2,
+          "id": 334,
+          "bm25": -16.674398580903336,
+          "content": "[as of 2000-03-27] Leo restricts Project Ashes folder sharing to himself until the project is ready."
+        },
+        {
+          "rank": 3,
+          "id": 327,
+          "bm25": -13.561053839638076,
+          "content": "[as of 2000-03-27] The Project Ashes Google Drive root folder is named Project_Ashes_SaffronEmber and is kept private."
+        },
+        {
+          "rank": 4,
+          "id": 718,
+          "bm25": -13.439698075492068,
+          "content": "[as of 2000-07-05] Leo wants his vocal mixes to keep warmth while staying clear and emotionally close."
+        },
+        {
+          "rank": 5,
+          "id": 77,
+          "bm25": -12.230386760675406,
+          "content": "[as of 2000-01-18] Leo prefers practical, concise drafts that he can tweak himself to fit the vibe."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "She would sync essential sessions to her passworded Google Drive folder and access them from her laptop, because that extends her existing cloud workflow and preserves the mundane “Household Expenses” disguise while traveling.",
+        "nearest": "She would sync essential sessions to her passworded Google Drive folder and access them from her laptop, because that extends her existing cloud workflow and preserves the mundane “Household Expenses” disguise while traveling.",
+        "choices": [
+          "She would sync essential sessions to her passworded Google Drive folder and access them from her laptop, because that extends her existing cloud workflow and preserves the mundane “Household Expenses” disguise while traveling.",
+          "She would temporarily move the album into a shared folder with Ethan for redundancy, because that leverages existing backup practices and reduces the risk of losing any in‑progress creative work.",
+          "She would upload project archives to a new anonymous cloud account created at the airport, because that detaches access from her usual identity and minimizes overlap with normal professional services.",
+          "She would copy all stems to an unlabeled USB stick stored in her carry‑on bag, because that removes dependence on online accounts and concentrates every project element in a single portable device.",
+          "She would mail an encrypted external drive to her parents’ house before departure, because that separates transport from her luggage and relies on physical custody rather than online authentication."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Live folder name is Project_Ashes_SaffronEmber, not Household Expenses. Drive-sync row 365 is superseded by recording-app metadata at 366; passworded-drive security survives but not the asserted disguise."
+    },
+    {
+      "case_id": "pv4-u155-q0",
+      "label": "fixture gap",
+      "question": "A new sustainable-fashion client wants to rush a full rebrand in one week, but Rae already blocked that week for “creative‑play” recording sessions and a brewery label deadline. What workflow adjustment would Rae most likely make to protect both focus blocks and client trust?",
+      "store": "pv4/user_155.jsonl",
+      "checked": [
+        {
+          "id": 22,
+          "content": "[as of 2000-01-07] Leo prefers 90-minute focus blocks in his work schedule.",
+          "superseded_by": null
+        },
+        {
+          "id": 223,
+          "content": "[as of 2000-02-25] Leo runs creative-play sessions as 90-minute focus blocks.",
+          "superseded_by": null
+        },
+        {
+          "id": 613,
+          "content": "[as of 2000-06-06] Leo works with clients and prefers structuring the week around 90-minute focus blocks with 15-minute resets.",
+          "superseded_by": null
+        },
+        {
+          "id": 614,
+          "content": "[as of 2000-06-06] Leo is working on an album and wants three protected 90-minute creative blocks per week, on Mondays, Wednesdays, and Fridays.",
+          "superseded_by": null
+        },
+        {
+          "id": 620,
+          "content": "[as of 2000-06-06] Leo prefers to protect creative time by blocking it as 'Busy — No Clients' and routing client requests to set office hours or a daily check-in slot.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 617,
+          "bm25": -20.423510965779844,
+          "content": "[as of 2000-06-06] Leo aims for one full gym session per week, typically on Tuesday evenings, and listens to a Mosh-Break playlist while working out."
+        },
+        {
+          "rank": 2,
+          "id": 223,
+          "bm25": -16.957702676359464,
+          "content": "[as of 2000-02-25] Leo runs creative-play sessions as 90-minute focus blocks."
+        },
+        {
+          "rank": 3,
+          "id": 613,
+          "bm25": -15.616568507932817,
+          "content": "[as of 2000-06-06] Leo works with clients and prefers structuring the week around 90-minute focus blocks with 15-minute resets."
+        },
+        {
+          "rank": 4,
+          "id": 360,
+          "bm25": -15.464295110990873,
+          "content": "[as of 2000-03-28] Leo needs a sustainable content schedule that fits alongside client focus blocks."
+        },
+        {
+          "rank": 5,
+          "id": 128,
+          "bm25": -15.267282867589978,
+          "content": "[as of 2000-01-31] Leo charges a flat $75 fee for out-of-hours rush client edits."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Reschedule several “creative‑play” sessions into late‑night focus blocks, extend a few existing 90‑minute design intervals, and negotiate a staggered delivery timeline that prioritizes key brand assets first.",
+        "nearest": "Reschedule several “creative‑play” sessions into late‑night focus blocks, extend a few existing 90‑minute design intervals, and negotiate a staggered delivery timeline that prioritizes key brand assets first.",
+        "choices": [
+          "Reschedule several “creative‑play” sessions into late‑night focus blocks, extend a few existing 90‑minute design intervals, and negotiate a staggered delivery timeline that prioritizes key brand assets first.",
+          "Split each 90‑minute focus block between brewery work and the rebrand, keep “creative‑play” protected on the calendar, and rely on early‑morning hours to finish any remaining design tasks.",
+          "Postpone most personal recording plans for that month entirely, convert every existing 90‑minute focus block to the new client, and deliver the full rebrand in one uninterrupted production phase.",
+          "Maintain the existing brewery deadline and “creative‑play” slots, decline the one‑week rush timeline, and offer a later project start date with a more realistic phased delivery schedule.",
+          "Compress all current brewery work into a single marathon weekend sprint, keep the original “creative‑play” calendar intact, and accept the one‑week rush by adding shorter, scattered work intervals."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Focus blocks survive, but live rows explicitly protect album slots and route clients to office hours; no live row supports sacrificing creative-play slots for this rush. Do not change the reference to fit these extracted preferences."
+    },
+    {
+      "case_id": "pv4-u155-q105",
+      "label": "retrieval miss",
+      "question": "Because Rae is sensitive to external validation, they worry that a confused reaction from mom’s friends could sting and derail the family moment. While planning, what boundary or structure is Rae most likely to set to protect both vulnerability and the reconnection intention?",
+      "store": "pv4/user_155.jsonl",
+      "checked": [
+        {
+          "id": 96,
+          "content": "[as of 2000-01-23] Leo wants to move on to his next creative project without obsessively refreshing for validation.",
+          "superseded_by": null
+        },
+        {
+          "id": 662,
+          "content": "[as of 2000-06-20] Leo is working on a tribute album for his mother.",
+          "superseded_by": null
+        },
+        {
+          "id": 742,
+          "content": "[as of 2000-07-10] Leo is working on an unreleased album that he wants to keep as a surprise.",
+          "superseded_by": null
+        },
+        {
+          "id": 771,
+          "content": "[as of 2000-07-18] Leo is creating an album as a gift for his family.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 62,
+          "bm25": -15.949458586116013,
+          "content": "[as of 2000-01-15] Leo wants to avoid blocking too much natural light from the windows because Atlas naps in the sill."
+        },
+        {
+          "rank": 2,
+          "id": 620,
+          "bm25": -15.626653895572518,
+          "content": "[as of 2000-06-06] Leo prefers to protect creative time by blocking it as 'Busy — No Clients' and routing client requests to set office hours or a daily check-in slot."
+        },
+        {
+          "rank": 3,
+          "id": 174,
+          "bm25": -15.457329202968797,
+          "content": "[as of 2000-02-12] Leo has decided to request a rate increase from Eclipse Brewery because the project scope has grown."
+        },
+        {
+          "rank": 4,
+          "id": 745,
+          "bm25": -14.266360104879778,
+          "content": "[as of 2000-07-10] Leo is open to sharing behind-the-scenes audio snippets as long as they don't reveal a full song."
+        },
+        {
+          "rank": 5,
+          "id": 52,
+          "bm25": -13.694897631883567,
+          "content": "[as of 2000-01-13] Leo avoids the phrase 'What's your mission?' in client interviews because it makes people disengage."
+        }
+      ],
+      "scoring_control": {
+        "passed": true,
+        "response": "Keep the initial listening circle small to immediate family before inviting friends to hear it later, because Rae wants first reactions from people closest to the shared history.",
+        "nearest": "Keep the initial listening circle small to immediate family before inviting friends to hear it later, because Rae wants first reactions from people closest to the shared history.",
+        "choices": [
+          "Keep the initial listening circle small to immediate family before inviting friends to hear it later, because Rae wants first reactions from people closest to the shared history.",
+          "Let mom’s friends hear the album first without Rae present, because Rae assumes secondhand summaries will buffer their sensitivity to direct reactions.",
+          "Encourage everyone to post live reactions on social media, because Rae believes public enthusiasm will counterbalance any confusing in-person comments.",
+          "Set a ground rule that only positive comments are allowed, because Rae thinks eliminating criticism is the best way to feel safe sharing the work.",
+          "Ask mom’s friends to provide written feedback sheets after hearing the album, because Rae feels formal responses will be easier to emotionally compartmentalize."
+        ],
+        "similarities": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reason": "Validation sensitivity and a surprise family tribute remain live; fallback misses all four. The small first listening circle is an inference from these facts."
+    },
+    {
+      "case_id": "supersede-02",
+      "label": "retrieval miss",
+      "question": "What should you order me at the cafe?",
+      "store": "pv4/user_130.jsonl",
+      "checked": [
+        {
+          "id": 617,
+          "content": "My usual coffee is a caramel latte.",
+          "superseded_by": 618
+        },
+        {
+          "id": 618,
+          "content": "My usual coffee is a plain espresso.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 181,
+          "bm25": -6.776145452367262,
+          "content": "[as of 2000-03-01] Leo prefers article lists in chronological order, newest first."
+        },
+        {
+          "rank": 2,
+          "id": 447,
+          "bm25": -5.101137654933552,
+          "content": "[as of 2000-05-21] Leo's campaign rubric should have 3–5 criteria per value, scored 1–5 with pass/fail thresholds."
+        },
+        {
+          "rank": 3,
+          "id": 596,
+          "bm25": -4.718105492028214,
+          "content": "[as of 2000-07-12] The workshop targets young creatives who may apply the skills at agencies or startups."
+        },
+        {
+          "rank": 4,
+          "id": 194,
+          "bm25": -4.553736871626298,
+          "content": "[as of 2000-03-06] Leo treats oddities and quirks as assets, turning what seems weird into a signature element of his act."
+        },
+        {
+          "rank": 5,
+          "id": 471,
+          "bm25": -4.244987569489635,
+          "content": "[as of 2000-05-26] Leo is the go-to, dependable person at his office and values that reputation."
+        }
+      ],
+      "scoring_control": {
+        "actual_fallback": {
+          "passed": false,
+          "newer_retrieved": false,
+          "stale_retrieved": false
+        },
+        "correct_control": {
+          "passed": true,
+          "newer_retrieved": true,
+          "stale_retrieved": false
+        },
+        "stale_control": {
+          "passed": false,
+          "newer_retrieved": false,
+          "stale_retrieved": true
+        },
+        "mixed_control": {
+          "passed": false,
+          "newer_retrieved": true,
+          "stale_retrieved": true
+        }
+      },
+      "reason": "Seeding supersedes caramel latte with live plain espresso. Fallback misses 618; the unchanged assertion accepts the new row alone and rejects stale-only and mixed rows."
+    },
+    {
+      "case_id": "supersede-10",
+      "label": "retrieval miss",
+      "question": "What vegetables am I tending this season?",
+      "store": "pv4/user_130.jsonl",
+      "checked": [
+        {
+          "id": 617,
+          "content": "This season I am growing tomatoes.",
+          "superseded_by": 618
+        },
+        {
+          "id": 618,
+          "content": "This season I am growing courgettes.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 618,
+          "bm25": -29.371693210152145,
+          "content": "This season I am growing courgettes."
+        },
+        {
+          "rank": 2,
+          "id": 124,
+          "bm25": -5.5337920193363646,
+          "content": "[as of 2000-02-11] The product achieved a 12% activation lift this quarter."
+        },
+        {
+          "rank": 3,
+          "id": 194,
+          "bm25": -4.553390243694917,
+          "content": "[as of 2000-03-06] Leo treats oddities and quirks as assets, turning what seems weird into a signature element of his act."
+        },
+        {
+          "rank": 4,
+          "id": 497,
+          "bm25": -4.001938853732127,
+          "content": "[as of 2000-06-06] Leo's internal memos use a short subject line, three opening bullets (what changed, why it matters, immediate impact), and a closing call to action."
+        }
+      ],
+      "scoring_control": {
+        "actual_fallback": {
+          "passed": true,
+          "newer_retrieved": true,
+          "stale_retrieved": false
+        },
+        "correct_control": {
+          "passed": true,
+          "newer_retrieved": true,
+          "stale_retrieved": false
+        },
+        "stale_control": {
+          "passed": false,
+          "newer_retrieved": false,
+          "stale_retrieved": true
+        },
+        "mixed_control": {
+          "passed": false,
+          "newer_retrieved": true,
+          "stale_retrieved": true
+        }
+      },
+      "reason": "Seeding supersedes tomatoes with live courgettes. Fallback DOES return 618 and passes; this is not a reproduction of the historical Qwen failure. Correct retrieval passes the unchanged assertion, so the historical failure implicates retrieved contents, not a broken substring assertion."
+    },
+    {
+      "case_id": "supersede-18",
+      "label": "retrieval miss",
+      "question": "Which handset needs a new protective case?",
+      "store": "pv4/user_130.jsonl",
+      "checked": [
+        {
+          "id": 617,
+          "content": "My phone is a Pixel 7.",
+          "superseded_by": 618
+        },
+        {
+          "id": 618,
+          "content": "My phone is a Galaxy S24.",
+          "superseded_by": null
+        }
+      ],
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": 590,
+          "bm25": -4.82747165369191,
+          "content": "[as of 2000-07-09] Leo made a project called Thumb Tumble around 1999, which he recorded on VHS and which was central to his life at the time."
+        },
+        {
+          "rank": 2,
+          "id": 88,
+          "bm25": -4.6216489184310605,
+          "content": "[as of 2000-01-29] Leo prefers podcasts with vivid case studies and hosts with good cadence."
+        },
+        {
+          "rank": 3,
+          "id": 384,
+          "bm25": -4.516570956485223,
+          "content": "[as of 2000-05-01] Leo uses a closing quote template in case studies that he tailors to each client."
+        },
+        {
+          "rank": 4,
+          "id": 226,
+          "bm25": -4.467617641901394,
+          "content": "[as of 2000-03-17] The user's parents moved from São Paulo, Brazil to a new country."
+        },
+        {
+          "rank": 5,
+          "id": 536,
+          "bm25": -4.464872901772515,
+          "content": "[as of 2000-06-15] Leo needs the transcription tool to preserve Portuguese diacritics."
+        }
+      ],
+      "scoring_control": {
+        "actual_fallback": {
+          "passed": false,
+          "newer_retrieved": false,
+          "stale_retrieved": false
+        },
+        "correct_control": {
+          "passed": true,
+          "newer_retrieved": true,
+          "stale_retrieved": false
+        },
+        "stale_control": {
+          "passed": false,
+          "newer_retrieved": false,
+          "stale_retrieved": true
+        },
+        "mixed_control": {
+          "passed": false,
+          "newer_retrieved": true,
+          "stale_retrieved": true
+        }
+      },
+      "reason": "Seeding supersedes Pixel 7 with live Galaxy S24. Fallback misses 618; the unchanged assertion accepts the new row alone and rejects stale-only and mixed rows."
+    }
+  ],
+  "source_revision": "dced8c1f4a6971f0398beed6ecbcfe491fadefeb",
+  "input_sha256": {
+    "pv4/cases.jsonl": "f4b3c1e83da5c2d73940f96c75ec76971e2c0b479b1df7be6c0f4dd96979a1a2",
+    "pv4/user_130.jsonl": "c3e3c0572a68eb9bdf0aa4552c03553616d2deadefeb406d529637d7cf7a34ec",
+    "pv4/user_131.jsonl": "fa19e769b74f183a5326c3e65c4dc4b1ceee64a0d632121c729f5d975d076d21",
+    "pv4/user_133.jsonl": "a85172356504aa1180abafe746f02984f30e1d96de049f5e0b67eec20dacfe59",
+    "pv4/user_135.jsonl": "8529772f6caae37a2a309aeee3b2f7f0a8de95df8b32da27bd983fb18da61be2",
+    "pv4/user_137.jsonl": "7795936045af43d53525e264441f0377e7cb481fef342166a2f4576b74bc643f",
+    "pv4/user_144.jsonl": "e923d2be4e11c3ff5522f85f149c6f2e764e981a1c5c08d4eaba4e6730b3901e",
+    "pv4/user_145.jsonl": "ff4e59981871d370f1d7a887119afe100cfa0ca45520db051f571934e5db4a66",
+    "pv4/user_149.jsonl": "8390bb8f79b85b0e38eea81fb68f883c8c9d1fbb0ee948bee85b7b631180bd56",
+    "pv4/user_151.jsonl": "96b1a1625e2eea9c2dd5d36a3cf4c34b41cfa66968805a51f690c5fd85b98ba0",
+    "pv4/user_152.jsonl": "468e025fed583d587ebdd9ae4d4da7a86607da43eb664f97fd950d74675513cb",
+    "pv4/user_154.jsonl": "5fe34a2a6cd252d505cf002936a4f2f902f66d17b39cd0396d03ddc9e0f63294",
+    "pv4/user_155.jsonl": "6592fb3c6f3c4302bc26b844c57d6164722932e2a9f7aa75123ef8b59a575f96",
+    "supersede_cases.jsonl": "1ea8d81de1ddd9dee60fcd0b217fcf3dc2f5652b320c8b57b42479339b48f7ce"
+  }
+}
