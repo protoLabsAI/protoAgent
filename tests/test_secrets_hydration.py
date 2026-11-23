@@ -136,7 +136,8 @@ def test_refresh_updates_and_removes_owned_only(fake, monkeypatch):
 
     # Rotation: one value changes, one disappears from the manager.
     fake.values = {"ROTATES": "value-two-2"}
-    hydrate_from_docs(*_docs(), force=True)
+    rotated = hydrate_from_docs(*_docs(), force=True)
+    assert rotated.changed == 2  # replacement and removal both invalidate the live client
     assert os.environ["ROTATES"] == "value-two-2"
     assert "GOES_AWAY" not in os.environ
     assert ext.applied_env_names() == ["ROTATES"]
@@ -602,3 +603,131 @@ def test_infisical_404_with_api_suffix_hints():
     assert not result.ok and result.error_kind == ErrorKind.BAD_RESPONSE
     assert "universal-auth login: HTTP 404" in result.error
     assert "should not include the '/api' suffix" in result.error
+
+
+@pytest.fixture
+def live_secrets(fake, monkeypatch):
+    """Real hydration and model construction, with runtime services at the reload seam."""
+    import threading
+
+    from fastapi import FastAPI
+
+    from graph.config import LangGraphConfig
+    from graph.llm import create_llm
+    from operator_api.secrets_routes import register_secrets_routes
+    from runtime.state import STATE
+    from server.secrets_reload import reload_after_secrets
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = LangGraphConfig(api_base="http://gateway.test/v1", model_name="test-model")
+    cfg.secrets_manager_enabled = True
+    cfg.secrets_manager_refresh_seconds = 30
+    monkeypatch.setattr(STATE, "graph_config", cfg)
+    monkeypatch.setattr(STATE, "graph", None)
+    monkeypatch.setattr("graph.config.load_config_docs", lambda *a, **kw: _docs())
+    monkeypatch.setattr("server.secrets_reload.is_setup_complete", lambda: True)
+    calls = []
+
+    def rebuild():
+        calls.append(threading.get_ident())
+        STATE.graph = create_llm(cfg)
+        return True, "reloaded"
+
+    monkeypatch.setattr("server.agent_init._reload_langgraph_agent", rebuild)
+    app = FastAPI()
+    register_secrets_routes(app, reload_after_sync=reload_after_secrets)
+    return app, calls, rebuild
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial", ["loaded", "fail_open", "missing_unchanged", "setup_pending"])
+async def test_sync_rotates_live_client_and_recovers_missing_graph(fake, live_secrets, monkeypatch, initial):
+    import threading
+
+    from runtime.state import STATE
+
+    app, calls, rebuild = live_secrets
+    if initial == "fail_open":
+        fake.result = FetchResult(error="offline", error_kind=ErrorKind.NETWORK)
+        assert not hydrate_from_docs(*_docs(required=False)).ok
+        fake.result = None
+    elif initial in ("loaded", "missing_unchanged"):
+        fake.values = {"OPENAI_API_KEY": "old-manager-value"}
+        hydrate_from_docs(*_docs())
+        if initial == "loaded":
+            rebuild()
+            assert STATE.graph.openai_api_key.get_secret_value() == "old-manager-value"
+            calls.clear()
+    else:
+        monkeypatch.setattr("server.secrets_reload.is_setup_complete", lambda: False)
+
+    if initial not in ("missing_unchanged", "setup_pending"):
+        fake.values = {"OPENAI_API_KEY": "rotated-manager-value"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/secrets/sync")
+        assert response.status_code == 200
+        body = response.json()
+        if initial == "setup_pending":
+            assert not calls and STATE.graph is None
+            return
+        assert body["graph_reloaded"] is True
+        assert len(calls) == 1 and calls[0] != threading.get_ident()
+        assert STATE.graph is not None
+        assert STATE.graph.openai_api_key.get_secret_value() == fake.values["OPENAI_API_KEY"]
+        response = await client.post("/api/secrets/sync")
+        assert response.status_code == 200 and response.json()["changed"] == 0
+        assert "graph_reloaded" not in response.json()
+        assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raises", [True, False])
+async def test_sync_reports_reload_failure_without_leaking_errors(fake, live_secrets, monkeypatch, caplog, raises):
+    app, _, _ = live_secrets
+    fake.values = {"OPENAI_API_KEY": "rotated-manager-value"}
+
+    def fail():
+        if raises:
+            raise RuntimeError("OPENAI_API_KEY rotated-manager-value")
+        return False, "OPENAI_API_KEY rotated-manager-value"
+
+    monkeypatch.setattr("server.agent_init._reload_langgraph_agent", fail)
+    with caplog.at_level("INFO"):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/secrets/sync")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["graph_reloaded"] is False
+    assert response.json()["graph_reload_error"] == "graph reload failed after secrets hydration"
+    assert "graph reload failed" in caplog.text
+    assert "OPENAI_API_KEY" not in caplog.text
+    assert "rotated-manager-value" not in caplog.text + response.text
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotation_rebuilds_live_client(fake, live_secrets, monkeypatch):
+    import asyncio
+    import threading
+
+    from runtime.state import STATE
+    from server.maintenance_loops import _secrets_refresh_loop
+
+    _, calls, rebuild = live_secrets
+    fake.values = {"OPENAI_API_KEY": "old-manager-value"}
+    hydrate_from_docs(*_docs())
+    rebuild()
+    calls.clear()
+    fake.values = {"OPENAI_API_KEY": "rotated-manager-value"}
+    elapsed = 0
+
+    async def sleep(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+        if elapsed > 60:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await _secrets_refresh_loop()
+    assert len(calls) == 1 and calls[0] != threading.get_ident()
+    assert STATE.graph.openai_api_key.get_secret_value() == "rotated-manager-value"

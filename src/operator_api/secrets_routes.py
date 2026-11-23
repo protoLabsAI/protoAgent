@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel
+
+from infra.secrets.hydrate import SourceStatus
 
 
 class SecretsTestRequest(BaseModel):
@@ -44,7 +47,9 @@ def _live_overlay() -> dict:
     }
 
 
-def register_secrets_routes(app) -> None:
+def register_secrets_routes(
+    app, *, reload_after_sync: Callable[[SourceStatus], Awaitable[dict]] | None = None
+) -> None:
     from fastapi import APIRouter, HTTPException
 
     router = APIRouter()
@@ -88,7 +93,8 @@ def register_secrets_routes(app) -> None:
                 detail="secrets manager is not enabled (secrets_manager.enabled) or hydration "
                 "is disabled (PROTOAGENT_NO_SECRETS_HYDRATE)",
             )
-        return status()  # just fetched from the saved config — already current
+        reload_status = await reload_after_sync(result) if reload_after_sync is not None else {}
+        return {**status(), **reload_status}  # saved config and live graph outcome
 
     @router.post("/api/secrets/test")
     async def _secrets_test(req: SecretsTestRequest) -> dict:

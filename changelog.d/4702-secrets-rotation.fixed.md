@@ -1,0 +1,1 @@
+- **Live secrets rotation and recovery.** Sync and background refresh rebuild the live model client when applied secrets change, and recover a missing graph after a fail-open boot without re-saving Settings. Sync reports reload failures without failing the request. Fixes #4702.
