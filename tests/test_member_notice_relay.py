@@ -160,9 +160,9 @@ async def test_route_takes_a_notice_only_from_the_fleet_token(box):
             )
             assert bad.status_code == 400 and bad.json()["error"] == "invalid_notice"
             origin = await http.get("/api/notices/decision-dec-1")
-            assert origin.json() == {"ok": True, "agent": MEMBER}
+            assert origin.json() == {"ok": True, "agent": MEMBER, "link": None}
             assert origin.headers["cache-control"] == "no-store"
-            assert (await http.get("/api/notices/unknown-notice")).json() == {"ok": True, "agent": None}
+            assert (await http.get("/api/notices/unknown-notice")).json() == {"ok": True, "agent": None, "link": None}
     finally:
         await loops._stop_push_delivery()
 
