@@ -18,14 +18,14 @@ const TEST_FIELDS = new Set<keyof SecretsTestOverrides>([
   "provider", "host", "project_id", "environment", "path", "recursive", "client_id", "client_secret", "timeout_seconds",
 ]);
 
-// Map the panel's dirty `secrets_manager.*` field keys (dotted config paths) to the test
+// Map the panel's current `secrets_manager.*` field keys (dotted config paths) to the test
 // route's field names (#4702). The schema keys are flat (`secrets_manager.client_id`), so the
 // final path segment IS the request field name — taking the last segment also survives a
 // nested credential key (`secrets_manager.auth.client_id` → `client_id`). `api.secretsTest`
-// drops blanks and the redacted placeholder, so pass the raw dirty values straight through.
-export function secretsTestOverrides(dirty: Record<string, unknown>): SecretsTestOverrides {
+// drops blanks and the redacted placeholder, so pass the raw form values straight through.
+export function secretsTestOverrides(values: Record<string, unknown>): SecretsTestOverrides {
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(dirty)) {
+  for (const [key, value] of Object.entries(values)) {
     if (!key.startsWith("secrets_manager.")) continue;
     const short = key.split(".").pop() as keyof SecretsTestOverrides;
     if (TEST_FIELDS.has(short)) out[short] = value;
@@ -44,7 +44,7 @@ export function SecretsPanel() {
     <SettingsCategoryPanel
       category="Secrets"
       title="Secrets manager"
-      footer={({ dirty }) => <SecretsStatusCard overrides={secretsTestOverrides(dirty)} />}
+      footer={({ values }) => <SecretsStatusCard overrides={secretsTestOverrides(values)} />}
     />
   );
 }
@@ -61,7 +61,10 @@ function SecretsStatusCard({ overrides }: { overrides: SecretsTestOverrides }) {
       if (s.ok) toast({ tone: "success", title: "Secrets synced", message: `${s.applied} env var(s) live from ${s.provider}.` });
       else toast({ tone: "error", title: "Sync failed", message: s.error || s.error_kind || "fetch failed" });
     },
-    onError: (e) => toast({ tone: "error", title: "Sync failed", message: errMsg(e) }),
+    onError: (e) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.secretsStatus });
+      toast({ tone: "error", title: "Sync failed", message: errMsg(e) });
+    },
   });
 
   const test = useMutation({

@@ -1,8 +1,4 @@
-// Settings ▸ Secrets ▸ Test connection must probe the operator's UNSAVED field edits, not an
-// empty body (#4702 item 2). Three seams are covered here: the dirty→request-field mapping
-// (`secretsTestOverrides`), the wire body `api.secretsTest` posts (blanks and the redacted
-// placeholder dropped, {} when nothing is typed), and the footer render-function that hands
-// the live dirty values from the panel to the status card's Test button.
+// Settings ▸ Secrets tests current form values and refreshes connection status (#4702).
 
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -128,6 +124,7 @@ const groups: SettingsGroup[] = [
       },
       dependentString("secrets_manager.host", "Server URL"),
       dependentString("secrets_manager.project_id", "Project ID"),
+      dependentSecret("secrets_manager.client_id", "Machine identity client ID"),
       dependentSecret("secrets_manager.client_secret", "Machine identity client secret"),
     ],
   },
@@ -163,6 +160,7 @@ describe("SecretsPanel ▸ Test connection", () => {
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   async function flush() {
@@ -190,46 +188,102 @@ describe("SecretsPanel ▸ Test connection", () => {
     });
   }
 
-  async function mount() {
+  async function mount(schema = groups, initialStatus = status) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     // Seed the schema + status so the panel renders without suspending; spies keep any
     // background refetch resolving to the same fixtures.
-    client.setQueryData(queryKeys.settings, { groups });
-    client.setQueryData(queryKeys.secretsStatus, status);
-    vi.spyOn(api, "settingsSchema").mockResolvedValue({ groups });
-    vi.spyOn(api, "secretsStatus").mockResolvedValue(status);
+    client.setQueryData(queryKeys.settings, { groups: schema });
+    client.setQueryData(queryKeys.secretsStatus, initialStatus);
+    vi.spyOn(api, "settingsSchema").mockResolvedValue({ groups: schema });
+    vi.spyOn(api, "secretsStatus").mockResolvedValue(initialStatus);
     await act(async () => {
       root.render(h(QueryClientProvider, { client }, h(ToastProvider, null, h(SecretsPanel))));
     });
     await flush();
+    return client;
   }
 
-  it("posts the operator's unsaved field edits under the server's field names", async () => {
-    const test = vi
-      .spyOn(api, "secretsTest")
-      .mockResolvedValue({ ok: true, error: "", error_kind: "", count: 2, names: ["A", "B"] });
-    await mount();
-
-    await change("secrets_manager.project_id", "proj-xyz");
-    await change("secrets_manager.host", "https://eu.infisical.com");
-    await change("secrets_manager.client_secret", "shh-secret");
+  it.each([false, true])("posts current form values (saved fields: %s)", async (saved) => {
+    const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
+      ok: true,
+      json: async () => ({ ok: true, error: "", error_kind: "", count: 0, names: [] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const values: Record<string, string> = {
+      "secrets_manager.project_id": "proj-xyz",
+      "secrets_manager.host": "https://eu.infisical.com",
+      "secrets_manager.client_id": "identity-id",
+      "secrets_manager.client_secret": "shh-secret",
+    };
+    const schema = saved ? groups.map((g) => ({
+      ...g,
+      fields: g.fields.map((f) => ({
+        ...f, value: f.type === "string" ? values[f.key] : f.value,
+      })),
+    })) : groups;
+    await mount(schema);
+    for (const [key, value] of Object.entries(values)) {
+      if (!saved || key.includes("client_")) await change(key, value);
+    }
     await clickTest();
-
-    expect(test).toHaveBeenCalledWith({
-      project_id: "proj-xyz",
-      host: "https://eu.infisical.com",
-      client_secret: "shh-secret",
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/secrets/test");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      project_id: "proj-xyz", host: "https://eu.infisical.com",
+      client_id: "identity-id", client_secret: "shh-secret",
     });
   });
 
-  it("posts {} when nothing has been edited", async () => {
-    const test = vi
-      .spyOn(api, "secretsTest")
-      .mockResolvedValue({ ok: true, error: "", error_kind: "", count: 0, names: [] });
+  it("omits blank fields and redacted credentials from the form request", async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
+      ok: true,
+      json: async () => ({ ok: true, error: "", error_kind: "", count: 0, names: [] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
     await mount();
-
+    await change("secrets_manager.client_id", "••••••••");
+    await change("secrets_manager.client_secret", "•••••••• (set — leave blank to keep)");
     await clickTest();
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({});
+  });
 
-    expect(test).toHaveBeenCalledWith({});
+  function buttonNamed(label: string) {
+    const button = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
+    if (!button) throw new Error(`no ${label} button`);
+    return button;
+  }
+
+  it("refreshes status after save and disables Sync when the manager becomes disabled", async () => {
+    vi.spyOn(api, "saveSettings").mockResolvedValue({ ok: true, messages: [], restart_required: [] });
+    const client = await mount(groups, { ...status, ok: true });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    vi.mocked(api.secretsStatus).mockResolvedValue({ ...status, enabled: false, ok: true });
+    const toggle = container.querySelector<HTMLElement>('[data-key="secrets_manager.enabled"] input[type="checkbox"]')!;
+    await act(async () => toggle.click());
+    await act(async () => buttonNamed("Save & apply").click());
+    await flush();
+    await flush();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.secretsStatus });
+    const card = container.querySelector('[data-testid="secrets-status"]')!;
+    expect(card.textContent).toContain("disabled");
+    expect(card.textContent).not.toContain("connected");
+    expect(buttonNamed("Sync now").disabled).toBe(true);
+    // The server deliberately permits a test before enabling the manager.
+    expect(buttonNamed("Test connection").disabled).toBe(false);
+  });
+
+  it.each([false, true])("refetches status after a 502 Sync (status read fails: %s)", async (readFails) => {
+    vi.spyOn(api, "secretsSync").mockRejectedValue(new Error("HTTP 502"));
+    await mount(groups, { ...status, ok: true });
+    const read = vi.mocked(api.secretsStatus);
+    read.mockClear();
+    if (readFails) read.mockRejectedValue(new Error("offline"));
+    else read.mockResolvedValue({ ...status, error_kind: "auth", error: "Authentication failed" });
+    await act(async () => buttonNamed("Sync now").click());
+    await flush();
+    await flush();
+    expect(read).toHaveBeenCalled();
+    const card = container.querySelector('[data-testid="secrets-status"]')!;
+    expect(card.textContent).not.toContain("connected");
+    expect(card.textContent).toContain(readFails ? "Couldn’t load" : "Authentication failed");
   });
 });
