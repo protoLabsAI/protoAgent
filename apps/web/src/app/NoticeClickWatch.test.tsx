@@ -410,3 +410,33 @@ it("Home's entry still wins over the hub's link", async () => {
   expect(chatStore.getSnapshot().currentSessionId).toBe(homeId);
   expect(go).not.toHaveBeenCalled();
 });
+
+// ── the worker messages a console open on another page (#5664) ─────────────────────────
+// With no window on the route's page, the worker focuses whichever console is open — here
+// one on a member's page — and posts the tap there instead of opening a second console.
+it("a decision tapped while the console is open on a member's page opens there without a reload", async () => {
+  window.history.replaceState(null, "", "/app/agent/member-x/");
+  origin = "member-x";
+  homeOff();
+  go.mockClear();
+  await act(async () => root.render(<NoticeClickWatch go={go} />));
+  await flush();
+  tap("decision-dec-40");
+  await settled();
+  expect(openWorkGroup).toHaveBeenCalledWith("needs-you", "decision:dec-40");
+  expect(go).not.toHaveBeenCalled();
+});
+
+it("a notice with no Home entry and no link, tapped on a member's page, stays put instead of reloading", async () => {
+  window.history.replaceState(null, "", "/app/agent/member-x/");
+  homeOff();
+  noticeLink = null;
+  go.mockClear();
+  await act(async () => root.render(<NoticeClickWatch go={go} />));
+  await flush();
+  tap("spend-cap-1"); // route: /app/?notice=spend-cap-1, what the hub sends for every notice
+  await settled();
+  expect(go).not.toHaveBeenCalled();
+  expect(openWorkGroup).not.toHaveBeenCalled();
+  expect(window.location.pathname).toBe("/app/agent/member-x/");
+});

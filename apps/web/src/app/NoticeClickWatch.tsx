@@ -14,8 +14,9 @@ import { useUI } from "../state/uiStore";
 import { openView } from "./palette/nav";
 
 // A clicked push notification lands here (ADR 0135 W2, "Clicking fetches the current
-// authoritative record"). The push worker (public/sw.js) either focuses an open console and
-// posts `protoagent:notice-click`, or opens `/app/?notice=<id>`. Both carry only the opaque
+// authoritative record"). The push worker (public/sw.js) either focuses an open console (on
+// the route's page if one is, else any) and posts `protoagent:notice-click`, or opens
+// `/app/?notice=<id>`. Both carry only the opaque
 // notice id; this turns it into the place the operator needs: the notice's entry in Home when
 // Home holds one (#5545), otherwise a decision's answer form or the route the worker named.
 
@@ -86,6 +87,7 @@ const HOME_WAIT_MS = 4_000; // a console that just started: Home's tab is regist
 const SCROLL_LOOK_EVERY_MS = 100;
 const SCROLL_LOOKS = 30; // the card mounts a few frames after Home is selected
 const SCROLL_SETTLE_MS = 300;
+const CONSOLE_ROOT = "/app/"; // sw.js CONSOLE_ROOT
 const CONSOLE_PATH = /^\/app\/(?:agent\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/)?$/; // sw.js CONSOLE_PATH
 let latestTap = 0;
 
@@ -231,9 +233,13 @@ export async function openClickedNotice(
     logTap("link", `${id} names ${link === null ? "no page" : "a page outside this console"}`);
   }
   const href = routeHref(route, id);
-  // The worker only messages a console already on the route's page, so this is normally
-  // "stay here"; loading the same page again would only reload the console.
-  if (!href || new URL(href, window.location.origin).pathname === window.location.pathname) return false;
+  // The worker messages a console on the route's page when one is open, else any open
+  // console window (#5664), so this console may be on another page. Loading this same page
+  // again would only reload the console. And a route of the console itself (`/app/`, what the
+  // hub sends for every notice and the worker's fallback) names no page: the notice was
+  // already looked for above, so a console open on an agent's page stays put too.
+  const path = href ? new URL(href, window.location.origin).pathname : "";
+  if (!href || path === window.location.pathname || path === CONSOLE_ROOT) return false;
   logTap("route", `${String(id)} follows ${href}`);
   go(href);
   return true;

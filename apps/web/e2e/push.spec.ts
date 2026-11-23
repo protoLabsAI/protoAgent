@@ -170,11 +170,12 @@ test("a click focuses the open console window, or opens a known console route", 
   expect(focused.messages).toEqual([{ type: "protoagent:notice-click", v: 1, id: NOTICE.id, route: NOTICE.route }]);
   expect(focused.opened).toEqual([]);
 
-  // No window on that page: open it.
+  // No window on that page, but the console is open on another: focus that one and tell it.
   const route = `/app/agent/ava-12/?notice=${NOTICE.id}`;
-  const opened = await click(worker, { v: 1, id: NOTICE.id, route });
-  expect(opened.opened).toEqual([`${origin}${route}`]);
-  expect(opened.focused).toEqual([]);
+  const other = await click(worker, { v: 1, id: NOTICE.id, route });
+  expect(other.focused).toEqual([`${origin}/app/`]);
+  expect(other.messages).toEqual([{ type: "protoagent:notice-click", v: 1, id: NOTICE.id, route }]);
+  expect(other.opened).toEqual([]);
 
   // Any other destination is ignored: the click lands on the console and nowhere else.
   const hostile = [
@@ -196,6 +197,44 @@ test("a click focuses the open console window, or opens a known console route", 
   for (const data of [null, "text", { route: 7 }]) {
     expect((await click(worker, data)).focused).toEqual([`${origin}/app/`]);
   }
+});
+
+test("a click while the console is open on another page focuses that window instead of opening a second", async ({ page, context, baseURL }) => {
+  // The operator's phone tap log (#5664): one console open on the member, a tap on a notice
+  // routed to /app/, and the worker opened a second console beside it.
+  const { worker } = await startWorker(page, context, "/app/agent/member-x/");
+  const origin = new URL(baseURL!).origin;
+  const route = "/app/?notice=spend-cap-1";
+  const tapped = await click(worker, { v: 1, id: "spend-cap-1", route });
+  expect(tapped.focused).toEqual([`${origin}/app/agent/member-x/`]);
+  expect(tapped.messages).toEqual([{ type: "protoagent:notice-click", v: 1, id: "spend-cap-1", route }]);
+  expect(tapped.opened).toEqual([]);
+  const steps = await page.evaluate(async () => {
+    const hit = await (await caches.open("protoagent-notice-trace")).match("/app/__notice-trace");
+    return ((await hit!.json()) as Array<{ who: string; step: string; detail: string }>).map((r) => `${r.who} ${r.step}: ${r.detail}`);
+  });
+  expect(steps).toContain("worker message: sent to /app/agent/member-x/ (other page)");
+
+  // A window on the route's exact page is still preferred over any other console window.
+  const second = await context.newPage();
+  await second.goto("/app/");
+  const exact = await click(worker, { v: 1, id: "spend-cap-1", route });
+  expect(exact.focused).toEqual([`${origin}/app/`]);
+  expect(exact.opened).toEqual([]);
+  await second.close();
+
+  // A same-origin window that is not a console is never reused: the route opens.
+  await page.goto("/app/manifest.webmanifest");
+  const notConsole = await click(worker, { v: 1, id: "spend-cap-1", route });
+  expect(notConsole.focused).toEqual([]);
+  expect(notConsole.messages).toEqual([]);
+  expect(notConsole.opened).toEqual([`${origin}${route}`]);
+
+  // No window of this origin at all: the route opens.
+  await page.goto("about:blank");
+  const none = await click(worker, { v: 1, id: "spend-cap-1", route });
+  expect(none.focused).toEqual([]);
+  expect(none.opened).toEqual([`${origin}${route}`]);
 });
 
 test("a click leaves the notice id where a console that got no URL and no message will find it", async ({ page, context }) => {
