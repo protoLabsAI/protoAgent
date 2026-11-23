@@ -164,14 +164,25 @@ function openConsole(route, id) {
   var target = new URL(route, self.location.origin);
   return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (windows) {
     trace("windows", windows.length + " open: " + windows.map(function (w) { return pathOf(w.url) + (w.focused ? "*" : ""); }).join(" "));
-    var open = windows.filter(function (client) {
+    var consoles = windows.filter(function (client) {
       try {
         var at = new URL(client.url);
-        return at.origin === target.origin && at.pathname === target.pathname;
+        return at.origin === target.origin && CONSOLE_PATH.test(at.pathname);
       } catch (e) {
         return false;
       }
+    });
+    // A window already on the route's page first; else any open console (the focused one,
+    // else the first): it gets the same message, so the operator keeps one console instead
+    // of a second one starting beside it.
+    var open = consoles.filter(function (client) {
+      return new URL(client.url).pathname === target.pathname;
     })[0];
+    var which = "route's page";
+    if (!open) {
+      open = consoles.filter(function (client) { return client.focused; })[0] || consoles[0];
+      which = "other page";
+    }
     if (!open) {
       return self.clients.openWindow(target.href).then(
         function (client) {
@@ -186,7 +197,7 @@ function openConsole(route, id) {
     return open.focus().then(
       function (focused) {
         (focused || open).postMessage({ type: CLICK_MESSAGE, v: PAYLOAD_VERSION, id: id, route: route });
-        trace("message", "sent to " + pathOf(open.url));
+        trace("message", "sent to " + pathOf(open.url) + " (" + which + ")");
       },
       function (error) {
         trace("focus", "refused: " + (error && error.name));
