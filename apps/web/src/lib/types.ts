@@ -1242,6 +1242,10 @@ export type ConsumedSteer = { id: string; text: string };
  *  which carries that turn's durable task id, so the console can tell when the turn it
  *  was sent to is over and settle or re-send whatever the turn never reached. */
 export type QueuedSteer = ConsumedSteer & {
+  /** Typed words for recall, separate from the attachment-labelled bubble. */
+  draftText?: string;
+  /** Pipeline context plus typed words, retained for retries. */
+  sendAs?: string;
   images?: { b64: string; mime: string; name: string }[];
   serverTaskId?: string;
   /** The submission never got an answer (the request failed, or the tab reloaded while it
