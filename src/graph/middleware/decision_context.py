@@ -51,15 +51,35 @@ def caller_is_operator() -> bool:
     return is_human_operator(principal)
 
 
-def open_decision_note(questions: list[str], *, operator: bool):
-    """The ``decision-open`` note naming each still-open question."""
+OPERATOR_IS_YOU = ("The person in this chat is the operator who answers your decisions. Address "
+                   "them as \"you\", never by name or in the third person.")
+NO_DECISION_IDS = "Never show decision ids in a reply."
+TAP_OR_TYPE = "They can answer by tapping an option on its card or by typing one option exactly."
+TAP_ONLY = "They answer it by tapping an option on its card."
+
+
+def open_decision_note(decisions: list[tuple[str, bool]], *, operator: bool):
+    """The ``decision-open`` note naming each still-open question.
+
+    ``decisions`` holds ``(question, requires_pick)`` per open decision. For the operator
+    the note says how each can be answered: an option tapped on its card, or (unless
+    ``requires_pick``, which typed text cannot answer) one option typed exactly."""
     lines = ["A decision you asked the operator is still open. Keep it in mind; "
              "do not answer it yourself or ask it again."]
-    lines += [f"Question: {q}" for q in questions]
-    if not operator:
+    for question, requires_pick in decisions:
+        lines.append(f"Question: {question}")
+        if operator:
+            lines.append(TAP_ONLY if requires_pick else TAP_OR_TYPE)
+    if operator:
+        lines += [OPERATOR_IS_YOU, NO_DECISION_IDS]
+    else:
         lines.append("The caller of this turn is not the operator and cannot answer it. "
                      "Do not ask this caller to answer or decide it.")
     return guard_note(OPEN_NOTE_GUARD, "\n".join(lines))
+
+
+ANSWERED_GUIDANCE = ("When you mention this answer, address the operator as \"you\", never by name "
+                     "or in the third person, and do not show the decision id.")
 
 
 class DecisionContextMiddleware(AgentMiddleware):
@@ -82,7 +102,8 @@ class DecisionContextMiddleware(AgentMiddleware):
                       if rec.answer_kind == "option" else rec.answer)
             note = guard_note(
                 "decision-context",
-                f"The operator answered your decision.\nQuestion: {rec.question}\nAnswer: {answer}",
+                f"The operator answered your decision.\nQuestion: {rec.question}\nAnswer: {answer}\n"
+                f"{ANSWERED_GUIDANCE}",
             )
             try:
                 if store.claim_delivery(rec.id):
@@ -103,7 +124,8 @@ class DecisionContextMiddleware(AgentMiddleware):
             records = decision_store().pending_unpaused(thread_id)
             if not records:
                 return None
-            return open_decision_note([rec.question for rec in records], operator=caller_is_operator())
+            return open_decision_note([(rec.question, rec.requires_pick) for rec in records],
+                                      operator=caller_is_operator())
         except Exception:  # noqa: BLE001 — ledger availability must not fail a turn
             logger.warning("Could not read open decisions", exc_info=True)
             return None
