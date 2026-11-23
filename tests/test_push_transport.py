@@ -11,7 +11,7 @@ import pytest
 
 from graph.plugins.chat_surface import ChatNotice
 from graph.plugins.host import HOST
-from graph.push_transport import PushResult, PushTransport, WebPushProvider
+from graph.push_transport import PushResult, PushTransport, WebPushProvider, build_push_payload
 from infra.paths import reset_instance_paths
 from security import devices
 
@@ -67,6 +67,56 @@ def notice(expiry=2000, kind="notify", importance="high"):
 def attempts(sender):
     with sqlite3.connect(sender.path) as db:
         return db.execute("SELECT count(*) FROM attempts").fetchone()[0]
+
+
+@pytest.mark.parametrize("link,allowed", [
+    ("/app/?view=work", True), ("/app/" + "x" * 507, True),
+    ("https://evil.example/x", False), ("//evil", False), ("javascript:alert(1)", False),
+    ("/app/" + "x" * 508, False), ("/private/path", False), ("", False),
+    ("/app/\n?view=work", False), ("/app/" + chr(92) + "evil", False),
+])
+async def test_notice_links_are_local_validated_durable_and_expire(setup, link, allowed):
+    now, _, transport, enroll = setup
+    enroll()
+    sender = transport()
+    item = replace(notice(), link=link)
+    assert sender.enqueue(item) == 1
+    expected = link if allowed else None
+    assert sender.link_of(item.notice_id) == expected
+    sender = transport()
+    assert sender.link_of(item.notice_id) == expected
+    assert sender.enqueue(item) == 0  # replay retains the same local destination
+    payload = json.loads(build_push_payload(vars(item)))
+    assert "link" not in payload
+    assert payload["route"] == "/app/?notice=" + item.notice_id
+    now[0] = item.expires_at
+    assert sender.link_of(item.notice_id) is None
+    await sender.drain()
+    with sqlite3.connect(sender.path) as db:
+        assert db.execute("SELECT count(*) FROM links").fetchone()[0] == 0
+
+
+async def test_notice_lookup_returns_local_link_and_nulls(setup, monkeypatch):
+    from fastapi import FastAPI
+    from graph import push_transport
+    from operator_api.notice_routes import register_notice_routes
+
+    now, _, transport, _ = setup
+    sender = transport()
+    sender.enqueue(replace(notice(), link="/app/?view=work"))
+    monkeypatch.setattr(push_transport, "_ACTIVE", [sender])
+    app = FastAPI()
+    register_notice_routes(app)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        for notice_id, expected in [("notice-1", "/app/?view=work"), ("unknown", None), ("invalid!", None)]:
+            response = await client.get("/api/notices/" + notice_id)
+            assert response.status_code == 200
+            assert response.json() == {"ok": True, "agent": None, "link": expected}
+            assert response.headers["cache-control"] == "no-store"
+        now[0] = 2000
+        assert (await client.get("/api/notices/notice-1")).json() == {"ok": True, "agent": None, "link": None}
+        monkeypatch.setattr(push_transport, "_ACTIVE", [None])
+        assert (await client.get("/api/notices/notice-1")).json() == {"ok": True, "agent": None, "link": None}
 
 
 @pytest.mark.parametrize("kind,importance", [("notify", "normal"), ("review", "normal"), ("notify", "low")])

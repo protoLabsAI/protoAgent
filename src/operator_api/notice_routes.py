@@ -65,15 +65,17 @@ def register_notice_routes(app) -> None:
 
     @app.get("/api/notices/{notice_id}")
     async def _notice_origin(notice_id: str):  # noqa: ANN202
-        """``{ok, agent}``: the member that raised the notice, or null for this agent's own
-        (or one it no longer remembers). Never an error for an unknown id: the console
-        then simply opens the notice where it is."""
+        """``{ok, agent, link}``: the raising member and locally retained console link.
+        Missing or expired metadata is null, including both fields for an unknown id.
+        """
         import asyncio
 
         from graph import push_transport
 
         transport = push_transport.active_transport()
         agent = None
+        link = None
         if transport is not None and _NOTICE_ID.fullmatch(notice_id):
             agent = await asyncio.to_thread(transport.origin_of, notice_id)
-        return JSONResponse({"ok": True, "agent": agent}, headers={"Cache-Control": "no-store"})
+            link = await asyncio.to_thread(transport.link_of, notice_id)
+        return JSONResponse({"ok": True, "agent": agent, "link": link}, headers={"Cache-Control": "no-store"})

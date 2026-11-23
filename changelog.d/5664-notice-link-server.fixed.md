@@ -1,0 +1,1 @@
+- **Push notices retain their console destination locally.** The notice lookup API now returns a validated console link until expiry, so a later console change can open non-decision notices. Links remain absent from outbound push payloads. Refs #5664.

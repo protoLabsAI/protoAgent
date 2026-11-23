@@ -4,7 +4,7 @@ The hub registers ``accept`` with the notice seam and one maintenance loop calls
 ``drain`` (W2b4: ``server.maintenance_loops``), so raising a notice never waits on a send.
 ``WebPushProvider`` is the one sender behind ``PushProvider`` (D8): it encrypts a
 generic payload for the device (RFC 8291) and signs it with VAPID (RFC 8292).
-Only transport metadata is retained: no notice text, target, or binding secrets.
+Only transport metadata and local console links are retained: no notice text or binding secrets.
 For a notice a fleet member handed over (``graph.fleet.notice_relay``) the hub also
 keeps which agent raised it, until the notice expires, so a click can be routed after
 authentication without the payload naming a member.
@@ -109,6 +109,9 @@ class PushTransport:
             db.execute("""CREATE TABLE IF NOT EXISTS origins (
                 notice_id TEXT PRIMARY KEY, agent TEXT NOT NULL, expires_at REAL NOT NULL)""")
             db.execute("DELETE FROM origins WHERE expires_at <= ?", (self.clock(),))
+            db.execute("""CREATE TABLE IF NOT EXISTS links (
+                notice_id TEXT PRIMARY KEY, link TEXT NOT NULL, expires_at REAL NOT NULL)""")
+            db.execute("DELETE FROM links WHERE expires_at <= ?", (self.clock(),))
         self.path.chmod(0o600)
 
     @contextmanager
@@ -137,6 +140,14 @@ class PushTransport:
                 "SELECT agent FROM origins WHERE notice_id = ? AND expires_at > ?", (notice_id, self.clock()),
             ).fetchone()
         return row["agent"] if row else None
+
+    def link_of(self, notice_id: str) -> str | None:
+        """The local console link for a live notice, or None when absent or expired."""
+        with self._db() as db:
+            row = db.execute(
+                "SELECT link FROM links WHERE notice_id = ? AND expires_at > ?", (notice_id, self.clock()),
+            ).fetchone()
+        return row["link"] if row else None
 
     @staticmethod
     def _pushes(notice: ChatNotice) -> bool:
@@ -178,6 +189,16 @@ class PushTransport:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM attempts WHERE expires_at <= ?", (now,))
+            db.execute("DELETE FROM links WHERE expires_at <= ?", (now,))
+            # A root-relative /app/ prefix excludes schemes and hosts. Reject browser
+            # URL normalization characters too; retain the original address locally only.
+            link = notice.link
+            if (isinstance(link, str) and link.startswith("/app/") and len(link) <= 512
+                    and not any(ord(char) < 32 or ord(char) == 127 or char == "\\" for char in link)):
+                db.execute(
+                    "INSERT OR IGNORE INTO links (notice_id, link, expires_at) VALUES (?, ?, ?)",
+                    (notice.notice_id, link, notice.expires_at),
+                )
             added = 0
             for device in recipients:
                 added += db.execute(
@@ -226,6 +247,7 @@ class PushTransport:
         """Send due rows independently; pending retries survive reconstruction."""
         with self._db() as db:
             db.execute("DELETE FROM attempts WHERE expires_at <= ?", (self.clock(),))
+            db.execute("DELETE FROM links WHERE expires_at <= ?", (self.clock(),))
             rows = db.execute(
                 "SELECT * FROM attempts WHERE state = 'pending' AND next_at <= ?", (self.clock(),)
             ).fetchall()
