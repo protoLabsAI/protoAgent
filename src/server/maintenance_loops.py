@@ -1493,10 +1493,12 @@ async def _secrets_refresh_loop() -> None:
         from graph.config import load_config_docs
         from graph.config_io import config_yaml_path
         from infra.secrets import SecretsRequiredError, hydrate_from_docs
+        from server.secrets_reload import reload_after_secrets
 
         try:
             merged, secrets_doc = load_config_docs(config_yaml_path(), validate=True)
-            await asyncio.to_thread(hydrate_from_docs, merged, secrets_doc, force=True)
+            result = await asyncio.to_thread(hydrate_from_docs, merged, secrets_doc, force=True)
+            await reload_after_secrets(result)
         except SecretsRequiredError as e:
             log.warning("[secrets] refresh failed (required source): %s", e)
         except Exception:

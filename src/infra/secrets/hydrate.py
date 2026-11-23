@@ -96,6 +96,7 @@ class SourceStatus:
     shadowed: list[str] = field(default_factory=list)  # skipped: pre-existing env won
     refresh_seconds: int = 0  # effective cadence (clamped to MIN_REFRESH_SECONDS)
     configured_refresh_seconds: int = 0  # the raw configured value
+    changed: int = 0  # environment writes/removals in the last fetch pass
 
     def as_dict(self) -> dict:
         return {
@@ -110,6 +111,7 @@ class SourceStatus:
             "error_kind": self.error_kind,
             "fetched_at": self.fetched_at,
             "applied": self.applied,
+            "changed": self.changed,
             "shadowed": list(self.shadowed),
             "refresh_seconds": self.refresh_seconds,
             "configured_refresh_seconds": self.configured_refresh_seconds,
@@ -220,6 +222,7 @@ def hydrate_from_docs(merged: dict | None, secrets_doc: dict | None, *, force: b
         if result.ok:
             protected = set(PROTECTED_BASE) | set(getattr(provider, "bootstrap_env", ()) or ())
             changed, shadowed = _apply(result.values or {}, cfg, protected)
+            status.changed = changed
             status.applied = len(_APPLIED)
             status.shadowed = shadowed
             if changed or shadowed:

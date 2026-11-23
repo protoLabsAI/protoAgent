@@ -1374,8 +1374,9 @@ def _main():
     # External secrets manager (ADR 0080) — /api/secrets status / sync-now /
     # connection-test for the Settings panel.
     from operator_api.secrets_routes import register_secrets_routes
+    from server.secrets_reload import reload_after_secrets
 
-    register_secrets_routes(fastapi_app)
+    register_secrets_routes(fastapi_app, reload_after_sync=reload_after_secrets)
 
     # Per-agent theme (ADR 0042) — each agent saves its own look; the console repaints
     # to the focused agent's theme (proxied via /agents/<slug>/api/theme, slug routing).
