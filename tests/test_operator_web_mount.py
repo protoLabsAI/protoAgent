@@ -1,9 +1,41 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+import ast
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from operator_api.web import mount_ds_plugin_kit, mount_react_app
+
+
+@pytest.mark.parametrize("ui", ["full", "console", "none"])
+def test_root_redirect_preserves_raw_query_only_when_console_is_served(ui) -> None:
+    # Execute the complete registration block, including its UI guard, without
+    # running CLI boot and its background services (Refs #4702).
+    source = Path(__file__).resolve().parents[1] / "src/server/__init__.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_main")
+    registration = next(
+        statement for statement in main.body
+        if any(isinstance(n, ast.AsyncFunctionDef) and n.name == "_root_to_console" for n in ast.walk(statement))
+    )
+    app = FastAPI()
+    exec(
+        compile(ast.Module(body=[registration], type_ignores=[]), str(source), "exec", dont_inherit=True),
+        {"fastapi_app": app, "Request": Request, "ui": ui},
+    )
+    client = TestClient(app)
+    for query in ("", "flag:secrets-panel", "dev", "next=//evil.example", "flag:one&flag:two&value=%2f%23+space&value="):
+        response = client.get(f"/?{query}" if query else "/", follow_redirects=False)
+        if ui == "none":
+            assert response.status_code == 404
+            assert "location" not in response.headers
+        else:
+            assert response.status_code == 307
+            assert response.headers["location"] == (f"/app/?{query}" if query else "/app/")
+    assert "/" not in app.openapi()["paths"]
 
 
 def test_mount_react_app_serves_index_assets_and_fallback(tmp_path) -> None:

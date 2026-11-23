@@ -1808,8 +1808,9 @@ def _main():
         from fastapi.responses import RedirectResponse
 
         @fastapi_app.get("/", include_in_schema=False)
-        async def _root_to_console() -> RedirectResponse:
-            return RedirectResponse(url="/app/")
+        async def _root_to_console(request: Request) -> RedirectResponse:
+            query = request.url.query
+            return RedirectResponse(url=f"/app/?{query}" if query else "/app/")
 
     app = fastapi_app
 
