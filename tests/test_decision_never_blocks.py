@@ -1,8 +1,8 @@
 """``decisions.never_block`` (#5678 slice 9a): request_decision records and returns, no pause.
 
 With the setting on, the tool writes a no-pause ledger record (empty interrupt id), returns
-"asked, waiting" and the turn ends there (``return_direct``), completed rather than
-input-required. A later unrelated turn runs normally, the decision stays pending, and the
+"asked, waiting", and the model then writes the turn's reply itself (what it did, what it
+is asking); the turn ends completed rather than input-required. A later unrelated turn runs normally, the decision stays pending, and the
 operator can still answer it. Since #5678 slice 10 the tool never pauses, so the setting is
 declared but has no effect: with it off (the default) the ask is the same no-pause record.
 
@@ -33,6 +33,7 @@ turn_control = importlib.import_module("server.turn_control")
 
 SESSION = "s-never-block"
 ASK = {"question": "Deploy to prod?", "options": ["yes", "no"]}
+WRAP = "I checked the release and asked you whether to deploy it to prod."
 
 
 class ScriptedModel(GenericFakeChatModel):
@@ -95,12 +96,12 @@ def _thread() -> str:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["api-chat", "scheduler"])
 async def test_the_asking_turn_ends_completed_with_one_no_pause_record(store, monkeypatch, origin):
-    graph, model = _graph(monkeypatch, never_block=True, replies=[_ask_call(), AIMessage(content="unused")])
+    graph, model = _graph(monkeypatch, never_block=True, replies=[_ask_call(), AIMessage(content=WRAP)])
     thread, sink = _thread(), {}
     reply = await _turn(thread, "ship it", origin=origin, sink=sink)
 
-    # The turn ended at the tool (return_direct): one model call, no interrupt, not parked.
-    assert len(model.seen) == 1
+    # The model replies after the ask (not return_direct): two model calls, no interrupt, not parked.
+    assert len(model.seen) == 2
     assert sink.get("state") != "input_required"
     snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
     assert not snapshot.next and not snapshot.interrupts
@@ -108,22 +109,35 @@ async def test_the_asking_turn_ends_completed_with_one_no_pause_record(store, mo
     assert rec.interrupt_id == ""
     assert (rec.thread_id, rec.session_id, rec.agent) == (thread, SESSION, "deploy-agent")
     assert rec.question == "Deploy to prod?"
-    # The turn's last message is the tool's "asked, waiting" result, naming the record.
-    last = snapshot.values["messages"][-1]
+    # The tool's "asked, waiting" result names the record and tells the model to wrap up.
+    last = snapshot.values["messages"][-2]
     assert isinstance(last, ToolMessage) and last.content.startswith("Asked, waiting")
+    assert "End this turn now with no more tool calls" in last.content
+    assert isinstance(model.seen[1][-1], ToolMessage)
     assert rec.id in last.content
     assert 'Address the operator as "you"' in last.content
     assert "never by name or in the third person" in last.content
     assert "Never show decision ids in a reply" in last.content
     # The reply is a completed one carrying the decision card, not an "Input needed" park.
-    assert reply[0]["content"] == "I've asked you this; answer whenever you're ready."
+    # The reply is the model's own words about this turn, not one fixed line.
+    assert reply[0]["content"] == WRAP
     assert reply[0]["hitl"]["decision_id"] == rec.id
+
+
+@pytest.mark.asyncio
+async def test_an_ask_with_no_model_text_falls_back_to_naming_the_question(store, monkeypatch):
+    _graph(monkeypatch, never_block=True, replies=[_ask_call(), AIMessage(content="")])
+    reply = await _turn(_thread(), "ship it")
+    rec, = store.list(state="pending")
+    assert reply[0]["content"] == "I've asked you: Deploy to prod?"
+    assert rec.id not in reply[0]["content"]
+    assert "do not ask again" not in reply[0]["content"]
 
 
 @pytest.mark.asyncio
 async def test_streaming_no_pause_ask_replies_without_model_instructions(store, monkeypatch):
     chat = importlib.import_module("server.chat")
-    _graph(monkeypatch, never_block=True, replies=[_ask_call(), AIMessage(content="unused")])
+    _graph(monkeypatch, never_block=True, replies=[_ask_call(), AIMessage(content="")])
     with verified_principal_scope("shared-operator-bearer"):
         frames = [frame async for frame in chat._run_native_turn(
             "ship it", SESSION, {"configurable": {"thread_id": _thread()}},
@@ -131,14 +145,14 @@ async def test_streaming_no_pause_ask_replies_without_model_instructions(store, 
 
     rec, = store.list(state="pending")
     reply = next(payload for kind, payload in frames if kind == "done")
-    assert reply == "I've asked you this; answer whenever you're ready."
+    assert reply == "I've asked you: Deploy to prod?"
     assert rec.id not in reply
 
 
 @pytest.mark.asyncio
 async def test_a_later_turn_leaves_the_decision_pending_and_answerable(store, monkeypatch):
     graph, model = _graph(monkeypatch, never_block=True, replies=[
-        _ask_call(), AIMessage(content="It is 4."), AIMessage(content="Deploying now."),
+        _ask_call(), AIMessage(content=WRAP), AIMessage(content="It is 4."), AIMessage(content="Deploying now."),
     ])
     thread = _thread()
     await _turn(thread, "ship it")
@@ -150,8 +164,8 @@ async def test_a_later_turn_leaves_the_decision_pending_and_answerable(store, mo
     assert "Input needed" not in reply[0]["content"]
     # ...and the operator is reminded once that the decision is still open (#5678 7b).
     assert 'Still waiting on your decision: "Deploy to prod?"' in reply[0]["content"]
-    assert len(model.seen) == 2
-    assert isinstance(model.seen[1][-1], HumanMessage)
+    assert len(model.seen) == 3
+    assert isinstance(model.seen[2][-1], HumanMessage)
     assert store.get(rec.id).pending
 
     # The decision is still answerable: the operator's typed pick answers it and the
@@ -161,7 +175,7 @@ async def test_a_later_turn_leaves_the_decision_pending_and_answerable(store, mo
     assert (answered.state, answered.answer) == ("answered", "yes")
     assert answered.delivered_at
     assert reply[0]["content"] == "Deploying now."
-    assert "Deploy to prod?" in model.seen[2][-1].content
+    assert "Deploy to prod?" in model.seen[3][-1].content
     assert store.list(state="pending") == []
 
 
@@ -169,9 +183,10 @@ async def test_a_later_turn_leaves_the_decision_pending_and_answerable(store, mo
 async def test_with_the_setting_off_request_decision_no_longer_pauses(store, monkeypatch):
     # #5678 slice 10 removed the pausing path: the setting off is the same no-pause ask.
     assert LangGraphConfig().decisions_never_block is False
-    graph, model = _graph(monkeypatch, never_block=False, replies=[_ask_call(), AIMessage(content="unused")])
+    graph, model = _graph(monkeypatch, never_block=False,
+                          replies=[_ask_call(), AIMessage(content=WRAP), AIMessage(content="It is 4.")])
     tool = next(t for t in get_all_tools(graph_config=LangGraphConfig()) if t.name == "request_decision")
-    assert tool.return_direct is True
+    assert not tool.return_direct
     thread, sink = _thread(), {}
     reply = await _turn(thread, "ship it", sink=sink)
 
