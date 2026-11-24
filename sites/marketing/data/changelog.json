@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.261.2",
+    "date": "2026-11-24",
+    "changes": [
+      "Base URL console redirects preserve query strings (#5769).",
+      "Secrets manager restores your own env values, keeps var names out of logs, and reports its true status (#5764).",
+      "Secrets panel connection accuracy (#5766).",
+      "Live secrets rotation and recovery (#5771).",
+      "Settled decisions clear their notifications (#5772).",
+      "Tapping a notice that is not a decision opens the page it is about, even with Home off (#5767).",
+      "Push notices retain their console destination locally (#5763).",
+      "A tapped notification reuses the console window that is already open (#5770).",
+      "Steering carries pasted text and files (#5776).",
+      "Memory baseline now shows triage labels and proposes whole-store defaults (#5768).",
+      "Memory baseline failure evidence is documented (#5765)."
+    ]
+  },
+  {
     "version": "v0.261.1",
     "date": "2026-11-23",
     "changes": [
