@@ -1,1 +1,0 @@
-- **Secrets panel connection accuracy.** Test connection includes current form values, including unchanged saved fields, while omitting blank fields and redacted credentials. Refresh manager status after Settings saves and failed Sync attempts so failures and disabled managers replace stale connected status. Refs #4702.

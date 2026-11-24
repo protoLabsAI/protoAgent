@@ -1,1 +1,0 @@
-- **Base URL console redirects preserve query strings.** Shared links such as `/?flag:secrets-panel` and `/?dev` now reach `/app/` with their query intact. The redirect destination remains the fixed console path. Refs #4702.

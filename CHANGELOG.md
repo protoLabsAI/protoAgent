@@ -15,6 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.261.2] - 2026-11-24
+
+### Fixed
+- **Base URL console redirects preserve query strings (#5769).** Shared links such as `/?flag:secrets-panel` and `/?dev` now reach `/app/` with their query intact. The redirect destination remains the fixed console path. Refs #4702.
+
+- **Secrets manager restores your own env values, keeps var names out of logs, and reports its true status (#5764).** With `secrets_manager.override_env: true`, a key removed from the manager now restores the value you had set before the manager overrode it, instead of unsetting it until a restart. Removals log a count at INFO (names only at DEBUG, per ADR 0080 D7). A changed `secrets_manager.refresh_seconds` takes effect within seconds instead of after the old interval, and `GET /api/secrets/status` reports the cadence that actually runs (the 30s floor applied, with the raw value as `configured_refresh_seconds`). With the manager disabled, the status now says `enabled: false` / `connected: false` instead of the last successful fetch. Refs #4702.
+
+- **Secrets panel connection accuracy (#5766).** Test connection includes current form values, including unchanged saved fields, while omitting blank fields and redacted credentials. Refresh manager status after Settings saves and failed Sync attempts so failures and disabled managers replace stale connected status. Refs #4702.
+
+- **Live secrets rotation and recovery (#5771).** Sync and background refresh rebuild the live model client when applied secrets change, and recover a missing graph after a fail-open boot without re-saving Settings. Sync reports reload failures without failing the request. Fixes #4702.
+
+- **Settled decisions clear their notifications (#5772).** When a decision is answered, cancelled, expired or withdrawn anywhere, every open console closes that decision's delivered notification on its own device — as soon as it hears the change, and again whenever it loads or comes back to the front — so the lock screen no longer shows a question that is already settled. Notifications of decisions still waiting are left alone, and no new push is sent. Fixes #5664.
+
+- **Tapping a notice that is not a decision opens the page it is about, even with Home off (#5767).** A fleet-member-down or spend-limit push notice used to leave the console where it was unless Home held its entry. The console now asks the hub once about the notice and either hands the tap to the console of the agent that raised it, or opens the console page the notice links to (same origin, under `/app/` only). Decisions still open their answer form, and Home's entry still wins when Home holds one. Every outcome is written to the tap log. Refs #5664.
+
+- **Push notices retain their console destination locally (#5763).** The notice lookup API now returns a validated console link until expiry, so a later console change can open non-decision notices. Links remain absent from outbound push payloads. Refs #5664.
+
+- **A tapped notification reuses the console window that is already open (#5770).** When no window is on the notice's own page, the push worker now focuses any open console window (the focused one, else the first) and hands it the tap, instead of starting a second console beside it; it opens a new window only when no console is open or focus is refused. The tap trace names the window chosen. A console on an agent's page that receives a notice with no Home entry, no link and only the generic console route stays put rather than reloading. Refs #5664.
+
+- **Steering carries pasted text and files (#5776).** Mid-turn messages and server-turn interjections include ready pipeline attachments, clear them after acknowledgement, and keep raw context out of queued bubbles and recalled drafts. Fixes #5775.
+
+### Docs
+- **Memory baseline now shows triage labels and proposes whole-store defaults (#5768).** `evals/memory_fixtures/BASELINE.md` replaces the 26 "candidate harness bug" flags with their TRIAGE.md labels (0 harness bug, 10 fixture gap, 16 retrieval miss). It records that no rerun was needed because no harness fix landed. It also proposes a `memory.whole_store_max_rows` of 450, which covers all 12 fixture stores (285–413 live rows; a cap of 300 would cover 2), and keeps the uncalibrated weak score at 0.5 until a Qwen run records cosine scores. Runtime defaults are unchanged. Fixes #4961.
+
+- **Memory baseline failure evidence is documented (#5765).** Audit all 26 never-passing cases with fixture row status, offline scorer controls and explicitly scoped FTS retrieval receipts. Preserve the frozen cases and baseline; original Qwen retrieval and grading remain unverified. Refs #4961.
+
 ## [0.261.1] - 2026-11-23
 
 ### Fixed
