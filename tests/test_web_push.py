@@ -18,9 +18,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from graph.push_transport import PushResult, WebPushProvider, build_push_payload
+from graph.push_transport import PushResult, PushTransport, WebPushProvider, build_push_payload
 from infra.paths import reset_instance_paths
-from security import public_console, push_keys
+from security import devices, public_console, push_keys
 from security.devices import PushBinding
 
 pytestmark = pytest.mark.platform_sensitive  # reads the owner-only VAPID keyring
@@ -247,12 +247,22 @@ def test_notice_payload_without_the_close_marker_is_unchanged(env):
     )
 
 
-def test_close_payload_is_sent_encrypted_to_the_device(env):
+def test_close_payload_is_sent_encrypted_to_the_device(env, monkeypatch):
     browser, service = Browser(), Service()
-
-    close = {"type": "close", "tag": "decision-abc", "expires_at": NOW + 600, "importance": "normal"}
-    assert send(service, browser.binding(), close) == PushResult("accepted")
+    monkeypatch.setattr(devices, "_now", lambda: NOW)
+    device, token = devices._register("phone")
+    binding = browser.binding()
+    devices.set_push_binding(
+        device.id, token, endpoint=binding.endpoint, p256dh=binding.p256dh,
+        auth=binding.auth, vapid_version=1,
+    )
+    provider = WebPushProvider(clock=lambda: NOW, transport=httpx.MockTransport(service))
+    sender = PushTransport(provider, clock=lambda: NOW, eligible=lambda _: False)
+    assert sender.enqueue_close("decision-abc") == 1
+    asyncio.run(sender.drain())
 
     (request,) = service.requests
     assert browser.decrypt(request.content) == {"v": 1, "type": "close", "tag": "decision-abc"}
     assert b"decision-abc" not in request.content
+    assert request.headers["TTL"] == "86400"
+    assert request.headers["Urgency"] == "high"

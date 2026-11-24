@@ -284,6 +284,18 @@ def _notify_created(rec: Decision) -> None:
         log.exception("Could not queue notification for decision %s", rec.id)
 
 
+def _notify_closed(rec: Decision) -> None:
+    """Best-effort hub push dismissal after a terminal decision write commits."""
+    try:
+        from graph.push_transport import active_transport
+
+        transport = active_transport()
+        if transport is not None:
+            transport.enqueue_close(f"decision-{rec.id}")
+    except Exception:  # noqa: BLE001 — delivery must never fail a committed transition
+        log.exception("Could not queue notification dismissal for decision %s", rec.id)
+
+
 class DecisionStore:
     """The durable decisions ledger. One SQLite table; thread-safe via the module lock
     (one process, low contention) plus SQLite's own busy-timeout for cross-process safety.
@@ -854,6 +866,7 @@ class DecisionStore:
             finally:
                 self._close(db)
         _publish("decision.changed", {"id": rec.id, "session_id": rec.session_id, "state": rec.state})
+        _notify_closed(rec)
         return rec
 
 

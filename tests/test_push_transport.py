@@ -513,3 +513,79 @@ def test_old_binding_rows_and_unknown_errors_are_safe(setup):
     rows[0]["push"]["last_error"] = "secret response body"
     path.write_text(json.dumps(rows))
     assert devices.push_status(device_id) == status
+
+
+@pytest.mark.parametrize("transition,state", [
+    ("answer", "answered"), ("cancel", "cancelled"),
+    ("expire", "expired"), ("withdraw", "withdrawn"),
+])
+async def test_terminal_decisions_dismiss_devices_and_suppress_held_notice(setup, monkeypatch, transition, state):
+    from datetime import datetime, timezone
+    from graph import decisions, push_transport
+
+    now, provider, transport, enroll = setup
+    enroll("phone")
+    enroll("tablet")
+    apple_id, apple_token = enroll("apple")
+    devices.set_push_binding(
+        apple_id, apple_token, endpoint="https://web.push.apple.com/device",
+        p256dh="client-key", auth="secret", vapid_version=1,
+    )
+    store = decisions.DecisionStore(clock=lambda: datetime.fromtimestamp(now[0], timezone.utc))
+    monkeypatch.setattr(decisions, "decision_store", lambda: store)
+    monkeypatch.setattr(decisions, "_notify_created", lambda rec: None)
+    sender = transport(eligible=decisions.push_eligible, delay=lambda _: 60)
+    monkeypatch.setattr(push_transport, "_ACTIVE", [sender])
+    rec = store.create("session", "Choose?", ["yes"], default_option="yes", expires_in_minutes=1)
+    tag = f"decision-{rec.id}"
+    assert attempts(sender) == 0  # pending never queues a close
+    assert sender.enqueue(replace(notice(), notice_id=tag)) == 3
+    now[0] += 60
+    args = (rec.id, "yes") if transition == "answer" else (rec.id,)
+    assert getattr(store, transition)(*args).state == state
+    assert sender.enqueue_close(tag) == 0  # replay cannot duplicate the close
+    assert attempts(sender) == 5  # original and close have distinct ledger keys
+    # Reconstruction proves the marker survives restart; even a failed eligibility
+    # read must not swallow a close, while settled original notices are obsolete.
+    await transport(eligible=decisions.push_eligible).drain()
+    assert len(provider.calls) == 2
+    assert all(json.loads(build_push_payload(payload)) == {"v": 1, "type": "close", "tag": tag}
+               for _, payload in provider.calls)
+    with sqlite3.connect(sender.path) as db:
+        assert db.execute("SELECT count(*) FROM attempts WHERE state = 'obsolete'").fetchone()[0] == 3
+        assert db.execute("SELECT count(*) FROM attempts WHERE state = 'accepted'").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("failure", ["provider", "ledger", "member"])
+async def test_close_failure_never_rolls_back_decision(setup, monkeypatch, failure):
+    from graph import decisions, push_transport
+
+    now, provider, transport, enroll = setup
+    enroll()
+    store = decisions.DecisionStore()
+    monkeypatch.setattr(decisions, "_notify_created", lambda rec: None)
+    sender = transport(capacity=1)
+    monkeypatch.setattr(push_transport, "_ACTIVE", [None if failure == "member" else sender])
+    if failure == "ledger":
+        sender.enqueue(notice())  # full ledger rejects the close fanout atomically
+    rec = store.create("session", "Choose?", ["yes"])
+    assert store.answer(rec.id, "yes").state == "answered"
+    if failure == "provider":
+        async def unavailable(binding, payload):
+            raise OSError("provider unavailable")
+
+        provider.hook = unavailable
+        await sender.drain()
+        assert len(provider.calls) == 1
+        # Close retries bypass failed authoritative reads too.
+        def failed_read(_):
+            raise OSError("decision store unavailable")
+
+        now[0] += 30
+        provider.hook = None
+        await transport(eligible=failed_read).drain()
+        assert len(provider.calls) == 2
+        assert provider.calls[-1][1]["type"] == "close"
+    else:
+        assert attempts(sender) == (1 if failure == "ledger" else 0)
+    assert store.get(rec.id).state == "answered"

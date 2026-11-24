@@ -99,12 +99,15 @@ class PushTransport:
         self.path = instance_paths().store("push") / "delivery.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")  # serialize schema upgrades across hub processes
             db.execute("""CREATE TABLE IF NOT EXISTS attempts (
                 notice_id TEXT NOT NULL, device_id TEXT NOT NULL, generation INTEGER NOT NULL,
                 kind TEXT NOT NULL, importance TEXT NOT NULL, created_at REAL NOT NULL,
                 expires_at REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                 next_at REAL NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
                 PRIMARY KEY (notice_id, device_id, generation))""")
+            if "close_tag" not in {row["name"] for row in db.execute("PRAGMA table_info(attempts)")}:
+                db.execute("ALTER TABLE attempts ADD COLUMN close_tag TEXT")
             db.execute("DELETE FROM attempts WHERE expires_at <= ?", (self.clock(),))
             db.execute("""CREATE TABLE IF NOT EXISTS origins (
                 notice_id TEXT PRIMARY KEY, agent TEXT NOT NULL, expires_at REAL NOT NULL)""")
@@ -173,6 +176,23 @@ class PushTransport:
 
         Returns 0 without touching devices or the ledger when policy keeps the notice off push.
         """
+        return self._enqueue(notice)
+
+    def enqueue_close(self, tag: str) -> int:
+        """Queue an immediate dismissal with its own identity and bounded retries.
+
+        Apple requires visible pushes; those devices retain console-side dismissal.
+        The maintenance drain sends the queued rows.
+        """
+        if not isinstance(tag, str) or not _NOTICE_ID.fullmatch(tag):
+            raise ValueError("close tag is not an opaque notice identifier")
+        now = self.clock()
+        return self._enqueue(
+            ChatNotice("question", "high", "", "", "close:" + tag, now, now + MAX_TTL_SECONDS),
+            close_tag=tag,
+        )
+
+    def _enqueue(self, notice: ChatNotice, *, close_tag: str | None = None) -> int:
         if not notice.notice_id or not math.isfinite(notice.expires_at):
             raise ValueError("push requires a notice identity and finite expiry")
         now = self.clock()
@@ -184,8 +204,10 @@ class PushTransport:
         for view in devices.list_devices():
             device = devices.get_device(view["id"])
             if device and device.kind == devices.KIND_DEVICE and not device.is_expired(now) and device.push:
+                if close_tag and (urlsplit(device.push.endpoint).hostname or "").lower() == "web.push.apple.com":
+                    continue
                 recipients.append(device)
-        first_at = now + self._first_delay(notice.notice_id)
+        first_at = now if close_tag else now + self._first_delay(notice.notice_id)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM attempts WHERE expires_at <= ?", (now,))
@@ -203,10 +225,10 @@ class PushTransport:
             for device in recipients:
                 added += db.execute(
                     """INSERT OR IGNORE INTO attempts
-                    (notice_id, device_id, generation, kind, importance, created_at, expires_at, next_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (notice_id, device_id, generation, kind, importance, created_at, expires_at, next_at, close_tag)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (notice.notice_id, device.id, device.push.generation, notice.kind,
-                     notice.importance, notice.created_at, notice.expires_at, first_at),
+                     notice.importance, notice.created_at, notice.expires_at, first_at, close_tag),
                 ).rowcount
             if db.execute("SELECT count(*) FROM attempts").fetchone()[0] > self.capacity:
                 raise OverflowError("push delivery ledger capacity reached")
@@ -266,7 +288,7 @@ class PushTransport:
                     db.execute(f"DELETE FROM attempts WHERE {where}", key)
                 return
             try:
-                eligible = self.eligible(row["notice_id"])
+                eligible = bool(row["close_tag"]) or self.eligible(row["notice_id"])
             except Exception:
                 return  # failed authoritative read: defer, never send stale state
             with self._db() as db:
@@ -288,6 +310,11 @@ class PushTransport:
                 "body": "Open the console to view an update",
                 "link": "/app/?notice_id=" + quote(row["notice_id"], safe=""),
             }
+            if row["close_tag"]:
+                payload = {
+                    "type": "close", "tag": row["close_tag"],
+                    "expires_at": row["expires_at"], "importance": row["importance"],
+                }
             try:
                 result = await asyncio.wait_for(self.provider.send(device.push, payload), self.timeout)
             except (TimeoutError, httpx.TimeoutException):
