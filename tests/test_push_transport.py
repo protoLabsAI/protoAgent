@@ -13,7 +13,7 @@ from graph.plugins.chat_surface import ChatNotice
 from graph.plugins.host import HOST
 from graph.push_transport import PushResult, PushTransport, WebPushProvider, build_push_payload
 from infra.paths import reset_instance_paths
-from security import devices
+from security import devices, push_keys
 
 pytestmark = pytest.mark.platform_sensitive
 
@@ -554,6 +554,23 @@ async def test_terminal_decisions_dismiss_devices_and_suppress_held_notice(setup
     with sqlite3.connect(sender.path) as db:
         assert db.execute("SELECT count(*) FROM attempts WHERE state = 'obsolete'").fetchone()[0] == 3
         assert db.execute("SELECT count(*) FROM attempts WHERE state = 'accepted'").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("host", ["web.push.apple.com", "api.push.apple.com", "push.apple.com"])
+def test_close_skips_every_apple_push_zone_endpoint(setup, host):
+    """Any endpoint the Apple push-host policy accepts gets no close push (Safari
+    requires a visible notification for every push), not just web.push.apple.com."""
+    _now, _provider, transport, enroll = setup
+    enroll("phone")
+    apple_id, apple_token = enroll("apple")
+    devices.set_push_binding(
+        apple_id, apple_token, endpoint=f"https://{host}/device",
+        p256dh="client-key", auth="secret", vapid_version=1,
+    )
+    assert push_keys.push_provider(host) == "apple"
+    sender = transport()
+    assert sender.enqueue_close("decision-zone") == 1  # only the non-Apple device
+    assert sender.enqueue(replace(notice(), notice_id="decision-zone")) == 2  # prompts still go to Apple
 
 
 @pytest.mark.parametrize("failure", ["provider", "ledger", "member"])

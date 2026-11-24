@@ -280,7 +280,8 @@ decision write; members without an active hub transport do not enqueue closes.
 
 iOS Safari requires every Web Push to display a notification and may revoke a
 subscription for silent pushes. The sender therefore skips close pushes for Apple
-endpoints (`web.push.apple.com`), rather than showing a blank or confusing notice.
+endpoints (any host in the `*.push.apple.com` zone that the push-host policy in
+`security/push_keys.py` accepts), rather than showing a blank or confusing notice.
 The fallback on those devices is the existing console-side close when the console
 next opens; automatic dismissal with the console closed is unavailable there.
 Other browsers may apply their own background-push policy or display a generic

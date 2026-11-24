@@ -204,7 +204,7 @@ class PushTransport:
         for view in devices.list_devices():
             device = devices.get_device(view["id"])
             if device and device.kind == devices.KIND_DEVICE and not device.is_expired(now) and device.push:
-                if close_tag and (urlsplit(device.push.endpoint).hostname or "").lower() == "web.push.apple.com":
+                if close_tag and push_keys.push_provider(urlsplit(device.push.endpoint).hostname or "") == "apple":
                     continue
                 recipients.append(device)
         first_at = now if close_tag else now + self._first_delay(notice.notice_id)
