@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.261.3] - 2026-11-24
+
+### Added
+- **Push: a close payload lets a phone drop a settled notice's notification without showing a new one (#5779).**
+  `build_push_payload` now builds a versioned close payload, `{"v": 1, "type": "close", "tag": "<notice id>"}`,
+  carrying the tag only (no text, no link) and refusing any tag that is not an opaque notice id. On a valid
+  close push the console's push worker closes every notification shown under that tag and shows nothing; a
+  malformed close push shows the generic fallback as before, and normal notice pushes are unchanged. The
+  worker's header comment documents why iOS Safari web push must not be sent a close push. The hub does not
+  send close pushes yet; that is the next slice of #5778.
+
+- **Settled decisions dismiss phone notifications through push (#5780).** The hub queues best-effort close pushes when decisions are answered, cancelled, expired or withdrawn, and suppresses queued stale prompts. Apple Web Push retains console-side dismissal because Safari requires visible notifications. Fixes #5778.
+
+### Fixed
+- **An agent's reply after asking a decision is its own again (#5781).** Since v0.261.1 every turn that asked a decision ended on the same line, "I've asked you this; answer whenever you're ready.", in place of the agent's real reply, however much work the turn had done. The agent now writes the turn's last message itself (what it did and what it is asking), and the card still shows the question. If it writes nothing, the fallback names the question instead of repeating one fixed line.
+
 ## [0.261.2] - 2026-11-24
 
 ### Fixed
