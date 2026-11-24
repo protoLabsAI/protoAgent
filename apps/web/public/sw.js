@@ -16,8 +16,26 @@
 //     "title": "protoAgent needs your attention",
 //     "body": "Open the console to view a decision",
 //     "route": "/app/?notice=<id>" }
+//
+// Close payload, version 1 (sent when a notice is settled elsewhere, e.g. a decision answered
+// or cancelled on another device):
+//   { "v": 1, "type": "close", "tag": "<opaque notice id>" }
+// It carries no text and no link, and nothing else. The worker closes every notification it
+// showed under that tag (`registration.getNotifications({ tag })`) and shows NO new one. A
+// close payload that fails these checks (a bad tag, another version, extra fields) is treated
+// like any other malformed push: it shows the generic fallback.
+//
 // Anything else — no data, not JSON, another version, an unknown kind, oversized text — shows
-// the generic fallback below. A push always shows a notification (browsers require it).
+// the generic fallback below. Every push other than a valid close shows a notification.
+//
+// Browsers that require every push to show a notification: Chrome and Edge allow an
+// occasional push that shows nothing from a small per-origin budget and, once it is spent,
+// show their own "This site has been updated in the background" notice. iOS Safari web push
+// gives no such allowance and may revoke a subscription whose pushes show nothing. A close
+// push must never show a blank or confusing notification, so the worker shows none, on every
+// browser. The fallback for iOS Safari is the sender's: it does not send a close push to an
+// Apple push endpoint (web.push.apple.com), and that device's stale notification is closed
+// when the console next opens there instead (apps/web/src/lib/closeDecisionNotices.ts, #5664).
 "use strict";
 
 var PAYLOAD_VERSION = 1;
@@ -96,14 +114,52 @@ function parseNotice(text) {
   };
 }
 
-/** Show one notification for a push message (`data` is a PushMessageData, or null). */
-function showNotice(data) {
-  var text = "";
+/** The tag a close payload names, or null when `text` is not a version-1 close payload. */
+function parseClose(text) {
+  if (typeof text !== "string" || text === "" || text.length > MAX_PAYLOAD_CHARS) return null;
+  var doc;
   try {
-    text = data ? data.text() : "";
+    doc = JSON.parse(text);
   } catch (e) {
-    text = "";
+    return null;
   }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc) || doc.v !== PAYLOAD_VERSION) return null;
+  if (doc.type !== "close" || Object.keys(doc).length !== 3) return null;
+  return typeof doc.tag === "string" && NOTICE_ID.test(doc.tag) ? doc.tag : null;
+}
+
+/** Close every notification shown under `tag`. Shows nothing and never rejects. */
+function closeNotices(tag) {
+  return Promise.resolve()
+    .then(function () {
+      return self.registration.getNotifications({ tag: tag });
+    })
+    .then(function (open) {
+      (open || []).forEach(function (notification) {
+        if (notification.tag === tag) notification.close();
+      });
+    })
+    .catch(function () {});
+}
+
+function pushText(data) {
+  try {
+    return data ? data.text() : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+/** Handle one push message (`data` is a PushMessageData, or null): a valid close payload
+ *  closes its tag's notifications and shows nothing; anything else shows one notification. */
+function handlePush(data) {
+  var text = pushText(data);
+  var closeTag = parseClose(text);
+  return closeTag ? closeNotices(closeTag) : showNotice(text);
+}
+
+/** Show one notification for a push message's text. */
+function showNotice(text) {
   var notice = parseNotice(text);
   var options = {
     body: notice ? notice.body : FALLBACK_BODY,
@@ -215,7 +271,7 @@ function clickRoute(data) {
 }
 
 function onPush(event) {
-  event.waitUntil(showNotice(event.data));
+  event.waitUntil(handlePush(event.data));
 }
 
 /** Leave the clicked notice's id where the console will find it when it next comes to the

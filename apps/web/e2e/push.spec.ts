@@ -46,14 +46,32 @@ async function startWorker(page: Page, context: BrowserContext, path = "/app/") 
   const worker: Worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
   await expect.poll(() => registrations.length).toBeGreaterThan(0);
   await worker.evaluate(() => {
-    const g = self as unknown as { __shown: unknown[]; registration: { showNotification: unknown } };
+    type Open = { tag: string; close: () => void };
+    const g = self as unknown as {
+      __shown: unknown[];
+      __open: Open[];
+      __queried: string[];
+      registration: { showNotification: unknown; getNotifications: unknown };
+    };
     g.__shown = [];
+    // The notifications still on screen: a repeat tag replaces, `close()` removes.
+    g.__open = [];
+    g.__queried = [];
     g.registration.showNotification = (title: string, o: Record<string, unknown>) => {
       g.__shown.push({ title, body: o.body, tag: o.tag, data: o.data });
+      const tag = String(o.tag);
+      const open: Open = { tag, close: () => void (g.__open = g.__open.filter((n) => n !== open)) };
+      g.__open = [...g.__open.filter((n) => n.tag !== tag), open];
       return Promise.resolve();
+    };
+    g.registration.getNotifications = (filter?: { tag?: string }) => {
+      g.__queried.push(filter?.tag ?? "");
+      return Promise.resolve(g.__open.filter((n) => !filter?.tag || n.tag === filter.tag));
     };
   });
   const shown = () => worker.evaluate(() => (self as unknown as { __shown: Shown[] }).__shown);
+  const onScreen = () => worker.evaluate(() => (self as unknown as { __open: Array<{ tag: string }> }).__open.map((n) => n.tag));
+  const queried = () => worker.evaluate(() => (self as unknown as { __queried: string[] }).__queried);
   const push = async (data: string) => {
     const before = (await shown()).length;
     const origin = new URL(page.url()).origin;
@@ -61,7 +79,14 @@ async function startWorker(page: Page, context: BrowserContext, path = "/app/") 
     await expect.poll(async () => (await shown()).length).toBe(before + 1);
     return (await shown())[before];
   };
-  return { worker, push, shown, workerRequests };
+  /** Deliver a close push and wait until the worker has looked its tag up. */
+  const pushClose = async (data: string) => {
+    const before = (await queried()).length;
+    const origin = new URL(page.url()).origin;
+    await cdp.send("ServiceWorker.deliverPushMessage", { origin, registrationId: registrations[0].registrationId, data });
+    await expect.poll(async () => (await queried()).length).toBe(before + 1);
+  };
+  return { worker, push, pushClose, shown, onScreen, queried, workerRequests };
 }
 
 /** Click a notification carrying `data`; returns what the worker focused, messaged and opened. */
@@ -157,6 +182,45 @@ test("a malformed or unknown push shows the generic fallback", async ({ page, co
     expect(await push(data), data.slice(0, 60)).toEqual({ ...FALLBACK, data: { v: 1, id: "", route: "/app/" } });
   }
   expect(workerRequests).toEqual([]);
+});
+
+test("a close push closes its tag's notification and shows none", async ({ page, context }) => {
+  const { push, pushClose, shown, onScreen, queried, workerRequests } = await startWorker(page, context);
+  const decision = { ...NOTICE, id: "decision-dcn_42", route: "/app/?notice=decision-dcn_42" };
+  expect((await push(JSON.stringify(decision))).tag).toBe("decision-dcn_42");
+  expect((await push(JSON.stringify(NOTICE))).tag).toBe(NOTICE.id);
+  expect(await onScreen()).toEqual(["decision-dcn_42", NOTICE.id]);
+
+  // A close for another tag leaves the decision's notification in place.
+  await pushClose(JSON.stringify({ v: 1, type: "close", tag: "decision-other" }));
+  expect(await onScreen()).toEqual(["decision-dcn_42", NOTICE.id]);
+
+  // A close for its tag closes it, and nothing new is shown.
+  await pushClose(JSON.stringify({ v: 1, type: "close", tag: "decision-dcn_42" }));
+  expect(await onScreen()).toEqual([NOTICE.id]);
+  expect(await queried()).toEqual(["decision-other", "decision-dcn_42"]);
+  expect(await shown()).toHaveLength(2);
+  expect(workerRequests).toEqual([]);
+});
+
+test("a malformed close push shows the generic fallback and closes nothing", async ({ page, context }) => {
+  const { push, onScreen, queried } = await startWorker(page, context);
+  const decision = { ...NOTICE, id: "decision-dcn_42", route: "/app/?notice=decision-dcn_42" };
+  await push(JSON.stringify(decision));
+  const malformed = [
+    JSON.stringify({ v: 1, type: "close" }),
+    JSON.stringify({ v: 1, type: "close", tag: "" }),
+    JSON.stringify({ v: 1, type: "close", tag: 42 }),
+    JSON.stringify({ v: 1, type: "close", tag: ["..", "..", "etc"].join("/") }),
+    JSON.stringify({ v: 2, type: "close", tag: "decision-dcn_42" }),
+    JSON.stringify({ v: 1, type: "dismiss", tag: "decision-dcn_42" }),
+    JSON.stringify({ v: 1, type: "close", tag: "decision-dcn_42", body: "Deploy prod-db now?" }),
+  ];
+  for (const data of malformed) {
+    expect(await push(data), data).toEqual({ ...FALLBACK, data: { v: 1, id: "", route: "/app/" } });
+  }
+  expect(await queried()).toEqual([]);
+  expect(await onScreen()).toEqual(["decision-dcn_42", FALLBACK.tag]);
 });
 
 test("a click focuses the open console window, or opens a known console route", async ({ page, context, baseURL }) => {
