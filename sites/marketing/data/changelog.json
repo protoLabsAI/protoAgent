@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.261.3",
+    "date": "2026-11-24",
+    "changes": [
+      "Push: a close payload lets a phone drop a settled notice's notification without showing a new one (#5779).",
+      "Settled decisions dismiss phone notifications through push (#5780).",
+      "An agent's reply after asking a decision is its own again (#5781)."
+    ]
+  },
+  {
     "version": "v0.261.2",
     "date": "2026-11-24",
     "changes": [
