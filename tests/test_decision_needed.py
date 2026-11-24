@@ -1283,12 +1283,15 @@ async def _agent_turn(thread, message="ship it", *, origin="api-chat", resume=Fa
 @pytest.mark.parametrize("origin", ["api-chat", "scheduler"])
 async def test_request_decision_writes_a_no_pause_record_and_the_turn_completes(store, monkeypatch, origin):
     assert LangGraphConfig().decisions_never_block is False  # the setting is unset
-    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="unused")])
+    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="I asked you about the deploy.")])
     thread, sink = f"a2a:s-nopause:{origin}", {}
     reply = await _agent_turn(thread, origin=origin, sink=sink)
 
-    # One model call, no interrupt on the checkpoint, the turn not parked.
-    assert len(model.seen) == 1
+    # The model replies after the ask (two calls), no interrupt on the checkpoint, not parked.
+    assert len(model.seen) == 2
+    # (This store's frozen clock dates the decision before the turn, so the once-only
+    # reminder may follow; with a real clock the asking turn is never reminded.)
+    assert reply[0]["content"].startswith("I asked you about the deploy.")
     assert sink.get("state") != "input_required"
     assert "Input needed" not in reply[0]["content"]
     snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
@@ -1297,7 +1300,7 @@ async def test_request_decision_writes_a_no_pause_record_and_the_turn_completes(
     assert is_unpaused_decision(rec)
     assert (rec.thread_id, rec.session_id, rec.interrupt_id, rec.question) == (
         thread, "s-nopause", "", "Deploy to prod?")
-    last = snapshot.values["messages"][-1]
+    last = snapshot.values["messages"][-2]
     assert isinstance(last, ToolMessage) and last.content.startswith("Asked, waiting")
 
 
@@ -1308,16 +1311,18 @@ def test_request_decision_is_no_longer_a_pausing_tool_but_stays_lead_only():
     assert "request_decision" not in HITL_TOOL_NAMES
     assert "request_decision" not in _MCP_INCOMPATIBLE
     assert "request_decision" in SUBAGENT_DENIED_TOOLS
-    # Bound return_direct whatever the (now inert) setting says: the ask always ends the turn.
+    # Not return_direct whatever the (now inert) setting says: the model writes the turn's
+    # reply after asking, so the operator never gets one fixed line in its place.
     for never_block in (False, True):
         tool_obj = next(t for t in get_all_tools(graph_config=LangGraphConfig(decisions_never_block=never_block))
                         if t.name == "request_decision")
-        assert tool_obj.return_direct is True
+        assert not tool_obj.return_direct
 
 
 @pytest.mark.asyncio
 async def test_an_open_no_pause_decision_never_holds_an_autonomous_turn(store, monkeypatch):
-    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="Scheduled report done.")])
+    graph, model = _agent_graph(monkeypatch, [
+        _ask_call(), AIMessage(content="I asked you about the deploy."), AIMessage(content="Scheduled report done.")])
     thread = "a2a:s-nopause:held"
     await _agent_turn(thread)
     rec, = store.list(state="pending")
@@ -1329,7 +1334,7 @@ async def test_an_open_no_pause_decision_never_holds_an_autonomous_turn(store, m
     reply = await _agent_turn(thread, "scheduled fire", origin="scheduler")
     assert reply[0]["content"].startswith("Scheduled report done.")
     assert "Input needed" not in reply[0]["content"]
-    assert len(model.seen) == 2
+    assert len(model.seen) == 3
     assert store.get(rec.id).pending  # the decision stays open and answerable
 
 
@@ -1380,10 +1385,10 @@ async def test_open_mode_turn_records_a_no_pause_decision_a_loopback_caller_answ
     auth.install(app, bearer_token=None, api_key="", allowed_origins_raw="")
     assert auth.open_mode()
 
-    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="unused")])
+    graph, model = _agent_graph(monkeypatch, [_ask_call(), AIMessage(content="I asked you about the deploy.")])
     thread, sink = "a2a:s-open", {}
     await _agent_turn(thread, sink=sink, session_id="s-open", principal="open/unknown")
-    assert len(model.seen) == 1 and sink.get("state") != "input_required"
+    assert len(model.seen) == 2 and sink.get("state") != "input_required"
     snapshot = await graph.aget_state({"configurable": {"thread_id": thread}})
     assert not snapshot.next and not snapshot.interrupts  # the turn ended completed
     rec, = store.list(state="pending")

@@ -114,3 +114,33 @@ def test_delivery_claim_lost_after_read_does_not_duplicate_answer(store, monkeyp
     monkeypatch.setattr(store, "undelivered_answers", racing_read)
     assert not notes(graph().invoke({"messages": [HumanMessage("Continue")]},
                                     {"configurable": {"thread_id": THREAD}}))
+
+
+def test_the_call_right_after_an_ask_gets_no_tools_so_it_can_only_reply():
+    """One ask per turn: the model call that follows a successful no-pause ask is made with
+    no tools, so the turn ends on the agent's own reply and can never re-ask in a loop."""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import ToolMessage
+
+    from graph.middleware.decision_context import _reply_only_after_ask
+
+    class _Req(SimpleNamespace):
+        def override(self, **kw):
+            return _Req(**{**self.__dict__, **kw})
+
+    asked = ToolMessage(content="Asked, waiting for the operator's answer (decision dec-1): Ship? ...",
+                        tool_call_id="c1", name="request_decision")
+    call = AIMessage(content="", tool_calls=[{"name": "request_decision", "args": {}, "id": "c1"}])
+    note = HumanMessage(content="A decision you asked the operator is still open.")
+    req = _Req(messages=[HumanMessage(content="ship it"), call, asked, note], tools=["t1", "t2"], tool_choice="auto")
+    narrowed = _reply_only_after_ask(req)
+    assert narrowed.tools == [] and narrowed.tool_choice is None
+
+    # Not after a failed ask, another tool, or once the model has already replied.
+    failed = ToolMessage(content="Error: no thread", tool_call_id="c1", name="request_decision")
+    other = ToolMessage(content="Asked, waiting for the operator's answer (decision x): y", tool_call_id="c2",
+                        name="current_time")
+    for messages in ([call, failed], [other], [call, asked, AIMessage(content="I asked you."),
+                                                HumanMessage(content="what time is it?")]):
+        assert _reply_only_after_ask(_Req(messages=messages, tools=["t1"], tool_choice="auto")).tools == ["t1"]

@@ -170,8 +170,9 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
     # Maintainer notes (kept out of the model-facing docstring): the ask never pauses the
     # turn (#5678 slice 10 removed the old ``interrupt()`` path). The tool writes a no-pause
     # record to the durable decisions ledger (graph/decisions.py: a thread, an empty
-    # interrupt id) and returns "asked, waiting"; ``get_all_tools`` binds a ``return_direct``
-    # copy so the turn ends there, completed. The chat stays free, and the operator's answer
+    # interrupt id) and returns "asked, waiting", which tells the model to end the turn with a
+    # short reply of its own (not return_direct: a fixed fallback line used to replace the
+    # turn's real answer on every ask). The chat stays free, and the operator's answer
     # reaches the agent later as a delivery turn (server/turn_control.py
     # claim_decision_delivery). ``decisions.never_block`` is still declared but no longer
     # read. One legacy seam remains: a decision PAUSED before the upgrade still has a
@@ -182,8 +183,9 @@ def request_decision(question: str, options: list[str | dict], context: str = ""
     Use it when a skill rule forbids proceeding on your own judgment, for a destructive or
     outward-facing step, or for a choice only the operator can make. ``options`` is the list
     of allowed answers — each a short string, or ``{"id", "label", "description"?}``;
-    ``context`` is optional background for the operator. The question is recorded and your
-    turn ends here without blocking the chat; the operator's answer reaches you as a later
+    ``context`` is optional background for the operator. The question is recorded without
+    blocking the chat; then end your turn with a short reply (what you did, what you're
+    asking — the card shows the options). The operator's answer reaches you as a later
     message, so don't ask again or guess meanwhile — only use it for a decision that genuinely
     cannot be made autonomously.
     Pass both ``expires_in_minutes`` (positive) and ``default_option`` (an option id)
@@ -318,7 +320,9 @@ def _record_unpaused_decision(state: Any, question: str, options, **fields) -> s
         return f"Error: {exc}"
     return (f"Asked, waiting for the operator's answer (decision {rec.id}): {rec.question} "
             'Their answer arrives as a later message; do not ask again. Address the operator as "you", '
-            "never by name or in the third person. Never show decision ids in a reply.")
+            "never by name or in the third person. Never show decision ids in a reply. "
+            "End this turn now with no more tool calls: in one or two sentences, tell the operator "
+            "what you did and what you are asking them. The card shows the options; do not list them.")
 
 
 @tool
@@ -1258,9 +1262,10 @@ def get_all_tools(
         fetch_url,
         ask_human,
         request_user_input,
-        # request_decision never pauses (#5678): the ask ends the turn, so bind a
-        # return_direct copy.
-        request_decision.model_copy(update={"return_direct": True}),
+        # request_decision never pauses (#5678). Not return_direct: after the ask the model
+        # writes the turn's reply itself (what it did, what it is asking), so the operator
+        # never gets one fixed line in place of the turn's real answer.
+        request_decision,
         withdraw_decision,
         load_skill,
         show_component,

@@ -784,10 +784,19 @@ def this_turn_messages(result) -> list:
     return list(messages)
 
 
+_ASKED_PREFIX = "Asked, waiting for the operator's answer (decision "
+_ASKED_RE = re.compile(r"^Asked, waiting for the operator's answer \(decision [^)]*\): (?P<q>.*?) Their answer arrives", re.S)
+
+
 def _operator_tool_reply(name: str | None, text: str) -> str:
-    """Keep a successful no-pause ask's model instructions out of the chat reply."""
-    if name == "request_decision" and text.startswith("Asked, waiting for the operator's answer (decision "):
-        return "I've asked you this; answer whenever you're ready."
+    """Keep a successful no-pause ask's model instructions out of the chat reply.
+
+    Only the fallback for a turn whose model wrote no text after asking: the model
+    normally replies itself. Names the question so it never reads as one fixed line."""
+    if name == "request_decision" and text.startswith(_ASKED_PREFIX):
+        m = _ASKED_RE.match(text)
+        question = m.group("q").strip() if m else ""
+        return f"I've asked you: {question}" if question else "I've asked you a question; answer whenever you're ready."
     return text
 
 
