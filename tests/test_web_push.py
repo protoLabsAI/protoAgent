@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from graph.push_transport import PushResult, WebPushProvider
+from graph.push_transport import PushResult, WebPushProvider, build_push_payload
 from infra.paths import reset_instance_paths
 from security import public_console, push_keys
 from security.devices import PushBinding
@@ -217,3 +217,42 @@ def test_unsendable_notices_never_reach_the_service(env):
     assert send(service, browser.binding(), payload(notice_id="free text id")) == PushResult("failed")
     assert send(service, browser.binding(version=99)) == PushResult("failed")  # retired VAPID key
     assert service.requests == []
+
+
+def test_close_request_builds_a_tag_only_close_payload(env):
+    raw = build_push_payload({"type": "close", "tag": "decision-abc"})
+
+    assert raw == b'{"v":1,"type":"close","tag":"decision-abc"}'
+    # Text a caller put beside the close request never leaves the machine.
+    leaky = build_push_payload({
+        "type": "close", "tag": "decision-abc", "title": "Deploy prod-db now?",
+        "body": "token sk-live-secret", "route": "/private/repo/path", "notice_id": "other",
+    })
+    assert leaky == raw
+
+
+@pytest.mark.parametrize("tag", [None, "", 42, "free text id", "../../etc", "-leading-dash", "x" * 129, ["decision-abc"]])
+def test_close_request_with_an_invalid_or_missing_tag_raises(tag):
+    request = {"type": "close"} if tag is None else {"type": "close", "tag": tag}
+    with pytest.raises(ValueError):
+        build_push_payload(request)
+
+
+def test_notice_payload_without_the_close_marker_is_unchanged(env):
+    assert build_push_payload(payload(tag="decision-abc")) == (
+        b'{"v":1,"id":"notice-1","kind":"question","importance":"high",'
+        b'"created_at":' + str(float(NOW - 5)).encode() + b',"expires_at":' + str(float(NOW + 600)).encode()
+        + b',"title":"protoAgent needs your attention","body":"Open the console to view a decision",'
+        b'"route":"/app/?notice=notice-1"}'
+    )
+
+
+def test_close_payload_is_sent_encrypted_to_the_device(env):
+    browser, service = Browser(), Service()
+
+    close = {"type": "close", "tag": "decision-abc", "expires_at": NOW + 600, "importance": "normal"}
+    assert send(service, browser.binding(), close) == PushResult("accepted")
+
+    (request,) = service.requests
+    assert browser.decrypt(request.content) == {"v": 1, "type": "close", "tag": "decision-abc"}
+    assert b"decision-abc" not in request.content

@@ -376,7 +376,19 @@ def build_push_payload(payload: dict) -> bytes:
     Rebuilt from the notice's identity and code-assigned fields ONLY: title, body and
     route are fixed here, so whatever else a caller put in ``payload`` (notice text, a
     link, a token) cannot leave the machine. Raises ``ValueError`` on anything else.
+
+    A close request (``{"type": "close", "tag": "<notice id>"}``) builds the close payload
+    ``{"v": 1, "type": "close", "tag": "<notice id>"}`` instead: the worker closes that
+    notice's notification on the device and shows nothing. It carries the tag only, never
+    text or a link. A payload without the close marker is built exactly as before.
     """
+    if payload.get("type") == "close":
+        tag = payload.get("tag")
+        if not isinstance(tag, str) or not _NOTICE_ID.fullmatch(tag):
+            raise ValueError("close tag is not an opaque notice identifier")
+        return json.dumps(
+            {"v": PAYLOAD_VERSION, "type": "close", "tag": tag}, separators=(",", ":"),
+        ).encode("utf-8")
     notice_id, kind, importance = payload.get("notice_id"), payload.get("kind"), payload.get("importance")
     if not isinstance(notice_id, str) or not _NOTICE_ID.fullmatch(notice_id):
         raise ValueError("notice id is not an opaque identifier")
