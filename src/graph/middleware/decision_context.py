@@ -132,7 +132,8 @@ class DecisionContextMiddleware(AgentMiddleware):
 
     @staticmethod
     def _with_note(request, note):
-        return request if note is None else request.override(messages=[*request.messages, note])
+        request = request if note is None else request.override(messages=[*request.messages, note])
+        return _reply_only_after_ask(request)
 
     def wrap_model_call(self, request, handler):  # type: ignore[override]
         return handler(self._with_note(request, self._open_note()))
@@ -140,3 +141,32 @@ class DecisionContextMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):  # type: ignore[override]
         note = await asyncio.to_thread(self._open_note)
         return await handler(self._with_note(request, note))
+
+
+ASKED_PREFIX = "Asked, waiting for the operator's answer (decision "
+
+
+def _just_asked(messages) -> bool:
+    """Whether the newest tool result is a successful no-pause ``request_decision`` and no
+    model turn has followed it: the call being made now is the one that closes the turn."""
+    for msg in reversed(messages or []):
+        kind = getattr(msg, "type", "")
+        if kind == "tool":
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            return getattr(msg, "name", "") == "request_decision" and content.startswith(ASKED_PREFIX)
+        if kind == "ai":
+            return False
+    return False
+
+
+def _reply_only_after_ask(request):
+    """Right after a successful ask, call the model with no tools so it can only write the
+    turn's closing reply: one ask per turn, never a loop of repeated asks, and the operator
+    sees the agent's own words rather than a fixed line (the tool is not return_direct)."""
+    try:
+        if not _just_asked(request.messages):
+            return request
+        return request.override(tools=[], tool_choice=None)
+    except Exception:  # noqa: BLE001 — never fail a model call over this guard
+        logger.warning("Could not narrow the post-ask model call", exc_info=True)
+        return request
