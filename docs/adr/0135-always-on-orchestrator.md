@@ -268,6 +268,25 @@ member/repository names, file paths, credentials, subscription secrets or absolu
 private hub URL. Lock screens show generic copy. The worker accepts only known
 same-origin routes, never arbitrary destinations or executable action commands.
 
+When a hub decision becomes answered, cancelled, expired or withdrawn, the hub
+queues a best-effort close push: `{"v":1,"type":"close","tag":"decision-<id>"}`.
+These are the only wire fields: no text, route or decision content leaves the
+machine. The worker closes matching notification tags without showing a new
+notification. Close attempts have a separate `close:<tag>` ledger identity and a
+durable close marker, bypass prompt eligibility and the initial push delay, and
+expire after 24 hours. Pending original prompts still check authoritative decision
+state before sending, including retries. A transport failure cannot undo the
+decision write; members without an active hub transport do not enqueue closes.
+
+iOS Safari requires every Web Push to display a notification and may revoke a
+subscription for silent pushes. The sender therefore skips close pushes for Apple
+endpoints (any host in the `*.push.apple.com` zone that the push-host policy in
+`security/push_keys.py` accepts), rather than showing a blank or confusing notice.
+The fallback on those devices is the existing console-side close when the console
+next opens; automatic dismissal with the console closed is unavailable there.
+Other browsers may apply their own background-push policy or display a generic
+browser-generated background-update notice; delivery is not a dismissal guarantee.
+
 Clicking fetches the current authoritative record after authentication; push
 does not grant approval or answer from the lock screen. Answered, expired,
 withdrawn and cancelled decisions get their real terminal presentation and no
