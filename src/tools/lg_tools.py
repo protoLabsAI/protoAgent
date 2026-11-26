@@ -715,6 +715,19 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     if blocked:
         return blocked
 
+    from runtime.state import STATE
+
+    provider = str(getattr(STATE.graph_config, "web_extract_provider", "") or "none").strip().lower()
+    if provider != "none":
+        from tools.web_providers import provider_extract
+
+        try:
+            markdown = await provider_extract(provider, url)
+        except Exception as e:  # noqa: BLE001 — provider failures must preserve plain fetch
+            log.warning("fetch_url: %s extraction failed (%s); falling back to plain fetch", provider, e)
+        else:
+            return _format_fetch_output(markdown, url, 200, max_chars)
+
     try:
         import httpx
     except ImportError:
@@ -778,6 +791,11 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
         except LookupError:
             text = content.decode("utf-8", errors="replace")
 
+    return _format_fetch_output(text, url, resp.status_code, max_chars)
+
+
+def _format_fetch_output(text: str, url: str, status_code: int, max_chars: int) -> str:
+    """Apply the same output budget to plain text and provider markdown."""
     text = text.strip()
     if len(text) > max_chars:
         # Say how much was cut and how to get the rest. A bare "[truncated]" lets the
@@ -788,7 +806,7 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
             "re-call with a larger max_chars to read the rest]"
         )
 
-    return f"[{resp.status_code}] {url}\n\n{text}"
+    return f"[{status_code}] {url}\n\n{text}"
 
 
 def _extract_text_from_html(content: bytes) -> str:

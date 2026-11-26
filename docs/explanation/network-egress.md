@@ -52,12 +52,28 @@ None of these run on a fresh install; each starts only once you set the config n
 ## Because you (or the agent) asked
 
 Chat turns go to your model gateway, or to Anthropic/OpenAI directly when you sign in with
-OAuth (tokens refresh against their OAuth endpoints on use). `web_search` queries DuckDuckGo;
+OAuth (tokens refresh against their OAuth endpoints on use). `web_search` queries DuckDuckGo by default;
 `fetch_url`, ingestion and YouTube transcripts fetch what was asked for. Plugin installs clone
 from the URL you give; *install deps* pulls from PyPI; runtime installs download Node from
 `nodejs.org` or Python from `astral-sh/python-build-standalone`. A2A push notifications go to
 the URL the caller supplied. The scheduler and background tasks only call this agent's own
 loopback `/a2a`.
+
+Optional web providers contact the following hosts only when that provider is configured
+and the corresponding tool runs:
+
+| Destination | Search (`web.search_provider`) | Extraction (`web.extract_provider`) |
+|---|---|---|
+| `api.tavily.com` | `tavily` | `tavily` |
+| `api.firecrawl.dev` | `firecrawl` | `firecrawl` |
+| The configured SearXNG host (`web.searxng_url`) | `searxng` | Not supported |
+
+Provider keys come only from `TAVILY_API_KEY` / `FIRECRAWL_API_KEY` environment
+variables. Never put keys in the config file. Extraction defaults to `none`:
+`fetch_url` fetches the target directly. Configured extraction sends the target URL
+to the provider after the target passes the egress check; provider hosts also pass
+the configured egress allowlist. Failed extraction falls back to direct fetching,
+and failed search falls back to DuckDuckGo.
 
 The plugin, MCP and archetype catalogs are local files shipped with the release; browsing
 them fetches nothing. No bundled plugin or default config starts an MCP server.
