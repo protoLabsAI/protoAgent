@@ -1527,6 +1527,14 @@ FIELDS: list[Field] = [
     Field("decisions.never_block", "decisions_never_block", "Ask decisions without pausing", "bool", "Decisions",
           description="No longer has an effect: a decision the agent asks is always saved and the turn ends, "
                       "so the chat stays free for any message."),
+    Field("web.search_provider", "web_search_provider", "Search provider", "select", "Web",
+          options=["duckduckgo", "tavily", "firecrawl", "searxng"],
+          description="Web search provider selection. Tool integration is pending."),
+    Field("web.searxng_url", "web_searxng_url", "SearXNG URL", "string", "Web",
+          description="Base URL of your self-hosted SearXNG instance."),
+    Field("web.extract_provider", "web_extract_provider", "Extract provider", "select", "Web",
+          options=["none", "firecrawl", "tavily"],
+          description="Page extraction provider selection. Tool integration is pending. Keep API keys in environment variables."),
     Field("spend_cap.enabled", "spend_cap_enabled", "Cap unattended spend", "bool", "Spend cap",
           description="Pause all unattended turns at either daily hard limit until an operator answers the decision."),
     Field("spend_cap.daily_cost_hard_limit", "spend_cap_daily_cost_hard_limit", "Daily cost hard limit (USD)",
@@ -2678,6 +2686,8 @@ _SECTION_CATEGORY = {
     "MCP": "Capabilities",
     "Filesystem": "Capabilities",
     "Tools": "Capabilities",
+    # Provider choices use the existing schema-driven Behavior panel.
+    "Web": "Behavior",
     # Project onboarding (#2555) — operator-consented clone+register space.
     "Project onboarding": "Capabilities",
     # Knowledge — recall / RAG config, split into sub-sections (see _KNOWLEDGE_SUBSECTION).

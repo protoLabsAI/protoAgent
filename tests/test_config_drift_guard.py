@@ -228,6 +228,9 @@ FROM_DICT_UNCONSUMED_KEYS: set[str] = set()
 # Keys whose value from_dict VALIDATES (and refuses), so the generic sentinel would raise
 # rather than round-trip. Each maps to a valid, non-default value in its canonical form.
 _VALIDATED_SENTINELS: dict[str, object] = {
+    # Web providers reject unknown names; exercise consumption with supported choices.
+    "web.search_provider": "searxng",
+    "web.extract_provider": "firecrawl",
     # ADR 0128: named profiles must be mappings of supported generation settings.
     "model.profiles": {"__drift__": {"max_tokens": 1234}},
     "subagents": {"__drift__": {"profile": "lane"}},

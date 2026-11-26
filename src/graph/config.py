@@ -1322,6 +1322,11 @@ class LangGraphConfig:
     tools_deferred_enabled: bool = False
     tools_deferred_keep: list[str] = field(default_factory=list)
 
+    # Provider selection only; web tools wire these settings in later slices.
+    web_search_provider: str = "duckduckgo"
+    web_searxng_url: str = ""
+    web_extract_provider: str = "none"
+
     # Skip re-executing an allowlisted read call when this turn's history already
     # has an up-to-date result for the identical (tool, project, path). Found via a
     # live-session audit: `read_file` on the same file, called twice non-
@@ -2560,6 +2565,17 @@ class LangGraphConfig:
 
         plugin_config = _resolve_plugin_config(data, secrets, config_dir) if _plugin_config is None else _plugin_config
         model = data.get("model", {})
+        web = _mapping(data.get("web"), "web")
+        web_providers = {}
+        for key, choices, default in (
+            ("search_provider", ("duckduckgo", "tavily", "firecrawl", "searxng"), cls.web_search_provider),
+            ("extract_provider", ("none", "firecrawl", "tavily"), cls.web_extract_provider),
+        ):
+            value = web.get(key, default)
+            if value not in choices:
+                log.warning("web.%s: unknown provider %r — using %s", key, value, default)
+                value = default
+            web_providers[key] = value
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
         knowledge = data.get("knowledge", {})
@@ -2688,6 +2704,9 @@ class LangGraphConfig:
                 data.get("compaction", {}).get("model", cls.compaction_model), cls.compaction_model
             ),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
+            web_search_provider=web_providers["search_provider"],
+            web_searxng_url=web.get("searxng_url", cls.web_searxng_url),
+            web_extract_provider=web_providers["extract_provider"],
             tools_deferred_keep=_migrate_tools(
                 data.get("tools", {}).get("deferred", {}).get("keep", []), "tools.deferred.keep"
             ),

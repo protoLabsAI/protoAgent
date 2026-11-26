@@ -419,6 +419,30 @@ tools:
 
 Every tool remains **executable** even while deferred — `create_agent` registers all executors; deferral only trims what the model *sees* per turn. The agent loads tools by calling `search_tools("github pull request")`; matches stay available for the rest of the thread. Leave off unless you have a large catalog (e.g. a chatty MCP server) — for a handful of tools it adds a discovery hop for no benefit.
 
+## `web`
+
+Provider selections are available in Settings under **Behavior → Web** and persist in YAML.
+This release adds settings only; `web_search` and `fetch_url` continue using their
+existing behavior until provider integration ships.
+
+```yaml
+web:
+  search_provider: duckduckgo
+  searxng_url: ""
+  extract_provider: none
+```
+
+| Setting | Default | Values / meaning |
+| --- | --- | --- |
+| `web.search_provider` | `duckduckgo` | `duckduckgo`, `tavily`, `firecrawl`, or `searxng` |
+| `web.searxng_url` | `""` | Base URL of a self-hosted SearXNG instance, e.g. `http://localhost:8888` |
+| `web.extract_provider` | `none` | `none`, `firecrawl`, or `tavily`; `none` keeps plain HTTP fetching |
+
+Unknown provider values log a warning and fall back to the defaults above.
+Set `TAVILY_API_KEY` and `FIRECRAWL_API_KEY` in the runtime environment for the
+respective providers; later tool integrations will read them there. **Never put
+keys in the config file.** There are no web API key settings.
+
 ## `settings`
 
 **Hide settings from the console** — the settings half of `tools.hidden` (#2172,

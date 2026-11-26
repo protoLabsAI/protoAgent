@@ -385,6 +385,9 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "thinking": "",
     "tools_deferred_enabled": False,
     "tools_deferred_keep": [],
+    "web_search_provider": "duckduckgo",
+    "web_searxng_url": "",
+    "web_extract_provider": "none",
     "tools_fleet_diagnostics_enabled": False,
     "tools_fleet_demo_enabled": False,
     "tools_fleet_demo_max_live": 3,
@@ -418,6 +421,39 @@ def _write_yaml(dir_path: Path, body: str, *, secrets: str | None = None) -> str
 # ---------------------------------------------------------------------------
 # (a) Golden field map for the shipped example config
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("web", [
+    None,
+    {"search_provider": "searxng", "searxng_url": "http://localhost:8888", "extract_provider": "firecrawl"},
+    {"search_provider": "tavily", "searxng_url": "", "extract_provider": "tavily"},
+    {"search_provider": "firecrawl", "searxng_url": "", "extract_provider": "none"},
+])
+def test_web_settings_load_and_round_trip(tmp_path, web):
+    expected = web if web is not None else {
+        "search_provider": "duckduckgo", "searxng_url": "", "extract_provider": "none",
+    }
+    path = tmp_path / "langgraph-config.yaml"
+    save_yaml_doc({"web": web} if web is not None else {}, path)
+    cfg = LangGraphConfig.from_yaml(str(path))
+    assert {key: getattr(cfg, f"web_{key}") for key in expected} == expected
+    emitted = config_to_dict(cfg)
+    assert emitted["web"] == expected
+    doc = {}
+    apply_updates_to_yaml(doc, emitted)
+    save_yaml_doc(doc, path)
+    assert config_to_dict(LangGraphConfig.from_yaml(str(path)))["web"] == expected
+
+
+@pytest.mark.parametrize("key,default", [
+    ("search_provider", "duckduckgo"), ("extract_provider", "none"),
+])
+def test_unknown_web_provider_falls_back_with_warning(key, default, caplog):
+    cfg = LangGraphConfig.from_dict({"web": {key: "unknown-provider"}})
+    assert getattr(cfg, f"web_{key}") == default
+    assert f"web.{key}" in caplog.text
+    assert "unknown-provider" in caplog.text
+    assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
 def test_from_yaml_example_golden(monkeypatch):
