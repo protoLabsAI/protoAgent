@@ -161,6 +161,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_run_requires_approval": True,
     "filesystem_run_auto_approve": [],
     "filesystem_run_command_env_passthrough": [],
+    "filesystem_compact_command_output": True,
+    "filesystem_compact_command_output_threshold": 8000,
     "fleet_member_restart_enabled": False,
     # Unattended approval policy (ADR 0124 D5): the example ships no `unattended:` section,
     # so every tier is empty and the default (deny) holds.
@@ -1557,3 +1559,21 @@ def test_push_all_notices_setting_roundtrip(tmp_path):
     assert LangGraphConfig.from_yaml(str(path)).push_all_notices is True
     (field,) = [f for f in FIELDS if f.key.startswith("push.")]
     assert (field.label, field.type, field.section, field.ui_hidden) == ("Push every notice", "bool", "Notifications", False)
+
+
+@pytest.mark.parametrize("filesystem,enabled,threshold", [
+    ({}, True, 8000),
+    ({"compact_command_output": False, "compact_command_output_threshold": 2000}, False, 2000),
+    *[({"compact_command_output_threshold": value}, True, 8000)
+      for value in (0, -1, "2000", "invalid", 1.5, True, None)],
+    ({"compact_command_output_threshold": 1}, True, 1),
+])
+def test_command_output_compaction_config(tmp_path, filesystem, enabled, threshold):
+    path = tmp_path / "langgraph-config.yaml"
+    save_yaml_doc({"filesystem": filesystem} if filesystem else {}, path)
+    cfg = LangGraphConfig.from_yaml(str(path))
+    assert cfg.filesystem_compact_command_output is enabled
+    assert cfg.filesystem_compact_command_output_threshold == threshold
+    emitted = config_to_dict(cfg)["filesystem"]
+    assert emitted["compact_command_output"] is enabled
+    assert emitted["compact_command_output_threshold"] == threshold

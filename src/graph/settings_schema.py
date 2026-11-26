@@ -1409,6 +1409,28 @@ FIELDS: list[Field] = [
         depends_on={"key": "filesystem.allow_run"},
     ),
     Field(
+        "filesystem.compact_command_output",
+        "filesystem_compact_command_output",
+        "Compact command output",
+        "bool",
+        "Filesystem",
+        "Compact long successful run_command output: strip ANSI codes, collapse repeated "
+        "lines, and keep a head and tail. Failing commands are never compacted. "
+        "The full output is saved to a spill file named in the output.",
+        depends_on={"key": "filesystem.allow_run"},
+    ),
+    Field(
+        "filesystem.compact_command_output_threshold",
+        "filesystem_compact_command_output_threshold",
+        "Command output threshold (characters)",
+        "number",
+        "Filesystem",
+        "Output at or below this length is returned unchanged. Must be a positive integer; "
+        "invalid values fall back to 8000 characters.",
+        minimum=1,
+        depends_on={"key": "filesystem.compact_command_output"},
+    ),
+    Field(
         "filesystem.editor_command",
         "filesystem_editor_command",
         "Open-in-editor command",
