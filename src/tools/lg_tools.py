@@ -525,7 +525,7 @@ async def calculator(expression: str) -> str:
     return f"{expression} = {result}"
 
 
-# ── web_search (DuckDuckGo) ──────────────────────────────────────────────────
+# ── web_search (DuckDuckGo + configured provider) ────────────────────────────
 
 # ddgs signals a throttled/failing backend with the SAME ``DDGSException('No results
 # found.')`` it raises for a genuinely empty result, so a single failed call can't tell
@@ -550,14 +550,70 @@ def _ddgs_supports_backend(text_method) -> bool:
     return any(p.name == "backend" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
+def _format_search_results(query: str, results: list) -> str:
+    """Render search rows as ``N result(s) for 'q':`` + ``N. title — url`` + indented snippet."""
+    if not results:
+        # A search actually COMPLETED and came back empty — the one true "miss".
+        return f"No results for {query!r}."
+    lines = [f"{len(results)} result(s) for {query!r}:"]
+    for i, r in enumerate(results, 1):
+        title = (r.get("title") or "").strip() or "(no title)"
+        url = (r.get("href") or r.get("url") or "").strip()
+        body = (r.get("body") or "").strip()
+        lines.append(f"{i}. {title} — {url}")
+        if body:
+            lines.append(f"   {body}")
+    return "\n".join(lines)
+
+
+def _configured_search_provider() -> tuple[str, str]:
+    """``(web.search_provider, web.searxng_url)`` from the live config; DuckDuckGo when unset."""
+    from runtime.state import STATE
+
+    cfg = STATE.graph_config
+    provider = str(getattr(cfg, "web_search_provider", "") or "duckduckgo").strip().lower()
+    return provider, str(getattr(cfg, "web_searxng_url", "") or "")
+
+
 @tool
 @with_fallback()
 async def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web (DuckDuckGo); returns numbered ``title — url`` + snippet results.
+    """Search the web; returns numbered ``title — url`` + snippet results.
 
     ``max_results`` 1–10. Rate-limited — don't hammer. Use ``fetch_url`` to read a result.
     """
     max_results = max(1, min(max_results, 10))
+    provider, searxng_url = _configured_search_provider()
+    if provider == "duckduckgo":
+        return await _duckduckgo_search(query, max_results)
+
+    from tools.web_providers import PROVIDER_LABELS, WebProviderError, provider_search
+
+    label = PROVIDER_LABELS.get(provider, provider)
+    try:
+        rows = await provider_search(provider, query, max_results, searxng_url=searxng_url)
+    except WebProviderError as e:
+        provider_reason = e.reason
+    except Exception as e:  # noqa: BLE001 — any provider crash falls back, never reads as empty
+        provider_reason = str(e).strip() or type(e).__name__
+    else:
+        return _format_search_results(query, rows)
+
+    log.warning("web_search: %s failed (%s); falling back to DuckDuckGo", label, provider_reason)
+    ddg = await _duckduckgo_search(query, max_results)
+    if ddg.startswith("Error"):
+        # Same load-bearing "Error:" prefix as the DuckDuckGo paths below: a failed search
+        # must never be audited as a success or read as an empty result.
+        ddg_reason = ddg.removeprefix("Error:").strip()
+        return (
+            f"Error: web search via {label} (web.search_provider={provider}) failed: {provider_reason}; "
+            f"the DuckDuckGo fallback also failed: {ddg_reason}"
+        )
+    return f"{ddg}\n(answered by DuckDuckGo — the configured provider {label} failed: {provider_reason})"
+
+
+async def _duckduckgo_search(query: str, max_results: int) -> str:
+    """The keyless ``ddgs`` path: two attempts, never collapsing a failure into "No results"."""
     try:
         from ddgs import DDGS
     except ImportError:
@@ -631,19 +687,7 @@ async def web_search(query: str, max_results: int = 5) -> str:
             "this is NOT an empty result — retry later."
         )
 
-    if not results:
-        # A search actually COMPLETED and came back empty — the one true "miss".
-        return f"No results for {query!r}."
-
-    lines = [f"{len(results)} result(s) for {query!r}:"]
-    for i, r in enumerate(results, 1):
-        title = (r.get("title") or "").strip() or "(no title)"
-        url = (r.get("href") or r.get("url") or "").strip()
-        body = (r.get("body") or "").strip()
-        lines.append(f"{i}. {title} — {url}")
-        if body:
-            lines.append(f"   {body}")
-    return "\n".join(lines)
+    return _format_search_results(query, results)
 
 
 # ── fetch_url ────────────────────────────────────────────────────────────────
