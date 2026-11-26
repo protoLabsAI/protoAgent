@@ -43,6 +43,7 @@ from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
 from graph.multimodal import multimodal_tool_result
+from tools import command_output as _command_output
 from infra.proc import child_env, detached_kwargs, scrub_agent_env
 from tools.fs_view import split_lines
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
@@ -1165,6 +1166,25 @@ def _memoized_read(state, project: str, path: str, offset: int, limit: int, limi
     return last_content
 
 
+def _compact_run_output(body: str, threshold: int) -> str | None:
+    """Spill ``body`` in full, then return its compacted form naming the spill path.
+
+    Returns None when the spill write fails, so the caller falls back to the
+    uncompacted output — compaction must never fail the tool call (#5784).
+    """
+    try:
+        spill_path = _command_output.write_spill(body)
+    except Exception as exc:  # noqa: BLE001 — any spill failure falls back to today's output
+        log.debug("[fs] run_command output spill failed; returning uncompacted output: %s", exc)
+        return None
+    compacted = _command_output.compact_output(body, threshold=min(threshold, _MAX_READ_CHARS), spill_path=spill_path)
+    if spill_path not in compacted:
+        # Cleaning alone brought it under the threshold, so no omission marker was
+        # added — still tell the agent where the original output lives.
+        compacted += f"\n[output compacted; full output saved to {spill_path}]"
+    return compacted
+
+
 def build_fs_tools(config) -> list:
     """Build the fenced filesystem tools from config. Empty list when no valid
     projects are registered (so the primitive is inert by default)."""
@@ -1212,6 +1232,12 @@ def build_fs_tools(config) -> list:
     auto_approve_rules = compile_auto_approve(getattr(config, "filesystem_run_auto_approve", None)) if allow_run else []
     # Names an operator re-admits into run_command's otherwise-scrubbed env (see below).
     run_env_passthrough = tuple(getattr(config, "filesystem_run_command_env_passthrough", None) or ())
+    # Long output of a SUCCESSFUL run is compacted (#5784); the full body goes to a spill file
+    # the marker names. getattr defaults keep older config objects working.
+    compact_output_enabled = bool(getattr(config, "filesystem_compact_command_output", True))
+    compact_threshold = getattr(config, "filesystem_compact_command_output_threshold", 8000)
+    if not isinstance(compact_threshold, int) or isinstance(compact_threshold, bool) or compact_threshold <= 0:
+        compact_threshold = 8000
 
     def _mode(p: Project) -> str:
         if not p.write:
@@ -1993,6 +2019,12 @@ def build_fs_tools(config) -> list:
             body = res.stdout or "(no output)"
             if res.stderr:
                 body += f"\n[stderr]\n{res.stderr}"
+            # Never compact a failing command (#5784): the operator and the model need the
+            # full error output. Only a clean exit with long output is compacted.
+            if res.returncode == 0 and compact_output_enabled and len(body) > compact_threshold:
+                compacted = _compact_run_output(body, compact_threshold)
+                if compacted is not None:
+                    return marker + compacted
             return marker + body[:_MAX_READ_CHARS] + (f"\n(exit {res.returncode})" if res.returncode else "")
 
         tools.append(run_command)

@@ -31,6 +31,8 @@ class _Cfg:
     filesystem_projects: list = field(default_factory=list)
     tools_memoize_reads_enabled: bool = False
     filesystem_run_command_env_passthrough: list = field(default_factory=list)
+    filesystem_compact_command_output: bool = True
+    filesystem_compact_command_output_threshold: int = 8000
 
 
 @pytest.fixture
@@ -2359,3 +2361,124 @@ def test_search_files_eight_queries_is_allowed_and_an_empty_list_falls_back_to_q
 
 def test_search_files_description_mentions_queries(multi_search):
     assert "queries" in multi_search.description
+
+
+# ── run_command output compaction (#5784) ─────────────────────────────────────
+
+
+def _compact_tools(a, **over):
+    return _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+            filesystem_compact_command_output_threshold=over.pop("threshold", 500),
+            **over,
+        )
+    )
+
+
+def _noisy_script(project_dir, *, exit_code: int = 0, lines: int = 400) -> str:
+    """A script printing ANSI-coloured, repeated progress lines; returns its command."""
+    import sys
+
+    (project_dir / "noisy.py").write_text(
+        "import sys\n"
+        "print('\\x1b[32mstarting\\x1b[0m')\n"
+        f"for i in range({lines}):\n"
+        "    print(f'\\x1b[33mdownloading chunk {i}\\x1b[0m')\n"
+        "print('\\x1b[1mall done\\x1b[0m')\n"
+        f"sys.exit({exit_code})\n"
+    )
+    return f'"{sys.executable}" noisy.py'
+
+
+def _expected_today(body: str, code: int) -> str:
+    return body[:50_000] + (f"\n(exit {code})" if code else "")
+
+
+@pytest.fixture
+def spill_dir(tmp_path, monkeypatch):
+    d = tmp_path / "spills"
+    monkeypatch.setattr("tools.command_output._spill_dir", lambda: d)
+    return d
+
+
+def _raw_output(project_dir, command: str) -> str:
+    """The same command's body as today's run_command builds it (compaction off)."""
+    t = _compact_tools(project_dir, filesystem_compact_command_output=False)
+    return asyncio.run(t["run_command"].ainvoke({"project": "a", "command": command}))
+
+
+def test_run_command_compacts_long_successful_output_and_spills_it(workspace, spill_dir):
+    _, a, _ = workspace
+    cmd = _noisy_script(a)
+    raw = _raw_output(a, cmd)
+    assert "\x1b[" in raw and len(raw) > 500
+    out = asyncio.run(_compact_tools(a)["run_command"].ainvoke({"project": "a", "command": cmd}))
+    assert "\x1b" not in out
+    assert "repeated 400 times" in out
+    assert len(out) < len(raw)
+    spills = list(spill_dir.glob("cmd-*.txt"))
+    assert len(spills) == 1
+    assert str(spills[0].resolve()) in out  # the marker names the spill file
+    assert spills[0].read_bytes() == raw.encode("utf-8")  # full original output, byte-for-byte
+
+
+def test_run_command_never_compacts_a_failing_command(workspace, spill_dir):
+    _, a, _ = workspace
+    cmd = _noisy_script(a, exit_code=1)
+    out = asyncio.run(_compact_tools(a)["run_command"].ainvoke({"project": "a", "command": cmd}))
+    assert out.endswith("\n(exit 1)")
+    assert "\x1b[33mdownloading chunk 399" in out  # uncompacted, ANSI intact
+    assert out == _raw_output(a, cmd)
+    assert not spill_dir.exists() or not list(spill_dir.iterdir())
+
+
+def test_run_command_short_output_is_unchanged(workspace, spill_dir):
+    _, a, _ = workspace
+    cmd = _noisy_script(a, lines=3)
+    raw = _raw_output(a, cmd)
+    out = asyncio.run(_compact_tools(a, threshold=8000)["run_command"].ainvoke({"project": "a", "command": cmd}))
+    assert out == raw and "\x1b[" in out
+    assert not spill_dir.exists() or not list(spill_dir.iterdir())
+
+
+def test_run_command_compaction_disabled_is_unchanged(workspace, spill_dir):
+    _, a, _ = workspace
+    cmd = _noisy_script(a)
+    t = _compact_tools(a, filesystem_compact_command_output=False)
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": cmd}))
+    assert "\x1b[33mdownloading chunk 399" in out and "repeated" not in out
+    assert out == _expected_today(out, 0)
+    assert not spill_dir.exists() or not list(spill_dir.iterdir())
+
+
+def test_run_command_spill_failure_returns_uncompacted_output(workspace, monkeypatch):
+    _, a, _ = workspace
+    cmd = _noisy_script(a)
+    raw = _raw_output(a, cmd)
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("tools.command_output.write_spill", boom)
+    out = asyncio.run(_compact_tools(a)["run_command"].ainvoke({"project": "a", "command": cmd}))
+    assert out == raw
+
+
+def test_run_command_compaction_tolerates_old_config_objects(workspace, spill_dir):
+    """A config without the #5784 fields defaults to compaction ON at 8000 chars."""
+    _, a, _ = workspace
+
+    @dataclass
+    class _OldCfg:
+        filesystem_enabled: bool = True
+        filesystem_allow_run: bool = True
+        filesystem_run_requires_approval: bool = False
+        filesystem_projects: list = field(default_factory=list)
+
+    cmd = _noisy_script(a, lines=3)
+    t = _tools(_OldCfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": cmd}))
+    assert "starting" in out and "\x1b[" in out  # short output: unchanged
