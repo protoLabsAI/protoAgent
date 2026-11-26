@@ -1,0 +1,1 @@
+- **Web provider settings.** Add search provider, SearXNG URL, and extraction provider settings in YAML and Settings, defaulting to DuckDuckGo and no extraction provider. Unknown providers warn and fall back to defaults; tool integration follows in later slices. Provider keys belong in environment variables, never config. Refs #5783.
