@@ -666,9 +666,48 @@ carries your own earlier instruction to yourself, never a new approval.
 - Keep exact identifiers (PR and issue numbers, branch names, versions, paths, ids).
 - Be concise everywhere except the quotes."""
 
+#: Extra rules for a scheduled job's own ``job:<uuid>`` thread (#5786). Each run re-reads
+#: these notes, so anything written as a rule here becomes one: the agent's own improvised
+#: searches and earlier conclusions must stay history, and only the job prompt (plus the
+#: operator's own words) may stand as an instruction.
+_JOB_THREAD_RULES = """This is a scheduled job's own thread. Extra rules for it:
+- The only standing instruction is the job prompt: the text of the latest SYSTEM-GENERATED scheduler \
+wake. Under STANDING INSTRUCTIONS & APPROVALS write only that prompt, quoted verbatim, plus any \
+instruction from an OPERATOR line.
+- Your own earlier actions (searches, queries, filters, contact or item lists) and conclusions from \
+earlier runs (for example "X hasn't replied") go under STATE & DECISIONS as dated history. Never put \
+them under STANDING INSTRUCTIONS & APPROVALS, COMMITMENTS or PENDING ACTIONS, and never phrase them \
+as rules ("keep", "always", "continue to").
+- PENDING ACTIONS lists only waits, watches, schedules or delegations still armed.
+- If your previous notes list such self-made items as standing instructions, commitments or pending \
+actions, carry them forward but move them to STATE & DECISIONS as history.
+- NEXT STEPS must say to re-check the source of truth (tracker, store, inbox) before reporting \
+anything as still open."""
 
-def build_prompt(transcript_chunk: str, running_summary: str = "", *, part: int = 1, parts: int = 1) -> str:
-    """The continuation prompt for one chunk of the span, folding into ``running_summary``."""
+
+def is_job_session(session_id: str) -> bool:
+    """Whether ``session_id`` is a scheduled job's execution thread (ADR 0129): ``job:<uuid>``,
+    or that segment right after one transport prefix (``a2a:job:<uuid>``) — the same match
+    ``middleware.compaction._is_system_thread`` uses for job threads."""
+    sid = str(session_id or "")
+    if sid.startswith("job:"):
+        return True
+    head, sep, rest = sid.partition(":")
+    return bool(sep and head and rest.startswith("job:"))
+
+
+def build_prompt(
+    transcript_chunk: str,
+    running_summary: str = "",
+    *,
+    part: int = 1,
+    parts: int = 1,
+    job_thread: bool = False,
+) -> str:
+    """The continuation prompt for one chunk of the span, folding into ``running_summary``.
+
+    ``job_thread`` adds :data:`_JOB_THREAD_RULES` for a scheduled job's own thread; when
+    false the prompt is exactly the chat-thread prompt."""
     sections = "\n".join(f"## {h}\n({_SECTION_GUIDE[h]})" for h in SECTION_HEADINGS)
     previous = ""
     if running_summary.strip():
@@ -679,10 +718,12 @@ def build_prompt(transcript_chunk: str, running_summary: str = "", *, part: int 
             f"<previous_notes>\n{running_summary.strip()}\n</previous_notes>"
         )
     where = f"part {part} of {parts}, oldest first" if parts > 1 else "oldest first"
+    job_rules = f"{_JOB_THREAD_RULES}\n\n" if job_thread else ""
     return (
         f"{_PROMPT_HEAD}{previous}\n\n"
         f"The conversation being compacted ({where}):\n<transcript>\n{transcript_chunk}\n</transcript>\n\n"
         f"{_PROMPT_RULES}\n\n"
+        f"{job_rules}"
         "Write exactly these sections, in this order, each heading on its own line as shown. Under a "
         'section with nothing in it, write "None".\n\n'
         f"{sections}"
@@ -723,12 +764,14 @@ def _window_ceiling_chars(budget: int) -> int:
     return max(budget, int(budget / _CHUNK_WINDOW_SHARE))
 
 
-def _chunks_for(blocks: list[str], budget: int, running: str, *, part: int = 1) -> list[list[str]]:
+def _chunks_for(
+    blocks: list[str], budget: int, running: str, *, part: int = 1, job_thread: bool = False
+) -> list[list[str]]:
     # The running notes ride every call, so the transcript gets what is left of the budget.
     # Bound the part-count digits before planning; even one character per remaining
     # chunk cannot exceed this count. Include the previous-notes framing as well.
     parts_bound = part + sum(map(len, blocks))
-    framing = len(build_prompt("", running, part=part, parts=parts_bound))
+    framing = len(build_prompt("", running, part=part, parts=parts_bound, job_thread=job_thread))
     room = budget - framing
     if room < _MIN_CHUNK_CHARS:
         # The running notes have outgrown the conservative chunk budget (~45% of the
@@ -777,10 +820,13 @@ def summarize_span(
     running = seed
     if not blocks:
         return with_operator_block(running, block)
+    job_thread = is_job_session(session_id)
     part = 1
     while blocks:
-        chunks = _chunks_for(blocks, budget, running, part=part)
-        prompt = build_prompt("\n\n".join(chunks[0]), running, part=part, parts=part + len(chunks) - 1)
+        chunks = _chunks_for(blocks, budget, running, part=part, job_thread=job_thread)
+        prompt = build_prompt(
+            "\n\n".join(chunks[0]), running, part=part, parts=part + len(chunks) - 1, job_thread=job_thread
+        )
         running = _clean(summarize(prompt))
         blocks = [piece for group in chunks[1:] for piece in group]
         part += 1
@@ -802,10 +848,13 @@ async def asummarize_span(
     running = seed
     if not blocks:
         return with_operator_block(running, block)
+    job_thread = is_job_session(session_id)
     part = 1
     while blocks:
-        chunks = _chunks_for(blocks, budget, running, part=part)
-        prompt = build_prompt("\n\n".join(chunks[0]), running, part=part, parts=part + len(chunks) - 1)
+        chunks = _chunks_for(blocks, budget, running, part=part, job_thread=job_thread)
+        prompt = build_prompt(
+            "\n\n".join(chunks[0]), running, part=part, parts=part + len(chunks) - 1, job_thread=job_thread
+        )
         running = _clean(await summarize(prompt))
         blocks = [piece for group in chunks[1:] for piece in group]
         part += 1

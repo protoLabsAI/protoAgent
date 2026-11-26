@@ -2686,7 +2686,12 @@ class LocalScheduler:
         elif is_goal_run:
             wake_header = "[Autonomous wake — driving your active goal. Orient from <working_state>, then:]"
         else:
-            wake_header = "[Autonomous wake — scheduled run. Orient from <working_state>, then:]"
+            wake_header = (
+                "[Autonomous wake — scheduled run. Orient from <working_state>. The job prompt below is "
+                "your only standing instruction; notes from earlier runs are history, not rules. Before "
+                "reporting an item as still open or unchanged, re-check its source of truth (tracker, "
+                "store, inbox) on this run, then:]"
+            )
         # Control-command jobs must remain slash-first: prepending the autonomous
         # header turns `/self-improve` into ordinary lead-agent text and bypasses
         # the bounded reviewer/tool policy entirely.
