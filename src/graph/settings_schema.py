@@ -1551,7 +1551,8 @@ FIELDS: list[Field] = [
                       "so the chat stays free for any message."),
     Field("web.search_provider", "web_search_provider", "Search provider", "select", "Web",
           options=["duckduckgo", "tavily", "firecrawl", "searxng"],
-          description="Web search provider selection. Tool integration is pending."),
+          description="Where web_search sends queries. Tavily and Firecrawl read TAVILY_API_KEY / FIRECRAWL_API_KEY "
+                      "from the environment; if the provider fails, DuckDuckGo answers instead."),
     Field("web.searxng_url", "web_searxng_url", "SearXNG URL", "string", "Web",
           description="Base URL of your self-hosted SearXNG instance."),
     Field("web.extract_provider", "web_extract_provider", "Extract provider", "select", "Web",
