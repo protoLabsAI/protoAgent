@@ -181,7 +181,7 @@ def test_interactive_wait_keeps_the_chat_and_background_wait_stays_on_its_owner(
     wait = next(t for t in _build_scheduler_tools(s) if t.name == "wait")
 
     # Interactive: deliberate same-chat continuation, ADR 0053 untouched.
-    out = asyncio.run(wait.ainvoke({"seconds": 60, "then": "re-check", "state": {"session_id": "chat-11"}}))
+    out = asyncio.run(wait.ainvoke({"seconds": 60, "then": "re-check", "summary": "Started the work.", "state": {"session_id": "chat-11"}}))
     assert out.startswith("Wait scheduled:")
     chat_wait = s.get_job("wait:chat-11")
     assert chat_wait.context_id == "chat-11"
@@ -190,8 +190,8 @@ def test_interactive_wait_keeps_the_chat_and_background_wait_stays_on_its_owner(
     root_a = s.add_job("sweep a", "0 9 * * *", job_id="cron-a")
     root_b = s.add_job("sweep b", "0 9 * * *", job_id="cron-b")
     assert root_a.context_id.startswith("job:") and root_b.context_id.startswith("job:")
-    asyncio.run(wait.ainvoke({"seconds": 60, "then": "resume a", "state": {"session_id": root_a.context_id}}))
-    asyncio.run(wait.ainvoke({"seconds": 60, "then": "resume b", "state": {"session_id": root_b.context_id}}))
+    asyncio.run(wait.ainvoke({"seconds": 60, "then": "resume a", "summary": "Started the work.", "state": {"session_id": root_a.context_id}}))
+    asyncio.run(wait.ainvoke({"seconds": 60, "then": "resume b", "summary": "Started the work.", "state": {"session_id": root_b.context_id}}))
 
     wait_a = s.get_job(f"wait:{root_a.context_id}")
     wait_b = s.get_job(f"wait:{root_b.context_id}")
@@ -207,7 +207,7 @@ def test_interactive_wait_keeps_the_chat_and_background_wait_stays_on_its_owner(
 
     # A wait from an Activity-context turn gets a live isolated owner — never a hold,
     # never the shared Activity session (the wait tool reported success already).
-    asyncio.run(wait.ainvoke({"seconds": 60, "then": "follow up", "state": {"session_id": ACTIVITY_CONTEXT}}))
+    asyncio.run(wait.ainvoke({"seconds": 60, "then": "follow up", "summary": "Started the work.", "state": {"session_id": ACTIVITY_CONTEXT}}))
     legacy_shaped = s.get_job(f"wait:{ACTIVITY_CONTEXT}")
     assert legacy_shaped.context_id.startswith("job:")
     assert legacy_shaped.execution_hold is None

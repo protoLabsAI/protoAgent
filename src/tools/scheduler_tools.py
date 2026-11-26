@@ -322,7 +322,7 @@ def _build_scheduler_tools(scheduler) -> list:
         return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
 
     @tool
-    async def wait(seconds: int, then: str, state: Annotated[Any, InjectedState] = None) -> str:
+    async def wait(seconds: int, then: str, summary: str, state: Annotated[Any, InjectedState] = None) -> str:
         # ADR 0053: the wake-up resumes in the SAME conversation with history intact.
         """Pause and resume LATER instead of polling: ENDS your turn now and re-invokes you in this conversation after ``seconds``.
 
@@ -334,6 +334,10 @@ def _build_scheduler_tools(scheduler) -> list:
             seconds: ≥1; use the reported ETA, rounded up a little.
             then: self-contained instruction for when you wake — your only context then, so name
                 the exact entities and steps.
+            summary: for the USER, in one or two plain sentences: what you did this turn and what
+                you'll pick back up, e.g. "Started the deploy and it's building. When it finishes
+                I'll check the health endpoint and tell you if it's live." Shown as your reply
+                when you say nothing else, so write it to them, not to yourself.
 
         Never paste the returned status line or an ISO timestamp into chat; paraphrase briefly,
         and say WHY you're waiting and what happens on resume — never reply with only "I'll pick
@@ -341,6 +345,9 @@ def _build_scheduler_tools(scheduler) -> list:
         """
         if not (then or "").strip():
             return "Error: `then` is required — describe what to do on resume."
+        summary = " ".join((summary or "").split())
+        if not summary:
+            return "Error: `summary` is required — tell the user what you did and what you'll pick back up."
         try:
             secs = max(1, int(seconds))
             when = (datetime.now(UTC) + timedelta(seconds=secs)).isoformat()
@@ -391,7 +398,10 @@ def _build_scheduler_tools(scheduler) -> list:
         # that fixes #4651 lives in this tool's DOCSTRING instead (the model reads it before it
         # calls ``wait``, and emits its reply text alongside the tool call). Keeping the result
         # clean also means the silent-turn fallback (``wait_turn_reply``) has nothing to strip.
-        return f"Wait scheduled: {_humanize_duration(secs)}. Will resume to: {then}"
+        # The user-facing ``summary`` sits on its own line BEFORE "Will resume to:" so the
+        # console's wait card (apps/web/src/chat/waitInfo.ts) still reads ``then`` as everything
+        # after that mark, and ``wait_turn_reply`` can lift the summary for a silent turn.
+        return f"Wait scheduled: {_humanize_duration(secs)}.\nFor the user: {summary}\nWill resume to: {then}"
 
     return [schedule_task, list_schedules, cancel_schedule, wait]
 

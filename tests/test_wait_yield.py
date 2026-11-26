@@ -103,7 +103,7 @@ def _wait_tool(sched):
 @pytest.mark.asyncio
 async def test_wait_schedules_a_one_shot_in_the_future():
     sched = _FakeScheduler()
-    out = await _wait_tool(sched).ainvoke({"seconds": 40, "then": "Dock and sell ore."})
+    out = await _wait_tool(sched).ainvoke({"seconds": 40, "then": "Dock and sell ore.", "summary": "Started the work."})
 
     assert len(sched.added) == 1
     prompt, schedule = sched.added[0]
@@ -117,7 +117,7 @@ async def test_wait_schedules_a_one_shot_in_the_future():
 @pytest.mark.asyncio
 async def test_wait_clamps_to_at_least_one_second():
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke({"seconds": 0, "then": "continue"})
+    await _wait_tool(sched).ainvoke({"seconds": 0, "then": "continue", "summary": "Started the work."})
     fire = datetime.fromisoformat(sched.added[0][1])
     assert (fire - datetime.now(UTC)).total_seconds() > 0
 
@@ -125,7 +125,7 @@ async def test_wait_clamps_to_at_least_one_second():
 @pytest.mark.asyncio
 async def test_wait_requires_a_then_instruction():
     sched = _FakeScheduler()
-    out = await _wait_tool(sched).ainvoke({"seconds": 10, "then": "  "})
+    out = await _wait_tool(sched).ainvoke({"seconds": 10, "then": "  ", "summary": "Started the work."})
     assert out.startswith("Error:")
     assert sched.added == []  # nothing scheduled
 
@@ -137,7 +137,7 @@ async def test_wait_reads_session_from_injected_state():
     # empty there and silently dropped the resume to the Activity thread. Passing
     # `state` directly mirrors what the ToolNode injects at runtime.
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue", "state": {"session_id": "chat-xyz"}})
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue", "summary": "Started the work.", "state": {"session_id": "chat-xyz"}})
     assert sched.last_context_id == "chat-xyz"
 
 
@@ -148,7 +148,7 @@ async def test_wait_injected_state_wins_over_contextvar(monkeypatch):
 
     monkeypatch.setattr(tracing, "current_session_id", lambda: "stale-ctxvar")
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "x", "state": {"session_id": "live-state"}})
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "x", "summary": "Started the work.", "state": {"session_id": "live-state"}})
     assert sched.last_context_id == "live-state"
 
 
@@ -160,7 +160,7 @@ async def test_wait_falls_back_to_contextvar_off_graph(monkeypatch):
 
     monkeypatch.setattr(tracing, "current_session_id", lambda: "chat-abc")
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue"})
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue", "summary": "Started the work."})
     assert sched.last_context_id == "chat-abc"
 
 
@@ -170,7 +170,7 @@ async def test_wait_without_a_session_leaves_context_id_none(monkeypatch):
 
     monkeypatch.setattr(tracing, "current_session_id", lambda: "")
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue"})
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue", "summary": "Started the work."})
     assert sched.last_context_id is None  # → scheduler falls back to Activity
 
 
@@ -202,7 +202,7 @@ async def test_wait_in_a_real_graph_stamps_the_turn_session(monkeypatch):
 
     wait_call = AIMessage(
         content="",
-        tool_calls=[{"name": "wait", "args": {"seconds": 30, "then": "resume"}, "id": "c1", "type": "tool_call"}],
+        tool_calls=[{"name": "wait", "args": {"seconds": 30, "then": "resume", "summary": "Started the work."}, "id": "c1", "type": "tool_call"}],
     )
     fake = _ToolFake(messages=iter([wait_call, AIMessage(content="done")]))
     sched = _FakeScheduler()
@@ -228,8 +228,8 @@ async def test_wait_supersedes_a_pending_wait_for_the_same_thread():
     the first, so stacked wakes can't pile up (the 'old resume messages catching up' bug)."""
     sched = _FakeScheduler()
     state = {"session_id": "chat-abc"}
-    await _wait_tool(sched).ainvoke({"seconds": 30, "then": "check ship", "state": state})
-    await _wait_tool(sched).ainvoke({"seconds": 200, "then": "check ship again", "state": state})
+    await _wait_tool(sched).ainvoke({"seconds": 30, "then": "check ship", "summary": "Started the work.", "state": state})
+    await _wait_tool(sched).ainvoke({"seconds": 200, "then": "check ship again", "summary": "Started the work.", "state": state})
     # both waits target the stable per-session id; the second actually superseded the
     # first (proven by exactly ONE pending job despite two add_jobs — without the
     # cancel, the second add_job would ValueError on the duplicate id).
@@ -241,8 +241,8 @@ async def test_wait_supersedes_a_pending_wait_for_the_same_thread():
 @pytest.mark.asyncio
 async def test_wait_for_different_threads_do_not_supersede_each_other():
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke({"seconds": 10, "then": "a", "state": {"session_id": "chat-1"}})
-    await _wait_tool(sched).ainvoke({"seconds": 10, "then": "b", "state": {"session_id": "chat-2"}})
+    await _wait_tool(sched).ainvoke({"seconds": 10, "then": "a", "summary": "Started the work.", "state": {"session_id": "chat-1"}})
+    await _wait_tool(sched).ainvoke({"seconds": 10, "then": "b", "summary": "Started the work.", "state": {"session_id": "chat-2"}})
     assert set(sched.jobs) == {"wait:chat-1", "wait:chat-2"}  # both pending, independent
 
 
@@ -252,7 +252,7 @@ async def test_wait_logs_the_scheduling(caplog):
 
     sched = _FakeScheduler()
     with caplog.at_level(logging.INFO, logger="protoagent.tools"):
-        await _wait_tool(sched).ainvoke({"seconds": 45, "then": "dock and sell", "state": {"session_id": "chat-x"}})
+        await _wait_tool(sched).ainvoke({"seconds": 45, "then": "dock and sell", "summary": "Started the work.", "state": {"session_id": "chat-x"}})
     line = next((r.getMessage() for r in caplog.records if "[wait]" in r.getMessage()), "")
     assert "thread=chat-x" in line and "45s" in line and "dock and sell" in line
 
@@ -287,7 +287,7 @@ async def test_wait_supersede_works_against_a_persisted_wait_across_restart(tmp_
 
     s1 = _real_scheduler(tmp_path)
     await _wait_tool(s1).ainvoke(
-        {"seconds": 300, "then": "check ship (pre-restart)", "state": {"session_id": "chat-abc"}}
+        {"seconds": 300, "then": "check ship (pre-restart)", "summary": "Started the work.", "state": {"session_id": "chat-abc"}}
     )
     del s1  # "restart": a fresh scheduler instance over the same persisted db
 
@@ -295,7 +295,7 @@ async def test_wait_supersede_works_against_a_persisted_wait_across_restart(tmp_
     assert [j.id for j in s2.list_jobs()] == ["wait:chat-abc"]  # survived the restart
     with caplog.at_level(logging.INFO, logger="protoagent.tools"):
         await _wait_tool(s2).ainvoke(
-            {"seconds": 60, "then": "check ship (post-restart)", "state": {"session_id": "chat-abc"}}
+            {"seconds": 60, "then": "check ship (post-restart)", "summary": "Started the work.", "state": {"session_id": "chat-abc"}}
         )
 
     jobs = s2.list_jobs()
@@ -325,7 +325,7 @@ async def test_wait_after_the_pending_wait_fired_is_not_a_supersede(tmp_path, ca
     assert s.list_jobs() == []  # fired one-shot is gone
 
     with caplog.at_level(logging.INFO, logger="protoagent.tools"):
-        await _wait_tool(s).ainvoke({"seconds": 60, "then": "next step", "state": {"session_id": "chat-abc"}})
+        await _wait_tool(s).ainvoke({"seconds": 60, "then": "next step", "summary": "Started the work.", "state": {"session_id": "chat-abc"}})
 
     assert [j.prompt for j in s.list_jobs()] == ["next step"]
     line = next((r.getMessage() for r in caplog.records if "next step" in r.getMessage()), "")
@@ -336,8 +336,8 @@ async def test_wait_after_the_pending_wait_fired_is_not_a_supersede(tmp_path, ca
 async def test_wait_real_backend_keeps_different_threads_independent(tmp_path):
     """#1702 edge (b) against the real backend: per-context job ids never collide."""
     s = _real_scheduler(tmp_path)
-    await _wait_tool(s).ainvoke({"seconds": 30, "then": "a", "state": {"session_id": "chat-1"}})
-    await _wait_tool(s).ainvoke({"seconds": 30, "then": "b", "state": {"session_id": "chat-2"}})
+    await _wait_tool(s).ainvoke({"seconds": 30, "then": "a", "summary": "Started the work.", "state": {"session_id": "chat-1"}})
+    await _wait_tool(s).ainvoke({"seconds": 30, "then": "b", "summary": "Started the work.", "state": {"session_id": "chat-2"}})
     assert {j.id for j in s.list_jobs()} == {"wait:chat-1", "wait:chat-2"}  # both pending
 
 
@@ -352,6 +352,45 @@ def test_wait_turn_reply_says_when_the_agent_is_back():
     assert wait_turn_reply("Error: couldn't schedule the wake-up: down") is None
     assert wait_turn_reply("Scheduled job j1 next at 2026-10-05T09:00:00Z.") is None
     assert wait_turn_reply("") is None
+
+
+def test_wait_turn_reply_tells_the_user_what_happened_and_whats_next():
+    # A silent wait turn used to reply only "I'll pick this back up in 2 minutes 30 seconds." —
+    # nothing on what the turn did or what it's coming back for. The summary carries both.
+    from graph.middleware.wait_yield import wait_turn_reply
+
+    out = (
+        "Wait scheduled: 2 minutes 30 seconds.\n"
+        "For the user: Kicked off the build; when it's done I'll run the smoke test\n"
+        "Will resume to: Check build 412. If green, run scripts/live_smoke.py."
+    )
+    assert wait_turn_reply(out) == (
+        "Kicked off the build; when it's done I'll run the smoke test. "
+        "I'll pick this back up in 2 minutes 30 seconds."
+    )
+    # The agent's note to itself never reaches the user.
+    assert "Check build 412" not in wait_turn_reply(out)
+
+
+@pytest.mark.asyncio
+async def test_wait_requires_a_user_summary():
+    from tools.scheduler_tools import _build_scheduler_tools
+
+    class _Sched:
+        added = False
+
+        def cancel_job(self, job_id):
+            return False
+
+        def add_job(self, *a, **k):
+            self.added = True
+
+    sched = _Sched()
+    wait = next(t for t in _build_scheduler_tools(sched) if t.name == "wait")
+    assert "summary" in wait.args_schema.model_json_schema()["required"]
+    out = await wait.ainvoke({"seconds": 5, "then": "go", "summary": "   "})
+    assert out.startswith("Error: `summary` is required")
+    assert not sched.added
 
 
 def test_wait_turn_reply_matches_the_real_tool_confirmation():
@@ -370,8 +409,8 @@ def test_wait_turn_reply_matches_the_real_tool_confirmation():
             return None
 
     wait = next(t for t in _build_scheduler_tools(_Sched()) if t.name == "wait")
-    out = asyncio.run(wait.ainvoke({"seconds": 2700, "then": "Check the board.", "state": {}}))
-    assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."
+    out = asyncio.run(wait.ainvoke({"seconds": 2700, "then": "Check the board.", "summary": "Started the work.", "state": {}}))
+    assert wait_turn_reply(out) == "Started the work. I'll pick this back up in 45 minutes."
 
 
 def test_schedule_turn_reply_strips_model_only_guidance_for_the_user():
@@ -428,7 +467,7 @@ def test_schedule_turn_reply_matches_the_real_tool_confirmation():
 async def test_out_of_range_wait_preserves_pending_wakeup(seconds):
     sched = _FakeScheduler()
     sched.jobs["wait:activity"] = "existing wakeup"
-    out = await _wait_tool(sched).ainvoke({"seconds": seconds, "then": "Resume later"})
+    out = await _wait_tool(sched).ainvoke({"seconds": seconds, "then": "Resume later", "summary": "Queued it."})
     assert out.startswith("Error:")
     assert sched.jobs == {"wait:activity": "existing wakeup"}
     assert sched.cancelled == [] and sched.added == []

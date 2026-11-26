@@ -105,8 +105,9 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
         )
     if has_wait:
         lines.append(
-            "- **Wait:** `wait(seconds, then=…)` ends this turn and resumes you after "
-            "a short countdown with the supplied next step."
+            "- **Wait:** `wait(seconds, then=…, summary=…)` ends this turn and resumes you after "
+            "a short countdown with the supplied next step; `summary` tells the user what you "
+            "did and what you'll pick back up."
         )
     if has_directives:
         # ADR 0127 D6 — the directive ledger, not the transcript, is the record of approvals.

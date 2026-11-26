@@ -110,7 +110,7 @@ Built by default; drop with `middleware.scheduler: false` (or `SCHEDULER_DISABLE
 | [`schedule_task(prompt, when, job_id=None, timezone=None, ttl=None, max_fires=None)`](#schedule_task) | Persist a future turn — cron expression or ISO datetime. |
 | [`list_schedules()`](#list_schedules) | This agent's jobs (never another agent's). |
 | [`cancel_schedule(job_id)`](#cancel_schedule) | Cancel one job by id. |
-| [`wait(seconds, then)`](#wait) | End the turn now, resume in `seconds` with `then` as the instruction. **Lead agent only.** |
+| [`wait(seconds, then, summary)`](#wait) | End the turn now, resume in `seconds` with `then` as the instruction; `summary` tells the user what happened and what's next. **Lead agent only.** |
 
 ### Tasks — bound when a `TaskStore` exists
 
@@ -683,7 +683,7 @@ the cadence changes in that plugin's config section in Settings.
 ### `wait`
 
 ```python
-async def wait(seconds: int, then: str) -> str
+async def wait(seconds: int, then: str, summary: str) -> str
 ```
 
 Yield the turn and resume **later** instead of busy-polling a status tool
@@ -697,6 +697,11 @@ recursion budget on a poll loop.
 must name the work and the entities ("Dock NOVAHAUL-5 at X1-UC87-K93, sell the ore, accept the
 next contract"). `seconds` is clamped to ≥ 1; pass the ETA a status tool gave you and wait the
 **full** duration in one call, since under-waiting just wakes early to wait again.
+
+`summary` is required and written **to the user**: one or two plain sentences on what the turn
+did and what the agent will pick back up. A turn that ends on `wait` often has no other text,
+so the chat reply becomes `<summary> I'll pick this back up in <duration>.` A bare "I'll pick
+this back up in 2 minutes 30 seconds." told the operator neither.
 
 **One pending wait per thread**
 ([#1702](https://github.com/protoLabsAI/protoAgent/issues/1702)): a new `wait` **supersedes**

@@ -42,6 +42,13 @@ describe("resolveWaitInfo (#4852)", () => {
     )).toEqual({ seconds: 600, then });
   });
 
+  it("reads the confirmation that carries a user summary line", () => {
+    expect(resolveWaitInfo(
+      "garbage",
+      "Wait scheduled: 2 minutes 30 seconds.\nFor the user: Started the build.\nWill resume to: Check build 412.",
+    )).toEqual({ seconds: 150, then: "Check build 412." });
+  });
+
   it("prefers valid JSON over output details", () => {
     expect(resolveWaitInfo('{"seconds": 30, "then": "input"}',
       "Wait scheduled: 1 minute. Will resume to: output",

@@ -138,7 +138,7 @@ async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
             AIMessage(
                 content="",
                 tool_calls=[
-                    {"name": "wait", "args": {"seconds": 30, "then": "resume"}, "id": "c1", "type": "tool_call"}
+                    {"name": "wait", "args": {"seconds": 30, "then": "resume", "summary": "Started the work."}, "id": "c1", "type": "tool_call"}
                 ],
             ),
             AIMessage(content="unused"),
@@ -149,7 +149,7 @@ async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     content = out[0]["content"]
     # Not a blank reply, and not the raw confirmation either: its "Will resume to: …" is the
     # agent's note to its future self, which read in chat as the agent prompting itself.
-    assert content == "I'll pick this back up in 30 seconds."
+    assert content == "Started the work. I'll pick this back up in 30 seconds."
 
 
 def test_vision_human_message_gates_on_model_vision(monkeypatch, tmp_path):

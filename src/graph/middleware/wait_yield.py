@@ -21,6 +21,8 @@ circuits a turn that didn't call ``wait``.
 
 from __future__ import annotations
 
+import re
+
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import ToolMessage
 
@@ -29,10 +31,12 @@ from graph.middleware.goal_checkpoint import closing_call, goal_checkpoint
 WAIT_TOOL_NAME = "wait"
 
 # The ``wait`` tool's success confirmation (tools/scheduler_tools.py) — "Wait scheduled:
-# <duration>. Will resume to: <then>". It is a status line for the MODEL; the resume
-# instruction in it is the agent talking to its future self.
+# <duration>.\nFor the user: <summary>\nWill resume to: <then>". The resume instruction is
+# the agent talking to its future self; the summary line is written to the user. Older
+# confirmations ("Wait scheduled: <duration>. Will resume to: <then>") carry no summary.
 _WAIT_CONFIRMATION_PREFIX = "Wait scheduled: "
-_WAIT_RESUME_MARK = ". Will resume to: "
+_WAIT_DURATION_RE = re.compile(r"^Wait scheduled: (.+?)\.(?:\s|$)")
+_WAIT_SUMMARY_RE = re.compile(r"^For the user: (.+)$", re.MULTILINE)
 
 # The ``schedule_task`` tool's success confirmation (tools/scheduler_tools.py) —
 # "Scheduled job <id> next at <iso>.", followed by a newline and a line of MODEL-ONLY
@@ -63,17 +67,23 @@ def wait_turn_reply(tool_output: str) -> str | None:
     when ``tool_output`` isn't a wait confirmation.
 
     A turn that ends on ``wait`` often has no assistant text — the model calls the tool and
-    the turn ends here — so the answer used to fall back to the raw confirmation. In chat
-    that read as the agent prompting itself: the operator saw "Wait scheduled: 45 minutes.
-    Will resume to: Check on …" as the reply. The tool card already shows the resume plan;
-    the reply only needs to say when the agent is back."""
+    the turn ends here. The raw confirmation read as the agent prompting itself ("Will resume
+    to: Check on …"), and the bare "I'll pick this back up in 45 minutes." that replaced it
+    told the operator neither what the turn did nor what it's coming back for. So ``wait``
+    takes a user-facing ``summary``, and the reply is that summary plus when it's back."""
     text = (tool_output or "").strip()
-    if not text.startswith(_WAIT_CONFIRMATION_PREFIX):
+    match = _WAIT_DURATION_RE.match(text)
+    if not match:
         return None
-    duration = text[len(_WAIT_CONFIRMATION_PREFIX) :].split(_WAIT_RESUME_MARK, 1)[0].strip().rstrip(".")
-    if not duration:
-        return None
-    return f"I'll pick this back up in {duration}."
+    duration = match.group(1).strip()
+    back = f"I'll pick this back up in {duration}."
+    summary_match = _WAIT_SUMMARY_RE.search(text)
+    summary = summary_match.group(1).strip() if summary_match else ""
+    if not summary:
+        return back
+    if summary[-1] not in ".!?":
+        summary += "."
+    return f"{summary} {back}"
 
 
 def _just_waited(messages: list) -> bool:
