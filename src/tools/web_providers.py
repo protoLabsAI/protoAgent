@@ -9,8 +9,8 @@ on any failure, so a raise here must never be swallowed into an empty result.
 API keys come ONLY from env vars (``TAVILY_API_KEY`` / ``FIRECRAWL_API_KEY``) — never the
 config file. A missing key is a provider failure, not a silent skip.
 
-Extract clients for ``fetch_url`` (``web.extract_provider``) land beside these in a later
-slice; they share :func:`_post_json` / :class:`WebProviderError`.
+Extract clients for ``fetch_url`` (``web.extract_provider``) return markdown or raise
+so the caller can fall back to plain HTTP fetching.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from typing import Any
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v1/search"
+TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
+FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape"
 
 TAVILY_KEY_ENV = "TAVILY_API_KEY"
 FIRECRAWL_KEY_ENV = "FIRECRAWL_API_KEY"
@@ -188,3 +190,29 @@ async def provider_search(
     if provider == "searxng":
         return await searxng_search(query, max_results, searxng_url, transport=transport)
     raise WebProviderError(provider, "unknown search provider")
+
+
+async def provider_extract(provider: str, url: str, *, transport: Any = None) -> str:
+    """Extract one page as markdown using environment-only credentials."""
+    if provider == "firecrawl":
+        data = await _post_json(
+            provider, FIRECRAWL_SCRAPE_URL, {"url": url, "formats": ["markdown"]},
+            _api_key(provider, FIRECRAWL_KEY_ENV), transport=transport,
+        )
+        if not isinstance(data, dict) or data.get("success") is False:
+            raise WebProviderError(provider, "scrape was not successful")
+        result = data.get("data")
+        content = result.get("markdown") if isinstance(result, dict) else None
+    elif provider == "tavily":
+        data = await _post_json(
+            provider, TAVILY_EXTRACT_URL, {"urls": [url], "format": "markdown"},
+            _api_key(provider, TAVILY_KEY_ENV), transport=transport,
+        )
+        results = data.get("results") if isinstance(data, dict) else None
+        result = results[0] if isinstance(results, list) and results else None
+        content = result.get("raw_content") if isinstance(result, dict) else None
+    else:
+        raise WebProviderError(provider, "unknown extract provider")
+    if not isinstance(content, str) or not content.strip():
+        raise WebProviderError(provider, "no extracted content")
+    return content

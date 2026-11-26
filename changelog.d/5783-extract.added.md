@@ -1,0 +1,1 @@
+- **Optional page extraction providers.** `fetch_url` can use Firecrawl or Tavily to read rendered page text, with environment-only API keys and plain-fetch fallback on failure. Default fetching is unchanged, and the egress documentation lists search and extraction provider hosts. Fixes #5783.

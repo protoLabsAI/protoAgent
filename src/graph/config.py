@@ -1322,8 +1322,8 @@ class LangGraphConfig:
     tools_deferred_enabled: bool = False
     tools_deferred_keep: list[str] = field(default_factory=list)
 
-    # web_search reads search_provider/searxng_url (tools.web_providers); fetch_url wires
-    # extract_provider in a later slice. Provider API keys live in env vars, never here.
+    # web_search reads search_provider/searxng_url; fetch_url reads extract_provider.
+    # Provider API keys live in env vars, never here (tools.web_providers).
     web_search_provider: str = "duckduckgo"
     web_searxng_url: str = ""
     web_extract_provider: str = "none"
