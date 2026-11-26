@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.261.4",
+    "date": "2026-11-26",
+    "changes": [
+      "A scheduled job stops treating its own earlier searches and conclusions as rules (#5787)."
+    ]
+  },
+  {
     "version": "v0.261.3",
     "date": "2026-11-24",
     "changes": [

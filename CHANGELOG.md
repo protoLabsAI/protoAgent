@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.261.4] - 2026-11-26
+
+### Fixed
+- **A scheduled job stops treating its own earlier searches and conclusions as rules (#5787).** Compacting a job's own `job:<uuid>` thread now keeps only the job prompt (and the operator's own words) as a standing instruction, and moves the agent's improvised searches, filters and earlier conclusions to STATE & DECISIONS as dated history — including ones older notes had listed as standing instructions or pending actions. The plain scheduled-run wake header also tells the agent that notes from earlier runs are history and to re-check the source of truth before reporting an item as still open. Chat-thread compaction is unchanged. Fixes #5786.
+
 ## [0.261.3] - 2026-11-24
 
 ### Added
