@@ -1,0 +1,1 @@
+- **Command output compaction settings.** Add and document the filesystem compaction toggle and positive character threshold, defaulting to enabled and 8000 characters. Runtime integration follows in a separate slice. Refs #5784.

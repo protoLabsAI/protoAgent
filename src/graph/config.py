@@ -2213,6 +2213,9 @@ class LangGraphConfig:
     # PROTOAGENT_* and no credential-shaped vars (infra.proc.scrub_agent_env). Env var names
     # listed here are passed through anyway (e.g. GH_TOKEN for a `gh` the project calls).
     filesystem_run_command_env_passthrough: list[str] = field(default_factory=list)
+    # Compact successful command output above this positive character threshold.
+    filesystem_compact_command_output: bool = True
+    filesystem_compact_command_output_threshold: int = 8000
     # Operator's desktop editor for the ``open_in_editor`` tool — a command line
     # (``zed``, ``code -g``, ``cursor -g``) split with shlex; the fenced target is
     # appended as ONE argv element ``<abs_path>[:<line>]``. Empty (default) = the tool
@@ -2597,6 +2600,16 @@ class LangGraphConfig:
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
         operator = data.get("operator", {})
+        filesystem = data.get("filesystem", {}) or {}
+        compact_command_output_threshold = filesystem.get(
+            "compact_command_output_threshold", cls.filesystem_compact_command_output_threshold
+        )
+        if (
+            not isinstance(compact_command_output_threshold, int)
+            or isinstance(compact_command_output_threshold, bool)
+            or compact_command_output_threshold <= 0
+        ):
+            compact_command_output_threshold = cls.filesystem_compact_command_output_threshold
         # `or {}` at each level: a present-but-empty `soul:` or `soul.drift:` block
         # parses to None (top-level null is normalized above, a nested null is not).
         soul = data.get("soul", {}) or {}
@@ -3070,6 +3083,10 @@ class LangGraphConfig:
                 for x in ((data.get("filesystem", {}) or {}).get("run_command_env_passthrough") or [])
                 if x is not None and str(x).strip()
             ],
+            filesystem_compact_command_output=not _falsey(
+                filesystem.get("compact_command_output"), default=not cls.filesystem_compact_command_output
+            ),
+            filesystem_compact_command_output_threshold=compact_command_output_threshold,
             filesystem_editor_command=str(
                 (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""
             ).strip(),
