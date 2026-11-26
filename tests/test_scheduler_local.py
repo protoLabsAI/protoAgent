@@ -999,6 +999,17 @@ async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
     assert len(msg["parts"]) == 1 and set(msg["parts"][0]) == {"text"}
     assert msg["parts"][0]["text"].endswith("do the thing")
     assert "Autonomous wake — scheduled run" in msg["parts"][0]["text"]
+    # #5786: the plain scheduled-run header keeps its prefix, stays one bracketed header,
+    # and tells the agent the job prompt is its only standing instruction and to re-check
+    # the source of truth before reporting anything as still open.
+    text = msg["parts"][0]["text"]
+    header, _, rest = text.partition("\n\n")
+    assert header.startswith("[Autonomous wake — scheduled run.")
+    assert header.endswith("then:]") and header.count("]") == 1
+    assert rest == "do the thing"
+    assert "The job prompt below is your only standing instruction" in header
+    assert "notes from earlier runs are history, not rules" in header
+    assert "Before reporting an item as still open or unchanged, re-check its source of truth" in header
     assert msg["contextId"] == job.context_id
     assert msg["metadata"]["scheduler_job_id"] == job.id
     assert msg["metadata"]["origin"] == "scheduler"
