@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://agent.protolabs.studio/download"><img src="https://img.shields.io/badge/download-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-9b87f2" alt="Download for macOS, Windows, Linux"></a>
-  <a href="https://pypi.org/project/protolabs-agent/"><img src="https://badge.fury.io/py/protolabs-agent.svg" alt="PyPI: protolabs-agent"></a>
+  <a href="https://pypi.org/project/protolabs-agent/"><img src="https://img.shields.io/pypi/v/protolabs-agent?label=PyPI" alt="PyPI: protolabs-agent"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://agent.protolabs.studio/docs/"><img src="https://img.shields.io/badge/docs-agent.protolabs.studio-9b87f2" alt="Docs"></a>
   <a href="https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml"><img src="https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
