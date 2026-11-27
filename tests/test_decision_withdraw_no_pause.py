@@ -47,6 +47,17 @@ async def test_owned_no_pause_withdraw_closes_record_without_resume(store, resum
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_id_says_not_found_not_not_owned(store, resume):
+    """#5796: a typo'd or stale id read as an ownership refusal, so the agent couldn't
+    tell the two apart."""
+    result = await withdraw_decision.ainvoke(
+        {"decision_id": "dec-test-nonexistent", "reason": "x", "state": {"session_id": "s"}}
+    )
+    assert result == "Error: no decision with id 'dec-test-nonexistent'. Use the id request_decision returned."
+    resume.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("agent", ["", "someone-else"])
 async def test_unowned_no_pause_withdraw_is_refused_and_changes_nothing(store, resume, agent):
     rec = store.create("s", "Release?", OPTIONS, agent=agent, thread_id="s")
