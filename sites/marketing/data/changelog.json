@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.262.0",
+    "date": "2026-11-27",
+    "changes": [
+      "Web provider settings (#5790).",
+      "Optional page extraction providers (#5794).",
+      "web_search can use Tavily, Firecrawl or SearXNG (#5792).",
+      "Command output compaction settings (#5791).",
+      "run_command compacts long output from a successful command (#5793).",
+      "A helper compacts long command output (#5788).",
+      "Shell reads are no longer friction, and an agent with an unapproved shell can browse with it (#5802).",
+      "The fleet proxy forwards every value of a repeated query parameter (#5805).",
+      "withdraw_decision says an unknown id was not found (#5804).",
+      "A background job whose turn outlived the client wait is no longer marked failed (#5806).",
+      "An agent can quote a past session's whole final answer (#5807).",
+      "A background job's feed entry, scheduled-report card and Discord DM now show its closing answer instead of every step's narration (#5810).",
+      "A turn that ends on wait now tells you what it did and what it's coming back for (#5795)."
+    ]
+  },
+  {
     "version": "v0.261.4",
     "date": "2026-11-26",
     "changes": [

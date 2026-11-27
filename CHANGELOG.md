@@ -15,6 +15,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.262.0] - 2026-11-27
+
+### Added
+- **Web provider settings (#5790).** Add search provider, SearXNG URL, and extraction provider settings in YAML and Settings, defaulting to DuckDuckGo and no extraction provider. Unknown providers warn and fall back to defaults; tool integration follows in later slices. Provider keys belong in environment variables, never config. Refs #5783.
+
+- **Optional page extraction providers (#5794).** `fetch_url` can use Firecrawl or Tavily to read rendered page text, with environment-only API keys and plain-fetch fallback on failure. Default fetching is unchanged, and the egress documentation lists search and extraction provider hosts. Fixes #5783.
+
+- **web_search can use Tavily, Firecrawl or SearXNG (#5792).** Set `web.search_provider` to `tavily`, `firecrawl` or `searxng` to send searches to that provider; keys come only from the `TAVILY_API_KEY` / `FIRECRAWL_API_KEY` env vars and SearXNG uses `web.searxng_url`. If the configured provider fails (missing key, HTTP error, unreachable), `web_search` falls back to DuckDuckGo and says DuckDuckGo answered; if both fail it returns an `Error:` naming the provider, so a failed search never reads as an empty result. The default `duckduckgo` setting behaves exactly as before. Refs #5783.
+
+- **Command output compaction settings (#5791).** Add and document the filesystem compaction toggle and positive character threshold, defaulting to enabled and 8000 characters. `run_command` uses them in this release (#5793). Refs #5784.
+
+- **`run_command` compacts long output from a successful command (#5793).** When a command exits 0 and its output is longer than `filesystem.compact_command_output_threshold`, the agent now sees the output with ANSI codes stripped, progress redraws resolved, repeated lines collapsed and the middle trimmed to a head and tail, and the full original output is saved to a spill file the marker names. A failing command, short output, or `filesystem.compact_command_output: false` returns exactly what it did before, and a failed spill write falls back to the uncompacted output. Fixes #5784.
+
+- **A helper compacts long command output (#5788).** The new `tools.command_output.compact_output` strips ANSI escape codes, keeps only the final state of carriage-return progress redraws, collapses repeated or digits-only-different lines into one line with a repeat count, and keeps a head and tail with one marker naming the dropped line count and the spill file. `write_spill` saves the full output to a unique, size-capped file under the instance data root. `run_command` uses it in this release (#5793). Refs #5784
+
+### Changed
+- **Shell reads are no longer friction, and an agent with an unapproved shell can browse with it (#5802).** The friction plugin stops logging `cat`, `head`, `grep`, `rg`, `ls` and `find` through `run_command` as duplicates of a first-class tool. Those rows were a third of the fleet's ledgers on 2026-11-26 and all resolved as model behavior. Shell writes (`sed -i`, `tee`, `> file`) are still logged, since they skip `edit_file`'s lock and the code pane. The new `filesystem.shell_first` setting (off by default) hides `list_dir`, `find_files` and `search_files` from the lead model when `run_command` runs without approval, so the agent uses `ls`, `find` and `rg` and the three schemas leave its prompt. `read_file`, `edit_file` and `write_file` stay, and subagents keep every read tool.
+
+### Fixed
+- **The fleet proxy forwards every value of a repeated query parameter (#5805).** Both hub-to-member proxy paths built the upstream query with `dict(request.query_params)`, which kept only the last value of a repeated key, so `?tag=a&tag=b` reached the member as `?tag=b`. The hub-signed `?token=` is still dropped before a remote. Fixes #5785
+
+- **`withdraw_decision` says an unknown id was not found (#5804).** A typo'd or stale decision id used to come back as "decision does not belong to this agent or session", which read as an ownership problem. It now says no decision has that id. Fixes #5796
+
+- **A background job whose turn outlived the client wait is no longer marked failed (#5806).** When the background manager stopped waiting on a long detached turn (a read timeout or a dropped connection after its own `/a2a` had the request), it marked the job `failed` with a blank "Background turn delivery error: " cause, so the turn's real completion was ignored and its final report was lost. Now only a real delivery failure (connection refused, an error response) fails the job; otherwise the turn's own completion settles it, and a failure cause names the exception even when its message is empty. Fixes #5797
+
+- **An agent can quote a past session's whole final answer (#5807).** `recall_session(session_id, entry="final")` returns the session's final answer in full (reasoning stripped and credentials redacted, as the search index does), capped at about 12,000 characters with a truncation marker. The session card now keeps up to 12,000 characters of the final answer instead of 2,000 and flags one it had to clip. The summary view says when its final answer is only an excerpt, and an unknown `entry` id now lists the session's real entry ids and points at `entry="final"` instead of ending in "No history entry found". Fixes #5800
+
+- **A background job's feed entry, scheduled-report card and Discord DM now show its closing answer instead of every step's narration (#5810).**
+  A job turn used to put each model call's "let me check X" preamble into the delivered
+  message, often several near-identical times with long blank gaps in between. Surfaces
+  without tool cards now show the text after the turn's last tool call. Chat history keeps
+  the full text. Fixes #5809.
+
+- **A turn that ends on `wait` now tells you what it did and what it's coming back for (#5795).** It used to reply only "I'll pick this back up in 2 minutes 30 seconds.", with nothing on what the turn had done or what the agent would pick back up. `wait` now takes a required `summary`, one or two sentences written to the user, and a turn with no other text replies "<summary> I'll pick this back up in <duration>." The agent's note to itself (`then`) still stays out of the reply and still shows on the wait card.
+
 ## [0.261.4] - 2026-11-26
 
 ### Fixed
