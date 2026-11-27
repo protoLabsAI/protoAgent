@@ -1375,6 +1375,88 @@ def sync_host_model_layer(config) -> bool:
     return True
 
 
+# The operator's identity is the box's, not one agent's (#5812): these keys live in the
+# Host layer so every agent on the machine inherits them.
+BOX_IDENTITY_KEYS = ("identity.operator", "identity.org")
+
+
+def promote_host_identity() -> bool:
+    """Move the operator's name and organization from the HOST agent's own config up to the
+    Host layer (``host-config.yaml``), so every agent on the box inherits them (#5812).
+
+    Before #5812 ``identity.operator`` was a per-agent setting: the setup wizard and the
+    host console saved it to the host agent's leaf, where no member could see it. This
+    runs at every host reload (boot included) and is a one-way MOVE, never a mirror: on
+    the host console a host-scoped field saves to the Host layer, so copying the leaf up
+    on each reload would undo the operator's next edit.
+
+    Per key, when the host leaf sets it:
+    - the Host layer doesn't set it (or sets it empty) → the leaf value moves up;
+    - the Host layer already has the same value, or the leaf value is empty → the leaf
+      copy is dropped (an empty leaf value would otherwise shadow the box's);
+    - the two differ → left alone (the host agent keeps a deliberate value of its own).
+
+    Members never write box state, and neither does a named sandbox (``scripts/dev.sh``,
+    ``PROTOAGENT_INSTANCE`` without ``PROTOAGENT_HOME``): it shares the box's Host layer but
+    is seeded from the operator's config, so it must not decide the box's identity. A
+    corrupt/non-mapping host file is left alone. Returns True when either file changed.
+    """
+    from graph.workspaces.manager import is_workspace_member
+    from infra.paths import atomic_write, host_config_path, read_text_utf8
+
+    if is_workspace_member():
+        return False
+    if os.environ.get("PROTOAGENT_INSTANCE", "").strip() and not os.environ.get("PROTOAGENT_HOME", "").strip():
+        return False
+    import yaml as _y
+
+    hp = host_config_path()
+    leaf = config_yaml_path()
+    if not hp.parent.exists() or not leaf.exists():
+        return False
+    leaf_doc = load_yaml_doc(leaf)
+    if not isinstance(leaf_doc, dict):
+        return False
+    host_doc: dict = {}
+    if hp.exists():
+        try:
+            host_doc = _y.safe_load(read_text_utf8(hp)) or {}
+        except (OSError, _y.YAMLError):
+            log.warning("[config] host-config.yaml unreadable — not moving the operator's identity into it")
+            return False
+        if not isinstance(host_doc, dict):
+            log.warning("[config] host-config.yaml is not a mapping — not moving the operator's identity into it")
+            return False
+    host_changed = False
+    drop: list[str] = []
+    for key in BOX_IDENTITY_KEYS:
+        section, name = key.split(".", 1)
+        leaf_section = leaf_doc.get(section)
+        if not isinstance(leaf_section, dict) or name not in leaf_section:
+            continue
+        mine = str(leaf_section.get(name) or "").strip()
+        host_section = host_doc.get(section)
+        box = str(host_section.get(name) or "").strip() if isinstance(host_section, dict) else ""
+        if mine and not box:
+            if not isinstance(host_section, dict):
+                host_section = {}
+                host_doc[section] = host_section
+            host_section[name] = mine
+            host_changed = True
+            drop.append(key)
+        elif not mine or mine == box:
+            drop.append(key)
+    if not host_changed and not drop:
+        return False
+    if host_changed:
+        atomic_write(hp, _y.safe_dump(host_doc, sort_keys=False))
+    if drop:
+        pop_keys_from_yaml(leaf_doc, drop)
+        save_yaml_doc(leaf_doc, leaf)
+    log.info("[config] operator identity moved to the Host layer (%s): %s", hp, ", ".join(drop))
+    return True
+
+
 def write_soul(text: str) -> list[Path]:
     """Write persona text to the instance's live ``SOUL.md`` (mkdir parents).
 

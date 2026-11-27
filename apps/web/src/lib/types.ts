@@ -565,6 +565,13 @@ export type SettingsField = {
   // from the host file, or the App (dataclass) default. Drives the
   // inherited-vs-overridden badge + the "reset to inherited" affordance.
   source: "agent" | "host" | "default";
+  // What an empty field shows in its input (#5812): the effect of leaving it blank.
+  placeholder?: string;
+  // The machine's value for this key, when the box-shared host file sets it (#5812) —
+  // so an agent that sets its own can say what the machine uses. Never sent for secrets.
+  host_value?: unknown;
+  // Host console only (#5812): the fleet members whose own config sets this host-scoped key.
+  set_by_agents?: string[];
 };
 
 export type SettingsGroup = {
@@ -1574,7 +1581,8 @@ export type AgentConfig = {
   };
   identity: {
     name: string;
-    operator: string;
+    // Omitted when blank (#5812), so the agent keeps the machine's Operator.
+    operator?: string;
   };
   auth: {
     token: string;

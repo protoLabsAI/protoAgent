@@ -253,9 +253,16 @@
 /* ADR 0047 inheritance row — the source Badge + reset-to-inherited link aligned. */
 .setting-inheritance {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--pl-space-2);
   margin: var(--pl-space-1) 0 0;
+}
+/* What the machine uses, or which agents set their own (#5812). */
+.setting-origin-note {
+  font-size: var(--pl-font-size-xs);
+  line-height: 1.4;
+  color: var(--pl-color-fg-muted);
 }
 /* "Saving overrides the Global default for this agent" — shown when a still-inherited
    box-shared field is edited in the Workspace view (PR4). */

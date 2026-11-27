@@ -19,6 +19,7 @@ import asyncio
 import logging
 import os
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, Request  # Request at MODULE level: under `from __future__
@@ -69,6 +70,39 @@ class OAuthLoginRequest(BaseModel):
     provider: str = ""
     flow_id: str = ""
     code: str = ""
+
+
+def _host_keys_set_by_members() -> dict[str, list[str]]:
+    """On the host console (#5812): each host-scoped settings key → the labels of the fleet
+    members on this machine whose own config sets it, so a box-wide setting can say which
+    agents don't follow it. Empty on a member (it can't see its siblings' configs) and on
+    any read failure — this only annotates the form."""
+    try:
+        from graph.config_io import load_yaml_doc
+        from graph.settings_schema import FIELDS, _value_at
+        from graph.workspaces.manager import is_workspace_member, list_workspaces
+
+        if is_workspace_member():
+            return {}
+        host_keys = [f.key for f in FIELDS if f.scope == "host" and f.type != "secret"]
+        out: dict[str, list[str]] = {}
+        for ws in list_workspaces():
+            cfg = Path(ws["path"]) / "config" / "langgraph-config.yaml"
+            if not cfg.exists():
+                continue
+            try:
+                doc = load_yaml_doc(cfg)
+            except Exception:  # noqa: BLE001 — one unreadable member never hides the rest
+                continue
+            if not isinstance(doc, dict):
+                continue
+            for key in host_keys:
+                if _value_at(doc, key)[0]:
+                    out.setdefault(key, []).append(str(ws.get("label") or ws.get("name") or ""))
+        return out
+    except Exception:  # noqa: BLE001 — the settings surface must still render
+        log.debug("[settings] member override scan failed", exc_info=True)
+        return {}
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -1001,6 +1035,7 @@ def register_config_routes(app) -> None:
         _cfg_yaml = config_yaml_path()
         agent_doc = load_yaml_doc(_cfg_yaml) if _cfg_yaml.exists() else {}
         host_doc = _load_host_layer()
+        set_by_agents = await asyncio.to_thread(_host_keys_set_by_members)
         return {
             "groups": build_schema(
                 STATE.graph_config,
@@ -1008,6 +1043,7 @@ def register_config_routes(app) -> None:
                 slot_model_options=slot_models,
                 agent_doc=agent_doc if isinstance(agent_doc, dict) else {},
                 host_doc=host_doc,
+                set_by_agents=set_by_agents,
             )
         }
 

@@ -1109,7 +1109,7 @@ def test_settings_schema_lists_native_oauth_models(monkeypatch, tmp_path):
     monkeypatch.setattr("graph.config._load_host_layer", lambda: {})
     captured = {}
 
-    def _capture_schema(cfg, model_options=None, slot_model_options=None, agent_doc=None, host_doc=None):
+    def _capture_schema(cfg, model_options=None, slot_model_options=None, agent_doc=None, host_doc=None, set_by_agents=None):
         captured["model_options"] = model_options
         captured["slot_model_options"] = slot_model_options
         return []

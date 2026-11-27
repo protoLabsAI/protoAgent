@@ -1668,6 +1668,16 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         sync_host_model_layer(new_config)
     except Exception:  # noqa: BLE001 — the mirror must never fail a reload
         log.exception("[config] host model-layer sync failed")
+    # The operator's name and organization are the box's (#5812): move any the host agent
+    # still holds in its own config up to the Host layer, so members inherit them. Takes
+    # effect for this config at the next reload (the values are equal, so nothing changes
+    # for the host itself in the meantime).
+    try:
+        from graph.config_io import promote_host_identity
+
+        promote_host_identity()
+    except Exception:  # noqa: BLE001 — the move must never fail a reload
+        log.exception("[config] operator identity move failed")
     STATE.knowledge_store = new_store
     STATE.history_store = new_history_store
     STATE.memory_store = new_memory_store

@@ -627,28 +627,72 @@ export function SettingsCategory({
   );
 }
 
-// The inheritance state of a field, derived from ADR 0047 `source`+`scope`:
-//   source=="host"                    → inherited from Host
-//   source=="default"                 → inherited from default (App dataclass)
-//   source=="agent" && scope=="host"  → overridden here (offer reset-to-inherited)
-//   source=="agent" && scope=="agent" → a plain agent setting (no badge)
-function inheritance(field: SettingsField, onHost: boolean): { label: string; status: "neutral" | "info" | "warning"; overridden: boolean } | null {
+// Where a field's value comes from (ADR 0047 `source` + `scope`), told only when it says
+// something (#5812). An unset field with an empty built-in value gets no badge: its input
+// is empty and its placeholder says what blank means.
+//   member, source=="host"                  → "From this machine"
+//   member, source=="agent" && scope=="host" → "Set for this agent" + what the machine uses + reset
+//   host,   scope=="host" (set)              → "Every agent on this machine" (+ who sets their own)
+//   host,   scope=="host" && source=="agent" → the host agent's own value shadows the box's (#1459)
+//   source=="default" with a real value      → "Built-in"
+export type FieldOrigin = {
+  label: string;
+  status: "neutral" | "info" | "warning";
+  overridden: boolean;
+  note?: string;
+};
+
+export function isEmptySetting(field: SettingsField, value: unknown = field.value): boolean {
+  if (field.type === "secret") return !field.is_set;
+  if (value === undefined || value === null || value === "" || value === false) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value as object).length === 0;
+  return false;
+}
+
+function describeValue(value: unknown): string {
+  const text = Array.isArray(value)
+    ? value.map((v) => String(v)).join(", ")
+    : typeof value === "boolean"
+      ? value ? "on" : "off"
+      : typeof value === "object" && value !== null
+        ? JSON.stringify(value)
+        : String(value);
+  return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+}
+
+function setByAgentsNote(names: readonly string[] | undefined): string | undefined {
+  if (!names?.length) return undefined;
+  const shown = names.slice(0, 3).join(", ");
+  const more = names.length > 3 ? ` and ${names.length - 3} more` : "";
+  return names.length === 1 ? `1 agent sets its own: ${shown}.` : `${names.length} agents set their own: ${shown}${more}.`;
+}
+
+export function fieldOrigin(field: SettingsField, onHost: boolean): FieldOrigin | null {
+  const builtIn = field.source === "default" && !isEmptySetting(field) ? { label: "Built-in", status: "neutral" as const, overridden: false } : null;
   if (onHost) {
-    // On the host console you ARE the box: a host-scoped field is the shared default every
-    // agent inherits (not "inherited from" anything); agent-scoped fields are the host's own.
-    // But if the agent leaf ALSO sets it (source=="agent"), the leaf WINS at runtime (ADR 0047)
-    // and silently shadows the box default — surface that as a warning + reset (issue #1459).
-    if (field.scope === "host")
-      return field.source === "agent"
-        ? { label: "overridden by agent config", status: "warning", overridden: true }
-        : { label: "box default", status: "info", overridden: false };
-    return null;
+    if (field.scope !== "host") return builtIn;
+    if (field.source === "agent")
+      return {
+        label: "Set for this agent only",
+        status: "warning",
+        overridden: true,
+        note: "This agent's own config sets it, so the machine value isn't used here.",
+      };
+    if (isEmptySetting(field)) return null;
+    return { label: "Every agent on this machine", status: "info", overridden: false, note: setByAgentsNote(field.set_by_agents) };
   }
-  // A fleet member (non-host): the ADR 0047 inheritance view.
-  if (field.source === "host") return { label: "inherited from host", status: "neutral", overridden: false };
-  if (field.source === "default") return { label: "inherited from default", status: "neutral", overridden: false };
-  if (field.source === "agent" && field.scope === "host") return { label: "overridden here", status: "warning", overridden: true };
-  return null; // source=="agent" && scope=="agent" — just an agent setting.
+  if (field.source === "host") return isEmptySetting(field) ? null : { label: "From this machine", status: "neutral", overridden: false };
+  if (field.source === "agent" && field.scope === "host") {
+    const machine = field.host_value;
+    const note =
+      machine === undefined || isEmptySetting(field, machine)
+        ? "The machine doesn't set this."
+        : `The machine uses ${describeValue(machine)}.`;
+    return { label: "Set for this agent", status: "warning", overridden: true, note };
+  }
+  if (field.source === "default") return builtIn;
+  return null; // source=="agent" && scope=="agent" — just this agent's setting.
 }
 
 function SettingRow({
@@ -686,7 +730,7 @@ function SettingRow({
   live?: boolean;
   feedback?: { tone: "success" | "error"; text: string };
 }) {
-  const inherit = showInheritance ? inheritance(field, onHost) : null;
+  const inherit = showInheritance ? fieldOrigin(field, onHost) : null;
   return (
     <div className={`setting-row${dirty ? " dirty" : ""}`} data-key={field.key}>
       <div className="setting-meta">
@@ -705,10 +749,11 @@ function SettingRow({
         {inherit ? (
           <p className="setting-inheritance">
             <Badge status={inherit.status}>{inherit.label}</Badge>
+            {inherit.note ? <span className="setting-origin-note">{inherit.note}</span> : null}
             {inherit.overridden && onReset ? (
               <Button variant="ghost" size="sm" type="button" onClick={onReset} loading={resetting}>
                 {resetting ? null : <RotateCcw size={13} />}
-                Reset to inherited
+                Use machine value
               </Button>
             ) : null}
           </p>
@@ -716,15 +761,7 @@ function SettingRow({
         {/* Editing a still-inherited box-shared field in the Workspace view writes a
             per-agent leaf override (not the box default) — make that effect explicit. */}
         {showInheritance && !onHost && dirty && field.scope === "host" && field.source !== "agent" ? (
-          <p className="setting-override-note">Saving overrides the box default for this agent only.</p>
-        ) : null}
-        {/* Host console: this box default is shadowed by the agent leaf — the shown value is the
-            effective (agent) value that wins, so editing the box default here has no runtime effect
-            until the agent override is removed via Reset to inherited (issue #1459). */}
-        {showInheritance && onHost && field.scope === "host" && field.source === "agent" ? (
-          <p className="setting-override-note">
-            The agent config overrides this box default — the agent value shown is what runs. Reset to use the box default.
-          </p>
+          <p className="setting-override-note">Saving sets this for this agent only.</p>
         ) : null}
       </div>
       <div className="setting-control" onBlur={(event) => {
@@ -921,6 +958,7 @@ export function SettingInput({ field, value, onChange, parentChain, inheritanceD
         id={id}
         className="setting-input setting-textarea"
         rows={4}
+        placeholder={field.placeholder || undefined}
         value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -985,6 +1023,7 @@ export function SettingInput({ field, value, onChange, parentChain, inheritanceD
       id={id}
       className="setting-input"
       type="text"
+      placeholder={field.placeholder || undefined}
       value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
       onChange={(e) => onChange(e.target.value)}
     />

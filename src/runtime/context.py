@@ -74,12 +74,13 @@ def build_stable_prefix(
     the runtime's tool plane really carries the fenced filesystem tools, or the section
     describes tools the brain cannot call.
     """
-    from graph.prompts import build_system_prompt
+    from graph.prompts import build_system_prompt, operator_line
 
     return build_system_prompt(
         include_subagents=include_subagents,
         projects=projects,
         bound_tool_names=bound_tool_names,
+        operator_line=operator_line(config) if config is not None else "",
     )
 
 

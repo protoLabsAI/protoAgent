@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 // sidenav splits into two labeled groups — Agent (always) and Box (host console only). The
 // old Global overlay + the old rail Settings surface both fold into this one dialog; there is
 // no scope toggle and no "Configuration" section (host-scoped FIELDS edit inline in the Agent
-// group with a "box default" badge). Each section renders GET /api/settings/schema groups and
+// group says it reaches every agent on this machine). Each section renders GET /api/settings/schema groups and
 // saves via POST /api/settings.
 
 // Open the consolidated settings dialog from the utility-bar pill.
@@ -158,24 +158,26 @@ test("a restart-flagged Behavior field shows the restart banner", async ({ page 
   await expect(page.locator(".settings-banner")).toContainText("restart");
 });
 
-// On the HOST console the host-scoped fields ARE the box defaults — they carry a "box
-// default" badge inline in the Model domain (editing these writes the host layer).
+// On the HOST console the host-scoped fields ARE the box defaults — a set one says it
+// reaches every agent on this machine (#5812; editing these writes the host layer).
 // model.name / routing.aux_model are host-scoped.
-test("host-scoped fields show the 'box default' badge inline in Model", async ({ page }) => {
+test("host-scoped fields say they reach every agent on this machine", async ({ page }) => {
   await openSettings(page);
   await section(page, "Model");
   await expandAllGroups(page);
-  await expect(page.locator('.setting-row[data-key="model.name"] .setting-inheritance')).toContainText("box default");
+  await expect(page.locator('.setting-row[data-key="model.name"] .setting-inheritance')).toContainText(
+    "Every agent on this machine",
+  );
   await expect(page.locator('.setting-row[data-key="routing.aux_model"] .setting-inheritance')).toContainText(
-    "box default",
+    "Every agent on this machine",
   );
   // An agent-scoped field (no host layer) carries no inheritance badge on the host.
   await expect(page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance')).toHaveCount(0);
   // A host-scoped field the agent leaf ALSO sets (model.temperature, source=agent) is shadowed:
-  // the host console warns instead of mislabelling it "box default", and offers reset (issue #1459).
+  // the host console warns instead of claiming it reaches every agent, and offers reset (issue #1459).
   const temp = page.locator('.setting-row[data-key="model.temperature"]');
-  await expect(temp.locator(".setting-inheritance")).toContainText("overridden by agent config");
-  await expect(temp.getByRole("button", { name: /Reset to inherited/ })).toBeVisible();
+  await expect(temp.locator(".setting-inheritance")).toContainText("Set for this agent only");
+  await expect(temp.getByRole("button", { name: /Use machine value/ })).toBeVisible();
 });
 
 // On the host these same host-scoped edits save to the host layer (ADR 0047): the mock echoes
@@ -191,21 +193,22 @@ test("a host-scoped edit on the host console saves to the host layer", async ({ 
 });
 
 // On a FLEET MEMBER console (/agent/<slug>/) the same fields show the ADR 0047 inheritance
-// view instead — inherited-from / overridden-here badges + reset-to-inherited. The Box group
+// view instead — from-this-machine / set-for-this-agent badges + reset. The Box group
 // narrows to Fleet there (see the next test).
-test("per-agent (fleet member) settings show ADR 0047 inheritance badges + reset", async ({ page }) => {
+test("per-agent (fleet member) settings say where each value comes from + reset", async ({ page }) => {
   await openSettings(page, "/app/agent/ava/");
   await section(page, "Model");
   await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="model.name"] .setting-inheritance')).toContainText(
-    "inherited from host",
+    "From this machine",
   );
   await expect(page.locator('.setting-row[data-key="routing.aux_model"] .setting-inheritance')).toContainText(
-    "inherited from default",
+    "Built-in",
   );
   const temp = page.locator('.setting-row[data-key="model.temperature"]');
-  await expect(temp.locator(".setting-inheritance")).toContainText("overridden here");
-  await temp.getByRole("button", { name: /Reset to inherited/ }).click();
+  await expect(temp.locator(".setting-inheritance")).toContainText("Set for this agent");
+  await expect(temp.locator(".setting-inheritance")).toContainText("The machine doesn't set this.");
+  await temp.getByRole("button", { name: /Use machine value/ }).click();
   await expect(page.locator(".pl-toast", { hasText: /inherited/i })).toBeVisible();
   await expect(page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance')).toHaveCount(0);
 });

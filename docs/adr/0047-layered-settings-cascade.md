@@ -147,7 +147,8 @@ the corresponding items in §7.
    | `prompt_cache.enabled/ttl/warm.enabled/warm.interval_seconds` | cache tier is gateway/deployment-dependent |
    | `telemetry.enabled`, `telemetry.retention_days`, `telemetry.ledger_retention_days` | observability is machine-wide |
    | `prompts.capture`, `prompts.retention_days`, `prompts.max_calls` | prompt-snapshot capture (#2243) is the same machine-wide observability posture as telemetry; both retention caps (#3019) sit with it |
-   | `identity.org` | white-label org branding is deployment-wide (`identity.name`/`operator` stay per-agent) |
+   | `identity.operator` | who the operator is is the same for every agent on the box; each agent's prompt names them (#5812, 2026-11-27 — was per-agent) |
+   | `identity.org` | white-label org branding is deployment-wide (`identity.name` stays per-agent) |
    | `egress.allowed_hosts` | box-wide outbound network policy (ADR 0008); sits at the Host layer beside the inbound `network.bind` (D8) |
    | `runtime.stay_awake` | serving sleep inhibition affects the host computer (#4541); opt-in, restart-required, with no env fallback for the setting |
 
