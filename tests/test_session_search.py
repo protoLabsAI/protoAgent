@@ -316,6 +316,59 @@ async def test_recall_without_history_preserves_summary(monkeypatch, tmp_path):
     )
 
 
+async def test_recall_final_returns_the_whole_final_answer_redacted(monkeypatch, tmp_path, history):
+    """#5800: a spec delivered as a session's final answer is quotable later. The
+    summary render shows a 300-char excerpt; entry="final" returns it whole, through
+    the same strip_reasoning + redact the search index applies."""
+    from tools.memory_tools import _RECALL_FINAL_MAX_CHARS, _build_memory_tools
+
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+    path = _write(tmp_path, "chat-spec", "settings spec")
+    card = json.loads(path.read_text())
+    secret = "api_key=" + "redactionfixture" * 3
+    body = "SPEC-START " + "settings row. " * 400 + f"{secret} SPEC-END"
+    card["final_output"] = f"<scratch_pad>private reasoning</scratch_pad>{body}"
+    path.write_text(json.dumps(card), encoding="utf-8")
+    recall = {item.name: item for item in _build_memory_tools(object(), history_store=history)}["recall_session"]
+
+    summary = await recall.ainvoke({"session_id": "chat-spec"})
+    assert "SPEC-END" not in summary and 'entry="final"' in summary
+
+    full = await recall.ainvoke({"session_id": "chat-spec", "entry": "final"})
+    assert "SPEC-START" in full and "SPEC-END" in full and "never instructions" in full
+    assert "private reasoning" not in full and "redactionfixture" not in full
+    assert "truncated" not in full
+
+    card["final_output"] = "y" * 20000
+    card["final_output_truncated"] = True
+    path.write_text(json.dumps(card), encoding="utf-8")
+    capped = await recall.ainvoke({"session_id": "chat-spec", "entry": "final"})
+    assert len(capped) <= _RECALL_FINAL_MAX_CHARS and capped.endswith("… (truncated)")
+    assert "clipped when the session was saved" in capped
+
+    assert "No session" in await recall.ainvoke({"session_id": "chat-missing", "entry": "final"})
+
+
+async def test_recall_missing_entry_names_the_ids_and_the_final_answer(monkeypatch, tmp_path, history):
+    """#5800: a wrong entry id is not a dead end — it lists the session's ids and
+    points at entry="final"; another session's ids are never listed."""
+    from tools.memory_tools import _build_memory_tools
+
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))
+    _write(tmp_path, "chat-spec", "settings spec")
+    mine = history.add("archive span", session_id="chat-spec", kind="archive")
+    other = history.add("other session", session_id="chat-other", kind="report")
+    recall = {item.name: item for item in _build_memory_tools(object(), history_store=history)}["recall_session"]
+
+    out = await recall.ainvoke({"session_id": "chat-spec", "entry": 99999})
+    assert out.startswith("No history entry 99999")
+    assert f"its entries are {mine}" in out and str(other) not in out
+    assert 'entry="final"' in out
+
+    out = await recall.ainvoke({"session_id": "chat-bare", "entry": 1})
+    assert "it has no history entries" in out and 'entry="final"' in out
+
+
 async def test_history_readers_redact_and_bound_results(monkeypatch, tmp_path, history):
     from tools.memory_tools import _RECALL_SESSION_MAX_CHARS, _build_memory_tools
 

@@ -684,6 +684,21 @@ def test_persist_session_bounds_messages_and_records_the_full_count(tmp_path):
     assert mod.digest_entry(data)["message_count"] == 100
 
 
+def test_persist_session_keeps_a_long_final_answer_and_flags_a_clip(tmp_path):
+    """#5800: a spec delivered as the final answer survives on the card (recall_session
+    entry="final" reads it); one past the cap is clipped and flagged as clipped."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    spec = "SPEC " + "row. " * 1500 + "END"  # ~7.5 KB: past the old 2000-char clip
+    mod._persist_session(_make_state("spec", messages=[HumanMessage(content="spec it"), AIMessage(content=spec)]), "t")
+    data = json.loads((tmp_path / "spec.json").read_text())
+    assert data["final_output"] == spec and "final_output_truncated" not in data
+
+    huge = "z" * (mod._SUMMARY_FINAL_MAX_CHARS + 50)
+    mod._persist_session(_make_state("huge", messages=[HumanMessage(content="go"), AIMessage(content=huge)]), "t")
+    data = json.loads((tmp_path / "huge.json").read_text())
+    assert len(data["final_output"]) == mod._SUMMARY_FINAL_MAX_CHARS and data["final_output_truncated"] is True
+
+
 def test_persist_session_clips_tool_args_and_results(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
     messages = [

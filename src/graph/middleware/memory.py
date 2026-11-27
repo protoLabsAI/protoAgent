@@ -219,11 +219,12 @@ def prune_session_summaries(
 # 35 of them over 200 KB and the largest 933 KB, because every message, every tool result
 # and the provider's encrypted reasoning blocks were stored whole. These caps keep what
 # the readers use: the digest's topic (first user message) and count, recall_session's
-# render (500 chars a message, 300 of the final output), and session_search's index.
+# render (500 chars a message, 300 of the final output), recall_session(entry="final")
+# (the whole final answer, #5800), and session_search's index.
 _SUMMARY_MESSAGE_MAX_CHARS = 500
 _SUMMARY_MAX_MESSAGES = 40  # the first user message plus the newest 39
 _SUMMARY_TOOL_FIELD_MAX_CHARS = 500
-_SUMMARY_FINAL_MAX_CHARS = 2000
+_SUMMARY_FINAL_MAX_CHARS = 12_000
 
 
 def _clip(text: str, limit: int) -> str:
@@ -280,7 +281,7 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
         tool_calls       — top-5 by duration list[{"name", "args", "result", "duration_ms"}],
                            args/result clipped
         tool_calls_total_count — int (present when > 5 tool calls)
-        final_output     — str | null, clipped
+        final_output     — str | null, clipped (``final_output_truncated: true`` when it was)
         gist / gist_at / gist_message_count — last successful idle gist, preserved on rewrites
         timestamp        — ISO-8601 UTC string
 
@@ -380,9 +381,12 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
 
     # --- Final output: last assistant message ---
     final_output: str | None = None
+    final_output_truncated = False
     for msg in reversed(messages_raw):
         if isinstance(msg, AIMessage) and msg.content:
-            final_output = _clip(_summary_text(msg), _SUMMARY_FINAL_MAX_CHARS)
+            final_text = _summary_text(msg)
+            final_output_truncated = len(final_text) > _SUMMARY_FINAL_MAX_CHARS
+            final_output = _clip(final_text, _SUMMARY_FINAL_MAX_CHARS)
             break
 
     # --- Build summary ---
@@ -396,6 +400,8 @@ def _persist_session_locked(state: dict, trace_id: str) -> None:
         "final_output": final_output,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if final_output_truncated:
+        summary["final_output_truncated"] = True
     if total_count > 5:
         summary["tool_calls_total_count"] = total_count
 
