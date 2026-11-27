@@ -558,8 +558,8 @@ async def test_parked_job_is_never_superseded_and_background_waits_stay_isolated
         assert tuple(after) == tuple(parked)
 
         # Background waits: one per OWNING execution session, mutually isolated.
-        await wait_tool.ainvoke({"seconds": 3600, "then": "resume parked", "state": {"session_id": owner}})
-        await wait_tool.ainvoke({"seconds": 3600, "then": "resume other", "state": {"session_id": other.context_id}})
+        await wait_tool.ainvoke({"seconds": 3600, "then": "resume parked", "summary": "Started the work.", "state": {"session_id": owner}})
+        await wait_tool.ainvoke({"seconds": 3600, "then": "resume other", "summary": "Started the work.", "state": {"session_id": other.context_id}})
         wait_parked = scheduler.get_job(f"wait:{owner}")
         wait_other = scheduler.get_job(f"wait:{other.context_id}")
         assert wait_parked.context_id == owner

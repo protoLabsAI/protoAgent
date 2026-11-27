@@ -130,7 +130,7 @@ def test_wait_only_produces_clean_handoff_text():
     wait_only = frozenset({"wait", "current_time"})
     prompt = build_system_prompt(include_subagents=False, bound_tool_names=wait_only)
     assert "Do not spin" in prompt
-    assert "`wait(seconds, then=…)` ends this turn and resumes you" in prompt
+    assert "`wait(seconds, then=…, summary=…)` ends this turn and resumes you" in prompt
     assert "When no independent step can progress, END your turn" in prompt
 
 

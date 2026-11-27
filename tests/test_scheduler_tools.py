@@ -270,8 +270,8 @@ async def test_wait_result_stays_clean_and_guidance_is_in_the_docstring():
     # text to leak. The guidance that actually reaches the model (before it calls the tool)
     # lives in the docstring, which is the tool description the model sees.
     sched = _FakeScheduler()
-    out = await _wait_tool(sched).ainvoke({"seconds": 300, "then": "check the upload", "state": {}})
-    assert out == "Wait scheduled: 5 minutes. Will resume to: check the upload"
+    out = await _wait_tool(sched).ainvoke({"seconds": 300, "then": "check the upload", "summary": "Started the work.", "state": {}})
+    assert out == "Wait scheduled: 5 minutes.\nFor the user: Started the work.\nWill resume to: check the upload"
     assert "Before ending your turn" not in out
     assert "I'll pick this back up" not in out
 
@@ -290,8 +290,8 @@ def test_wait_result_stays_parseable_by_wait_turn_reply():
     from graph.middleware.wait_yield import wait_turn_reply
 
     sched = _FakeScheduler()
-    out = asyncio.run(_wait_tool(sched).ainvoke({"seconds": 2700, "then": "Check the board.", "state": {}}))
-    assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."
+    out = asyncio.run(_wait_tool(sched).ainvoke({"seconds": 2700, "then": "Check the board.", "summary": "Started the work.", "state": {}}))
+    assert wait_turn_reply(out) == "Started the work. I'll pick this back up in 45 minutes."
 
 
 @pytest.mark.asyncio

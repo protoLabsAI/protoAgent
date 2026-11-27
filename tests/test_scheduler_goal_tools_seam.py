@@ -72,7 +72,7 @@ async def test_moved_collaborator_resolves_in_its_new_home_at_call_time(monkeypa
 
     monkeypatch.setattr(scheduler_tools, "_humanize_duration", lambda s: "PATCHED")
     wait = next(t for t in scheduler_tools._build_scheduler_tools(_Sched()) if t.name == "wait")
-    out = await wait.ainvoke({"seconds": 5, "then": "go"})
+    out = await wait.ainvoke({"seconds": 5, "then": "go", "summary": "Started the work."})
     assert "PATCHED" in out
 
 
