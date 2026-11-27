@@ -418,6 +418,17 @@ def _coerce_inbox_id(value: object) -> int | None:
     return None
 
 
+def _closing_answer(final_text: str, tail: str, tool_calls: int) -> str:
+    """The turn's closing answer (#5809): the text after its last tool call, when the turn
+    called a tool and ``final_text`` still ends with that text. Empty otherwise — a turn
+    with no tools, one that ended on a tool call, or one whose final text was replaced
+    after streaming — so the caller falls back to the full text."""
+    tail = tail.strip()
+    if not tool_calls or not tail or not final_text.rstrip().endswith(tail):
+        return ""
+    return tail
+
+
 @dataclass
 class TurnOutcome:
     """Everything a host needs at the end of an A2A turn (ADR 0003 / 0006).
@@ -477,6 +488,12 @@ class TurnOutcome:
     # when no model call reported usage — a turn that failed on its first call, a
     # short-circuit reply — instead of the configured default it never ran on (#3957).
     requested_model: str = ""
+    # The turn's closing answer: the text after its last tool call (#5809). ``text`` is
+    # every model call's text joined, which reads right in chat beside the tool cards but
+    # repeats each call's preamble on a surface with no tool cards (the Activity feed, a
+    # scheduled-report card, a Discord DM). Empty when it can't be told apart from
+    # ``text`` — then ``text`` is the answer.
+    answer: str = ""
 
 
 # A terminal hook the host can register (ADR 0003 / 0006): invoked with a
@@ -1158,6 +1175,8 @@ class ProtoAgentExecutor(AgentExecutor):
         # reads as the failure it is.
         ended_state = ["failed"]
         accumulated = ""
+        # Text since the last tool frame — the closing answer (#5809).
+        answer_tail = ""
         deltas: list[dict] = []
         usage = {
             "input_tokens": 0,
@@ -1423,6 +1442,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 context_tokens=context_tokens,
                 origin=_origin,
                 incognito=bool(_md.get("incognito")),
+                answer=_closing_answer(final_text, answer_tail, tool_calls),
                 trigger=_trigger,
                 priority=_priority,
                 stimulus=_stimulus,
@@ -1494,6 +1514,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     # model calls are the producer's to make, inside the delta itself
                     # (server.turn_stream._run_turn_stream).
                     accumulated += payload
+                    answer_tail += payload
                     _text_buf += payload
                     if _should_flush(_text_buf, _text_flushed_at):
                         await _flush_text()
@@ -1504,6 +1525,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     # rather than after it — the client builds its ordered render blocks
                     # in frame-arrival order, so text must reach it before the tool.
                     await _flush_text()
+                    answer_tail = ""
                     if event_type == "tool_start":
                         # server/chat.py announces a tool_start TWICE per real call — once
                         # early (streamed tool-call name, empty args, so the card shows
