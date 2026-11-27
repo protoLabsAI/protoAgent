@@ -442,7 +442,7 @@ describe("Job health and Recent runs (work-view-additions §2)", () => {
     expect(runs.querySelector("li .pl-chip-meta")?.textContent).toBe("Nov 7 2020 09:00 UTC");
     const order = (a: Element, b: Element) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
     expect(order(host!.querySelector(".work-detail__actions")!, runs)).toBeTruthy();
-    const technical = Array.from(host!.querySelectorAll(".work-detail > .pl-accordion")).pop()!;
+    const technical = Array.from(host!.querySelectorAll(".work-detail > .technical-details")).pop()!;
     expect(order(runs, technical)).toBeTruthy();
   });
 

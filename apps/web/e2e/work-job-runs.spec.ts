@@ -1,8 +1,10 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Work view additions §2 (#5543): a scheduled job's detail shows its health and a Recent runs
 // list. The acceptance point this spec owns is §4's reflow rule — at 390 px nothing scrolls
-// sideways, even with a URL-length error in the Health field and in a failed run.
+// sideways, even with a URL-length error in the Health field and in a failed run. It also
+// owns the compact Technical details disclosure's collapsed size (at most 32 CSS px, no card
+// chrome) and its keyboard toggle.
 
 const LONG_ERROR = `Gateway refused https://ci.example.com/protoAgent/runs?trace=${"a1b2c3d4e5".repeat(16)} after 30 s`;
 const CREATED = "2026-11-01T08:00:00+00:00";
@@ -20,6 +22,20 @@ const RUNS = [
   { ...RUN, scheduled_for: "2020-11-16T08:00:00+00:00", state: "settled", task_state: "completed", ok: true, error: null, duration_s: 65, reported: false,
     job_created_at: "2026-10-01T08:00:00+00:00" },
 ];
+
+/** Every collapsed Technical details toggle in `scope`: its height and card chrome. */
+async function collapsedToggles(scope: Locator) {
+  return scope.locator(".technical-details__toggle").evaluateAll((nodes) => nodes.map((node) => {
+    const style = getComputedStyle(node);
+    return {
+      expanded: node.getAttribute("aria-expanded"),
+      short: node.getBoundingClientRect().height <= 32,
+      border: style.borderTopWidth !== "0px",
+      fill: style.backgroundColor !== "rgba(0, 0, 0, 0)",
+    };
+  }));
+}
+const COMPACT = { expanded: "false", short: true, border: false, fill: false };
 
 async function serve(page: Page) {
   await page.route("**/api/scheduler/jobs", (route) => route.request().method() === "GET"
@@ -62,9 +78,14 @@ for (const theme of ["light", "dark"] as const) {
     // Open a run's Technical details and the job's own: the long ids and stamps must wrap too.
     const summaries = detail.getByRole("button", { name: "Technical details" });
     await expect(summaries).toHaveCount(4);
+    // Collapsed, each is a compact muted text toggle — not a bordered, padded card.
+    expect(await collapsedToggles(detail)).toEqual([COMPACT, COMPACT, COMPACT, COMPACT]);
     await summaries.first().click();
     await summaries.last().click();
+    await expect(summaries.first()).toHaveAttribute("aria-expanded", "true");
+    await expect(summaries.nth(1)).toHaveAttribute("aria-expanded", "false"); // per run, not shared
     await expect(runs.getByRole("listitem").first()).toContainText("2020-11-20T08:00:00+00:00");
+    await expect(runs.getByRole("listitem").first()).toContainText(RUN.task_id);
 
     // §4: nothing scrolls sideways — the page, the Work view, the detail pane, or any run row.
     const fits = () => page.evaluate(() => {
@@ -115,6 +136,20 @@ test("a healthy job with no runs says when it first runs; the window detail list
   await work.locator(".work-row", { hasText: JOB.prompt }).click();
   await expect(detail.getByRole("list", { name: "Recent runs" }).getByRole("listitem")).toHaveCount(3);
   await expect.poll(() => detail.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+
+  // Desktop scale: every collapsed Technical details row is compact; the keyboard opens and
+  // closes one run's disclosure with a visible focus ring, leaving the others closed.
+  expect(await collapsedToggles(detail)).toEqual([COMPACT, COMPACT, COMPACT, COMPACT]);
+  const toggle = detail.locator(".job-run").first().getByRole("button", { name: "Technical details" });
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(toggle).toBeFocused();
+  expect(await toggle.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");
+  await expect(detail.locator(".job-run").first()).toContainText(RUN.message_id);
+  await expect(detail.locator(".job-run").nth(1)).not.toContainText(RUN.message_id);
+  await page.keyboard.press("Space");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   const shot = info.outputPath("job-runs-wide.png");
   await page.screenshot({ path: shot });
   await info.attach("Recent runs in the window", { path: shot, contentType: "image/png" });

@@ -11,9 +11,9 @@
 import { useEffect, useId, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton, StatusDot } from "@protolabsai/ui/data";
-import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Button, Callout, type Status } from "@protolabsai/ui/primitives";
 
+import { TechnicalDetails } from "../app/TechnicalDetails";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 import type { ScheduledJob, ScheduledJobRun } from "../lib/types";
@@ -104,18 +104,16 @@ function RunRow({ run, job, zone }: { run: ScheduledJobRun; job: ScheduledJob; z
       </div>
       {line && <p className="job-run__note">{line}</p>}
       {technical.length > 0 && (
-        <Accordion>
-          <AccordionItem title="Technical details">
-            <dl className="work-detail__tech">
-              {technical.map(([key, value]) => (
-                <div className="work-detail__tech-row" key={key}>
-                  <dt>{key}</dt>
-                  <dd className="work-detail__tech-value">{String(value)}</dd>
-                </div>
-              ))}
-            </dl>
-          </AccordionItem>
-        </Accordion>
+        <TechnicalDetails>
+          <dl className="work-detail__tech">
+            {technical.map(([key, value]) => (
+              <div className="work-detail__tech-row" key={key}>
+                <dt>{key}</dt>
+                <dd className="work-detail__tech-value">{String(value)}</dd>
+              </div>
+            ))}
+          </dl>
+        </TechnicalDetails>
       )}
     </li>
   );

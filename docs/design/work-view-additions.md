@@ -123,7 +123,7 @@ Rows are matched top to bottom; the canceled row is checked before the generic `
 
 - **One clock per detail.** Every time in a job's detail — the **Runs** field, **Health**, each run row — uses the job's own clock: its `timezone`, or UTC when that's `null` (`types.ts:840`). Each time carries the zone name ("Today 14:00 UTC", or "Today 09:00 Europe/Berlin"). The row meta in Coming up uses the same clock. Nothing depends on `title`: the full ISO stamp is the `scheduled_for` value in the run's Technical details, which keyboard and touch can open.
 - Line 1: dot, the word (semibold), `.pl-chip-meta` time of `scheduled_for` in the job's clock.
-- Each run has its own collapsed **Technical details**: `state`, `task_state`, `scheduled_for`, `task_id`, `message_id`, `job_created_at`. A run from an older generation of the id (`job_created_at` ≠ the job's `created_at`) adds "From an earlier version of this job" to line 2.
+- Each run has its own collapsed **Technical details** — the shared compact text-and-chevron disclosure ([work-view.md](./work-view.md) §2.3), opened per run, never one shared state: `state`, `task_state`, `scheduled_for`, `task_id`, `message_id`, `job_created_at`. A run from an older generation of the id (`job_created_at` ≠ the job's `created_at`) adds "From an earlier version of this job" to line 2.
 - **Show older runs** (ghost) shows **only when the page came back full**: as many runs as the `limit` requested (20). It re-fetches with `limit=200` (S3). After that the button is gone; if 200 came back (the route's maximum, `local.py:344`), a muted line says "Showing the latest 200 runs."
 - Failures use warning, never error (four-group spec §6).
 
@@ -160,7 +160,7 @@ Rows are matched top to bottom; the canceled row is checked before the generic `
 - Tags: info dot, **Instance-wide**, **Instruction**. No "This chat" badge.
 - Fields: **Applies to** "Every chat and every unattended turn on this instance: scheduled jobs, watches, the inbox and webhooks." · **Your words** "You said “…” in “<chat title>” · <when> (your time)", for example "· Nov 18 09:40 (your time)" (or "in a chat that's since been deleted"). The zone is in the visible text. Today the stamp is the viewer's local time (`clock()`, `directives.tsx:59-63`) and only `title={localStampTitle(...)}` (`directives.tsx:226`) says so, which keyboard and touch users can't read. · **Lasts** "Until you withdraw it".
 - Actions: **Edit** (scope and conditions, `PATCH /api/directives/{id}?instance_wide=true`, `chat_routes.py:2337-2361`), **Withdraw…** (danger).
-- Technical details: `id`, `instance_wide`, `session_id` (labelled "recorded in"), `status`, `created_at`.
+- Technical details (the shared compact disclosure, closed by default): `id`, `instance_wide`, `session_id` (labelled "recorded in"), `status`, `created_at`.
 
 ### 3.4 Withdraw (inline confirm)
 

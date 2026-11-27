@@ -7,6 +7,7 @@ import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { clearQuickChats } from "../app/paletteChatStore";
+import { TechnicalDetails } from "../app/TechnicalDetails";
 import {
   clearSavedChats,
   freeUpSpace,
@@ -402,8 +403,7 @@ export function StoragePanel() {
         </section>
 
         {/* ── Technical details (§3.6) ── */}
-        <details className="storage-details">
-          <summary>Technical details</summary>
+        <TechnicalDetails className="storage-details">
           <ul>
             <li>
               Browser's estimate:{" "}
@@ -425,7 +425,7 @@ export function StoragePanel() {
               Persistent storage: {persistDetail(canPersist, persist)}. Saving: {saving ? "ok" : "failing"}.
             </li>
           </ul>
-        </details>
+        </TechnicalDetails>
       </div>
 
       <ConfirmDialog

@@ -119,7 +119,7 @@ The refused state is plain text in muted colour, with no warning colour and no i
 
 ### 3.6 Technical details
 
-A native `<details>`, closed by default, with the summary "Technical details". This is the only place jargon may appear:
+The shared compact **Technical details** disclosure (`apps/web/src/app/TechnicalDetails.tsx`, the same one the Work view uses, [work-view.md](./work-view.md) §2.3): a small muted text toggle with a chevron, closed by default, its expanded state on the button (`aria-expanded`). No border, background or card padding; the collapsed row is at most 32 px tall at desktop scale and grows to the 44 px touch floor on a coarse pointer. Its lines mount only while it is open. This is the only place jargon may appear:
 
 - Browser's estimate: 3.4 MB used of about 60 GB, including about 400 KB of browser overhead. Or "unavailable (needs a secure address and Safari 17 or later)".
 - Chats: about 3.0 MB in the `protoagent-transcripts` IndexedDB database.

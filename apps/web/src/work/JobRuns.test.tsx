@@ -144,6 +144,19 @@ describe("the §2.3 run table", () => {
     expect(rows()[0].textContent).toContain("msg-1");
   });
 
+  it("each run's compact Technical details opens on its own, its ledger scoped to that run", async () => {
+    apiMock.scheduleRuns.mockResolvedValue({ job_id: "job-7", runs: [run(), run({ task_id: "task-2", message_id: "msg-2" })] });
+    await mount(job());
+    const toggles = rows().map((li) => li.querySelector<HTMLButtonElement>(".technical-details__toggle")!);
+    expect(toggles.map((t) => t.getAttribute("aria-expanded"))).toEqual(["false", "false"]);
+    expect(host!.querySelector(".pl-accordion")).toBeNull();
+    await act(async () => toggles[1].click());
+    expect(toggles.map((t) => t.getAttribute("aria-expanded"))).toEqual(["false", "true"]);
+    expect(rows()[0].textContent).not.toContain("msg-1");
+    expect(rows()[1].textContent).toContain("msg-2");
+    expect(rows()[1].textContent).not.toContain("msg-1");
+  });
+
   it("marks a run from an older generation of the id on line 2", async () => {
     apiMock.scheduleRuns.mockResolvedValue({ job_id: "job-7", runs: [
       run(), run({ job_created_at: "2026-10-01T08:00:00+00:00" }),

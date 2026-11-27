@@ -88,3 +88,6 @@
 .work-view[data-frame="sheet"] .work-decision-detail button,
 .work-view[data-frame="sheet"] .chat-directive button { width: 100%; }
 .work-view[data-frame="sheet"] .chat-directive-actions { flex-direction: column; }
+/* The compact Technical details toggle stays a text-width row in the sheet too: its touch
+   height comes from technical-details.css, not from the full-width action-button rule. */
+.work-view[data-frame="sheet"] .work-detail .technical-details__toggle { width: auto; }
