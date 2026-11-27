@@ -1,0 +1,1 @@
+- **The fleet proxy forwards every value of a repeated query parameter.** Both hub-to-member proxy paths built the upstream query with `dict(request.query_params)`, which kept only the last value of a repeated key, so `?tag=a&tag=b` reached the member as `?tag=b`. The hub-signed `?token=` is still dropped before a remote. Fixes #5785
