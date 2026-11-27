@@ -336,6 +336,9 @@ async def withdraw_decision(decision_id: str, reason: str = "", state: Annotated
     rec = store.get(decision_id)
     session_id = _session_id_from(state)
     agent = getattr(STATE.graph_config, "identity_name", "")
+    if rec is None:
+        # A typo or a stale id is not an ownership problem; saying so lets the agent fix it.
+        return f"Error: no decision with id {decision_id!r}. Use the id request_decision returned."
     # Another session of this agent may learn that the parked choice is obsolete.
     # Unnamed legacy records can only be withdrawn from their own injected session.
     owns_record = rec is not None and (

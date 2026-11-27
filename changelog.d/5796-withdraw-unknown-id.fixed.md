@@ -1,0 +1,1 @@
+- **`withdraw_decision` says an unknown id was not found.** A typo'd or stale decision id used to come back as "decision does not belong to this agent or session", which read as an ownership problem. It now says no decision has that id. Fixes #5796
