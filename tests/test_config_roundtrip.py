@@ -160,6 +160,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_projects": [],
     "filesystem_run_requires_approval": True,
     "filesystem_run_auto_approve": [],
+    "filesystem_shell_first": False,
     "filesystem_run_command_env_passthrough": [],
     "filesystem_compact_command_output": True,
     "filesystem_compact_command_output_threshold": 8000,

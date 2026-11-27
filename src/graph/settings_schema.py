@@ -1444,6 +1444,19 @@ FIELDS: list[Field] = [
         credential_plane=True,
     ),
     Field(
+        "filesystem.shell_first",
+        "filesystem_shell_first",
+        "Shell-first file browsing",
+        "bool",
+        "Filesystem",
+        "Hide list_dir, find_files and search_files from the agent so it browses with "
+        "ls, find and rg through run_command instead, and their descriptions leave the "
+        "prompt. Applies only when run_command runs WITHOUT approval (otherwise every "
+        "read would ask you first) and not on Windows. read_file, edit_file and "
+        "write_file stay, and subagents keep all the read tools.",
+        depends_on={"key": "filesystem.run_requires_approval", "equals": False},
+    ),
+    Field(
         "filesystem.code_pane",
         "filesystem_code_pane",
         "Code pane",

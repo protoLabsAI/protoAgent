@@ -295,30 +295,30 @@ def test_middleware_logs_real_error_and_reraises(ledger):
 
 
 def test_middleware_filters_control_flow(ledger):
-    mw = FrictionMiddleware(bound_tools={"read_file"})
+    mw = FrictionMiddleware(bound_tools={"edit_file"})
     interrupt = type("GraphInterrupt", (Exception,), {})  # name is in _CONTROL_FLOW
 
     def pause(_req):
         raise interrupt("approval needed")
 
     with pytest.raises(interrupt):
-        mw.wrap_tool_call(_Req("run_command", {"command": "cat app.log"}), pause)
+        mw.wrap_tool_call(_Req("run_command", {"command": "sed -i 's/a/b/' app.py"}), pause)
     recs = _recs(ledger)
     # the escape-hatch reach IS logged; the HITL interrupt is NOT logged as an error
-    assert any(r.get("suggest") == "read_file" for r in recs)
+    assert any(r.get("suggest") == "edit_file" for r in recs)
     assert not any("raised" in r["summary"] for r in recs)
 
 
 def test_middleware_notes_escape_hatch(ledger):
-    mw = FrictionMiddleware(bound_tools={"list_dir"})
+    mw = FrictionMiddleware(bound_tools={"write_file"})
 
     def ok(_req):
         return "fine"
 
-    assert mw.wrap_tool_call(_Req("run_command", {"command": "ls"}), ok) == "fine"
+    assert mw.wrap_tool_call(_Req("run_command", {"command": "tee out.txt"}), ok) == "fine"
     recs = _recs(ledger)
-    assert [r["summary"] for r in recs] == ["used `ls` via run_command — list_dir does this"]
-    assert recs[0]["tool"] == "run_command" and recs[0]["suggest"] == "list_dir"
+    assert [r["summary"] for r in recs] == ["used `tee` via run_command — write_file does this"]
+    assert recs[0]["tool"] == "run_command" and recs[0]["suggest"] == "write_file"
 
 
 def test_middleware_ignores_normal_tools(ledger):
@@ -693,11 +693,11 @@ def test_a_resolve_never_truncates_the_ledger(monkeypatch, tmp_path):
 def test_auto_capture_detail_is_json_the_view_can_render(ledger):
     """The captured args are stored as JSON, not a Python dict repr — the console shows
     this string to an operator, and `{'command': 'git diff'}` parses as nothing."""
-    mw = FrictionMiddleware(bound_tools={"read_file"})
-    mw._note_escape_hatch(_Req("shell", {"command": "cat README.md", "cwd": "/repo"}))
+    mw = FrictionMiddleware(bound_tools={"write_file"})
+    mw._note_escape_hatch(_Req("shell", {"command": "echo hi > README.md", "cwd": "/repo"}))
 
     detail = _recs(ledger)[0]["detail"]
-    assert json.loads(detail) == {"command": "cat README.md", "cwd": "/repo"}
+    assert json.loads(detail) == {"command": "echo hi > README.md", "cwd": "/repo"}
 
 
 # ── ADR 0079 seam: the backlog reaches the agent's working state ─────────────
@@ -1559,31 +1559,32 @@ _ALL_FS = frozenset({"read_file", "search_files", "list_dir", "find_files", "edi
         ("awk '{print $1}' f", None),
         ("echo done", None),
         ("git status 2>/dev/null", None),
-        ("cat f 2>/dev/null", ("cat", "read_file")),  # a stderr redirect is not a write
-        # duplicates of a first-class tool
-        ("cat foo | grep x", ("cat", "read_file")),
-        ("cd x && cat y", ("cat", "read_file")),
-        ("cd a; ls", ("ls", "list_dir")),
-        ("ls -la", ("ls", "list_dir")),
-        ("head -n 50 src/app.ts", ("head", "read_file")),
-        ("/bin/cat f", ("cat", "read_file")),
-        ("rg -n foo src", ("rg", "search_files")),
-        ("env LC_ALL=C sudo -E grep -r x .", ("grep", "search_files")),
-        ("mise exec -- cat package.json", ("cat", "read_file")),
-        ("nice -n 10 cat foo", ("cat", "read_file")),  # a wrapper flag's value is not the command
-        ("sudo -u app grep x /var/log/app.log", ("grep", "search_files")),
-        ("env -u HOME ls", ("ls", "list_dir")),
+        ("cat f 2>/dev/null", None),  # a stderr redirect is not a write
+        # shell READS are never friction (2026-11-26): the model is fluent in them
+        ("cat foo | grep x", None),
+        ("cd a; ls", None),
+        ("head -n 50 src/app.ts", None),
+        ("rg -n foo src", None),
+        ("env LC_ALL=C sudo -E grep -r x .", None),
+        ("bash -c 'tail -n 5 log.txt'", None),
+        ("find . -name '*.py'", None),
+        ("tree -L 2", None),
         ("time npm test", None),
-        ("bash -c 'tail -n 5 log.txt'", ("tail", "read_file")),
-        ("find . -name '*.py'", ("find", "find_files")),
-        ("tree -L 2", ("tree", "list_dir")),
+        # shell WRITES that duplicate a first-class write tool
+        ("cd x && sed -i 's/a/b/' y", ("sed", "edit_file")),
+        ("/bin/sed -i 's/a/b/' f", ("sed", "edit_file")),
+        ("mise exec -- tee package.json", ("tee", "write_file")),
+        ("nice -n 10 tee foo", ("tee", "write_file")),  # a wrapper flag's value is not the command
+        ("sudo -u app tee /var/log/app.log", ("tee", "write_file")),
+        ("env -u HOME echo x > f", ("echo", "write_file")),
+        ("bash -c 'echo x > log.txt'", ("echo", "write_file")),
         ("sed -i 's/a/b/' f.py", ("sed", "edit_file")),
         ("sed -Ei.bak 's/a/b/' f.py", ("sed", "edit_file")),
         ("awk -i inplace '{print}' f", ("awk", "edit_file")),
         ("echo hi > out.txt", ("echo", "write_file")),
         ("cat > out.txt <<'EOF'\nhello\nEOF", ("cat", "write_file")),
         ("tee out.txt", ("tee", "write_file")),
-        ("cat 'unbalanced", ("cat", "read_file")),  # bad quoting degrades, never raises
+        ("cat 'unbalanced", None),  # bad quoting degrades, never raises
         ("", None),
     ],
 )
@@ -1594,12 +1595,12 @@ def test_the_command_classifier_matrix(command, expected):
 
 
 def test_a_duplicate_is_friction_only_when_its_tool_is_bound():
-    """An agent without list_dir running `ls` is using the only tool it has."""
+    """An agent without edit_file running `sed -i` is using the only tool it has."""
     from plugins.friction import _duplicated_tool
 
-    assert _duplicated_tool("ls -la", {"list_dir"}) == ("ls", "list_dir")
-    assert _duplicated_tool("ls -la", {"read_file", "search_files"}) is None
-    assert _duplicated_tool("cat f", set()) is None
+    assert _duplicated_tool("sed -i 's/a/b/' f", {"edit_file"}) == ("sed", "edit_file")
+    assert _duplicated_tool("sed -i 's/a/b/' f", {"read_file", "write_file"}) is None
+    assert _duplicated_tool("tee f", set()) is None
 
 
 def test_real_work_through_run_command_is_not_logged(ledger):
@@ -1611,12 +1612,12 @@ def test_real_work_through_run_command_is_not_logged(ledger):
 
 def test_a_duplicate_names_the_tool_that_does_it(ledger):
     mw = FrictionMiddleware(bound_tools=_ALL_FS)
-    mw.wrap_tool_call(_Req("run_command", {"project": "p", "command": "cat foo | grep x"}), lambda _r: "ok")
+    mw.wrap_tool_call(_Req("run_command", {"project": "p", "command": "cd x && sed -i 's/a/b/' y"}), lambda _r: "ok")
 
     (rec,) = _recs(ledger)
-    assert rec["summary"] == "used `cat` via run_command — read_file does this"
-    assert rec["suggest"] == "read_file" and rec["tool"] == "run_command"
-    assert grouped_entries()[0]["suggest"] == "read_file"
+    assert rec["summary"] == "used `sed` via run_command — edit_file does this"
+    assert rec["suggest"] == "edit_file" and rec["tool"] == "run_command"
+    assert grouped_entries()[0]["suggest"] == "edit_file"
 
 
 def test_bound_tools_are_learned_from_the_model_call(ledger):
@@ -1624,16 +1625,16 @@ def test_bound_tools_are_learned_from_the_model_call(ledger):
     from types import SimpleNamespace
 
     mw = FrictionMiddleware()
-    mw.wrap_tool_call(_Req("run_command", {"command": "ls"}), lambda _r: "ok")
+    mw.wrap_tool_call(_Req("run_command", {"command": "tee f"}), lambda _r: "ok")
     assert not ledger.exists()  # nothing bound yet → nothing to duplicate
 
-    tool = SimpleNamespace(name="list_dir")
+    tool = SimpleNamespace(name="write_file")
     req = SimpleNamespace(tools=[tool, {"type": "function", "function": {"name": "read_file"}}])
     assert mw.wrap_model_call(req, lambda r: "resp") == "resp"
     assert asyncio.run(mw.awrap_model_call(req, _async_ok)) == "resp"
 
-    mw.wrap_tool_call(_Req("run_command", {"command": "ls"}), lambda _r: "ok")
-    assert _recs(ledger)[0]["suggest"] == "list_dir"
+    mw.wrap_tool_call(_Req("run_command", {"command": "tee f"}), lambda _r: "ok")
+    assert _recs(ledger)[0]["suggest"] == "write_file"
 
 
 async def _async_ok(_req):
@@ -1652,14 +1653,14 @@ def test_escape_hatch_exempt_silences_a_tool_entirely(wired, tmp_path):
     mw = FrictionMiddleware(bound_tools=_ALL_FS)
 
     wired.config = {"escape_hatch_exempt": ["run_command", "python"]}
-    mw._note_escape_hatch(_Req("run_command", {"command": "cat f"}))
+    mw._note_escape_hatch(_Req("run_command", {"command": "tee f"}))
     mw._note_escape_hatch(_Req("python", {"code": "x"}))
     assert not ledger.exists()
 
     wired.config = {"escape_hatch_exempt": "python, exec"}  # a hand-edited string is a list too
     mw._note_escape_hatch(_Req("python", {"code": "x"}))
     assert not ledger.exists()
-    mw._note_escape_hatch(_Req("run_command", {"command": "cat f"}))
+    mw._note_escape_hatch(_Req("run_command", {"command": "tee f"}))
     assert len(_recs(ledger)) == 1  # not exempt any more
 
 
@@ -1714,11 +1715,11 @@ def test_a_duplicate_hint_says_which_tool_to_use(wired):
 
     mw = FrictionMiddleware(bound_tools=_ALL_FS)
     for _ in range(3):
-        mw._note_escape_hatch(_Req("run_command", {"command": "grep -rn foo ."}))
+        mw._note_escape_hatch(_Req("run_command", {"command": "sed -i 's/a/b/' f"}))
 
     (item,) = friction.open_friction_work()
-    assert item["title"] == "used `grep` via run_command — search_files does this"
-    assert item["hint"] == "use search_files"
+    assert item["title"] == "used `sed` via run_command — edit_file does this"
+    assert item["hint"] == "use edit_file"
 
 
 # ── resolve_friction must be able to find what the agent logged ──────────────
@@ -1919,7 +1920,7 @@ async def test_real_tool_runtime_auto_capture_ids(ledger, monkeypatch, sync):
     monkeypatch.setattr(tracing, "_enabled", True)
     score = MagicMock()
     monkeypatch.setattr(tracing, "score_trace", score)
-    mw = FrictionMiddleware(bound_tools={"read_file"})
+    mw = FrictionMiddleware(bound_tools={"write_file"})
     builder = StateGraph(ProtoAgentState)
     builder.add_node(
         "tools",
@@ -1941,7 +1942,7 @@ async def test_real_tool_runtime_auto_capture_ids(ledger, monkeypatch, sync):
                 tool_calls=[
                     {
                         "name": "run_command",
-                        "args": {"command": "cat file"},
+                        "args": {"command": "tee file"},
                         "id": "shell",
                         "type": "tool_call",
                     }
@@ -1959,7 +1960,7 @@ async def test_real_tool_runtime_auto_capture_ids(ledger, monkeypatch, sync):
     assert len(recs) == 2
     assert {r["session_id"] for r in recs} == {"auto-session"}
     assert {r["trace_id"] for r in recs} == {"auto-trace"}
-    assert recs[0]["suggest"] == "read_file"
+    assert recs[0]["suggest"] == "write_file"
     assert "raised ValueError" in recs[1]["summary"]
     assert score.call_count == 2
     for call, rec in zip(score.call_args_list, recs):
