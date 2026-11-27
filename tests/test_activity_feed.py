@@ -396,3 +396,50 @@ def test_resumed_chat_turn_carries_origin_for_the_result_card(tmp_path, monkeypa
     resumed = next((d for ev, d in published if ev == "chat.resumed"), None)
     assert resumed is not None
     assert resumed["origin"] == "scheduler"
+
+
+def _job_outcome(**kw):
+    base = dict(
+        task_id="job-task",
+        context_id="job:sweep-1",
+        state="completed",
+        origin="scheduler",
+        trigger="sweep",
+    )
+    base.update(kw)
+    return TurnOutcome(**base)
+
+
+def test_job_feed_entry_shows_the_closing_answer_not_every_preamble(tmp_path, monkeypatch):
+    """#5809: a job turn's feed entry (and the Discord DM that forwards it) is the text
+    after the last tool call, not each model call's preamble joined with blank runs."""
+    log = ActivityLog(str(tmp_path / "a.db"))
+    monkeypatch.setattr(server.STATE, "activity_log", log)
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+
+    server._a2a_terminal(
+        _job_outcome(
+            text="Running the sweep now.\n\n\n\n\nTwo changes. Let me check.\n\nVERDICT: BLOCK\n\n\n\nDisk at 9%.",
+            answer="VERDICT: BLOCK\n\n\n\nDisk at 9%.",
+        )
+    )
+
+    assert log.recent()[0]["text"] == "VERDICT: BLOCK\n\nDisk at 9%."
+    activity = next(d for ev, d in published if ev == "activity.message")
+    assert activity["text"] == "VERDICT: BLOCK\n\nDisk at 9%."
+
+
+def test_job_feed_entry_keeps_full_text_without_a_closing_answer_or_on_failure(tmp_path, monkeypatch):
+    log = ActivityLog(str(tmp_path / "a.db"))
+    monkeypatch.setattr(server.STATE, "activity_log", log)
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: None)
+
+    server._a2a_terminal(_job_outcome(task_id="t1", text="Only answer.\n\n\n\nSecond line."))
+    server._a2a_terminal(
+        _job_outcome(task_id="t2", state="failed", error="boom", text="Partial narration.", answer="narration.")
+    )
+
+    rows = {r["task_id"]: r["text"] for r in log.recent()}
+    assert rows["t1"] == "Only answer.\n\nSecond line."
+    assert rows["t2"].startswith("Partial narration.") and "boom" in rows["t2"]

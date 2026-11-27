@@ -1795,6 +1795,23 @@ def _record_run_report(job_id: str, task_id: str, reported: bool) -> None:
         log.exception("[scheduler] could not record whether job %s reported", job_id)
 
 
+_BLANK_RUN = re.compile(r"\n[ \t]*\n(?:[ \t]*\n)+")
+
+
+def _delivered_answer(outcome) -> str:
+    """The answer a surface WITHOUT tool cards shows for a turn (#5809): the Activity feed,
+    a scheduled-report card, and whatever forwards them (a Discord DM). A completed turn
+    that called tools shows its closing answer — the text after its last tool call —
+    rather than every model call's preamble joined; anything else shows the full text.
+    Runs of blank lines (tool-only model calls leave them) collapse to one."""
+    text = getattr(outcome, "text", "") or ""
+    answer = getattr(outcome, "answer", "") or ""
+    if answer and str(getattr(outcome, "state", "") or "completed") == "completed":
+        text = answer
+    text = extract_output(text) or text
+    return _BLANK_RUN.sub("\n\n", text)
+
+
 def _job_origin_session(job_id: str) -> str:
     """The ``origin_session`` stamped on scheduler job ``job_id``, or ``""``.
 
@@ -1902,7 +1919,7 @@ def _scheduled_delivery_payload(outcome) -> dict | None:
     context_id = str(getattr(outcome, "context_id", "") or "")
     if context_id == origin:
         return None
-    text = extract_output(outcome.text) or outcome.text or ""
+    text = _delivered_answer(outcome)
     summary = text.strip()
     state = str(getattr(outcome, "state", "") or "completed")
     if not summary and state not in ("completed", "canceled"):
@@ -2410,7 +2427,7 @@ def _a2a_terminal(outcome) -> None:
     if outcome.context_id != ACTIVITY_CONTEXT and not is_peer_turn and not is_job_turn:
         _surface_resumed_chat_turn(outcome)
         return
-    text = extract_output(outcome.text) or outcome.text
+    text = _delivered_answer(outcome)
     state = str(getattr(outcome, "state", "") or "completed")
     error = str(getattr(outcome, "error", "") or "")
     # A peer or job failure must read as failed even when the model emitted partial

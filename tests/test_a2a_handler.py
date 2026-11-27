@@ -1115,6 +1115,42 @@ async def test_terminal_hook_fires_turn_outcome_on_completion():
 
 
 @pytest.mark.asyncio
+async def test_terminal_outcome_carries_the_closing_answer_after_the_last_tool():
+    """#5809: ``text`` joins every model call's preamble; ``answer`` is only what the
+    model said after its last tool call — the part a feed entry or DM should show."""
+    outcomes: list[TurnOutcome] = []
+    set_terminal_hook(outcomes.append)
+    joined = "Checking now.\n\nTwo changes. Let me verify.\n\nSweep complete: all clear."
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "Checking now.")
+        yield ("tool_start", {"id": "a", "name": "df"})
+        yield ("tool_end", {"id": "a", "name": "df", "output": "ok"})
+        yield ("text", "\n\nTwo changes. Let me verify.")
+        yield ("tool_start", {"id": "b", "name": "du"})
+        yield ("tool_end", {"id": "b", "name": "du", "output": "ok"})
+        yield ("text", "\n\nSweep complete: all clear.")
+        yield ("done", joined)
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        await _poll_terminal(c, task["id"])
+    o = outcomes[0]
+    assert o.text == joined
+    assert o.answer == "Sweep complete: all clear."
+
+
+def test_closing_answer_is_empty_when_it_cannot_be_told_apart():
+    from a2a_impl.executor import _closing_answer
+
+    assert _closing_answer("just an answer", "just an answer", 0) == ""  # no tools: text is the answer
+    assert _closing_answer("pre", "", 2) == ""  # ended on a tool call
+    assert _closing_answer("replaced after streaming", "streamed tail", 1) == ""
+    assert _closing_answer("pre\n\nfinal\n", "\n\nfinal\n", 1) == "final"
+
+
+@pytest.mark.asyncio
 async def test_terminal_hook_receives_peer_provenance_from_send_message_metadata():
     """The real SDK request path preserves the delegate adapter's provenance, not just
     an isolated helper call: request-level metadata reaches the terminal outcome with
