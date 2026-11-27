@@ -148,6 +148,19 @@ def _read_file(path: str | Path) -> str:
     return ""
 
 
+def operator_line(config) -> str:
+    """The one prompt line naming who the agent works for (#5812), from
+    ``identity.operator`` and ``identity.org`` — box-wide settings every agent inherits.
+    Empty when neither is set, or when an agent blanks Operator for itself."""
+    name = str(getattr(config, "identity_operator", "") or "").strip()
+    org = str(getattr(config, "identity_org", "") or "").strip()
+    if name and org:
+        return f"You work for {name} at {org}."
+    if name:
+        return f"You work for {name}."
+    return ""
+
+
 def build_system_prompt(
     workspace: str = "/sandbox",
     include_subagents: bool = True,
@@ -155,6 +168,7 @@ def build_system_prompt(
     projects=None,
     bound_tool_names: frozenset[str] | None = None,
     disabled_tools_notice: str = "",
+    operator_line: str = "",
 ) -> str:
     """Build the complete system prompt for the lead agent.
 
@@ -181,6 +195,7 @@ def build_system_prompt(
             projects=projects,
             bound_tool_names=bound_tool_names,
             disabled_tools_notice=disabled_tools_notice,
+            operator_line=operator_line,
         )
     )
 
@@ -192,6 +207,7 @@ def build_system_prompt_parts(
     projects=None,
     bound_tool_names: frozenset[str] | None = None,
     disabled_tools_notice: str = "",
+    operator_line: str = "",
 ) -> list[tuple[str, str]]:
     """The lead-agent system prompt as labeled ``(label, text)`` sections —
     the segmentation substrate for the prompt viewer's context-budget
@@ -243,6 +259,11 @@ def build_system_prompt_parts(
                 "with your agent's identity, role, and personality.",
             )
         )
+
+    # 1b. Who the agent works for (#5812) — one line from the box-wide Operator and
+    # Organization settings, right after the persona. Absent when neither is set.
+    if operator_line:
+        parts.append(("Operator", operator_line))
 
     # 2. Subagent instructions
     if include_subagents and (bound_tool_names is None or bound_tool_names & {"task", "task_batch"}):

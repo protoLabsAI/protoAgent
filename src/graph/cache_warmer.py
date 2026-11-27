@@ -78,7 +78,7 @@ class CacheWarmer:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from graph.llm import create_llm
-        from graph.prompts import build_system_prompt
+        from graph.prompts import build_system_prompt, operator_line
         from tools.lg_tools import get_all_tools
 
         llm = create_llm(self._config)
@@ -91,6 +91,7 @@ class CacheWarmer:
         stable = build_system_prompt(
             include_subagents=True,
             bound_tool_names=frozenset(t.name for t in tools),
+            operator_line=operator_line(self._config),
         )
         system = SystemMessage(
             content=[

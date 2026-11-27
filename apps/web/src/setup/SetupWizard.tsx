@@ -798,7 +798,9 @@ export function SetupWizard({
           ...finishModelConfig(state, exploreWithoutModel),
           identity: {
             name: state.agentName.trim() || "protoagent",
-            operator: state.operatorName.trim(),
+            // Left out when blank (#5812): an empty value here would hide the machine's
+            // Operator from this agent. A filled one moves up to the machine on reload.
+            ...(state.operatorName.trim() ? { operator: state.operatorName.trim() } : {}),
           },
           middleware: state.middleware,
           subagents: {

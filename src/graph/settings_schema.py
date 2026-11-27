@@ -53,6 +53,9 @@ class Field:
     # the home/default layer + where the settings UI writes it. No "app" value: the
     # App layer is the dataclass defaults (no writable file).
     scope: str = "agent"
+    # What an empty field shows in its input (#5812) — the effect of leaving it blank, in
+    # the operator's words ("This computer's timezone"), so an unset field needs no badge.
+    placeholder: str = ""
     # Keep the field in FIELDS (so it round-trips through config_to_dict / the YAML
     # writer) but DON'T render it in the generic Settings UI — for a key a dedicated
     # panel already owns. `build_schema` skips it; `config_to_dict` keeps it. (#1076)
@@ -1556,7 +1559,8 @@ FIELDS: list[Field] = [
     Field("quiet_hours.start", "quiet_hours_start", "Start (HH:MM)", "string", "Quiet hours"),
     Field("quiet_hours.end", "quiet_hours_end", "End (HH:MM)", "string", "Quiet hours"),
     Field("quiet_hours.timezone", "quiet_hours_timezone", "Timezone", "string", "Quiet hours",
-          description="IANA timezone, for example America/Los_Angeles. Leave empty to use this computer's local time."),
+          description="IANA timezone, for example America/Los_Angeles. Leave empty to use this computer's local time.",
+          placeholder="This computer's timezone"),
     Field("push.all_notices", "push_all_notices", "Push every notice", "bool", "Notifications",
           description="Off: only questions and urgent notices reach your devices. On: every notice does."),
     Field("decisions.never_block", "decisions_never_block", "Ask decisions without pausing", "bool", "Decisions",
@@ -1784,8 +1788,28 @@ FIELDS: list[Field] = [
     # through the canonical /api/settings cascade (a ui_hidden key still saves fine — only
     # build_schema rendering is gated); only SOUL goes via /api/config.
     Field("identity.name", "identity_name", "Agent name", "string", "Identity", ui_hidden=True),
-    Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
-    Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),
+    # Box-wide (#5812): who the operator is is the same for every agent on this machine, so
+    # both live in the Host layer and every agent's prompt says who it works for. An agent
+    # can still set its own (a client-facing one can blank Operator to get no line).
+    Field(
+        "identity.operator",
+        "identity_operator",
+        "Operator",
+        "string",
+        "Identity",
+        "Your name. Every agent on this machine is told it works for you.",
+        scope="host",
+        placeholder="Your name",
+    ),
+    Field(
+        "identity.org",
+        "identity_org",
+        "Organization",
+        "string",
+        "Identity",
+        "Your organization, added to the line that tells each agent who it works for.",
+        scope="host",
+    ),
     # These two predate the ADR 0007 fence and are NOT access control — the copy used to
     # promise a tasks/notes sandbox that no longer exists (tasks went instance-global:
     # the routes take `project_path` and discard it, `operator_api/routes.py`; notes moved
@@ -2801,6 +2825,16 @@ def _resolve_dotted(doc: dict | None, dotted: str) -> bool:
     return True
 
 
+def _value_at(doc: dict | None, dotted: str) -> tuple[bool, Any]:
+    """``(found, value)`` for ``dotted`` in ``doc``."""
+    cur: Any = doc
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False, None
+        cur = cur[part]
+    return True, cur
+
+
 def _source_for(key: str, agent_doc: dict | None, host_doc: dict | None) -> str:
     """Which cascade layer the live value came from (ADR 0047): the agent leaf if it
     sets the key, else the Host layer, else the App default. Drives the UI's
@@ -2828,6 +2862,9 @@ def build_schema(
     # so "where does this value come from?" must still be able to answer for them.
     # Rendering paths keep the default and never see them.
     include_hidden: bool = False,
+    # On the host console (#5812): host-scoped key → the labels of the fleet members whose
+    # own config sets it, so a box-wide setting can say who doesn't follow it.
+    set_by_agents: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the settings schema grouped by section, with current values.
 
@@ -2881,6 +2918,7 @@ def build_schema(
             "default": _jsonable(getattr(defaults, f.attr, None)),
             "scope": f.scope,  # ADR 0047: "agent" | "host"
             "source": _source_for(f.key, agent_doc, host_doc),  # which layer set the live value
+            "placeholder": f.placeholder,
             # Lets the console refresh a model-backed dropdown from a DIFFERENT gateway than the
             # saved one (#1386): a "Get models" action probes the form's api_base/key and merges
             # the result into every field whose options come from "models".
@@ -2909,6 +2947,17 @@ def build_schema(
             entry["depends_on"] = f.depends_on  # #963 — full dotted sibling key
         if is_credential_plane_key(f.key):
             entry["credential_plane"] = True  # ADR 0121 D4 — refused to device-scope callers
+        # The value this agent would fall back to (#5812): the machine's, when the Host
+        # layer sets the key — so an agent that sets its own can say what it differs from.
+        # Never for a secret, which is never echoed.
+        if f.type != "secret":
+            found, host_value = _value_at(host_doc, f.key)
+            if found:
+                entry["host_value"] = (
+                    _as_chain(host_value) if f.type == "model_chain" else _jsonable(host_value)
+                )
+        if set_by_agents and f.scope == "host" and set_by_agents.get(f.key):
+            entry["set_by_agents"] = list(set_by_agents[f.key])
         groups.setdefault(f.section, {"section": f.section, "fields": []})["fields"].append(entry)
 
     # Plugin-declared settings fields (ADR 0019) — value from config.plugin_config,

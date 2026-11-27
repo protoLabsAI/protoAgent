@@ -2583,7 +2583,7 @@ def create_agent_graph(
     # stable prefix's section boundaries with the blob it hashes — the prompt
     # the model receives is exactly these texts joined (build_system_prompt is
     # the same join, pinned by test).
-    from graph.prompts import build_system_prompt_parts
+    from graph.prompts import build_system_prompt_parts, operator_line
 
     disabled_groups = disabled_tool_groups(
         disabled_tools, getattr(config, "tools_disabled", []), getattr(config, "tools_hidden", [])
@@ -2593,6 +2593,7 @@ def create_agent_graph(
         projects=(config.effective_filesystem_projects() if config.filesystem_enabled else None),
         bound_tool_names=frozenset(t.name for t in lead_tools) - shell_first,
         disabled_tools_notice=disabled_tools_explanation(disabled_groups),
+        operator_line=operator_line(config),
     )
     system_prompt = "\n\n".join(text for _label, text in prompt_parts)
 
