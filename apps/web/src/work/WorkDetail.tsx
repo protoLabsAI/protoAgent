@@ -1,9 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { FormField, Input } from "@protolabsai/ui/forms";
-import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Alert, StatusDot } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
+import { TechnicalDetails } from "../app/TechnicalDetails";
 import { useWorkActionSize } from "../shell/SurfaceFrame";
 import { copyText } from "../lib/clipboard";
 import { statusTone, statusWord, type WorkStatus } from "./tone";
@@ -280,29 +280,27 @@ export function WorkDetail({
       {children}
 
       {(techEntries.length > 0 || techFields.length > 0) && (
-        <Accordion>
-          <AccordionItem title="Technical details">
-            {techFields.length > 0 && (
-              <dl className="work-detail__fields work-detail__fields--technical">
-                {techFields.map((field, i) => (
-                  <div className="work-detail__field" key={`${field.label}-${i}`}>
-                    <dt>{field.label}</dt>
-                    <dd>{field.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            )}
-            <dl className="work-detail__tech">
-              {techEntries.map(([key, value]) => (
-                <div className="work-detail__tech-row" key={key}>
-                  <dt>{key}</dt>
-                  <dd className="work-detail__tech-value">{value}</dd>
-                  <CopyButton label={key} value={value} />
+        <TechnicalDetails>
+          {techFields.length > 0 && (
+            <dl className="work-detail__fields work-detail__fields--technical">
+              {techFields.map((field, i) => (
+                <div className="work-detail__field" key={`${field.label}-${i}`}>
+                  <dt>{field.label}</dt>
+                  <dd>{field.value}</dd>
                 </div>
               ))}
             </dl>
-          </AccordionItem>
-        </Accordion>
+          )}
+          <dl className="work-detail__tech">
+            {techEntries.map(([key, value]) => (
+              <div className="work-detail__tech-row" key={key}>
+                <dt>{key}</dt>
+                <dd className="work-detail__tech-value">{value}</dd>
+                <CopyButton label={key} value={value} />
+              </div>
+            ))}
+          </dl>
+        </TechnicalDetails>
       )}
     </div>
   );

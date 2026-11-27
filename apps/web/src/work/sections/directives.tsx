@@ -29,8 +29,8 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Reac
 import { Badge, Button, Callout, type Status } from "@protolabsai/ui/primitives";
 import { Alert, Skeleton, StatusDot } from "@protolabsai/ui/data";
 import { FormField, Textarea } from "@protolabsai/ui/forms";
-import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
+import { TechnicalDetails } from "../../app/TechnicalDetails";
 import { useWorkActionSize } from "../../shell/SurfaceFrame";
 import { WorkEmpty as Empty } from "../WorkEmpty";
 
@@ -355,19 +355,17 @@ function InstructionDetail({ ctx, item, decision }: {
       {jobItem && <Button size={size} onClick={() => ctx.onOpen(jobItem)}>Open the job</Button>}
       {inForce && <Button variant="danger" size={size} data-withdraw="" onClick={() => { setError(false); setConfirm(true); }}>Withdraw…</Button>}
     </div>}
-    {everywhere && <Accordion>
-      <AccordionItem title="Technical details">
-        <dl className="work-detail__tech">
-          {([["id", row.id], ["instance_wide", "true"], ["recorded in", row.session_id || "—"],
-            ["status", row.status], ["created_at", row.created_at]] as const).map(([key, value]) => (
-            <div className="work-detail__tech-row" key={key}>
-              <dt>{key}</dt>
-              <dd className="work-detail__tech-value">{value}</dd>
-            </div>
-          ))}
-        </dl>
-      </AccordionItem>
-    </Accordion>}
+    {everywhere && <TechnicalDetails>
+      <dl className="work-detail__tech">
+        {([["id", row.id], ["instance_wide", "true"], ["recorded in", row.session_id || "—"],
+          ["status", row.status], ["created_at", row.created_at]] as const).map(([key, value]) => (
+          <div className="work-detail__tech-row" key={key}>
+            <dt>{key}</dt>
+            <dd className="work-detail__tech-value">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </TechnicalDetails>}
     {editing && <WorkEditDialog
       draft={draftFromDirective(row)}
       target={{ kind: "instruction", id: row.id, sessionId: row.session_id, instanceWide: everywhere }}

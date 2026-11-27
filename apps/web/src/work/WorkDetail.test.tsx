@@ -239,6 +239,25 @@ describe("WorkDetail ▸ technical details (r4)", () => {
     const copyButtons = buttons().filter((b) => b.getAttribute("aria-label")?.startsWith("Copy "));
     expect(copyButtons.map((b) => b.getAttribute("aria-label"))).toEqual(["Copy id", "Copy session"]);
   });
+
+  it("is the compact shared toggle: expanded state, copy still copies its own value, closes again", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    await mount(base({ technical: { id: "goal-42", session: "sess-9" } }));
+    const trigger = button("Technical details");
+    expect(trigger.classList.contains("technical-details__toggle")).toBe(true);
+    expect(host!.querySelector(".pl-accordion")).toBeNull();
+
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => buttons().find((b) => b.getAttribute("aria-label") === "Copy session")!.click());
+    expect(writeText).toHaveBeenCalledWith("sess-9");
+
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(text()).not.toContain("goal-42");
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
 });
 
 describe("WorkDetail ▸ changed notice", () => {

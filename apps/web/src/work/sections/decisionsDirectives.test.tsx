@@ -900,9 +900,14 @@ describe("Instance-wide standing orders (work-view-additions §3, §4)", () => {
     expect(buttons("Withdraw…")[0].hasAttribute("data-withdraw")).toBe(true);
     expect(buttons("Withdraw…")[0].classList.contains("pl-btn--danger")).toBe(true);
 
-    const summary = [...pane.querySelectorAll<HTMLElement>("button, summary")].find((node) => node.textContent?.trim() === "Technical details")!;
+    const summary = [...pane.querySelectorAll<HTMLElement>("button")].find((node) => node.textContent?.trim() === "Technical details")!;
+    // The shared compact toggle, closed by default — not the bordered DS Accordion.
+    expect(summary.classList.contains("technical-details__toggle")).toBe(true);
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    expect(pane.querySelector(".work-detail__tech-row")).toBeNull();
     const focusedBefore = document.activeElement;
-    if (!pane.querySelector(".work-detail__tech-row")) await act(async () => summary.click());
+    await act(async () => summary.click());
+    expect(summary.getAttribute("aria-expanded")).toBe("true");
     const tech = [...pane.querySelectorAll(".work-detail__tech-row")].map((node) =>
       [node.querySelector("dt")?.textContent, node.querySelector("dd")?.textContent]);
     expect(tech).toEqual([

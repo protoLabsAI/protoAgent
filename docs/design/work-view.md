@@ -55,7 +55,7 @@ Rules:
 ### 2.3 Shared row and detail rules
 
 - Every timestamp shows as local relative time: "2 min ago", "today at 17:14", "7 Nov at 17:14". The full local timestamp goes in a `Tooltip`. Epoch seconds (goals, watches) and ISO strings (everything else) render the same way.
-- **Technical details** (Q4): a collapsed, copyable block at the bottom of every detail view. It is the only place where ids, raw statuses, verifier types, cron strings, backend names and session ids appear. It is never shown in a row.
+- **Technical details** (Q4): a collapsed, copyable block at the bottom of every detail view. It is the only place where ids, raw statuses, verifier types, cron strings, backend names and session ids appear. It is never shown in a row. It renders as the shared compact disclosure (`apps/web/src/app/TechnicalDetails.tsx`): a small muted "Technical details" text toggle with a chevron — no border, background or card padding — closed by default, at most 32 px tall collapsed at desktop scale and 44 px on a coarse pointer, a native button exposing `aria-expanded` with a visible focus ring. Every mount owns its own open state, so each run in Recent runs opens independently.
 - A field with an empty value hides its line. It never shows "—" or "none".
 
 ### 2.4 Decisions

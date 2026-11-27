@@ -1,0 +1,46 @@
+/* The compact Technical details disclosure (TechnicalDetails.tsx): a muted text-and-chevron
+   toggle, no border, background or card padding. 28px tall at desktop scale; a coarse
+   pointer gets the 44px touch floor. */
+.technical-details {
+  min-width: 0;
+  max-width: 100%;
+}
+.technical-details__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  min-height: 28px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 var(--pl-space-1);
+  border: 0;
+  border-radius: var(--pl-radius-md);
+  background: none;
+  color: var(--pl-color-fg-muted);
+  font: inherit;
+  font-size: var(--pl-font-size-sm);
+  line-height: 1.2;
+  text-align: start;
+  cursor: pointer;
+}
+.technical-details__toggle:hover { color: var(--pl-color-fg); }
+.technical-details__toggle:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 2px;
+}
+.technical-details__chevron {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.technical-details--open .technical-details__chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .technical-details__chevron { transition: none; }
+}
+.technical-details__body {
+  min-width: 0;
+  padding: var(--pl-space-2) 0 0 var(--pl-space-1);
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .technical-details__toggle { min-height: 44px; }
+}

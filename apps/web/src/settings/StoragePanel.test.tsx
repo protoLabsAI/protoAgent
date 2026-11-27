@@ -98,6 +98,11 @@ async function click(name: string) {
   await settle();
 }
 const dialog = () => document.querySelector(".pl-dialog");
+/** Technical details is the shared compact disclosure: closed until asked, body unmounted. */
+async function openTechnical() {
+  const toggle = button("Technical details")!;
+  if (toggle.getAttribute("aria-expanded") === "false") await click("Technical details");
+}
 
 beforeAll(async () => {
   window.history.replaceState(null, "", "/app/");
@@ -154,6 +159,25 @@ describe("normal", () => {
     expect(text()).toContain("Asks the browser not to clear this console's data on its own, for example when your disk is low.");
     // Section headings are h3s under the panel's h2.
     expect([...node.querySelectorAll("h3")].map((h) => h.textContent)).toEqual(["What's using space", "Keep data", "Last automatic clear"]);
+  });
+
+  it("Technical details is the compact toggle, closed by default, with the same four lines when opened", async () => {
+    await render();
+    const toggle = button("Technical details")!;
+    expect(toggle.classList.contains("technical-details__toggle")).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(node.querySelector("details")).toBeNull();
+    expect(text()).not.toContain("Browser's estimate");
+    await click("Technical details");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const lines = [...node.querySelectorAll(".storage-details li")].map((li) => li.textContent ?? "");
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toMatch(/^Browser's estimate: .+ used of about .+\.$/);
+    expect(lines[1]).toContain("IndexedDB database.");
+    expect(lines[2]).toMatch(/^Layout, preferences, dismissals and sign-in: about .+ in localStorage\.$/);
+    expect(lines[3]).toBe("Persistent storage: not requested. Saving: ok.");
+    await click("Technical details");
+    expect(text()).not.toContain("Browser's estimate");
   });
 
   it("the Last saved tooltip text is in the row's accessible description", async () => {
@@ -217,6 +241,7 @@ describe("full (saving fails) with a reply running", () => {
     expect(button("Clear them")).toBeUndefined();
     expect(button("Clear protoAgent's chats")!.disabled).toBe(true);
     expect(text()).toContain("Replying now. You can clear this after the reply finishes.");
+    await openTechnical();
     expect(text()).toContain("Saving: failing.");
 
     // The reply ends: Clear comes back without a reload.
@@ -278,6 +303,7 @@ describe("plain http", () => {
     expect(text()).toMatch(/About \d+ KB saved\./);
     expect(button("Keep data")!.disabled).toBe(true);
     expect(text()).toContain("Only works on a secure (https) address or in the desktop app. This console is on plain http.");
+    await openTechnical();
     expect(text()).toContain("Browser's estimate: unavailable (needs a secure address and Safari 17 or later).");
     expect(text()).toContain("Persistent storage: not available on this address.");
   });
@@ -292,6 +318,7 @@ describe("Keep data", () => {
       "This browser chose not to keep it this time. That's the browser's call and nothing is wrong: your chats save as usual. Browsers often say yes later, for example once you've used the console for a while or bookmarked it.",
     );
     expect(button("Keep data")!.disabled).toBe(false);
+    await openTechnical();
     expect(text()).toContain("Persistent storage: requested and not granted.");
     persistAnswer = true;
     await click("Keep data");
