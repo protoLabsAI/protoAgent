@@ -480,6 +480,40 @@ class TestManager:
         await _drain_fire_tasks(mgr)
         assert mgr.store.get(jid).status == "failed"
 
+    @pytest.mark.parametrize("exc_name", ["ReadTimeout", "ReadError", "RemoteProtocolError"])
+    async def test_send_error_after_handover_lets_the_turn_settle(self, tmp_path, monkeypatch, exc_name):
+        """#5797: the client gave up on a long turn (an empty-message ReadTimeout) after
+        our own /a2a had the request. The turn ran on and finished; its terminal hook
+        must still be able to settle the job with its real result."""
+        import httpx
+
+        exc = getattr(httpx, exc_name)("")
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(None, raise_exc=exc))
+        mgr = _manager(tmp_path)
+        jid = await mgr.spawn(origin_session="s1", subagent_type="researcher", description="d", prompt="p")
+        await _drain_fire_tasks(mgr)
+        assert mgr.store.get(jid).status == "running"
+        # The turn's own completion (what server/a2a.py's terminal hook does) lands.
+        assert mgr.store.mark_complete(jid, "completed", "11 cards made")
+        job = mgr.store.get(jid)
+        assert (job.status, job.result) == ("completed", "11 cards made")
+
+    async def test_connect_error_marks_failed_with_a_named_cause(self, tmp_path, monkeypatch):
+        """A send that never reached the server is a real delivery failure, and an
+        exception with an empty message still leaves a cause, not a blank (#5797)."""
+        import httpx
+
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(None, raise_exc=httpx.ConnectError(""))
+        )
+        mgr = _manager(tmp_path)
+        jid = await mgr.spawn(origin_session="s1", subagent_type="researcher", description="d", prompt="p")
+        await _drain_fire_tasks(mgr)
+        job = mgr.store.get(jid)
+        assert job.status == "failed"
+        assert job.result.startswith("Background turn delivery error: ConnectError(")
+        assert job.error == job.result
+
     async def test_fire_respects_concurrency_cap(self, tmp_path, monkeypatch):
         """A fan-out of background jobs runs at most ``max_concurrency`` turns at once —
         the semaphore gates the self-POST, which holds its slot for the whole turn. Without
