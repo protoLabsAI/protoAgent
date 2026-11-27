@@ -343,7 +343,7 @@ async def test_sse_query_token_never_rides_to_a_remote(monkeypatch):
     req = FakeRequest(query={"token": "HUB-SIGNED", "session": "s1"})
     req.state = SimpleNamespace(trust_tier="operator")
     await proxy.forward_to("r1", req, "api/events")
-    assert client.built["params"] == {"session": "s1"}
+    assert client.built["params"] == [("session", "s1")]
     assert _sent_auth(client) == ["Bearer sek"]
 
 
@@ -357,7 +357,7 @@ async def test_sse_query_token_still_rides_to_a_local_member(monkeypatch):
     req = FakeRequest(query={"token": "HUB-SIGNED"})
     req.state = SimpleNamespace(trust_tier="operator")
     await proxy.forward_to("alice", req, "api/events")
-    assert client.built["params"] == {"token": "HUB-SIGNED"}  # local behavior unchanged
+    assert client.built["params"] == [("token", "HUB-SIGNED")]  # local behavior unchanged
 
 
 # --- _forward_to_base -----------------------------------------------------
@@ -385,7 +385,7 @@ async def test_forward_strips_hop_headers_and_pipes_body(monkeypatch):
     assert "connection" not in client.built["headers"]
     assert client.built["headers"]["authorization"] == "Bearer t"
     assert client.built["url"] == "http://127.0.0.1:7001/api/chat"
-    assert client.built["params"] == {"stream": "1"}
+    assert client.built["params"] == [("stream", "1")]
     assert client.built["method"] == "POST"
 
     # response: hop-by-hop dropped, status + content-type preserved, body piped, upstream closed
@@ -1215,3 +1215,33 @@ async def test_http_proxy_preserves_only_verified_operator_identity(monkeypatch,
         if case == "replay":
             response = await client.post(destination, headers=headers)
             assert response.json() == {"human": False, "tier": "operator"}
+
+
+def test_repeated_query_params_all_ride_upstream_and_the_token_still_drops():
+    """#5785: ``dict(QueryParams)`` kept only the last value of a repeated key."""
+    from starlette.datastructures import QueryParams
+
+    q = QueryParams("tag=a&tag=b&token=HUB-SIGNED&x=1")
+    assert proxy._upstream_params(q, frozenset({"token"})) == [("tag", "a"), ("tag", "b"), ("x", "1")]
+    assert proxy._upstream_params(q) == [("tag", "a"), ("tag", "b"), ("token", "HUB-SIGNED"), ("x", "1")]
+
+
+async def test_a_proxied_repeated_param_reaches_the_member_with_every_value(monkeypatch):
+    """End to end through httpx: the URL the member receives carries both values."""
+    from types import SimpleNamespace
+
+    import httpx
+    from starlette.datastructures import QueryParams
+
+    seen = {}
+
+    def handler(request):
+        seen["query"] = request.url.query.decode()
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    req = FakeRequest(query=QueryParams("tag=a&tag=b"))
+    req.state = SimpleNamespace(trust_tier="operator")
+    await proxy.forward_to("alice", req, "api/things")
+    assert seen["query"] == "tag=a&tag=b"

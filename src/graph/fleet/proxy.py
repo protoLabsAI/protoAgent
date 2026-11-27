@@ -339,6 +339,16 @@ def mint_member_delegation(
     )
 
 
+def _upstream_params(query_params, drop_params: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
+    """The caller's query as ``(key, value)`` pairs for httpx, minus ``drop_params``.
+
+    Starlette's ``QueryParams`` is a multi-dict: ``dict()`` of it kept only the LAST value
+    of a repeated key, so ``?tag=a&tag=b`` reached the member as ``?tag=b`` (#5785).
+    ``multi_items()`` keeps every value in order; a plain mapping (tests) uses ``items()``."""
+    items = query_params.multi_items() if hasattr(query_params, "multi_items") else query_params.items()
+    return [(k, v) for k, v in items if k not in drop_params]
+
+
 async def _forward_to_base(
     base: str,
     request,
@@ -360,7 +370,7 @@ async def _forward_to_base(
         url,
         headers=headers,
         content=body,
-        params={k: v for k, v in dict(request.query_params).items() if k not in drop_params},
+        params=_upstream_params(request.query_params, drop_params),
         timeout=_timeout_for(request, path),
     )
     try:
@@ -626,7 +636,7 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
 
     client = _get_client()
     headers = _proxy_headers(request, extra)
-    params = {k: v for k, v in dict(request.query_params).items() if k not in drop_params}
+    params = _upstream_params(request.query_params, drop_params)
 
     # Submit on the turn lane: a new core answers 202 at once; an old core (ignores detach)
     # runs the whole turn here and answers 200 — the same 600s cap it has today, no regression.
