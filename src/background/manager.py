@@ -11,7 +11,12 @@ chat session.
 The fire is awaited inside an ``asyncio.create_task`` so the requesting tool returns
 immediately; the connection is held open for the whole turn (the A2A handler runs the turn
 synchronously), then the row is already terminal via the terminal hook. A delivery failure
-marks the row ``failed`` so it can never stick on ``running``.
+(the turn was never handed over: connect refused, a non-2xx answer) marks the row
+``failed`` so it can never stick on ``running``. A send error AFTER the request was handed
+over (the client's read timed out or the connection dropped on a long turn) does not: the
+turn is still running or already done server-side, and its own terminal hook settles the
+row with its real result (#5797). A turn the server never finishes is still settled: a
+wedged turn fails as stalled, and a crash is reconciled to ``failed`` at the next boot.
 """
 
 from __future__ import annotations
@@ -54,6 +59,25 @@ def note_peer_dispatch(peer_task_id: str, peer_message_id: str = "") -> None:
         store.set_peer_identity(job_id, str(peer_task_id), str(peer_message_id or ""))
     except Exception:  # noqa: BLE001 — bookkeeping must never fail a delegation
         log.exception("[background] could not record peer identity for %s", job_id)
+
+
+def _accepted_send_error(exc: BaseException) -> bool:
+    """Did this send error happen AFTER our own ``/a2a`` had the whole request (#5797)?
+
+    The fire holds the connection open for the turn, so a read that times out or a
+    connection that drops mid-wait means only that the CLIENT stopped listening: the turn
+    keeps running (or has already finished) and its terminal hook will settle the job.
+    Anything else (connect refused or timed out, the request never fully written, a
+    non-2xx answer) is a real delivery failure."""
+    import httpx
+
+    return isinstance(exc, (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError))
+
+
+def _exc_text(exc: BaseException) -> str:
+    """An exception's message, or its repr when the message is empty (a bare
+    ``httpx.ReadTimeout``), so a stored cause is never blank (#5797)."""
+    return str(exc).strip() or repr(exc)
 
 
 class BackgroundManager:
@@ -629,10 +653,12 @@ class BackgroundManager:
     ) -> None:
         """POST the job to our own /a2a as a turn in a dedicated background context.
 
-        On any delivery failure (non-2xx / network / timeout), mark the job failed —
-        but only if the terminal hook hasn't already settled it (mark_complete is a
-        no-op on an already-terminal row), so a slow-turn timeout can't clobber a
-        result that actually landed.
+        On a delivery failure (connect error, non-2xx), mark the job failed — but only
+        if the terminal hook hasn't already settled it (mark_complete is a no-op on an
+        already-terminal row). A send error after the request was handed over (a read
+        timeout on a long turn, a dropped connection) is NOT a failure: the turn is
+        still running server-side, and marking the row first would make the turn's own
+        completion a no-op and lose its result (#5797). The terminal hook settles it.
         """
         # Gate the actual self-POST on the concurrency semaphore so a fan-out can't open more
         # than ``_max_concurrency`` full turns at once. The slot is held for the WHOLE turn —
@@ -670,8 +696,16 @@ class BackgroundManager:
                     },
                 )
             except Exception as exc:  # noqa: BLE001
-                log.exception("[background] fire failed for %s", job_id)
-                self.store.mark_complete(job_id, "failed", f"Background turn delivery error: {exc}")
+                if _accepted_send_error(exc):
+                    log.warning(
+                        "[background] stopped waiting on %s's turn (%r); its own completion settles the job",
+                        job_id,
+                        exc,
+                    )
+                else:
+                    log.exception("[background] fire failed for %s", job_id)
+                    cause = f"Background turn delivery error: {_exc_text(exc)}"
+                    self.store.mark_complete(job_id, "failed", cause, error=cause)
             finally:
                 fire_auth.discard(job_id)
 
