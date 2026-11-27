@@ -2536,11 +2536,19 @@ def create_agent_graph(
     # search_tools meta-tool is built over the full set (so it can surface any
     # of them) and ToolDeferralMiddleware trims the per-call schemas to base +
     # loaded. Every tool stays callable; only the model's view is trimmed.
+    #
+    # Shell-first reads (``filesystem.shell_first``) are decided HERE, before search_tools
+    # is built, so its catalog treats them like held tools: never listed to the lead (which
+    # ShellFirstMiddleware would strip from the schemas anyway, leaving a "loaded" tool the
+    # model can't see), still listed to a fenced background-subagent pass that names them.
+    from graph.middleware.shell_first import shell_first_hidden
+
+    shell_first = shell_first_hidden(config, (t.name for t in lead_view(all_tools)))
     if config.tools_deferred_enabled:
         from tools.lg_tools import build_search_tools_tool, resolve_deferred_keep
 
         keep = resolve_deferred_keep(config.tools_deferred_keep)
-        all_tools.append(build_search_tools_tool(all_tools, keep, held_names=held_names))
+        all_tools.append(build_search_tools_tool(all_tools, keep, held_names=held_names | shell_first))
         # The meta-tool is denylistable like everything else — without this pass,
         # ``tools.disabled: [search_tools]`` silently re-binds it (it's appended after
         # the final filter above), which a Tools-tab row toggle would surface as a
@@ -2570,9 +2578,6 @@ def create_agent_graph(
     # as "No longer available" sent a live agent (Frank, 10-10) off answering the note
     # instead of reporting the work it had just delegated.
     record_toolset(t.name for t in all_tools)
-    from graph.middleware.shell_first import shell_first_hidden
-
-    shell_first = shell_first_hidden(config, (t.name for t in lead_tools))
 
     # Composed as labeled parts (#2243 P2) so PromptCapture can persist the
     # stable prefix's section boundaries with the blob it hashes — the prompt

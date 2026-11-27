@@ -127,3 +127,27 @@ async def test_a_real_lead_turn_offers_the_model_the_shell_instead(tmp_path, mon
     else:
         assert SHELL_COVERED_TOOLS <= offered[-1]
     assert SHELL_COVERED_TOOLS <= set(g.nodes["tools"].bound.tools_by_name)
+
+
+def test_search_tools_never_lists_a_hidden_browse_tool_to_the_lead(tmp_path, monkeypatch):
+    """Deferred mode: search_tools must not 'load' a tool ShellFirstMiddleware strips from
+    every lead model call. A fenced background-subagent pass that names it still sees it."""
+    from graph.agent import create_agent_graph
+    from graph.fence_scope import fence_scope
+
+    monkeypatch.setattr("sys.platform", "darwin")
+    cfg = LangGraphConfig(
+        filesystem_enabled=True,
+        filesystem_allow_run=True,
+        filesystem_run_requires_approval=False,
+        filesystem_shell_first=True,
+        filesystem_projects=[{"name": "p", "path": str(tmp_path)}],
+        tools_deferred_enabled=True,
+        tools_deferred_keep=[],
+    )
+    g = create_agent_graph(cfg)
+    search = g.nodes["tools"].bound.tools_by_name["search_tools"]
+    listed = str(search.invoke({"query": "", "limit": 50}))
+    assert not any(f"`{n}`" in listed for n in SHELL_COVERED_TOOLS)
+    with fence_scope(["search_files", "search_tools"]):
+        assert "`search_files`" in str(search.invoke({"query": "search files", "limit": 50}))
