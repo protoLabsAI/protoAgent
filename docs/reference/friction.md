@@ -145,9 +145,9 @@ Then, for that agent:
 1. Pin `friction.issue_repo` to the runtime repo (for example `protoLabsAI/protoAgent`,
    or your fork).
 2. If you turned `working_state` off while the noise was live, turn it back on. The
-   classifier now keeps shell noise out of the ledger.
+   classifier now keeps shell noise out of the ledger: shell reads are never recorded.
 3. Optionally, set `escape_hatch_exempt: [run_command]` if you don't want even the
-   `cat`/`ls`/`grep` duplicates recorded for this agent.
+   shell-write duplicates (`sed -i`, `tee`, `> file`) recorded for this agent.
 
 ## Configuration reference
 
