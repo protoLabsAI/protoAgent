@@ -23,24 +23,24 @@ append-only and capped at the newest 2000 entries.
 
 - **Tool errors** — a tool that raises (HITL interrupts, delegation and cancellation are
   control flow, not friction). Logged `major`.
-- **Shell commands that duplicate a first-class tool the agent has bound.** A call to a
-  shell tool (`run_command`, `execute_command`, `shell`, `bash`) is friction only when its
-  command's first word maps to a tool this agent actually has:
+- **Shell commands that WRITE a file a first-class tool the agent has bound would write.**
+  A call to a shell tool (`run_command`, `execute_command`, `shell`, `bash`) is friction
+  only when the command writes a file and the matching write tool is bound for this agent.
+  Shell READS (`cat`, `head`, `grep`, `rg`, `ls`, `find`) are never friction: models are
+  fluent in the shell, and those rows were a third of every ledger and changed nothing.
+  A shell write still is, because it skips `edit_file`'s lock, the code pane's change
+  announcement and the write tools' project-mode fence:
 
   | Command | First-class tool |
   |---|---|
   | `cat` / `echo` / `printf` with a `>` / `>>` redirect | `write_file` |
-  | `cat`, `head`, `tail`, `less`, `more` | `read_file` |
-  | `grep`, `egrep`, `fgrep`, `rg`, `ag`, `ack` | `search_files` |
-  | `ls`, `tree` | `list_dir` |
-  | `find`, `fd` | `find_files` |
   | `sed -i …`, `awk -i inplace …` | `edit_file` |
   | `tee` | `write_file` |
 
   The first word is read after stripping what isn't the command: `cd X &&` / `cd X;`,
   `VAR=value`, `sudo`, `env …`, `time`, `mise exec … --` and `sh -c '…'`. For a pipeline
-  only the first segment counts, so `cat f | grep x` is a read and `git diff | grep x`
-  is git. The entry names the fix: *"used `cat` via run_command — read_file does this"*.
+  only the first segment counts. The entry names the fix: *"used `sed` via run_command —
+  edit_file does this"*.
 
   **Everything else is not friction**: git, test runners, type checkers, builds, package
   managers, project scripts. They have no first-class equivalent, so a shell tool is the

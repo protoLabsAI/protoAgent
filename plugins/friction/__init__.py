@@ -10,8 +10,9 @@ agent captures where it hit friction and feeds that back into improving its harn
     High-signal: the model knows when it's frustrated. (Prompt it to use this in your
     agent's persona/system prompt — the tool exists, but the model has to reach for it.)
   * AUTO-CAPTURE — `FrictionMiddleware.wrap_tool_call`: genuine tool errors, and shell
-    commands that duplicate a first-class tool the agent has bound (`cat` via run_command
-    when `read_file` is there — see `_FIRST_CLASS_EQUIVALENTS`), with no agent effort.
+    commands that WRITE a file a bound first-class tool would write (`sed -i` via
+    run_command when `edit_file` is there — see `_FIRST_CLASS_EQUIVALENTS`; shell reads
+    are never friction), with no agent effort.
     `git`, test runners and builds through a shell tool are real work, not friction.
     HITL/interrupt control-flow is filtered out (a tool pausing for approval or
     delegating is not friction).
@@ -174,12 +175,14 @@ def _awk_in_place(tokens: list[str]) -> bool:
 
 
 # (command words, the first-class tool that does this, extra condition or None)
+#
+# WRITES only. A shell READ (`cat`, `head`, `grep`, `rg`, `ls`, `find`) is not friction:
+# models are fluent in the shell, and the 2026-11-26 fleet triage found those rows were
+# a third of every ledger and changed nothing (34 rows, all resolved as model-behavior).
+# A shell WRITE still is: it bypasses edit_file's per-file lock, the code pane's change
+# announcement and the write tools' project-mode fence.
 _FIRST_CLASS_EQUIVALENTS: tuple[tuple[frozenset[str], str, object], ...] = (
     (frozenset({"cat", "echo", "printf"}), "write_file", _has_redirect),
-    (frozenset({"cat", "head", "tail", "less", "more"}), "read_file", None),
-    (frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"}), "search_files", None),
-    (frozenset({"ls", "tree"}), "list_dir", None),
-    (frozenset({"find", "fd"}), "find_files", None),
     (frozenset({"sed"}), "edit_file", _sed_in_place),
     (frozenset({"awk", "gawk"}), "edit_file", _awk_in_place),
     (frozenset({"tee"}), "write_file", None),
@@ -263,7 +266,7 @@ def _duplicated_tool(command: str, bound: set[str] | frozenset[str]) -> tuple[st
 
     None for everything else — git, test runners, builds, package managers, project
     scripts — and for a duplicate whose first-class tool this agent does not have: an
-    agent with no ``list_dir`` running ``ls`` is using the only tool it has, which is
+    agent with no ``edit_file`` running ``sed -i`` is using the only tool it has, which is
     not friction."""
     word, tokens = _command_word(command)
     if not word:
@@ -1008,7 +1011,7 @@ class FrictionMiddleware(AgentMiddleware):
     logged without the agent's help. HITL/interrupt control-flow is filtered out.
 
     Also a pass-through ``wrap_model_call``, used ONLY to learn which tools are bound: a
-    tool call carries no view of the toolset, and "``ls`` via run_command" is friction
+    tool call carries no view of the toolset, and "``sed -i`` via run_command" is friction
     only when ``list_dir`` is actually there to use. The set accumulates across model
     calls (a deferred tool that surfaces later still counts as available)."""
 

@@ -21,7 +21,7 @@ repeated friction adds **nothing** to the block. Each line looks like this:
 ```
 OPEN FRICTION
 - [major] tool 'search_files' raised TimeoutError — tool: search_files
-- [minor x10+] used `cat` via run_command — read_file does this — use read_file
+- [minor x10+] used `sed` via run_command — edit_file does this — use edit_file
 ```
 
 The end of each line tells the agent what to do next:
@@ -60,31 +60,30 @@ includes the exception type, for example `tool 'task' raised TimeoutError`, so d
 failures of the same tool stay in separate rows. Control flow is not friction: an
 approval pause, an interrupt, a delegation or a cancellation is never logged.
 
-**Shell commands that duplicate a tool the agent has.** A call to a shell tool
-(`run_command`, `execute_command`, `shell`, `bash`) is logged only when the command's
-first word maps to a first-class tool, **and** that tool is bound for this agent:
+**Shell commands that write a file a bound tool would write.** A call to a shell tool
+(`run_command`, `execute_command`, `shell`, `bash`) is logged only when the command
+writes a file, **and** the matching write tool is bound for this agent. Shell reads
+(`cat`, `head`, `grep`, `rg`, `ls`, `find`) are never friction: models are fluent in
+the shell, and those rows made up a third of every ledger without changing anything. A
+shell write still is, because it skips `edit_file`'s per-file lock, the code pane's
+change announcement and the write tools' project-mode fence:
 
 | Command | First-class tool |
 |---|---|
 | `cat` / `echo` / `printf` with a `>` or `>>` redirect into a file | `write_file` |
-| `cat`, `head`, `tail`, `less`, `more` | `read_file` |
-| `grep`, `egrep`, `fgrep`, `rg`, `ag`, `ack` | `search_files` |
-| `ls`, `tree` | `list_dir` |
-| `find`, `fd` | `find_files` |
 | `sed -i …`, `awk -i inplace …` | `edit_file` |
 | `tee` | `write_file` |
 
-The entry names the fix, for example *"used `cat` via run_command — read_file does
+The entry names the fix, for example *"used `sed` via run_command — edit_file does
 this"*. It is logged as `minor`.
 
 Before reading the first word, the classifier strips the parts of the line that aren't
 the command: `cd X &&` or `cd X;`, `VAR=value`, `sudo`, `env …`, `time`,
-`mise exec … --`, and `sh -c '…'`. For a pipeline, only the first segment counts, so
-`cat f | grep x` is a read and `git diff | grep x` is git. A stderr redirect such as
-`2>/dev/null` doesn't turn a read into a write.
+`mise exec … --`, and `sh -c '…'`. For a pipeline, only the first segment counts. A stderr redirect such as `2>/dev/null`
+doesn't turn a read into a write.
 
 If the agent doesn't have the tool, the command isn't friction. An agent with no
-`list_dir` that runs `ls` is using the only tool it has.
+`edit_file` that runs `sed -i` is using the only tool it has.
 
 **What is never friction:** git, test runners, type checkers, builds, package
 managers, project scripts. None of these has a first-class equivalent, so a shell tool

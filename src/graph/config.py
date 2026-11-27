@@ -2210,6 +2210,14 @@ class LangGraphConfig:
     # are dropped with a warning when the tools build (tools/run_auto_approve.py).
     # Empty (default) = every command asks, exactly as before.
     filesystem_run_auto_approve: list[str] = field(default_factory=list)
+    # Shell-first reads: hide ``list_dir`` / ``find_files`` / ``search_files`` from the
+    # LEAD model when ``run_command`` is bound and runs without approval — the model uses
+    # ``ls`` / ``find`` / ``rg`` instead, and the three schemas leave its prompt. Inert when
+    # every command would pause for approval (that would turn each read into a prompt) and
+    # on Windows (cmd.exe has no POSIX tools). Subagents still inherit the three reads —
+    # they never get ``run_command`` — and ``read_file`` / ``edit_file`` / ``write_file``
+    # stay bound. Off by default.
+    filesystem_shell_first: bool = False
     # ``run_command`` runs project code with a SCRUBBED env: no A2A_AUTH_TOKEN / AGENT_NAME /
     # PROTOAGENT_* and no credential-shaped vars (infra.proc.scrub_agent_env). Env var names
     # listed here are passed through anyway (e.g. GH_TOKEN for a `gh` the project calls).
@@ -3093,6 +3101,9 @@ class LangGraphConfig:
             ).strip(),
             filesystem_code_pane=not _falsey(
                 (data.get("filesystem", {}) or {}).get("code_pane"), default=not cls.filesystem_code_pane
+            ),
+            filesystem_shell_first=not _falsey(
+                (data.get("filesystem", {}) or {}).get("shell_first"), default=not cls.filesystem_shell_first
             ),
             # not _falsey(), never bool(): a string "false" (JSON overlay, env, hand-edit)
             # must switch the hand-off OFF.

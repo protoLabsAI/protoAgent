@@ -377,6 +377,7 @@ def _build_middleware(
     bound_tool_names: frozenset[str] | None = None,
     subagent_only: frozenset[str] = frozenset(),
     inbox_store=None,
+    shell_first: frozenset[str] = frozenset(),
 ):
     middleware = []
 
@@ -546,6 +547,12 @@ def _build_middleware(
         from graph.middleware.subagent_only import SubagentOnlyMiddleware
 
         middleware.append(SubagentOnlyMiddleware(subagent_only))
+    # Shell-first reads (``filesystem.shell_first``): the lead's model view loses
+    # list_dir/find_files/search_files when run_command runs unapproved; subagents keep them.
+    if shell_first:
+        from graph.middleware.shell_first import ShellFirstMiddleware
+
+        middleware.append(ShellFirstMiddleware(shell_first))
 
     # Unattended approval policy (ADR 0124 D5): allow / ask / never for a tool's approval
     # pause on a turn nobody is watching. Always on, and a no-op unless the turn driver
@@ -2563,6 +2570,9 @@ def create_agent_graph(
     # as "No longer available" sent a live agent (Frank, 10-10) off answering the note
     # instead of reporting the work it had just delegated.
     record_toolset(t.name for t in all_tools)
+    from graph.middleware.shell_first import shell_first_hidden
+
+    shell_first = shell_first_hidden(config, (t.name for t in lead_tools))
 
     # Composed as labeled parts (#2243 P2) so PromptCapture can persist the
     # stable prefix's section boundaries with the blob it hashes — the prompt
@@ -2576,7 +2586,7 @@ def create_agent_graph(
     prompt_parts = build_system_prompt_parts(
         include_subagents=include_subagents,
         projects=(config.effective_filesystem_projects() if config.filesystem_enabled else None),
-        bound_tool_names=frozenset(t.name for t in lead_tools),
+        bound_tool_names=frozenset(t.name for t in lead_tools) - shell_first,
         disabled_tools_notice=disabled_tools_explanation(disabled_groups),
     )
     system_prompt = "\n\n".join(text for _label, text in prompt_parts)
@@ -2591,6 +2601,7 @@ def create_agent_graph(
         # Held tools aren't missing for a skill: the lead delegates them (ADR 0117 D6).
         bound_tool_names=frozenset(t.name for t in all_tools),
         inbox_store=inbox_store,
+        shell_first=shell_first,
     )
 
     agent = create_agent(
