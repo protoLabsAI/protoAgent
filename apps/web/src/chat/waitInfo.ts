@@ -53,7 +53,9 @@ export function resolveWaitInfo(
   if (seconds === undefined || !Number.isFinite(seconds)) return null;
 
   const partialThen = input?.match(/"then"\s*:\s*"((?:\\.|[^"\\])*)/)?.[1];
-  const then = output?.match(/Will resume to: ([\s\S]*)/)?.[1]
+  // The marker sits at the end of the header line (legacy "Wait scheduled: 5 minutes. Will
+  // resume to: …") or opens its own line after the user summary — never mid-summary.
+  const then = output?.match(/^(?:Wait scheduled: [^\n]*?\. )?Will resume to: ([\s\S]*)/m)?.[1]
     ?? partialThen?.replace(/\\(["n\\])/g, (_, escaped: string) => escaped === "n" ? "\n" : escaped)
     ?? "";
   return { seconds: Math.max(1, Math.round(seconds)), then };

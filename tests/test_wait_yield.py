@@ -372,6 +372,13 @@ def test_wait_turn_reply_tells_the_user_what_happened_and_whats_next():
     assert "Check build 412" not in wait_turn_reply(out)
 
 
+def test_legacy_wait_confirmation_never_reads_a_summary_out_of_then():
+    from graph.middleware.wait_yield import wait_turn_reply
+
+    legacy = "Wait scheduled: 5 minutes. Will resume to: Review the draft.\nFor the user: Deployment approved."
+    assert wait_turn_reply(legacy) == "I'll pick this back up in 5 minutes."
+
+
 @pytest.mark.asyncio
 async def test_wait_requires_a_user_summary():
     from tools.scheduler_tools import _build_scheduler_tools

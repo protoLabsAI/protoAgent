@@ -34,9 +34,9 @@ WAIT_TOOL_NAME = "wait"
 # <duration>.\nFor the user: <summary>\nWill resume to: <then>". The resume instruction is
 # the agent talking to its future self; the summary line is written to the user. Older
 # confirmations ("Wait scheduled: <duration>. Will resume to: <then>") carry no summary.
-_WAIT_CONFIRMATION_PREFIX = "Wait scheduled: "
 _WAIT_DURATION_RE = re.compile(r"^Wait scheduled: (.+?)\.(?:\s|$)")
-_WAIT_SUMMARY_RE = re.compile(r"^For the user: (.+)$", re.MULTILINE)
+_WAIT_SUMMARY_PREFIX = "For the user: "
+_WAIT_RESUME_MARK = "Will resume to: "
 
 # The ``schedule_task`` tool's success confirmation (tools/scheduler_tools.py) —
 # "Scheduled job <id> next at <iso>.", followed by a newline and a line of MODEL-ONLY
@@ -77,8 +77,13 @@ def wait_turn_reply(tool_output: str) -> str | None:
         return None
     duration = match.group(1).strip()
     back = f"I'll pick this back up in {duration}."
-    summary_match = _WAIT_SUMMARY_RE.search(text)
-    summary = summary_match.group(1).strip() if summary_match else ""
+    # The summary is only ever the SECOND line of a new-shape confirmation. A legacy one puts
+    # "Will resume to:" on the first line, so everything after it is ``then`` — a ``then`` line
+    # that happens to start "For the user:" must never be read as a summary.
+    lines = text.split("\n", 2)
+    summary = ""
+    if _WAIT_RESUME_MARK not in lines[0] and len(lines) > 1 and lines[1].startswith(_WAIT_SUMMARY_PREFIX):
+        summary = lines[1][len(_WAIT_SUMMARY_PREFIX) :].strip()
     if not summary:
         return back
     if summary[-1] not in ".!?":

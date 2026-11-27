@@ -49,6 +49,13 @@ describe("resolveWaitInfo (#4852)", () => {
     )).toEqual({ seconds: 150, then: "Check build 412." });
   });
 
+  it("never reads the resume plan out of the user summary", () => {
+    expect(resolveWaitInfo(
+      "garbage",
+      "Wait scheduled: 1 minute.\nFor the user: Build started. Will resume to: nothing.\nWill resume to: Check build 412.",
+    )).toEqual({ seconds: 60, then: "Check build 412." });
+  });
+
   it("prefers valid JSON over output details", () => {
     expect(resolveWaitInfo('{"seconds": 30, "then": "input"}',
       "Wait scheduled: 1 minute. Will resume to: output",
